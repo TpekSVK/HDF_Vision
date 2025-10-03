@@ -15,10 +15,10 @@ docker run --rm -it \
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/video1:/dev/video1 \
+  -v /dev:/dev \
   -v /data:/data \
   -v $(pwd)/app:/workspace/app \
   -v $(pwd)/data:/workspace/data \
-  hdf_vision:dev
-
+  -w /workspace \
+  ${IMAGE_NAME} \
+  bash -lc 'echo "[diag] whoami=$(whoami)"; id; ls -l /dev/video* 2>/dev/null || true; v4l2-ctl --list-devices 2>/dev/null || true; python3 -m app.main'

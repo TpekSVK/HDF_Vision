@@ -30,14 +30,60 @@ class CameraService:
         ]
         return variants
 
+# --- nahrad funkciu start() a pridaj helper _try_open_v4l2() ---
+    def _try_open_v4l2(self, dev):
+        cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+        if cap.isOpened():
+            try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+            except Exception: pass
+            try: cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+            except Exception: pass
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            cap.set(cv2.CAP_PROP_FPS, self.fps)
+            try:
+                fourcc_grey = cv2.VideoWriter_fourcc(*"GREY")
+                if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_grey):
+                    fourcc_y800 = cv2.VideoWriter_fourcc(*"Y800")
+                    cap.set(cv2.CAP_PROP_FOURCC, fourcc_y800)
+            except Exception:
+                pass
+            if cap.isOpened():
+                print(f"[Camera] V4L2 open OK -> {dev}")
+                return cap
+        return None
+
     def start(self):
-        # 1) Skús GStreamer (viac variantov)
+        # 0) GStreamer (ak by bol dostupný — u teba nie je, logy to ukázali)
         for pipe in self._gst_pipeline_variants():
             cap = cv2.VideoCapture(pipe, cv2.CAP_GSTREAMER)
             if cap.isOpened():
-                self._cap = cap
-                self._backend = "GST"
-                break
+                self._cap = cap; self._backend = "GST"; break
+
+        # 1) Ak GST nevyšiel, skús V4L2 cez viac kandidátov
+        if self._cap is None:
+            candidates = []
+            # ak bol zadaný string (path), skús najprv ten
+            if isinstance(self.device, str):
+                candidates.append(self.device)
+            # bežné cesty
+            candidates += ["/dev/video0", "/dev/video1", "/dev/video2"]
+            # indexy (niektoré buildy lepšie fungujú s indexom)
+            candidates += [0, 1, 2]
+
+            for dev in candidates:
+                cap = self._try_open_v4l2(dev)
+                if cap:
+                    self._cap = cap; self._backend = "V4L2"; break
+
+        if not (self._cap and self._cap.isOpened()):
+            raise RuntimeError("Camera open failed (GST & V4L2). Skontroluj /dev/video* a formáty.")
+
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._grab_loop, daemon=True)
+        self._thread.start()
+        print(f"[Camera] Started via backend: {self._backend}")
+
 
         # 2) Fallback: CAP_V4L2
         if self._cap is None:
