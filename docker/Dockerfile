@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # ostatné
     libatlas-base-dev libjpeg-dev libwebp-dev libsqlite3-0 \
     qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools \
-    && rm -rf /var/lib/apt/lists/*
+&& rm -rf /var/lib/apt/lists/*
 
 
 COPY requirements.txt /tmp/requirements.txt
