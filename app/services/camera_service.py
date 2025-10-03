@@ -46,14 +46,14 @@ class CameraService:
             buf.unmap(map_info)
         return Gst.FlowReturn.OK
 
-    def _gst_pipeline_str(self, dev):
-        # Použijeme GREY (8-bit) – podľa tvojho v4l2-ctl je podporený
-        # v4l2src -> caps -> appsink (emit-signals, drop)
-        return (
-            f"v4l2src device={dev} ! "
-            f"video/x-raw,format=GREY,width={self.width},height={self.height},framerate={self.fps}/1 ! "
-            f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
-        )
+    def _gst_pipeline_str(self, dev, use_convert=False):
+        # prefer GRAY8; ak use_convert=True, vložíme videoconvert pre robustnosť
+        caps = f"video/x-raw,format=GRAY8,width={self.width},height={self.height},framerate={self.fps}/1"
+        if use_convert:
+            return f"v4l2src device={dev} ! videoconvert ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+        else:
+            return f"v4l2src device={dev} ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+        
 
     def _bus_cb(self, bus, msg):
         t = msg.type
@@ -68,51 +68,48 @@ class CameraService:
             self.stop()
 
     def start(self):
-        # Skúsime /dev/video0, potom /dev/video1
+        tried = []
         for dev in [self.device, "/dev/video0", "/dev/video1"]:
-            try:
-                pipe = Gst.parse_launch(self._gst_pipeline_str(dev))
-            except Exception as e:
-                print(f"[GST] parse_launch failed for {dev}: {e}")
-                continue
-
-            sink = pipe.get_by_name("sink")
-            if sink is None:
-                print(f"[GST] appsink not found for {dev}")
-                continue
-            sink.connect("new-sample", self._on_new_sample)
-
-            bus = pipe.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message", self._bus_cb)
-
-            # spustíme GLib loop v thread-e
-            self._loop = GLib.MainLoop()
-            def _loop_run():
+            for use_convert in [False, True]:
                 try:
-                    self._loop.run()
+                    pipe = Gst.parse_launch(self._gst_pipeline_str(dev, use_convert=use_convert))
                 except Exception as e:
-                    print("[GST] MainLoop exception:", e)
+                    tried.append((dev, use_convert, f"parse_fail:{e}"))
+                    continue
 
-            self._pipeline = pipe
-            self._sink = sink
+                sink = pipe.get_by_name("sink")
+                if sink is None:
+                    tried.append((dev, use_convert, "no_sink"))
+                    continue
+                sink.connect("new-sample", self._on_new_sample)
 
-            # do PLAYING
-            ret = self._pipeline.set_state(Gst.State.PLAYING)
-            if ret == Gst.StateChangeReturn.FAILURE:
-                print(f"[GST] State PLAYING failed for {dev}")
-                self._pipeline.set_state(Gst.State.NULL)
-                self._pipeline = None
-                continue
+                bus = pipe.get_bus()
+                bus.add_signal_watch()
+                bus.connect("message", self._bus_cb)
 
-            self._stop.clear()
-            self._thread = threading.Thread(target=_loop_run, daemon=True)
-            self._thread.start()
+                self._loop = GLib.MainLoop()
+                def _loop_run():
+                    try: self._loop.run()
+                    except Exception as e: print("[GST] MainLoop exception:", e)
 
-            print(f"[Camera] Started via GStreamer on {dev} {self.width}x{self.height}@{self.fps} GREY")
-            return
+                self._pipeline = pipe
+                self._sink = sink
 
-        raise RuntimeError("GStreamer camera open failed for /dev/video0,/dev/video1")
+                ret = self._pipeline.set_state(Gst.State.PLAYING)
+                if ret == Gst.StateChangeReturn.FAILURE:
+                    tried.append((dev, use_convert, "PLAYING_fail"))
+                    self._pipeline.set_state(Gst.State.NULL)
+                    self._pipeline = None
+                    continue
+
+                self._stop.clear()
+                self._thread = threading.Thread(target=_loop_run, daemon=True)
+                self._thread.start()
+                mode = "GRAY8" + ("+videoconvert" if use_convert else "")
+                print(f"[Camera] Started via GStreamer on {dev} {self.width}x{self.height}@{self.fps} {mode}")
+                return
+
+        raise RuntimeError(f"GStreamer camera open failed. Tried: {tried}")
 
     def one_shot(self):
         # vráti posledný dostupný frame
