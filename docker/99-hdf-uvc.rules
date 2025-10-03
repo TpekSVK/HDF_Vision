@@ -1,0 +1,2 @@
+SUBSYSTEM=="video4linux", GROUP="video", MODE="0660"
+KERNEL=="video[0-9]*", ATTR{name}=="See3CAM*", MODE="0666"
