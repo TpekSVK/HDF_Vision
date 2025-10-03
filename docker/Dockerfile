@@ -8,19 +8,16 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-opencv \
-    # GStreamer runtime + Python väzba
     gstreamer1.0-tools gstreamer1.0-libav \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
-    v4l-utils libglib2.0-0 python3-gi gir1.2-gst-1.0 \
-    # Qt XCB závislosti (PySide6 potrebuje)
+    v4l-utils libglib2.0-0 python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
     libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \
     libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
     libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
-    # ostatné
     libatlas-base-dev libjpeg-dev libwebp-dev libsqlite3-0 \
-    qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools \
-&& rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/*
+
 
 
 COPY requirements.txt /tmp/requirements.txt
