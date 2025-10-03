@@ -63,9 +63,9 @@ class MainWindow(QMainWindow):
         self.panel_setup.hide()
 
         # Retencia periodicky
-        self.ret_timer = QTimer(self)
-        self.ret_timer.timeout.connect(run_retention_cycle)
-        self.ret_timer.start(20_000)  # 20 s demo; neskôr 20 min
+        from app.services.retention_service import RetentionThread
+        self.retention = RetentionThread(interval_sec=300)  # 5 min
+        self.retention.start()
 
     def toggle_mode(self):
         if self.mode == "RUN":
@@ -86,8 +86,15 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(f"GOLDEN uložený: {path}")
 
     def closeEvent(self, e):
-        try: self.cam.stop()
-        finally: e.accept()
+        try:
+            self.cam.stop()
+            try:
+                self.retention.stop()
+            except Exception:
+                pass
+        finally:
+            e.accept()
+
 
     @staticmethod
     def _ts():

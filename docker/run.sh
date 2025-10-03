@@ -10,6 +10,9 @@ docker run --rm -it \
   --network host \
   --env DISPLAY=$DISPLAY \
   --env QT_X11_NO_MITSHM=1 \
+  --env PYTHONFAULTHANDLER=1 \
+  --env OPENCV_LOG_LEVEL=INFO \
+  --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
   --device /dev/video0:/dev/video0 \

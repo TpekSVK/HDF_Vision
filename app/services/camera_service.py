@@ -43,18 +43,26 @@ class CameraService:
         if self._cap is None:
             cap = cv2.VideoCapture(self.device, cv2.CAP_V4L2)
             if cap.isOpened():
-                # nastav požadované parametre
+                # znížime ring buffer (ak driver podporuje)
+                try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+                except Exception: pass
+                # zakážeme RGB konverziu
+                try: cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+                except Exception: pass
+                # rozlíšenie / fps
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
                 cap.set(cv2.CAP_PROP_FPS, self.fps)
-                # Niektoré ovládače používajú FOURCC 'Y800' pre 8-bit grey
+                # preferuj GREY/Y800
                 try:
-                    fourcc = cv2.VideoWriter_fourcc(*"Y800")
-                    cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+                    # niekedy je stabilnejšie GREY ako Y800
+                    fourcc_grey = cv2.VideoWriter_fourcc(*"GREY")
+                    if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_grey):
+                        fourcc_y800 = cv2.VideoWriter_fourcc(*"Y800")
+                        cap.set(cv2.CAP_PROP_FOURCC, fourcc_y800)
                 except Exception:
                     pass
-                self._cap = cap
-                self._backend = "V4L2"
+
 
         if not (self._cap and self._cap.isOpened()):
             raise RuntimeError("Camera open failed (GST & V4L2). Skontroluj /dev/video* a formáty.")

@@ -37,3 +37,30 @@ def enforce_size_quota(max_bytes=MAX_BYTES):
 def run_retention_cycle():
     delete_older_than(DAYS)
     enforce_size_quota(MAX_BYTES)
+
+import threading
+
+class RetentionThread:
+    def __init__(self, interval_sec=300):  # 5 min namiesto 20 s
+        self.interval = interval_sec
+        self._stop = threading.Event()
+        self._th = threading.Thread(target=self._loop, daemon=True)
+
+    def start(self):
+        if not self._th.is_alive():
+            self._stop.clear()
+            self._th = threading.Thread(target=self._loop, daemon=True)
+            self._th.start()
+
+    def stop(self):
+        self._stop.set()
+        if self._th.is_alive():
+            self._th.join(timeout=1.0)
+
+    def _loop(self):
+        while not self._stop.is_set():
+            try:
+                run_retention_cycle()
+            except Exception as e:
+                print(f"[Retention] Exception: {e}")
+            self._stop.wait(self.interval)
