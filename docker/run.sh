@@ -11,10 +11,11 @@ docker run --rm -it \
   --env DISPLAY=$DISPLAY \
   --env QT_X11_NO_MITSHM=1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  -v /dev:/dev \
-  --device-cgroup-rule='c 81:* rmw' \
-  --device-cgroup-rule='c 189:* rmw' \
+  --group-add video \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/video1:/dev/video1 \
   -v /data:/data \
   -v $(pwd)/app:/workspace/app \
   -v $(pwd)/data:/workspace/data \
   hdf_vision:dev
+
