@@ -8,15 +8,22 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip python3-opencv \
+    # GStreamer + Python väzby
     gstreamer1.0-tools gstreamer1.0-libav \
     gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
     gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly \
     v4l-utils libglib2.0-0 python3-gi gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
-    libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 \
-    libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
-    libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
-    libatlas-base-dev libjpeg-dev libwebp-dev libsqlite3-0 \
+    # Qt/X11/xcb/GL runtime deps pre PySide6 (Qt6)
+    libx11-6 libxext6 libxrender1 libxfixes3 libxi6 libxrandr2 \
+    libgl1 libegl1 libgbm1 \
+    libxkbcommon0 libxkbcommon-x11-0 \
+    libxcb1 libxcb-shm0 libxcb-randr0 libxcb-shape0 libxcb-xkb1 \
+    libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
+    libxcb-render-util0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
+    # ostatné
+    libjpeg-dev libwebp-dev libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
+
 
 
 

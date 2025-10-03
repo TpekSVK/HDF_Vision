@@ -12,6 +12,9 @@ docker run --rm -it \
   --env QT_X11_NO_MITSHM=1 \
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
+  --env QT_QPA_PLATFORM=xcb \
+  --env QT_DEBUG_PLUGINS=0 \
+
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
