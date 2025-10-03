@@ -17,18 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libx11-6 libxext6 libxrender1 libxfixes3 libxi6 libxrandr2 \
     libgl1 libegl1 libgbm1 \
     libxkbcommon0 libxkbcommon-x11-0 \
-    libxcb1 libxcb-shm0 libxcb-randr0 libxcb-shape0 libxcb-xkb1 \
-    libxcb-render0 libx11-xcb1 libxcb-glx0 libxcb-util1 \
+    libx11-xcb1 libsm6 libice6 \
+    libxcb1 libxcb-shm0 libxcb-randr0 libxcb-shape0 libxcb-xkb1 libxcb-sync1 \
+    libxcb-render0 libxcb-render-util0 libxcb-glx0 libxcb-util1 \
     libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
-    libxcb-render-util0 libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
+    libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
     libfontconfig1 libfreetype6 libdbus-1-3 \
     # ostatné
     libjpeg-dev libwebp-dev libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
-
-
-
-
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \

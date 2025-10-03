@@ -27,6 +27,8 @@ exec docker run --rm -it \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env QT_QPA_PLATFORM=xcb \
+  --env QT_DEBUG_PLUGINS=1 \
+
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
   --ulimit core=-1 \
