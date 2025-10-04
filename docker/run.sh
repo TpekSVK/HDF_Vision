@@ -21,16 +21,20 @@ ls -l /dev/video* 2>/dev/null || true
 exec docker run --rm -it \
   --runtime nvidia \
   --network host \
+  --security-opt seccomp=unconfined \
+  --security-opt apparmor=unconfined \
+  --cap-add SYS_ADMIN \
+  --device /dev/video0:/dev/video0 \
+  --device /dev/video1:/dev/video1 \
+  --device-cgroup-rule='c 81:* rmw' \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env QT_QPA_PLATFORM=xcb \
-  --env QT_DEBUG_PLUGINS=0 \
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
-  -v /dev:/dev \
   -v /data:/data \
   -v "$(pwd)/app":/workspace/app \
   -v "$(pwd)/data":/workspace/data \
