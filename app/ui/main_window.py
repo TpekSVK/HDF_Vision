@@ -5,6 +5,8 @@ from PySide6.QtCore import Qt, QTimer
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_golden, save_validation_image, save_production_result
 from app.services.retention_service import run_retention_cycle
+from app.ui.golden_wizard import GoldenWizard
+from PySide6.QtWidgets import QPushButton
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -33,6 +35,9 @@ class MainWindow(QMainWindow):
         # Panel SETUP – „Nastavenia kamery“ (zatím len placeholdery)
         self.panel_setup = QWidget(); v = QVBoxLayout(self.panel_setup)
         v.addWidget(QLabel("Nastavenia kamery"))
+        self.btn_wizard = QPushButton("Golden WIZARD", self)
+        self.btn_wizard.clicked.connect(self.open_wizard)
+        self.topBarLayout.addWidget(self.btn_wizard)
         # rozlíšenie
         res_line = QHBoxLayout()
         v.addLayout(res_line)
@@ -94,7 +99,10 @@ class MainWindow(QMainWindow):
                 pass
         finally:
             e.accept()
-
+    def open_wizard(self):
+        dlg = GoldenWizard(self.cam, self)
+        dlg.resize(1200, 800)
+    dlg.exec()
 
     @staticmethod
     def _ts():
