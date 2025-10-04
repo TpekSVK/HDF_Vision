@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME="${1:-hdf_vision:dev}"
+IMAGE_NAME=hdf_vision:dev
 
 # Diagnostika
 echo "[diag] IMAGE_NAME=${IMAGE_NAME}"
