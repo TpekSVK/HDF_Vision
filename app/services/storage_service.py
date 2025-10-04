@@ -105,7 +105,28 @@ def save_production_result(frame,
     with open(fjsonl, "a", encoding="utf-8") as f:
         f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
+    
+    # DB insert (nech nezlyhá, ak DB nie je k dispozícii)
+    try:
+        from app.services.db_service import DbService
+        db = DbService()
+        rid = db.ensure_recipe(recipe_name)
+        db.insert_result(
+            ts_ms=ts,
+            recipe_id=rid,
+            ok=not nok,
+            metrics=meta.get("metrics", {}),
+            thumb_path=str(fthumb),
+            full_path=record["files"]["full"],
+            meta_json=json.dumps(meta, ensure_ascii=False)
+        )
+    except Exception as e:
+        print("[DB] insert_result skipped:", e)
+
+
+
     return {"thumb": str(fthumb), "jsonl": str(fjsonl), "full": record["files"]["full"]}
+
 
 
 def save_validation_image(img, ok: bool, recipe_name: str):
