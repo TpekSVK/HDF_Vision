@@ -160,8 +160,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(f"GOLDEN uložený: {path}")
 
     def open_wizard(self):
-        dlg = GoldenWIZARD(self.cam, self)  # NOTE: názov triedy opravíme nižšie, ak máš GoldenWizard
-        dlg = GoldenWizard(self.cam, self)  # použij toto, ak máš triedu GoldenWizard
+        dlg = GoldenWizard(self.cam, self)  # NOTE: názov triedy opravíme nižšie, ak máš GoldenWizard
         dlg.resize(1200, 800)
         dlg.exec()
 
