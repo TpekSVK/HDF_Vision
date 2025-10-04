@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer
 from app.services.camera_service import CameraService
-from app.services.storage_service import save_golden, save_validation, save_production_result
+from app.services.storage_service import save_golden, save_validation_image, save_production_result
 from app.services.retention_service import run_retention_cycle
 
 class MainWindow(QMainWindow):
