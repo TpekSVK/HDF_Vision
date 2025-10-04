@@ -34,6 +34,8 @@ class GoldenWizard(QDialog):
         self.type_sel.addItems(["pose","roi","ignore"])
 
         self.view = DrawView(self)
+        self.view.set_shape_type(self.shape_sel.currentText())
+        self.view.set_region_type(self.type_sel.currentText())
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
         top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
