@@ -10,6 +10,9 @@ from app.ui.golden_wizard import GoldenWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
+from app.ui.thresholds_panel import ThresholdsPanel
+from app.ui.results_strip import ResultsStrip
+
 
 
 class MainWindow(QMainWindow):
@@ -82,6 +85,19 @@ class MainWindow(QMainWindow):
 
         self.btn_trigger = QPushButton("Manuálny TRIGGER (one-shot)")
         self.btn_trigger.clicked.connect(self.manual_trigger)
+        
+        # Strip posledných snímok
+        self.strip = ResultsStrip(self, limit=12)
+
+        # Export CSV
+        self.btn_export = QPushButton("Export CSV (dnes)")
+        self.btn_export.clicked.connect(self.export_csv_today)
+
+        # Poradie v RUN paneli (status/metriky/stats už máš)
+        self.runLayout.addWidget(self.strip)
+        self.runLayout.addWidget(self.btn_export)
+
+
 
         self.lbl_stats_day = QLabel("Štatistiky dnes: –")
 
@@ -101,6 +117,12 @@ class MainWindow(QMainWindow):
         self.btn_wizard = QPushButton("Golden WIZARD", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
         v.addWidget(self.btn_wizard)
+
+        
+        v.addWidget(QLabel("Limity / Prahy"))
+        self.th_panel = ThresholdsPanel(self)
+        v.addWidget(self.th_panel)
+
 
         # Rozlíšenie (placeholder)
         res_line = QHBoxLayout()
@@ -187,6 +209,9 @@ class MainWindow(QMainWindow):
                 nok=nok
             )
 
+            # refresh stripu po uložení výsledku
+            self.strip.reload()
+
         except Exception as e:
             import traceback; traceback.print_exc()
 
@@ -228,6 +253,7 @@ class MainWindow(QMainWindow):
             self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
+            self.strip.reload()
 
     def on_recipe_new(self):
         from PySide6.QtWidgets import QInputDialog
@@ -265,3 +291,15 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        
+    def export_csv_today(self):
+        rid = self.db.recipe_id(self.current_recipe_name())
+        if rid is None:
+            self.lbl_status.setText("Nie je vybraný recept.")
+            return
+        out = f"/data/runs/{self.current_recipe_name()}_today.csv"
+        try:
+            path = self.db.export_csv_today(rid, out)
+            self.lbl_status.setText(f"CSV export: {path}")
+        except Exception as e:
+            self.lbl_status.setText(f"CSV error: {e}")
