@@ -2,7 +2,8 @@ from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QCheckBox, QSpinBox, QFileDialog
 )
 
-from PySide6.QtCore import Qt, QTimer, QFont, QColor
+from PySide6.QtCore import Qt, QTimer 
+from PySide6.QtGui import QFont, QColor
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_golden, save_validation_image, save_production_result
 from app.services.retention_service import run_retention_cycle
