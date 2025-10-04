@@ -1,5 +1,5 @@
 # app/ui/golden_wizard.py
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QAction
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QWidget
@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
 
 import json
 from pathlib import Path
+from app.services.live_preview_service import LivePreviewService
 
 from app.ui.draw_view import DrawView
 from app.services.storage_service import save_golden, save_validation_image
@@ -55,6 +56,25 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_val_nok)
         buttons.addWidget(btn_save_recipe)
 
+                # --- Live feed v WIZARDe ---
+        self.live_combo = QComboBox()
+        self.live_combo.addItems(["Live OFF", "Live ON"])
+        self.live_combo.currentIndexChanged.connect(self._on_live_toggle)
+        self.topBarLayout.addWidget(self.live_combo)  # kam pridávaš tvoje ovládacie prvky
+
+        # helpery
+        dev = getattr(self.cam, "devices", ["/dev/video0"])[0]
+        self._lp = LivePreviewService(dev, 1280, 720, 60)  # môžeš doladiť rozlíšenie podľa potreby SETUP
+        self._live_timer = QTimer(self)
+        self._live_timer.setInterval(50)  # ~20 FPS, postačuje
+        self._live_timer.timeout.connect(self._on_live_tick)
+
+        # pamätaj si pôvodné pozadie (napr. načítaný golden), aby OFF vedel vrátiť späť
+        self._static_bg = None
+        if hasattr(self.view, "_bg") and self.view._bg and self.view._bg.pixmap():
+            self._static_bg = self.view._bg.pixmap()
+
+
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addWidget(self.view)
@@ -78,6 +98,8 @@ class GoldenWizard(QDialog):
         # .copy() aby QImage vlastnil buffer (numpy môže zaniknúť)
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
+        self._static_bg = pm if self.live_combo.currentIndex() == 0 else self._static_bg
+
 
 
     def _capture_golden(self):
@@ -125,14 +147,23 @@ class GoldenWizard(QDialog):
         self._info(f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}")
 
     def _save_validation(self, is_ok: bool):
-        if self.current_img is None:
+        img = None
+        # ak je zapnutý live, použi posledný live frame
+        if self.live_combo.currentIndex() == 1:
+            img = self._lp.last_frame_u8()
+        # fallback: ak nie je live, vezmi current_img alebo sprav one_shot
+        if img is None:
+            img = self.current_img
+        if img is None:
             try:
-                self.current_img = self.cam.one_shot()
+                img = self.cam.one_shot()
             except Exception as e:
                 self._err(f"Zachytenie zlyhalo: {e}")
                 return
+        self.current_img = img  # zmysluplné držať posledný použitý
+
         name = self.recipe_name.text().strip() or "default"
-        out = save_validation_image(self.current_img, ok=is_ok, recipe_name=name)
+        out = save_validation_image(img, ok=is_ok, recipe_name=name)
         self._info(f"Validačný snímok uložený:\n{out['thumb']}\n{out['full']}")
 
     def _info(self, msg):
@@ -140,3 +171,34 @@ class GoldenWizard(QDialog):
 
     def _err(self, msg):
         QMessageBox.critical(self, "Chyba", msg)
+
+    def _on_live_toggle(self, idx: int):
+        if idx == 1:  # ON
+            # ulož aktuálne pozadie na neskorší návrat
+            if hasattr(self.view, "_bg") and self.view._bg and self.view._bg.pixmap():
+                self._static_bg = self.view._bg.pixmap()
+            try:
+                self._lp.start()
+                self._live_timer.start()
+            except Exception as e:
+                # fallback na OFF
+                self.live_combo.setCurrentIndex(0)
+                from PySide6.QtWidgets import QMessageBox
+                QMessageBox.warning(self, "Live feed", f"Nepodarilo sa spustiť live: {e}")
+        else:
+            try:
+                self._live_timer.stop()
+                self._lp.stop()
+            except Exception:
+                pass
+            # vráť statický obrázok (golden / posledný)
+            if self._static_bg is not None and hasattr(self.view, "_bg") and self.view._bg:
+                self.view._bg.setPixmap(self._static_bg)
+                self.view.update()
+
+    def _on_live_tick(self):
+        img = self._lp.last_frame_u8()
+        if img is None:
+            return
+        # aktualizuj pozadie kresliaceho view
+        self.view.set_background_image(img)

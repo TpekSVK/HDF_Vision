@@ -1,6 +1,6 @@
 # app/ui/draw_view.py
 from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPainter
+from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPainter, QImage, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem
@@ -341,3 +341,20 @@ class DrawView(QGraphicsView):
             if hasattr(it, "reg_type") and it.reg_type == reg_type:
                 n += 1
         return n
+
+
+    def set_background_image(self, img_u8):
+        """
+        Aktualizuje podklad kreslenia (pozadie) novou snímkou (uint8, GRAY8).
+        Zachová všetky prekreslené ROI/POSE/IGNORE vrsty.
+        """
+        if img_u8 is None:
+            return
+        h, w = img_u8.shape[:2]
+        q = QImage(img_u8.data, w, h, w, QImage.Format_Grayscale8)
+        pm = QPixmap.fromImage(q.copy())
+        if hasattr(self, "_bg") and self._bg is not None:
+            self._bg.setPixmap(pm)
+            if hasattr(self, "_scene"):
+                self._scene.setSceneRect(0, 0, w, h)
+            self.update()

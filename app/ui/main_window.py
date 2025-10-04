@@ -17,6 +17,7 @@ from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
 
 
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -144,28 +145,12 @@ class MainWindow(QMainWindow):
         self.btn_save_golden.clicked.connect(self.save_golden_clicked)
         v.addWidget(self.btn_save_golden)
 
-        # --- Live náhľad (SETUP) ---
-        self.live_on = QComboBox(); self.live_on.addItems(["Live OFF","Live ON"])
-        self.live_on.currentIndexChanged.connect(self._live_toggle)
-        v.addWidget(self.live_on)
-
-        self.live_lbl = QLabel("—")
-        self.live_lbl.setFixedHeight(320)
-        self.live_lbl.setAlignment(Qt.AlignCenter)
-        v.addWidget(self.live_lbl)
+        layout.addWidget(self.panel_setup)
+        self.panel_setup.hide()  # default RUN
 
         # XU panel
         self.xu = XUPanel(self)
         v.addWidget(self.xu)
-
-        # live helpery
-        self._lp = LivePreviewService(getattr(self.cam, "devices", ["/dev/video0"])[0], 1280, 720, 60)
-        self._live_timer = QTimer(self); self._live_timer.setInterval(50)  # ~20 FPS
-        self._live_timer.timeout.connect(self._live_tick)
-
-        layout.addWidget(self.panel_setup)
-        self.panel_setup.hide()  # default RUN
-
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
         # Zatiaľ používame to, čo je v ToolService (alebo "default")
@@ -240,11 +225,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         # najprv vypni live, potom kameru, potom zavri okno
-        try:
-            self._live_timer.stop()
-            self._lp.stop()
-        except Exception:
-            pass
+
         try:
             self.cam.stop()
         finally:
@@ -323,27 +304,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.lbl_status.setText(f"CSV error: {e}")
 
-    def _live_toggle(self, idx):
-        if idx == 1:  # ON
-            try:
-                self._lp.start()
-                self._live_timer.start()
-            except Exception as e:
-                self.live_lbl.setText(f"Live error: {e}")
-                self.live_on.setCurrentIndex(0)
-        else:
-            try:
-                self._live_timer.stop()
-                self._lp.stop()
-                self.live_lbl.setText("—")
-            except Exception:
-                pass
 
-    def _live_tick(self):
-        img = self._lp.last_frame_u8()
-        if img is None:
-            return
-        h, w = img.shape[:2]
-        q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
-        pm = QPixmap.fromImage(q.copy()).scaled(self.live_lbl.width(), self.live_lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-        self.live_lbl.setPixmap(pm)
+
+
