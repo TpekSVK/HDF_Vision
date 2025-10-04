@@ -1,6 +1,6 @@
 # app/ui/draw_view.py
 from PySide6.QtCore import Qt, QPointF, QRectF
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath
+from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPainter
 from PySide6.QtWidgets import QGraphicsView, QGraphicsScene, QGraphicsItem, QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem
 
 import math
@@ -73,7 +73,8 @@ class DrawView(QGraphicsView):
     """
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setRenderHints(self.renderHints() | 0x01 | 0x02)  # Antialiasing, TextAntialiasing
+        self.setRenderHint(QPainter.Antialiasing, True)
+        self.setRenderHint(QPainter.TextAntialiasing, True)
         self.setDragMode(QGraphicsView.RubberBandDrag)
         self.scene = QGraphicsScene(self)
         self.setScene(self.scene)

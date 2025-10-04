@@ -68,19 +68,15 @@ class GoldenWizard(QDialog):
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
 
     def _set_pixmap(self, img_u8):
-        # img_u8: numpy uint8 (H,W)
+        # img_u8: numpy uint8 (H, W)
+        from PySide6.QtGui import QImage, QPixmap
         h, w = img_u8.shape[:2]
-        qimg = QPixmap.fromImage(
-            QPixmap.fromImage(
-                # workaround: PySide6 si rozumie s QImage priamo,
-                # ale tu využijeme jednoduchú cestu: QPixmap -> QImage implicitne
-                ).toImage()
-        )
-        # rýchly spôsob – cez QImage z raw dát:
-        from PySide6.QtGui import QImage
+        # bytesPerLine = w (1 byte na pixel pri GRAY8)
         qimg = QImage(img_u8.data, w, h, w, QImage.Format_Grayscale8)
-        pm = QPixmap.fromImage(qimg.copy())  # copy -> vlastníme buffer
+        # .copy() aby QImage vlastnil buffer (numpy môže zaniknúť)
+        pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
+
 
     def _capture_golden(self):
         try:
