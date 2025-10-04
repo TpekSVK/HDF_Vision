@@ -1,9 +1,13 @@
+# app/services/camera_service.py
 import os
 import cv2
 import numpy as np
-import threading, queue, time
+import threading
+import time
+import queue
 
-# Voliteľné: GStreamer fallback (nebude vyžadovaný, ak nechceš)
+# --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
+_GST_OK = False
 try:
     import gi
     gi.require_version("Gst", "1.0")
@@ -16,212 +20,285 @@ except Exception:
 
 class CameraService:
     """
-    V4L2-first capture pre mono (GREY/Y12/Y16) kamery:
-      1) Skús /dev/videoX priamo cez cv2.CAP_V4L2 (explicitný FourCC, W/H/FPS, CONVERT_RGB=0)
-      2) Ak neprejde, fallback na GStreamer: v4l2src ! GRAY8 ! appsink
-    Frames sa dávajú do queue a čítajú v konzumentovi (UI thread).
+    Unified capture služba:
+      - preferuje GStreamer (v4l2src -> GRAY8 -> appsink)
+      - fallback na OpenCV V4L2
+    Vždy vracia uint8 (GRAY8). Ak príde Y12/Y16 -> prevedie sa na 8-bit.
     """
 
-    def __init__(self, device="/dev/video0", width=1280, height=720, fps=60, try_devices=("/dev/video0", "/dev/video1")):
+    def __init__(self,
+                 device=None,
+                 width=1920,
+                 height=1080,
+                 fps=60):
+        # device môže prísť z env (run.sh nastavuje CAM_DEV=/dev/video0|1)
+        self.device = device or os.getenv("CAM_DEV", "/dev/video0")
         self.width = int(width)
         self.height = int(height)
         self.fps = int(fps)
-        self.devices = [device] + [d for d in try_devices if d != device and os.path.exists(d)]
-        self.cap = None
-        self._mode = None  # "v4l2" alebo "gst"
-        self._stop = threading.Event()
+
+        # runtime
         self._q = queue.Queue(maxsize=5)
+        self._stop = threading.Event()
         self._t = None
 
-        # GST members (len keď fallbackujeme)
+        # backend info
+        self._mode = None  # "gst" alebo "v4l2"
+        self._cap = None
+
+        # GStreamer objekty
         self._pipeline = None
         self._loop = None
-        self._sink = None
 
-    # ----------------- V4L2 priame otvorenie -----------------
+        # zásobník kandidátov zariadení
+        self.devices = [self.device, "/dev/video0", "/dev/video1"]
 
-    def _open_v4l2(self, dev):
-        cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            return None
+    # =========================
+    # GStreamer časť (preferovaná)
+    # =========================
+    def _gst_pipeline_str(self, dev, use_convert=False, with_fps=True):
+        """
+        GRAY8 caps podľa gst-device-monitor (u teba potvrdené).
+        Skúšame viac permutácií (s/bez videoconvert, s/bez framerate caps).
+        """
+        caps = f"video/x-raw,format=GRAY8,width={self.width},height={self.height}"
+        if with_fps:
+            caps += f",framerate={self.fps}/1"
 
-        # Mono (GREY8) — skúsiť Y800; niektoré kamery môžu potrebovať "Y16 "
-        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"Y800"))
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
-        try:
-            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-        except Exception:
-            pass
-
-        ok, frame = cap.read()
-        if not ok or frame is None:
-            # Skús ešte Y16 (ak kamera reportuje Y12/16)
-            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"Y16 "))
-            ok2, frame2 = cap.read()
-            if not ok2 or frame2 is None:
-                cap.release()
-                return None
-
-        return cap
-
-    def _loop_v4l2(self):
-        # Snímame a tlačíme do queue; frame môže byť 2D (GRAY) alebo 16-bit
-        while not self._stop.is_set():
-            ok, frame = self.cap.read()
-            if not ok or frame is None:
-                time.sleep(0.005)
-                continue
-
-            # Pri Y16 môže OpenCV vrátiť 16-bit single channel (shape HxW) alebo HxWx2/3; normalizácia:
-            if frame.ndim == 3 and frame.shape[2] == 1:
-                frame = frame[:, :, 0]
-
-            if self._q.full():
-                try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    pass
-            self._q.put_nowait(frame)
-
-    # ----------------- GStreamer fallback -----------------
-
-    def _gst_pipeline_str(self, dev, use_convert=False):
-        caps = f"video/x-raw,format=GRAY8,width={self.width},height={self.height},framerate={self.fps}/1"
         if use_convert:
-            return f"v4l2src device={dev} io-mode=2 ! videoconvert ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+            return (
+                f"v4l2src device={dev} io-mode=2 ! "
+                f"videoconvert ! "
+                f"{caps} ! "
+                f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+            )
         else:
-            return f"v4l2src device={dev} io-mode=2 ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
-        
+            return (
+                f"v4l2src device={dev} io-mode=2 ! "
+                f"{caps} ! "
+                f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+            )
 
     def _on_new_sample(self, sink):
         sample = sink.emit("pull-sample")
         if sample is None:
-            return 1
+            return Gst.FlowReturn.ERROR
         buf = sample.get_buffer()
-        success, map_info = buf.map(1)  # READ
-        if not success:
-            return 1
+        ok, map_info = buf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.ERROR
         try:
             caps = sample.get_caps()
             s = caps.get_structure(0)
             w = int(s.get_value("width"))
             h = int(s.get_value("height"))
-            # predpoklad GRAY8
+            # GRAY8 by mal byť width*height bajtov
             arr = np.frombuffer(map_info.data, dtype=np.uint8)
             arr = arr.reshape((h, -1))[:, :w].copy()
             if self._q.full():
-                try: self._q.get_nowait()
-                except queue.Empty: pass
+                try:
+                    self._q.get_nowait()
+                except queue.Empty:
+                    pass
             self._q.put_nowait(arr)
         finally:
             buf.unmap(map_info)
-        return 0
+        return Gst.FlowReturn.OK
+
+    def _gst_bus_cb(self, bus, msg):
+        t = msg.type
+        if t == Gst.MessageType.ERROR:
+            err, dbg = msg.parse_error()
+            print(f"[GST][ERROR] {err} debug:{dbg}")
+        elif t == Gst.MessageType.WARNING:
+            err, dbg = msg.parse_warning()
+            print(f"[GST][WARN] {err} debug:{dbg}")
+        elif t == Gst.MessageType.EOS:
+            print("[GST] EOS")
+            self.stop()
 
     def _start_gst(self, dev):
         if not _GST_OK:
             return False
-        try:
-            pipe = self._gst_pipeline_str(dev, "GRAY8")
-            pipeline = Gst.parse_launch(pipe)
-        except Exception:
-            return False
 
-        sink = pipeline.get_by_name("sink")
-        if sink is None:
-            return False
-        sink.connect("new-sample", self._on_new_sample)
+        # poradie variantov: najprv bez konverzie, potom s konverziou; s fps a bez fps
+        variants = [
+            self._gst_pipeline_str(dev, use_convert=False, with_fps=True),
+            self._gst_pipeline_str(dev, use_convert=True,  with_fps=True),
+            self._gst_pipeline_str(dev, use_convert=False, with_fps=False),
+            self._gst_pipeline_str(dev, use_convert=True,  with_fps=False),
+            # úplný fallback – bez caps (nech negociáciu spraví GSt, appsink dostane čo príde)
+            f"v4l2src device={dev} io-mode=2 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2",
+        ]
 
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message", self._bus_cb)
-
-        self._loop = GLib.MainLoop()
-        def _run():
+        tried = []
+        for pipe in variants:
             try:
-                self._loop.run()
+                pipeline = Gst.parse_launch(pipe)
             except Exception as e:
-                print("[GST] loop err:", e)
+                tried.append(("parse_fail", str(e), pipe))
+                continue
 
-        self._pipeline = pipeline
-        ret = self._pipeline.set_state(Gst.State.PLAYING)
-        if ret == Gst.StateChangeReturn.FAILURE:
-            self._pipeline.set_state(Gst.State.NULL)
-            self._pipeline = None
-            self._loop = None
+            sink = pipeline.get_by_name("sink")
+            if sink is None:
+                tried.append(("no_sink", "", pipe))
+                pipeline.set_state(Gst.State.NULL)
+                continue
+            sink.connect("new-sample", self._on_new_sample)
+
+            bus = pipeline.get_bus()
+            bus.add_signal_watch()
+            bus.connect("message", self._gst_bus_cb)
+
+            loop = GLib.MainLoop()
+
+            ret = pipeline.set_state(Gst.State.PLAYING)
+            if ret == Gst.StateChangeReturn.FAILURE:
+                tried.append(("PLAYING_fail", "", pipe))
+                pipeline.set_state(Gst.State.NULL)
+                continue
+
+            # uložiť runtime objekty a spustiť loop v thread-e
+            self._pipeline = pipeline
+            self._loop = loop
+            self._mode = "gst"
+
+            def _loop_run():
+                try:
+                    loop.run()
+                except Exception as e:
+                    print("[GST] MainLoop exception:", e)
+
+            self._t = threading.Thread(target=_loop_run, daemon=True)
+            self._t.start()
+            print(f"[Camera] GST started: {pipe}")
+            return True
+
+        print("[GST] All variants failed:", tried)
+        return False
+
+    # =========================
+    # V4L2 fallback cez OpenCV
+    # =========================
+    def _start_v4l2(self, dev):
+        cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
+        if not cap.isOpened():
             return False
 
-        self._mode = "gst"
-        self._t = threading.Thread(target=_run, daemon=True)
+        # zníž buffre, vypni RGB konverziu
+        try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        except Exception: pass
+        try: cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+        except Exception: pass
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(cv2.CAP_PROP_FPS, self.fps)
+
+        # preferuj GREY/Y800
+        try:
+            fourcc_grey = cv2.VideoWriter_fourcc(*"GREY")
+            if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_grey):
+                fourcc_y800 = cv2.VideoWriter_fourcc(*"Y800")
+                cap.set(cv2.CAP_PROP_FOURCC, fourcc_y800)
+        except Exception:
+            pass
+
+        if not cap.isOpened():
+            cap.release()
+            return False
+
+        self._cap = cap
+        self._mode = "v4l2"
+        self._stop.clear()
+        self._t = threading.Thread(target=self._grab_loop, daemon=True)
         self._t.start()
-        print(f"[Camera] GST started on {dev} {self.width}x{self.height}@{self.fps} GRAY8")
+        print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps}")
         return True
 
-    def _bus_cb(self, bus, msg):
-        t = msg.type
-        if t == getattr(Gst, "MessageType").ERROR:
-            err, dbg = msg.parse_error()
-            print(f"[GST][ERROR] {err} debug:{dbg}")
-        elif t == getattr(Gst, "MessageType").WARNING:
-            err, dbg = msg.parse_warning()
-            print(f"[GST][WARN] {err} debug:{dbg}")
-        elif t == getattr(Gst, "MessageType").EOS:
-            print("[GST] EOS")
-            self.stop()
-
-    # ----------------- Public API -----------------
-
-    def start(self):
-        # 1) V4L2 priamo
-        for dev in self.devices:
-            if not os.path.exists(dev):
+    def _grab_loop(self):
+        while not self._stop.is_set():
+            ok, frame = self._cap.read()
+            if not ok:
+                time.sleep(0.005)
                 continue
-            cap = self._open_v4l2(dev)
-            if cap is not None:
-                self.cap = cap
-                self._mode = "v4l2"
-                self._stop.clear()
-                self._t = threading.Thread(target=self._loop_v4l2, daemon=True)
-                self._t.start()
-                print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps}")
-                return
 
-        # 2) Fallback: GStreamer
+            # ak príde BGR (niektoré buildy), preveď na greyscale
+            if frame.ndim == 3 and frame.shape[2] == 3:
+                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+
+            # --- kľúčové: 16-bit -> 8-bit (Y12/Y16 normalizácia) ---
+            if frame.dtype == np.uint16:
+                maxv = int(frame.max())
+                if maxv <= 0:
+                    frame = np.zeros_like(frame, dtype=np.uint8)
+                elif maxv <= 4095:          # typicky Y12
+                    frame = (frame >> 4).astype(np.uint8)
+                elif maxv <= 1023:          # ak by sa objavil 10-bit
+                    frame = (frame >> 2).astype(np.uint8)
+                else:                        # plný 16-bit
+                    frame = cv2.convertScaleAbs(frame, alpha=255.0/65535.0)
+
+            try:
+                if self._q.full():
+                    _ = self._q.get_nowait()
+                self._q.put_nowait(frame)
+            except queue.Full:
+                pass
+
+    # =========================
+    # Public API
+    # =========================
+    def start(self):
+        # 1) Skús GStreamer na kandidátoch device
         for dev in self.devices:
             if self._start_gst(dev):
                 return
 
+        # 2) Fallback: OpenCV V4L2
+        for dev in self.devices:
+            if self._start_v4l2(dev):
+                return
+
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
-    def one_shot(self, timeout=0.8):
-        # vráti posledný dostupný frame
-        end = time.time() + timeout
+    def one_shot(self):
+        tries = 0
         last = None
-        while time.time() < end:
+        while tries < 3:
             try:
-                last = self._q.get(timeout=0.2)
+                last = self._q.get(timeout=0.5)
             except queue.Empty:
+                tries += 1
                 continue
+            tries += 1
         if last is None:
-            raise RuntimeError("No frame available.")
+            raise RuntimeError("No frame available for one-shot.")
         return last
 
     def stop(self):
         self._stop.set()
-        try:
-            if self._mode == "v4l2" and self.cap:
-                self.cap.release()
-            elif self._mode == "gst" and self._pipeline:
+        # V4L2
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+        # GST
+        if self._pipeline is not None:
+            try:
                 self._pipeline.set_state(Gst.State.NULL)
-                if self._loop:
-                    try: self._loop.quit()
-                    except Exception: pass
-        finally:
-            if self._t and self._t.is_alive():
-                self._t.join(timeout=1.0)
-        self.cap = None
-        self._pipeline = None
-        self._loop = None
+            except Exception:
+                pass
+            self._pipeline = None
+        if self._loop is not None:
+            try:
+                self._loop.quit()
+            except Exception:
+                pass
+            self._loop = None
+        if self._t is not None and self._t.is_alive():
+            self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
