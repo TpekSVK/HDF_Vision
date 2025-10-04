@@ -1,11 +1,13 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QCheckBox, QSpinBox, QFileDialog
 )
-from PySide6.QtCore import Qt, QTimer
+
+from PySide6.QtCore import Qt, QTimer, QFont, QColor
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_golden, save_validation_image, save_production_result
 from app.services.retention_service import run_retention_cycle
 from app.ui.golden_wizard import GoldenWizard
+from app.services.tool_service import ToolService
 
 
 class MainWindow(QMainWindow):
@@ -15,6 +17,14 @@ class MainWindow(QMainWindow):
         self.mode = "RUN"  # RUN alebo SETUP
         self.cam = CameraService()
         self.cam.start()
+        # Tool/Recipe
+        self.tool = ToolService(base_dir="/data")
+        try:
+            self.tool.load_recipe("default")  # alebo načítaj z comboboxu receptov, ak už máš
+            print("[Tool] Loaded recipe: default")
+        except Exception as e:
+            print("[Tool] Recipe not loaded:", e)
+
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -31,6 +41,13 @@ class MainWindow(QMainWindow):
         self.btn_trigger.clicked.connect(self.manual_trigger)
         layout.addWidget(self.lbl_status)
         layout.addWidget(self.btn_trigger)
+        self.lbl_status = QLabel("–")
+        f = QFont(); f.setPointSize(28); f.setBold(True)
+        self.lbl_status.setFont(f)
+        self.lbl_metrics = QLabel("")
+
+        self.runLayout.addWidget(self.lbl_status)
+        self.runLayout.addWidget(self.lbl_metrics)
 
         # Panel SETUP – „Nastavenia kamery“ (zatím len placeholdery)
         self.panel_setup = QWidget(); v = QVBoxLayout(self.panel_setup)
@@ -80,11 +97,39 @@ class MainWindow(QMainWindow):
             self.mode = "RUN"; self.mode_btn.setText("Prepnúť do SETUP"); self.panel_setup.hide()
 
     def manual_trigger(self):
-        frame = self.cam.one_shot()
-        # TODO: tu zatiaľ len pseudo-hodnotenie -> OK
-        meta = {"ts": self._ts(), "result": "OK", "recipe": "default", "metrics": {}}
-        save_production_result(frame, meta, "default", store_full_nok=False, nok=False)
-        self.lbl_status.setText("OK/NOK: OK")
+        try:
+            frame = self.cam.one_shot()  # už uint8 gray
+            meta = {"mode": "manual"}
+
+            # --- D3: vyhodnotenie podľa receptu ---
+            nok = False
+            metrics = {}
+            try:
+                res = self.tool.evaluate(frame)
+                nok = (not res["ok"])
+                metrics = res["metrics"]
+            except Exception as e:
+                print("[Tool] evaluate failed:", e)
+
+            # --- UI update ---
+            if nok:
+                self.lbl_status.setText("NOK")
+                self.lbl_status.setStyleSheet("color: #ff3366;")
+            else:
+                self.lbl_status.setText("OK")
+                self.lbl_status.setStyleSheet("color: #33dd66;")
+
+            self.lbl_metrics.setText(
+                f'SSIM={metrics.get("ssim","-")}  blobs={metrics.get("blob_count","-")}  area={metrics.get("total_area","-")}'
+            )
+
+            # --- Uloženie (NOK flag pre retenciu) ---
+            from app.services.storage_service import save_production_result
+            save_production_result(frame, meta | {"metrics": metrics}, self.current_recipe_name(), store_full_nok=True, nok=nok)
+
+        except Exception as e:
+            import traceback; traceback.print_exc()
+            # voliteľne hláška užívateľovi
 
     def save_golden_clicked(self):
         frame = self.cam.one_shot()
