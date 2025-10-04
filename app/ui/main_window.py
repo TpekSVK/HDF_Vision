@@ -28,14 +28,14 @@ class MainWindow(QMainWindow):
         self.cam = CameraService()
         self.cam.start()
 
-        # DB + služby
+        # DB + sluĹľby
         self.db = DbService()
         self.recipes = RecipeService(db=self.db)
         self.stats = StatsService(db=self.db)
 
         # Tool/Recipe
         try:
-            # zaruč, že existuje "default"
+            # zaruÄŤ, Ĺľe existuje "default"
             if "default" not in self.recipes.list():
                 self.recipes.create("default")
             self.recipes.load("default")
@@ -50,8 +50,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(root)
         layout = QVBoxLayout(root)
 
-        # Prepínač RUN/SETUP
-        self.mode_btn = QPushButton("Prepnúť do SETUP")
+        # PrepĂ­naÄŤ RUN/SETUP
+        self.mode_btn = QPushButton("PrepnĂşĹĄ do SETUP")
         self.mode_btn.clicked.connect(self.toggle_mode)
         layout.addWidget(self.mode_btn)
 
@@ -64,9 +64,9 @@ class MainWindow(QMainWindow):
         self.cmb_recipe.currentTextChanged.connect(self.on_recipe_changed)
         bar.addWidget(self.cmb_recipe)
 
-        self.btn_new = QPushButton("Nový")
-        self.btn_ren = QPushButton("Premenovať")
-        self.btn_del = QPushButton("Zmazať")
+        self.btn_new = QPushButton("NovĂ˝")
+        self.btn_ren = QPushButton("PremenovaĹĄ")
+        self.btn_del = QPushButton("ZmazaĹĄ")
         bar.addWidget(self.btn_new); bar.addWidget(self.btn_ren); bar.addWidget(self.btn_del)
 
         self.btn_new.clicked.connect(self.on_recipe_new)
@@ -77,8 +77,8 @@ class MainWindow(QMainWindow):
         self.panel_run = QWidget()
         self.runLayout = QVBoxLayout(self.panel_run)
 
-        # Veľký OK/NOK + metriky
-        self.lbl_status = QLabel("–")
+        # VeÄľkĂ˝ OK/NOK + metriky
+        self.lbl_status = QLabel("â€“")
         f = QFont(); f.setPointSize(28); f.setBold(True)
         self.lbl_status.setFont(f)
         self.lbl_status.setAlignment(Qt.AlignLeft)
@@ -86,17 +86,17 @@ class MainWindow(QMainWindow):
         self.lbl_metrics = QLabel("")
         self.lbl_metrics.setAlignment(Qt.AlignLeft)
 
-        self.lbl_stats_day = QLabel("Štatistiky dnes: –")
+        self.lbl_stats_day = QLabel("Ĺ tatistiky dnes: â€“")
 
-        self.btn_trigger = QPushButton("Manuálny TRIGGER")  # berieme z ring bufferu
+        self.btn_trigger = QPushButton("ManuĂˇlny TRIGGER")  # berieme z ring bufferu
         self.btn_trigger.clicked.connect(self.manual_trigger)
 
-        # Strip posledných snímok + Export CSV
+        # Strip poslednĂ˝ch snĂ­mok + Export CSV
         self.strip = ResultsStrip(self, limit=12)
         self.btn_export = QPushButton("Export CSV (dnes)")
         self.btn_export.clicked.connect(self.export_csv_today)
 
-        # Poradie: status → metriky → stats → trigger → strip → export
+        # Poradie: status â†’ metriky â†’ stats â†’ trigger â†’ strip â†’ export
         self.runLayout.addWidget(self.lbl_status)
         self.runLayout.addWidget(self.lbl_metrics)
         self.runLayout.addWidget(self.lbl_stats_day)
@@ -119,19 +119,19 @@ class MainWindow(QMainWindow):
         self.th_panel = ThresholdsPanel(self)
         v.addWidget(self.th_panel)
 
-        # Rozlíšenie (placeholder)
+        # RozlĂ­Ĺˇenie (placeholder)
         res_line = QHBoxLayout()
         v.addLayout(res_line)
-        res_line.addWidget(QLabel("Rozlíšenie:"))
+        res_line.addWidget(QLabel("RozlĂ­Ĺˇenie:"))
         self.cmb_res = QComboBox()
         self.cmb_res.addItems([
             "1920x1080@60 Y8",
             "1280x720@60 Y8",
-            "2592x1944@30 Y8 (len setup/pomalé)"
+            "2592x1944@30 Y8 (len setup/pomalĂ©)"
         ])
         res_line.addWidget(self.cmb_res)
 
-        # Expo/gain (XU stub – doplníme neskôr)
+        # Expo/gain (XU stub â€“ doplnĂ­me neskĂ´r)
         v.addWidget(QLabel("Expo [us] (XU stub):"))
         self.spin_expo = QSpinBox(); self.spin_expo.setRange(1, 1_000_000); self.spin_expo.setValue(8000)
         v.addWidget(self.spin_expo)
@@ -140,8 +140,8 @@ class MainWindow(QMainWindow):
         self.spin_gain = QSpinBox(); self.spin_gain.setRange(0, 48); self.spin_gain.setValue(0)
         v.addWidget(self.spin_gain)
 
-        # Uložiť GOLDEN z aktuálneho one-shotu
-        self.btn_save_golden = QPushButton("Uložiť GOLDEN (current one-shot)")
+        # UloĹľiĹĄ GOLDEN z aktuĂˇlneho one-shotu
+        self.btn_save_golden = QPushButton("UloĹľiĹĄ GOLDEN (current one-shot)")
         self.btn_save_golden.clicked.connect(self.save_golden_clicked)
         v.addWidget(self.btn_save_golden)
 
@@ -153,28 +153,28 @@ class MainWindow(QMainWindow):
         v.addWidget(self.xu)
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
-        # Zatiaľ používame to, čo je v ToolService (alebo "default")
+        # ZatiaÄľ pouĹľĂ­vame to, ÄŤo je v ToolService (alebo "default")
         return getattr(self.tool, "recipe", "default") or "default"
 
     # ---------- UI akcie ----------
     def toggle_mode(self):
         if self.mode == "RUN":
             self.mode = "SETUP"
-            self.mode_btn.setText("Prepnúť do RUN")
+            self.mode_btn.setText("PrepnĂşĹĄ do RUN")
             self.panel_setup.show()
             self.panel_run.hide()
         else:
             self.mode = "RUN"
-            self.mode_btn.setText("Prepnúť do SETUP")
+            self.mode_btn.setText("PrepnĂşĹĄ do SETUP")
             self.panel_setup.hide()
             self.panel_run.show()
 
     def manual_trigger(self):
         try:
-            frame = self.cam.last_frame()  # berieme posledný kontinuálny frame
+            frame = self.cam.last_frame()  # berieme poslednĂ˝ kontinuĂˇlny frame
             meta = {"mode": "manual"}
 
-            # D3: vyhodnotenie podľa receptu
+            # D3: vyhodnotenie podÄľa receptu
             nok = False
             metrics = {}
             try:
@@ -193,12 +193,12 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setStyleSheet("color: #33dd66;")
 
             st = self.stats.daily_for_recipe(self.current_recipe_name())
-            self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
+            self.lbl_stats_day.setText(f"Ĺ tatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
             self.lbl_metrics.setText(
                 f'SSIM={metrics.get("ssim","-")}  blobs={metrics.get("blob_count","-")}  area={metrics.get("total_area","-")}'
             )
 
-            # Uloženie (NOK flag pre retenciu)
+            # UloĹľenie (NOK flag pre retenciu)
             save_production_result(
                 frame,
                 meta | {"metrics": metrics},
@@ -207,7 +207,7 @@ class MainWindow(QMainWindow):
                 nok=nok
             )
 
-            # refresh stripu po uložení výsledku
+            # refresh stripu po uloĹľenĂ­ vĂ˝sledku
             self.strip.reload()
 
         except Exception as e:
@@ -216,7 +216,7 @@ class MainWindow(QMainWindow):
     def save_golden_clicked(self):
         frame = self.cam.one_shot()
         path = save_golden(frame, self.current_recipe_name())
-        self.lbl_status.setText(f"GOLDEN uložený: {path}")
+        self.lbl_status.setText(f"GOLDEN uloĹľenĂ˝: {path}")
 
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self)
@@ -236,7 +236,7 @@ class MainWindow(QMainWindow):
         items = self.recipes.list()
         self.cmb_recipe.clear()
         self.cmb_recipe.addItems(items)
-        # vyber aktuálny tool.recipe
+        # vyber aktuĂˇlny tool.recipe
         cur = getattr(self.tool, "recipe", "default")
         ix = self.cmb_recipe.findText(cur)
         if ix >= 0:
@@ -248,16 +248,16 @@ class MainWindow(QMainWindow):
             self.recipes.load(name)
             self.tool = self.recipes.tool
             self.lbl_status.setText("Recipe loaded.")
-            # refresh štatistík + strip
+            # refresh ĹˇtatistĂ­k + strip
             st = self.stats.daily_for_recipe(name)
-            self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
+            self.lbl_stats_day.setText(f"Ĺ tatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
             self.strip.reload()
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
     def on_recipe_new(self):
         from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "Nový recept", "Názov receptu:")
+        name, ok = QInputDialog.getText(self, "NovĂ˝ recept", "NĂˇzov receptu:")
         if not ok or not name.strip():
             return
         name = name.strip()
@@ -269,7 +269,7 @@ class MainWindow(QMainWindow):
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
         old = self.current_recipe_name()
-        new, ok = QInputDialog.getText(self, "Premenovať recept", f"Nový názov pre '{old}':")
+        new, ok = QInputDialog.getText(self, "PremenovaĹĄ recept", f"NovĂ˝ nĂˇzov pre '{old}':")
         if not ok or not new.strip():
             return
         new = new.strip()
@@ -282,9 +282,9 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QMessageBox
         name = self.current_recipe_name()
         if name == "default":
-            QMessageBox.warning(self, "Upozornenie", "Recept 'default' nie je možné zmazať.")
+            QMessageBox.warning(self, "Upozornenie", "Recept 'default' nie je moĹľnĂ© zmazaĹĄ.")
             return
-        r = QMessageBox.question(self, "Zmazať recept", f"Naozaj zmazať '{name}'?")
+        r = QMessageBox.question(self, "ZmazaĹĄ recept", f"Naozaj zmazaĹĄ '{name}'?")
         if r != QMessageBox.Yes:
             return
         self.recipes.delete(name)
@@ -295,7 +295,7 @@ class MainWindow(QMainWindow):
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
         if rid is None:
-            self.lbl_status.setText("Nie je vybraný recept.")
+            self.lbl_status.setText("Nie je vybranĂ˝ recept.")
             return
         out = f"/data/runs/{self.current_recipe_name()}_today.csv"
         try:
@@ -303,7 +303,6 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(f"CSV export: {path}")
         except Exception as e:
             self.lbl_status.setText(f"CSV error: {e}")
-
 
 
 
