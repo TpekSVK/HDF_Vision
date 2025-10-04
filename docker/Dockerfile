@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 \
     libxcb-xfixes0 libxcb-xinerama0 libxcb-xinput0 \
     libfontconfig1 libfreetype6 libdbus-1-3 \
+    libv4l-0 v4l-utils \
     # ostatné
     libjpeg-dev libwebp-dev libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
