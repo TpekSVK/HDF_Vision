@@ -1,5 +1,5 @@
 # app/ui/golden_wizard.py
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap, QAction
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QWidget
@@ -7,7 +7,6 @@ from PySide6.QtWidgets import (
 
 import json
 from pathlib import Path
-from app.services.live_preview_service import LivePreviewService
 
 from app.ui.draw_view import DrawView
 from app.services.storage_service import save_golden, save_validation_image
@@ -35,8 +34,10 @@ class GoldenWizard(QDialog):
         self.type_sel.addItems(["pose","roi","ignore"])
 
         self.view = DrawView(self)
+        # po self.view = DrawView(self)
         self.view.set_shape_type(self.shape_sel.currentText())
         self.view.set_region_type(self.type_sel.currentText())
+
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
         top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
@@ -55,7 +56,6 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_val_ok)
         buttons.addWidget(btn_val_nok)
         buttons.addWidget(btn_save_recipe)
-
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
