@@ -1,5 +1,5 @@
 # Jetson Orin Nano (L4T) – JetPack 6.2
-FROM nvcr.io/nvidia/l4t-jetpack:r36.4.2
+FROM nvcr.io/nvidia/l4t-jetpack:r36.4.0
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Etc/UTC \
