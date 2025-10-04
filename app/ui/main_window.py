@@ -103,7 +103,7 @@ class MainWindow(QMainWindow):
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self)
         dlg.resize(1200, 800)
-    dlg.exec()
+        dlg.exec()
 
     @staticmethod
     def _ts():
