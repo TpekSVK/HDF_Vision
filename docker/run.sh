@@ -2,7 +2,6 @@
 set -euo pipefail
 
 IMAGE_NAME="${IMAGE_NAME:-hdf_vision:dev}"
-
 echo "[diag] IMAGE_NAME=${IMAGE_NAME}"
 
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
@@ -10,23 +9,24 @@ if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
   exit 1
 fi
 
-# X11 pre GUI
+# X11 (GUI)
 xhost +local:root >/dev/null 2>&1 || true
-
 echo "[diag] DISPLAY=${DISPLAY:-<unset>}"
-echo "[diag] /dev/video* na hostovi:"
-ls -l /dev/video* 2>/dev/null || true
+echo "[diag] /dev/video* na hostovi:"; ls -l /dev/video* 2>/dev/null || true
 
-# Spustenie kontajnera (POZOR: žiadny prázdny riadok po spätnom lomítku!)
+# Vyber device (ak chceš fixne video1, exportuj CAM_DEV=/dev/video1)
+CAM_DEV="${CAM_DEV:-/dev/video0}"
+
+# Spustenie (povolené V4L2 ioctl bez full privileged)
 exec docker run --rm -it \
   --runtime nvidia \
   --network host \
   --security-opt seccomp=unconfined \
   --security-opt apparmor=unconfined \
   --cap-add SYS_ADMIN \
-  --device /dev/video0:/dev/video0 \
-  --device /dev/video1:/dev/video1 \
+  --device ${CAM_DEV}:${CAM_DEV} \
   --device-cgroup-rule='c 81:* rmw' \
+  --env CAM_DEV="${CAM_DEV}" \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env QT_QPA_PLATFORM=xcb \
@@ -35,6 +35,7 @@ exec docker run --rm -it \
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
+  -v /dev/bus/usb:/dev/bus/usb \
   -v /data:/data \
   -v "$(pwd)/app":/workspace/app \
   -v "$(pwd)/data":/workspace/data \

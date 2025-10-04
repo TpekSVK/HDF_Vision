@@ -87,13 +87,13 @@ class CameraService:
 
     # ----------------- GStreamer fallback -----------------
 
-    def _gst_pipeline_str(self, dev, fmt="GRAY8"):
-        caps = f"video/x-raw,format={fmt},width={self.width},height={self.height},framerate={self.fps}/1"
-        # videoconvert pred appsink pre robustnosť medzi formátmi
-        return (
-            f"v4l2src device={dev} ! {caps} ! "
-            f"videoconvert ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
-        )
+    def _gst_pipeline_str(self, dev, use_convert=False):
+        caps = f"video/x-raw,format=GRAY8,width={self.width},height={self.height},framerate={self.fps}/1"
+        if use_convert:
+            return f"v4l2src device={dev} io-mode=2 ! videoconvert ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+        else:
+            return f"v4l2src device={dev} io-mode=2 ! {caps} ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
+        
 
     def _on_new_sample(self, sink):
         sample = sink.emit("pull-sample")
