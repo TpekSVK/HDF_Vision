@@ -99,6 +99,7 @@ class MainWindow(QMainWindow):
                 pass
         finally:
             e.accept()
+            
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self)
         dlg.resize(1200, 800)
