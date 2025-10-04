@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-IMAGE_NAME=hdf_vision:dev
+IMAGE_NAME="${IMAGE_NAME:-hdf_vision:dev}"
 
-# Diagnostika
 echo "[diag] IMAGE_NAME=${IMAGE_NAME}"
 
-# Over, že image existuje
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
   echo "[err] Docker image '${IMAGE_NAME}' nenájdený. Spusť najprv: bash docker/build.sh"
   exit 1
 fi
 
-# X11 pre GUI (bezpečne ignoruj chybu)
+# X11 pre GUI
 xhost +local:root >/dev/null 2>&1 || true
 
-# Overenia: DISPLAY a /dev/video*
 echo "[diag] DISPLAY=${DISPLAY:-<unset>}"
 echo "[diag] /dev/video* na hostovi:"
 ls -l /dev/video* 2>/dev/null || true
 
-# Spustenie kontajnera
+# Spustenie kontajnera (POZOR: žiadny prázdny riadok po spätnom lomítku!)
 exec docker run --rm -it \
   --runtime nvidia \
   --network host \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env QT_QPA_PLATFORM=xcb \
-  --env QT_DEBUG_PLUGINS=1 \
-
+  --env QT_DEBUG_PLUGINS=0 \
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
   --ulimit core=-1 \
