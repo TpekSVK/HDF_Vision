@@ -165,6 +165,9 @@ class DrawView(QGraphicsView):
             color = _color_for_type(self.current_type)
 
             if self.current_shape == "rect":
+                if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1:
+                    # už existuje – nič nové nevytváraj (užívateľ môže predošlý zmazať a nakresliť znova)
+                    return
                 # začni kresliť rectangle – 1. klik fixuje začiatočný bod
                 self._drawing_rect = True
                 self._rect_start = pos
@@ -174,6 +177,9 @@ class DrawView(QGraphicsView):
                 return
 
             elif self.current_shape == "circle":
+                if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1 and len(self._circle_pts) == 0:
+                    return
+
                 # 3-bodové: zbieraj body na obvode
                 self._circle_pts.append(pos)
                 if len(self._circle_pts) == 1:
@@ -209,6 +215,11 @@ class DrawView(QGraphicsView):
                     return
 
             elif self.current_shape == "poly":
+                if self._poly_item is None:
+                    if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1:
+                        return
+                    # založ nový polygon...
+
                 if self._poly_item is None:
                     # založ nový polygon s 1. bodom
                     self._poly_item = PolyItem([(pos.x(), pos.y())], color)
@@ -321,3 +332,12 @@ class DrawView(QGraphicsView):
                     "geom": it.points(),
                 })
         return regs
+    
+    def _count_type(self, reg_type: str) -> int:
+        n = 0
+        for it in self._scene.items():
+            if it is self._bg:
+                continue
+            if hasattr(it, "reg_type") and it.reg_type == reg_type:
+                n += 1
+        return n
