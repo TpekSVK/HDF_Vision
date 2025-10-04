@@ -5,6 +5,7 @@ import numpy as np
 import threading
 import time
 import queue
+from collections import deque
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -53,6 +54,9 @@ class CameraService:
         # zásobník kandidátov zariadení
         self.devices = [self.device, "/dev/video0", "/dev/video1"]
 
+        self._ring = deque(maxlen=5)
+        self._t_ring = None
+        self._stop_ring = threading.Event()
     # =========================
     # GStreamer časť (preferovaná)
     # =========================
@@ -259,6 +263,7 @@ class CameraService:
         for dev in self.devices:
             if self._start_v4l2(dev):
                 return
+        self.start_continuous()
 
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
@@ -302,3 +307,41 @@ class CameraService:
             self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
+        self.stop_continuous()
+
+    def start_continuous(self):
+        """Spustí ľahký kontinuálny zber do ring bufferu (bez GStreamer UI)."""
+        if self._t_ring and self._t_ring.is_alive():
+            return
+        self._stop_ring.clear()
+        self._t_ring = threading.Thread(target=self._loop_ring, daemon=True)
+        self._t_ring.start()
+
+    def _loop_ring(self):
+        import time
+        while not self._stop_ring.is_set():
+            ok, frame = self.cap.read()
+            if not ok or frame is None:
+                time.sleep(0.002); continue
+            if frame.ndim == 3 and frame.shape[2] == 1:
+                frame = frame[:,:,0]
+            # Ak by bola Y16 -> previesť na u8 pre hodnotenie/uloženie
+            if frame.dtype != np.uint8:
+                import cv2
+                f = frame
+                # normalizácia 16->8 (konzistentne)
+                f8 = cv2.convertScaleAbs(f, alpha=(255.0/4095.0) if f.dtype==np.uint16 else 1.0)
+                frame = f8
+            self._ring.append(frame)
+
+    def last_frame(self):
+        """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
+        if self._ring:
+            return self._ring[-1]
+        return self.one_shot()
+
+    def stop_continuous(self):
+        try:
+            self._stop_ring.set()
+        except Exception:
+            pass

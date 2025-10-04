@@ -1,8 +1,11 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QImage, QPixmap
+
+from app.services.live_preview_service import LivePreviewService
+from app.ui.xu_panel import XUPanel
 
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_golden, save_production_result
@@ -12,7 +15,6 @@ from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
-
 
 
 class MainWindow(QMainWindow):
@@ -83,29 +85,23 @@ class MainWindow(QMainWindow):
         self.lbl_metrics = QLabel("")
         self.lbl_metrics.setAlignment(Qt.AlignLeft)
 
-        self.btn_trigger = QPushButton("Manuálny TRIGGER (one-shot)")
-        self.btn_trigger.clicked.connect(self.manual_trigger)
-        
-        # Strip posledných snímok
-        self.strip = ResultsStrip(self, limit=12)
+        self.lbl_stats_day = QLabel("Štatistiky dnes: –")
 
-        # Export CSV
+        self.btn_trigger = QPushButton("Manuálny TRIGGER")  # berieme z ring bufferu
+        self.btn_trigger.clicked.connect(self.manual_trigger)
+
+        # Strip posledných snímok + Export CSV
+        self.strip = ResultsStrip(self, limit=12)
         self.btn_export = QPushButton("Export CSV (dnes)")
         self.btn_export.clicked.connect(self.export_csv_today)
 
-        # Poradie v RUN paneli (status/metriky/stats už máš)
-        self.runLayout.addWidget(self.strip)
-        self.runLayout.addWidget(self.btn_export)
-
-
-
-        self.lbl_stats_day = QLabel("Štatistiky dnes: –")
-
-        # Poradie: status → metriky → stats → tlačidlo
+        # Poradie: status → metriky → stats → trigger → strip → export
         self.runLayout.addWidget(self.lbl_status)
         self.runLayout.addWidget(self.lbl_metrics)
         self.runLayout.addWidget(self.lbl_stats_day)
         self.runLayout.addWidget(self.btn_trigger)
+        self.runLayout.addWidget(self.strip)
+        self.runLayout.addWidget(self.btn_export)
 
         layout.addWidget(self.panel_run)
 
@@ -118,11 +114,9 @@ class MainWindow(QMainWindow):
         self.btn_wizard.clicked.connect(self.open_wizard)
         v.addWidget(self.btn_wizard)
 
-        
         v.addWidget(QLabel("Limity / Prahy"))
         self.th_panel = ThresholdsPanel(self)
         v.addWidget(self.th_panel)
-
 
         # Rozlíšenie (placeholder)
         res_line = QHBoxLayout()
@@ -150,6 +144,25 @@ class MainWindow(QMainWindow):
         self.btn_save_golden.clicked.connect(self.save_golden_clicked)
         v.addWidget(self.btn_save_golden)
 
+        # --- Live náhľad (SETUP) ---
+        self.live_on = QComboBox(); self.live_on.addItems(["Live OFF","Live ON"])
+        self.live_on.currentIndexChanged.connect(self._live_toggle)
+        v.addWidget(self.live_on)
+
+        self.live_lbl = QLabel("—")
+        self.live_lbl.setFixedHeight(320)
+        self.live_lbl.setAlignment(Qt.AlignCenter)
+        v.addWidget(self.live_lbl)
+
+        # XU panel
+        self.xu = XUPanel(self)
+        v.addWidget(self.xu)
+
+        # live helpery
+        self._lp = LivePreviewService(getattr(self.cam, "devices", ["/dev/video0"])[0], 1280, 720, 60)
+        self._live_timer = QTimer(self); self._live_timer.setInterval(50)  # ~20 FPS
+        self._live_timer.timeout.connect(self._live_tick)
+
         layout.addWidget(self.panel_setup)
         self.panel_setup.hide()  # default RUN
 
@@ -173,7 +186,7 @@ class MainWindow(QMainWindow):
 
     def manual_trigger(self):
         try:
-            frame = self.cam.one_shot()  # už uint8 gray
+            frame = self.cam.last_frame()  # berieme posledný kontinuálny frame
             meta = {"mode": "manual"}
 
             # D3: vyhodnotenie podľa receptu
@@ -226,6 +239,12 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, e):
+        # najprv vypni live, potom kameru, potom zavri okno
+        try:
+            self._live_timer.stop()
+            self._lp.stop()
+        except Exception:
+            pass
         try:
             self.cam.stop()
         finally:
@@ -248,12 +267,12 @@ class MainWindow(QMainWindow):
             self.recipes.load(name)
             self.tool = self.recipes.tool
             self.lbl_status.setText("Recipe loaded.")
-            # refresh štatistík
+            # refresh štatistík + strip
             st = self.stats.daily_for_recipe(name)
             self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
+            self.strip.reload()
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
-            self.strip.reload()
 
     def on_recipe_new(self):
         from PySide6.QtWidgets import QInputDialog
@@ -291,7 +310,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
-        
+
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
         if rid is None:
@@ -303,3 +322,28 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(f"CSV export: {path}")
         except Exception as e:
             self.lbl_status.setText(f"CSV error: {e}")
+
+    def _live_toggle(self, idx):
+        if idx == 1:  # ON
+            try:
+                self._lp.start()
+                self._live_timer.start()
+            except Exception as e:
+                self.live_lbl.setText(f"Live error: {e}")
+                self.live_on.setCurrentIndex(0)
+        else:
+            try:
+                self._live_timer.stop()
+                self._lp.stop()
+                self.live_lbl.setText("—")
+            except Exception:
+                pass
+
+    def _live_tick(self):
+        img = self._lp.last_frame_u8()
+        if img is None:
+            return
+        h, w = img.shape[:2]
+        q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+        pm = QPixmap.fromImage(q.copy()).scaled(self.live_lbl.width(), self.live_lbl.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.live_lbl.setPixmap(pm)
