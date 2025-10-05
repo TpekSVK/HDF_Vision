@@ -134,43 +134,82 @@ def _roi_bbox(mask_u8: np.ndarray) -> Tuple[int,int,int,int] | None:
 def _template_align_in_roi(golden_u8: np.ndarray,
                            frame_u8: np.ndarray,
                            mask_roi: np.ndarray,
-                           search_margin: int = 20) -> Tuple[np.ndarray, Dict[str, float]]:
+                           search_margin: int = 20) -> tuple[np.ndarray, dict]:
     """
-    V ROI vyreže template z golden-u a hľadá ho vo frame v okne ±margin.
-    Vráti zarovnaný frame (translačne) a metriky: dx, dy, corr.
+    Coarse-to-fine template matching v ROI:
+      - 1) downscale vyhľadávacie okno aj template (r ~ 0.5..0.25), nájdi hrubú polohu
+      - 2) okolo nájdenej polohy sprav malý fine search v plnom rozlíšení
+    Vracia zarovnaný frame a diagnostiku.
     """
     bbox = _roi_bbox(mask_roi)
     if bbox is None:
         return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 1.0, "tm_used": 0}
 
+    import cv2, numpy as np
     x, y, w, h = bbox
-    # template (golden ROI, len pixle v maske – nepovinné; pre jednoduchosť berieme plný rect)
     templ = golden_u8[y:y+h, x:x+w]
 
-    # vyhľadávacie okno vo frame
     H, W = frame_u8.shape[:2]
     xs = max(0, x - search_margin)
     ys = max(0, y - search_margin)
     xe = min(W, x + w + search_margin)
     ye = min(H, y + h + search_margin)
     search = frame_u8[ys:ye, xs:xe]
-    if search.shape[0] < h or search.shape[1] < w:
-        # okno je menšie než template – nedá sa hľadať
+    sh, sw = search.shape[:2]
+    if sh < h or sw < w:
         return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 0.0, "tm_used": 0}
 
-    # match
-    res = cv2.matchTemplate(search, templ, cv2.TM_CCOEFF_NORMED)
-    minVal, maxVal, minLoc, maxLoc = cv2.minMaxLoc(res)
-    # pozícia nájdenia v rámci search
-    best_x, best_y = maxLoc
-    # posun frame ROI voči golden ROI (kladný znamená: obsah vo frame je posunutý doprava/dole)
-    dx = float((xs + best_x) - x)
-    dy = float((ys + best_y) - y)
+    # --- Coarse stage: downscale veľké okná, aby výpočet bol lacný ---
+    # cieľ: max(search_dim) ~ 600 px (tuning podľa výkonu)
+    max_dim = max(sh, sw)
+    if max_dim > 600:
+        scale = 600.0 / max_dim
+    else:
+        scale = 1.0
 
-    # Na dorovnanie posunieme celý frame o (-dx, -dy)
+    if scale < 1.0:
+        dsize_s = (max(1, int(sw * scale)), max(1, int(sh * scale)))
+        dsize_t = (max(1, int(w  * scale)), max(1, int(h  * scale)))
+        search_s = cv2.resize(search, dsize_s, interpolation=cv2.INTER_AREA)
+        templ_s  = cv2.resize(templ,  dsize_t, interpolation=cv2.INTER_AREA)
+        res_s = cv2.matchTemplate(search_s, templ_s, cv2.TM_CCOEFF_NORMED)
+        _, maxVal_s, _, maxLoc_s = cv2.minMaxLoc(res_s)
+        # premapuj hrubú polohu do plného rozlíšenia
+        coarse_x = int(round(maxLoc_s[0] / scale))
+        coarse_y = int(round(maxLoc_s[1] / scale))
+    else:
+        res = cv2.matchTemplate(search, templ, cv2.TM_CCOEFF_NORMED)
+        _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
+        best_x = maxLoc[0]; best_y = maxLoc[1]
+        dx = float((xs + best_x) - x)
+        dy = float((ys + best_y) - y)
+        aligned = warp_by_translation(frame_u8, -dx, -dy)
+        return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(maxVal), "tm_used": 1}
+
+    # --- Fine stage: malá oblasť okolo coarse polohy v plnom rozlíšení ---
+    # vyrež malé okno ~ (w+40)×(h+40) okolo coarse_x/coarse_y (tuning)
+    pad = 20
+    fx1 = xs + max(0, coarse_x - pad)
+    fy1 = ys + max(0, coarse_y - pad)
+    fx2 = min(xe, fx1 + w + 2*pad)
+    fy2 = min(ye, fy1 + h + 2*pad)
+    fine = frame_u8[fy1:fy2, fx1:fx2]
+    if fine.shape[0] < h or fine.shape[1] < w:
+        # fallback: použijeme coarse výsledok
+        best_x = coarse_x
+        best_y = coarse_y
+        corr   = float(maxVal_s if scale < 1.0 else 0.0)
+    else:
+        res_f = cv2.matchTemplate(fine, templ, cv2.TM_CCOEFF_NORMED)
+        _, maxVal_f, _, maxLoc_f = cv2.minMaxLoc(res_f)
+        best_x = (fx1 - x) + maxLoc_f[0]
+        best_y = (fy1 - y) + maxLoc_f[1]
+        corr   = float(maxVal_f)
+
+    dx = float((x + best_x) - x)  # = best_x
+    dy = float((y + best_y) - y)  # = best_y
     aligned = warp_by_translation(frame_u8, -dx, -dy)
-
-    return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(maxVal), "tm_used": 1}
+    return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(corr), "tm_used": 1}
 
 # ---------- Hlavná analýza ----------
 def analyze(golden: np.ndarray,
