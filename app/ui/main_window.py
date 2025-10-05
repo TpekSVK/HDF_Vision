@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.panel_setup)
         self.panel_setup.hide()  # default RUN
+        
     # Spusť retenciu na pozadí (jednorazovo pri štarte)
     def _run_retention():
         try:
