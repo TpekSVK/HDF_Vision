@@ -186,7 +186,7 @@ def analyze(golden: np.ndarray,
         max_blob_count=10,
         # Template matching tuning:
         tm_enable=1,          # 1=zap., 0=vyp.
-        tm_margin=20,         # px okolo ROI
+        tm_margin=200,         # px okolo ROI
         tm_min_corr=0.55      # ak korelácia veľmi nízka, efekt bude slabý
     )
     if thresholds:
