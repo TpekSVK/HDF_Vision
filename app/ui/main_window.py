@@ -142,15 +142,51 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.chk_heatmap)
         run.addLayout(actions)
 
+        # Live view + pravý sidebar so štatistikami
+        preview_row = QHBoxLayout(); preview_row.setSpacing(12)
+
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
-        self.live_view.setMinimumSize(1024, 576)   # stabilný 16:9 priemyselný náhľad
-        self.live_view.setFixedSize(1024, 576)
+        self.live_view.setMinimumSize(960, 540)
+        self.live_view.setFixedSize(960, 540)
         self.live_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
         self.live_view.setContentsMargins(0,0,0,0)
-        run.addWidget(self.live_view)
+        preview_row.addWidget(self.live_view, 0)
+
+        # Pravý panel (štatistiky + posledné metriky)
+        self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
+        side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
+        self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
+
+        # Nadpis a recept
+        t = QLabel("Štatistiky & Metriky"); tf = QFont(); tf.setPointSize(12); tf.setBold(True); t.setFont(tf)
+        side.addWidget(t)
+        self.sb_recipe = QLabel("Recept: –")
+        side.addWidget(self.sb_recipe)
+
+        # Denné štatistiky
+        side.addWidget(QLabel("— Dnes —"))
+        self.sb_total = QLabel("Celkom: –")
+        self.sb_ok    = QLabel("OK: –")
+        self.sb_nok   = QLabel("NOK: –")
+        self.sb_yield = QLabel("Yield: –")
+        for w in (self.sb_total, self.sb_ok, self.sb_nok, self.sb_yield):
+            side.addWidget(w)
+
+        # Posledné meranie (TRIGGER)
+        side.addWidget(QLabel("— Posledné meranie —"))
+        self.sb_ssim  = QLabel("SSIM: –")
+        self.sb_blobs = QLabel("Bloby: –")
+        self.sb_area  = QLabel("Plocha: –")
+        for w in (self.sb_ssim, self.sb_blobs, self.sb_area):
+            side.addWidget(w)
+
+        side.addStretch(1)
+        preview_row.addWidget(self.side_panel, 1)
+
+        run.addLayout(preview_row)
 
         # deliaca čiara
         line2 = QFrame(); line2.setFrameShape(QFrame.HLine); line2.setFrameShadow(QFrame.Sunken)
@@ -179,6 +215,9 @@ class MainWindow(QMainWindow):
         self._run_timer.setInterval(100)  # ~10 FPS
         self._run_timer.timeout.connect(self._update_live_view)
         # spúšťa sa až pri Live ON v _toggle_live()
+
+        # inicializuj pravý panel hodnotami
+        self._update_sidebar()
 
         # maximalizovať a uzamknúť veľkosť okna po zobrazení
         QTimer.singleShot(0, self._maximize_and_lock)
@@ -286,6 +325,9 @@ class MainWindow(QMainWindow):
             self.lbl_metrics.setText(
                 f'SSIM={metrics.get("ssim","-")}  blobs={metrics.get("blob_count","-")}  area={metrics.get("total_area","-")}'
             )
+
+            # aktualizuj side panel
+            self._update_sidebar(st, metrics)
 
             # Uloženie (NOK flag pre retenciu)
             save_production_result(
@@ -416,10 +458,32 @@ class MainWindow(QMainWindow):
         else:
             diff_norm = diff
         heat = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)  # BGR
-        # prehľadná zmes (alpha 0.45)
         base = cv2.cvtColor(frame_u8, cv2.COLOR_GRAY2BGR)
         out = cv2.addWeighted(base, 0.55, heat, 0.45, 0.0)
         return out
+
+    def _update_sidebar(self, st: dict | None = None, metrics: dict | None = None):
+        """Naplní pravý panel dennými štatistikami a poslednými metrikami."""
+        try:
+            name = self.current_recipe_name()
+            self.sb_recipe.setText(f"Recept: {name}")
+            if st is None:
+                st = self.stats.daily_for_recipe(name)
+            self.sb_total.setText(f"Celkom: {st.get('total','–')}")
+            self.sb_ok.setText(f"OK: {st.get('ok','–')}")
+            self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
+            self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
+            # metriky posledného merania
+            if metrics is None:
+                self.sb_ssim.setText("SSIM: –")
+                self.sb_blobs.setText("Bloby: –")
+                self.sb_area.setText("Plocha: –")
+            else:
+                self.sb_ssim.setText(f"SSIM: {metrics.get('ssim','-')}")
+                self.sb_blobs.setText(f"Bloby: {metrics.get('blob_count','-')}")
+                self.sb_area.setText(f"Plocha: {metrics.get('total_area','-')}")
+        except Exception:
+            pass
 
     def _maximize_and_lock(self):
         try:
@@ -456,6 +520,10 @@ class MainWindow(QMainWindow):
             st = self.stats.daily_for_recipe(name)
             self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
             self.strip.reload()
+            # update sidebar (nový recept, reset posledných metrík)
+            self._update_sidebar(st, None)
+        except Exception as e:
+            self.lbl_status.setText(f"Load failed: {e}")
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
