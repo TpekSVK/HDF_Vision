@@ -75,7 +75,11 @@ RUN mkdir -p build && cd build && cmake \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_opencv_python2=OFF \
   -D BUILD_opencv_python3=ON \
-  -D BUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,features2d,calib3d,python3,cudev,cudaarithm,cudaimgproc,cudawarping,cudaimgproc,cudafilters,cudawarping \
+  -D BUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,features2d,calib3d,python3,cudev,cudaarithm,cudaimgproc,cudafilters,cudawarping \
+  -D CMAKE_CUDA_ARCHITECTURES=87 \
+  -D OPENCV_GENERATE_PKGCONFIG=ON \
+  -D WITH_OPENCL=OFF \
+
   $(if [ "${OPENCV_CONTRIB}" = "ON" ]; then echo "-D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv-build/opencv_contrib/modules"; fi) \
   ../opencv && \
   make -j2 && make install && ldconfig && \

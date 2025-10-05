@@ -7,12 +7,12 @@ from app.services.mask_utils import regions_to_masks
 USE_CUDA = hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0
 
 # Pomocné GPU funkcie
-def _gpu_upload(u8):
+def _gpu_upload(u8: np.ndarray):
     g = cv2.cuda_GpuMat()
     g.upload(u8)
     return g
 
-def _gpu_gauss(gpu_src, ksize=3, sigma=0.8):
+def _gpu_gauss(gpu_src, ksize: int = 3, sigma: float = 0.8):
     k = (ksize, ksize)
     gf = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_8UC1, k, sigma)
     return gf.apply(gpu_src)
@@ -21,26 +21,33 @@ def _gpu_absdiff(a, b):
     return cv2.cuda.absdiff(a, b)
 
 def _gpu_threshold(gpu_src, thresh, maxv=255, typ=cv2.THRESH_BINARY):
-    return cv2.cuda.threshold(gpu_src, thresh, maxv, typ)[1]  # returns (retval, dst)
+    # returns (retval, dst)
+    return cv2.cuda.threshold(gpu_src, thresh, maxv, typ)[1]
 
 def _gpu_morph_open_then_dilate(gpu_bin, k_open=3, k_dil=3):
     se_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
     se_dil  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_dil, k_dil))
-    f_open = cv2.cuda.createMorphologyFilter(cv2.MORPH_OPEN, cv2.CV_8UC1, se_open)
-    f_dil  = cv2.cuda.createMorphologyFilter(cv2.MORPH_DILATE, cv2.CV_8UC1, se_dil)
+    f_open = cv2.cuda.createMorphologyFilter(cv2.MORPH_OPEN, cv2.CV_8UC1, se_open, iterations=1)
+    f_dil  = cv2.cuda.createMorphologyFilter(cv2.MORPH_DILATE, cv2.CV_8UC1, se_dil, iterations=1)
     out = f_open.apply(gpu_bin)
     out = f_dil.apply(out)
     return out
 
 def _gpu_warp_by_translation(gpu_src, dx, dy):
-    h, w = gpu_src.size()[0], gpu_src.size()[1]  # size() -> rows, cols
-    M = np.array([[1,0,dx],[0,1,dy]], np.float32)
-    return cv2.cuda.warpAffine(gpu_src, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+    # size() -> (rows, cols)
+    rows, cols = gpu_src.size()
+    M = np.array([[1, 0, dx],
+                  [0, 1, dy]], np.float32)
+    return cv2.cuda.warpAffine(
+        gpu_src, M, (cols, rows),
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT101
+    )
 
 def _gpu_match_template_coarse_fine(frame_u8, templ_u8, xs, ys, xe, ye):
     """
     GPU coarse->fine matchTemplate v obdĺžniku [xs:xe, ys:ye].
-    Vracia (dx, dy, corr).
+    Vracia (dx, dy, corr) relatívne voči (xs, ys).
     """
     H, W = frame_u8.shape[:2]
     search = frame_u8[ys:ye, xs:xe]
@@ -64,9 +71,9 @@ def _gpu_match_template_coarse_fine(frame_u8, templ_u8, xs, ys, xe, ye):
         gRes = cv2.cuda.matchTemplate(gS, gT, cv2.TM_CCOEFF_NORMED)
         res  = gRes.download()
         _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
-        dx = float((xs + maxLoc[0]))
-        dy = float((ys + maxLoc[1]))
-        return (dx - (xs), dy - (ys), float(maxVal))  # relatívne voči (x,y) vyrátame nižšie
+        dx = float(maxLoc[0])
+        dy = float(maxLoc[1])
+        return dx, dy, float(maxVal)
 
     # --- fine okno v plnom rozlíšení ---
     pad = 20
@@ -80,7 +87,7 @@ def _gpu_match_template_coarse_fine(frame_u8, templ_u8, xs, ys, xe, ye):
 
     gF, gT = _gpu_upload(fine), _gpu_upload(templ_u8)
     gRes = cv2.cuda.matchTemplate(gF, gT, cv2.TM_CCOEFF_NORMED)
-    res  = gRes.download()
+    res = gRes.download()
     _, maxVal_f, _, maxLoc_f = cv2.minMaxLoc(res)
 
     best_x = (fx1 - xs) + maxLoc_f[0]
@@ -89,57 +96,39 @@ def _gpu_match_template_coarse_fine(frame_u8, templ_u8, xs, ys, xe, ye):
 
 def _gpu_ssim_u8(img_u8, ref_u8, mask_u8=None):
     """
-    SSIM na GPU: (u,v,cov) cez Gaussian filtery a element-wise operácie.
-    Výsledok je skalar (download len malých medzivýsledkov).
+    SSIM na GPU: pracuje v 32F (Gaussian + element-wise),
+    výsledné štatistiky sa spriemerujú na CPU (celé alebo maskované).
     """
-    gI = _gpu_upload(img_u8)
-    gR = _gpu_upload(ref_u8)
+    gI8 = _gpu_upload(img_u8)
+    gR8 = _gpu_upload(ref_u8)
 
-    # Gaussian μ
-    gGauss = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_32FC1, (11,11), 1.5)
-    muI = gGauss.apply(gI)
-    muR = gGauss.apply(gR)
+    gI32 = cv2.cuda.convertTo(gI8, cv2.CV_32F)
+    gR32 = cv2.cuda.convertTo(gR8, cv2.CV_32F)
 
-    # square + product
-    sqI = cv2.cuda.multiply(gI, gI, scale=1.0)     # I^2 (8U*8U -> 8U; presnosť OK na SSIM? lepšie pretypovať)
-    sqR = cv2.cuda.multiply(gR, gR, scale=1.0)
-    gI32 = cv2.cuda.convertTo(gI, cv2.CV_32F)
-    gR32 = cv2.cuda.convertTo(gR, cv2.CV_32F)
-    muI32 = muI                              # 32F
-    muR32 = muR
+    gGauss = cv2.cuda.createGaussianFilter(cv2.CV_32F, cv2.CV_32F, (11, 11), 1.5)
+    muI = gGauss.apply(gI32)
+    muR = gGauss.apply(gR32)
 
-    # σ^2 = G(I^2) - μ^2
-    gi2 = cv2.cuda.multiply(gI32, gI32)      # 32F
-    gr2 = cv2.cuda.multiply(gR32, gR32)
-    GI2 = gGauss.apply(gi2)
-    GR2 = gGauss.apply(gr2)
-    muI2 = cv2.cuda.multiply(muI32, muI32)
-    muR2 = cv2.cuda.multiply(muR32, muR32)
+    GI2 = gGauss.apply(cv2.cuda.multiply(gI32, gI32))
+    GR2 = gGauss.apply(cv2.cuda.multiply(gR32, gR32))
+    muI2 = cv2.cuda.multiply(muI, muI)
+    muR2 = cv2.cuda.multiply(muR, muR)
     varI = cv2.cuda.subtract(GI2, muI2)
     varR = cv2.cuda.subtract(GR2, muR2)
 
-    # cov = G(I*R) - μI*μR
-    IR = cv2.cuda.multiply(gI32, gR32)
-    GIR = gGauss.apply(IR)
-    muImuR = cv2.cuda.multiply(muI32, muR32)
+    GIR = gGauss.apply(cv2.cuda.multiply(gI32, gR32))
+    muImuR = cv2.cuda.multiply(muI, muR)
     cov = cv2.cuda.subtract(GIR, muImuR)
 
-    # Ak je maska, aplikuj ju, stiahni len maskované pixely (lacné: 8-bit maska -> boolean filtrácia sa spraví CPU)
-    m = None
+    muI_np = muI.download(); muR_np = muR.download()
+    varI_np = varI.download(); varR_np = varR.download(); cov_np = cov.download()
+
     if mask_u8 is not None and mask_u8.any():
-        # stiahneme len nevyhnutné štatistiky a aplikujeme masku na CPU
-        muI_np = muI.download(); muR_np = muR.download()
-        varI_np = varI.download(); varR_np = varR.download(); cov_np = cov.download()
-        m = mask_u8 > 0
-        # SSIM skalar podľa vzorca
-        L = 255.0; C1 = (0.01*L)**2; C2 = (0.03*L)**2
+        m = mask_u8.astype(bool)
         ux = float(muI_np[m].mean()); uy = float(muR_np[m].mean())
         vx = float(varI_np[m].mean()); vy = float(varR_np[m].mean())
         cxy = float(cov_np[m].mean())
     else:
-        # globálne priemery
-        muI_np = muI.download(); muR_np = muR.download()
-        varI_np = varI.download(); varR_np = varR.download(); cov_np = cov.download()
         ux = float(muI_np.mean()); uy = float(muR_np.mean())
         vx = float(varI_np.mean()); vy = float(varR_np.mean())
         cxy = float(cov_np.mean())
@@ -152,9 +141,8 @@ def _gpu_ssim_u8(img_u8, ref_u8, mask_u8=None):
 
 # ---------- Pomocné okná/filtre ----------
 def _hanning_window(shape):
-    hy = cv2.createHanningWindow((shape[1], 1), cv2.CV_32F)
-    hx = cv2.createHanningWindow((1, shape[0]), cv2.CV_32F)
-    return (hx @ hy).astype(np.float32)
+    # shape = (H, W)
+    return cv2.createHanningWindow((shape[1], shape[0]), cv2.CV_32F)
 
 def estimate_translation_phasecorr(img_u8: np.ndarray, ref_u8: np.ndarray) -> tuple[float,float,float]:
     assert img_u8.shape == ref_u8.shape
@@ -291,7 +279,6 @@ def _template_align_in_roi(golden_u8: np.ndarray,
     if bbox is None:
         return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 1.0, "tm_used": 0}
 
-    import cv2, numpy as np
     x, y, w, h = bbox
     templ = golden_u8[y:y+h, x:x+w]
 
@@ -305,13 +292,9 @@ def _template_align_in_roi(golden_u8: np.ndarray,
     if sh < h or sw < w:
         return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 0.0, "tm_used": 0}
 
-    # --- Coarse stage: downscale veľké okná, aby výpočet bol lacný ---
-    # cieľ: max(search_dim) ~ 600 px (tuning podľa výkonu)
+    # --- Coarse stage ---
     max_dim = max(sh, sw)
-    if max_dim > 600:
-        scale = 600.0 / max_dim
-    else:
-        scale = 1.0
+    scale = 1.0 if max_dim <= 600 else 600.0 / max_dim
 
     if scale < 1.0:
         dsize_s = (max(1, int(sw * scale)), max(1, int(sh * scale)))
@@ -320,7 +303,6 @@ def _template_align_in_roi(golden_u8: np.ndarray,
         templ_s  = cv2.resize(templ,  dsize_t, interpolation=cv2.INTER_AREA)
         res_s = cv2.matchTemplate(search_s, templ_s, cv2.TM_CCOEFF_NORMED)
         _, maxVal_s, _, maxLoc_s = cv2.minMaxLoc(res_s)
-        # premapuj hrubú polohu do plného rozlíšenia
         coarse_x = int(round(maxLoc_s[0] / scale))
         coarse_y = int(round(maxLoc_s[1] / scale))
     else:
@@ -332,8 +314,7 @@ def _template_align_in_roi(golden_u8: np.ndarray,
         aligned = warp_by_translation(frame_u8, -dx, -dy)
         return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(maxVal), "tm_used": 1}
 
-    # --- Fine stage: malá oblasť okolo coarse polohy v plnom rozlíšení ---
-    # vyrež malé okno ~ (w+40)×(h+40) okolo coarse_x/coarse_y (tuning)
+    # --- Fine stage ---
     pad = 20
     fx1 = xs + max(0, coarse_x - pad)
     fy1 = ys + max(0, coarse_y - pad)
@@ -341,7 +322,6 @@ def _template_align_in_roi(golden_u8: np.ndarray,
     fy2 = min(ye, fy1 + h + 2*pad)
     fine = frame_u8[fy1:fy2, fx1:fx2]
     if fine.shape[0] < h or fine.shape[1] < w:
-        # fallback: použijeme coarse výsledok
         best_x = coarse_x
         best_y = coarse_y
         corr   = float(maxVal_s if scale < 1.0 else 0.0)
@@ -352,8 +332,8 @@ def _template_align_in_roi(golden_u8: np.ndarray,
         best_y = (fy1 - y) + maxLoc_f[1]
         corr   = float(maxVal_f)
 
-    dx = float((x + best_x) - x)  # = best_x
-    dy = float((y + best_y) - y)  # = best_y
+    dx = float(best_x)
+    dy = float(best_y)
     aligned = warp_by_translation(frame_u8, -dx, -dy)
     return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(corr), "tm_used": 1}
 
@@ -370,9 +350,9 @@ def analyze(golden: np.ndarray,
         max_total_area=2000,
         max_blob_count=10,
         # Template matching tuning:
-        tm_enable=1,          # 1=zap., 0=vyp.
-        tm_margin=200,         # px okolo ROI
-        tm_min_corr=0.55      # ak korelácia veľmi nízka, efekt bude slabý
+        tm_enable=1,         # 1=zap., 0=vyp.
+        tm_margin=200,       # px okolo ROI
+        tm_min_corr=0.55     # ak korelácia veľmi nízka, efekt bude slabý
     )
     if thresholds:
         th.update(thresholds)
@@ -390,25 +370,55 @@ def analyze(golden: np.ndarray,
             golden, frame_aligned, mask_roi_eff, search_margin=int(th["tm_margin"])
         )
 
-    # 3) SSIM v ROI
+    # 3) SSIM v ROI (CPU alebo GPU podľa chuti; necháme CPU pre stabilitu)
     ssim_val = _ssim(golden, frame_aligned, mask_roi_eff)
+    # Alternatíva (zapnúť ak chceš GPU): ssim_val = _gpu_ssim_u8(golden, frame_aligned, mask_roi_eff) if USE_CUDA else _ssim(golden, frame_aligned, mask_roi_eff)
 
-    # 4) „Mäkší“ diff: blur → absdiff → threshold → morfológia
-    g_blur = cv2.GaussianBlur(golden, (3,3), 0.8)
-    f_blur = cv2.GaussianBlur(frame_aligned, (3,3), 0.8)
-    diff = cv2.absdiff(g_blur, f_blur)
+    # 4) „Mäkší“ diff: blur → absdiff → threshold → morfológia (GPU ak je dostupná)
+    if USE_CUDA:
+        g_g = _gpu_upload(golden)
+        g_f = _gpu_upload(frame_aligned)
 
-    if th["diff_thresh"] > 0:
-        _, binm = cv2.threshold(diff, th["diff_thresh"], 255, cv2.THRESH_BINARY)
+        g_gb = _gpu_gauss(g_g, ksize=3, sigma=0.8)
+        g_fb = _gpu_gauss(g_f, ksize=3, sigma=0.8)
+
+        g_diff = _gpu_absdiff(g_gb, g_fb)
+
+        if th["diff_thresh"] > 0:
+            _, g_bin = cv2.cuda.threshold(g_diff, th["diff_thresh"], 255, cv2.THRESH_BINARY)
+        else:
+            # OTSU na ROI na CPU
+            diff_cpu = cv2.bitwise_and(g_diff.download(), mask_roi_eff)
+            _, binm_cpu = cv2.threshold(diff_cpu, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            g_bin = _gpu_upload(binm_cpu)
+
+        # aplikuj ROI masku
+        g_mask = _gpu_upload(mask_roi_eff)
+        g_bin = cv2.cuda.bitwise_and(g_bin, g_mask)
+
+        se = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+        f_open = cv2.cuda.createMorphologyFilter(cv2.MORPH_OPEN,  cv2.CV_8UC1, se, iterations=1)
+        f_dil  = cv2.cuda.createMorphologyFilter(cv2.MORPH_DILATE, cv2.CV_8UC1, se, iterations=1)
+        g_bin2 = f_open.apply(g_bin)
+        g_bin3 = f_dil.apply(g_bin2)
+
+        binm = g_bin3.download()
     else:
-        _, binm = cv2.threshold(cv2.bitwise_and(diff, mask_roi_eff), 0, 255,
-                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        g_blur = cv2.GaussianBlur(golden, (3,3), 0.8)
+        f_blur = cv2.GaussianBlur(frame_aligned, (3,3), 0.8)
+        diff = cv2.absdiff(g_blur, f_blur)
 
-    binm = cv2.bitwise_and(binm, mask_roi_eff)
+        if th["diff_thresh"] > 0:
+            _, binm = cv2.threshold(diff, th["diff_thresh"], 255, cv2.THRESH_BINARY)
+        else:
+            _, binm = cv2.threshold(cv2.bitwise_and(diff, mask_roi_eff), 0, 255,
+                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
-    binm = cv2.morphologyEx(binm, cv2.MORPH_OPEN, kernel, iterations=1)
-    binm = cv2.dilate(binm, kernel, iterations=1)
+        binm = cv2.bitwise_and(binm, mask_roi_eff)
+
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+        binm = cv2.morphologyEx(binm, cv2.MORPH_OPEN, kernel, iterations=1)
+        binm = cv2.dilate(binm, kernel, iterations=1)
 
     cnts, _ = cv2.findContours(binm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     areas = [cv2.contourArea(c) for c in cnts if cv2.contourArea(c) >= th["min_blob_area"]]
