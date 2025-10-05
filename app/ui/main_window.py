@@ -106,13 +106,6 @@ class MainWindow(QMainWindow):
         self.lbl_status.setAlignment(Qt.AlignLeft)
         status_row.addWidget(self.lbl_status, 0)
 
-        self.lbl_metrics = QLabel("")
-        self.lbl_metrics.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        status_row.addWidget(self.lbl_metrics, 1)
-
-        self.lbl_stats_day = QLabel("Štatistiky dnes: –")
-        status_row.addWidget(self.lbl_stats_day, 0)
-
         run.addLayout(status_row)
 
         # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
@@ -321,10 +314,6 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setStyleSheet("color: #33dd66;")
 
             st = self.stats.daily_for_recipe(self.current_recipe_name())
-            self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
-            self.lbl_metrics.setText(
-                f'SSIM={metrics.get("ssim","-")}  blobs={metrics.get("blob_count","-")}  area={metrics.get("total_area","-")}'
-            )
 
             # aktualizuj side panel
             self._update_sidebar(st, metrics)
@@ -518,12 +507,9 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Recipe loaded.")
             # refresh štatistík + strip
             st = self.stats.daily_for_recipe(name)
-            self.lbl_stats_day.setText(f"Štatistiky dnes: total={st['total']}  OK={st['ok']}  NOK={st['nok']}  yield={st['yield']}%")
             self.strip.reload()
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, None)
-        except Exception as e:
-            self.lbl_status.setText(f"Load failed: {e}")
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
