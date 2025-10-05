@@ -127,3 +127,45 @@ class DbService:
         nok = row[2] or 0
         yield_pct = (ok / total * 100.0) if total else 0.0
         return {"total": total, "ok": ok, "nok": nok, "yield": round(yield_pct, 2)}
+   
+    def recent_results(self, recipe_id: int, limit: int = 12):
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT ts_ms, ok, thumb_path, full_path, ssim, blob_count, total_area "
+            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime') "
+            "ORDER BY id DESC LIMIT ?",
+            (recipe_id, int(limit))
+        )
+        rows = cur.fetchall()
+        return [
+            {
+                "ts_ms": r[0],
+                "ok": bool(r[1]),
+                "thumb": r[2],
+                "full": r[3],
+                "ssim": r[4],
+                "blob_count": r[5],
+                "total_area": r[6],
+            }
+            for r in rows
+        ]
+
+    def export_csv_today(self, recipe_id: int, out_path: str):
+        import csv
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT ts_ms, ok, ssim, blob_count, total_area, thumb_path, full_path, meta_json "
+            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime') "
+            "ORDER BY id ASC",
+            (recipe_id,)
+        )
+        rows = cur.fetchall()
+        # istota: vytvor priečinok
+        import os
+        os.makedirs(os.path.dirname(out_path), exist_ok=True)
+        with open(out_path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["ts_ms","ok","ssim","blob_count","total_area","thumb_path","full_path","meta_json"])
+            for r in rows:
+                w.writerow(r)
+        return out_path
