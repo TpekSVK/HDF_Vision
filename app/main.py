@@ -5,12 +5,13 @@ from app.ui.theme import DARK_STYLE
 
 def main():
     app = QApplication(sys.argv)
+    app.setStyleSheet(DARK_STYLE)
     w = MainWindow()
     w.resize(900, 600)
     w.show()
     sys.exit(app.exec())
     
-app.setStyleSheet(DARK_STYLE)
+
 if __name__ == "__main__":
     try:
         main()
