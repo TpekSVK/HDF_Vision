@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox,
-    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton
+    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap
@@ -145,8 +145,11 @@ class MainWindow(QMainWindow):
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
-        self.live_view.setMinimumHeight(320)
+        self.live_view.setMinimumSize(960, 540)   # stabilný 16:9 priemyselný náhľad
+        self.live_view.setFixedSize(960, 540)
+        self.live_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
+        self.live_view.setContentsMargins(0,0,0,0)
         run.addWidget(self.live_view)
 
         # deliaca čiara
@@ -176,6 +179,9 @@ class MainWindow(QMainWindow):
         self._run_timer.setInterval(100)  # ~10 FPS
         self._run_timer.timeout.connect(self._update_live_view)
         # spúšťa sa až pri Live ON v _toggle_live()
+
+        # maximalizovať a uzamknúť veľkosť okna po zobrazení
+        QTimer.singleShot(0, self._maximize_and_lock)
 
         # ---------- SETUP panel ----------
         self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
@@ -362,40 +368,30 @@ class MainWindow(QMainWindow):
         import numpy as np
         from PySide6.QtGui import QImage, QPixmap
         if img is None:
-            label.clear()
-            return
-
-        # Zaruč kontiguitu (QImage rád dostane C-contiguous buffer)
+            label.clear(); return
         if not img.flags['C_CONTIGUOUS']:
             img = np.ascontiguousarray(img)
-
-        if img.ndim == 2:  # GRAY8
+        # cieľový rozmer ber z obsahového rectu labelu (stabilné)
+        target = label.contentsRect().size()
+        tw, th = max(1, target.width()), max(1, target.height())
+        if img.ndim == 2:
             h, w = img.shape
             q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
-            pm = QPixmap.fromImage(q.copy()).scaled(
-                label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            pm = QPixmap.fromImage(q.copy()).scaled(tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             label.setPixmap(pm)
         else:
             import cv2
             bgr = img
             if bgr.shape[2] == 4:
-                # fallback, ak by niekde pretiekol BGRA
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGRA2RGB)
-                bytes_per_line = rgb.shape[1] * 3
             else:
                 rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-                bytes_per_line = rgb.shape[1] * 3
-            # istota kontiguity po konverzii
             if not rgb.flags['C_CONTIGUOUS']:
                 rgb = np.ascontiguousarray(rgb)
             h, w, _ = rgb.shape
-            q = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
-            pm = QPixmap.fromImage(q.copy()).scaled(
-                label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-            )
+            q = QImage(rgb.data, w, h, w*3, QImage.Format_RGB888)
+            pm = QPixmap.fromImage(q.copy()).scaled(tw, th, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             label.setPixmap(pm)
-
 
     def _make_heatmap_overlay(self, frame_u8):
         """Vytvorí farebnú heatmapu rozdielov voči golden a preloží ju cez aktuálny obraz."""
@@ -424,6 +420,14 @@ class MainWindow(QMainWindow):
         base = cv2.cvtColor(frame_u8, cv2.COLOR_GRAY2BGR)
         out = cv2.addWeighted(base, 0.55, heat, 0.45, 0.0)
         return out
+
+    def _maximize_and_lock(self):
+        try:
+            # maximalizuj a uzamkni veľkosť (žiadne manuálne resize)
+            self.showMaximized()
+            self.setFixedSize(self.size())
+        except Exception:
+            pass
 
     def closeEvent(self, e):
         try:
