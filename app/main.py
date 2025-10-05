@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QApplication
 from app.ui.main_window import MainWindow
 import sys
+from app.ui.theme import DARK_STYLE
 
 def main():
     app = QApplication(sys.argv)
@@ -8,6 +9,7 @@ def main():
     w.resize(900, 600)
     w.show()
     sys.exit(app.exec())
+    app.setStyleSheet(DARK_STYLE)
 
 if __name__ == "__main__":
     try:
