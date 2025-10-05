@@ -169,3 +169,12 @@ class DbService:
             for r in rows:
                 w.writerow(r)
         return out_path
+    
+    def _ensure_indices(self):
+        cur = self._conn.cursor()
+        try:
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_results_recipe ON results(recipe_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_results_created ON results(created_at)")
+            self._conn.commit()
+        except Exception:
+            pass

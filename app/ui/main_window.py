@@ -14,6 +14,8 @@ from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
+from threading import Thread
+from app.services.retention_service import RetentionService
 
 
 class MainWindow(QMainWindow):
@@ -149,6 +151,13 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self.panel_setup)
         self.panel_setup.hide()  # default RUN
+    # Spusť retenciu na pozadí (jednorazovo pri štarte)
+    def _run_retention():
+        try:
+            RetentionService().run_once(verbose=False)
+        except Exception as e:
+            print("[Retention][ERR]", e)
+    Thread(target=_run_retention, daemon=True).start()
 
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
