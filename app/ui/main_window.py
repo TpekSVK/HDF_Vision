@@ -26,6 +26,10 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("HDF_Vision")
         self.mode = "RUN"  # RUN alebo SETUP
 
+        # Live režim (RUN):
+        self.live_enabled = False
+        self._last_trigger_frame = None
+
         # Kamera
         self.cam = CameraService()
         self.cam.start()
@@ -111,7 +115,7 @@ class MainWindow(QMainWindow):
 
         run.addLayout(status_row)
 
-        # Akcie (TRIGGER, Export, Wizard) + minimalizácia stripu
+        # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
         actions = QHBoxLayout(); actions.setSpacing(8)
         self.btn_trigger = QPushButton("⏻ TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.clicked.connect(self.manual_trigger)
@@ -125,8 +129,14 @@ class MainWindow(QMainWindow):
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
 
-        # Live náhľad + Heatmap toggle
         actions.addStretch(1)
+        # Live toggle
+        self.btn_live = QPushButton("Live OFF")
+        self.btn_live.setCheckable(True)
+        self.btn_live.clicked.connect(self._toggle_live)
+        actions.addWidget(self.btn_live)
+
+        # Heatmap toggle
         self.chk_heatmap = QCheckBox("Heatmap")
         self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
         actions.addWidget(self.chk_heatmap)
@@ -165,7 +175,7 @@ class MainWindow(QMainWindow):
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(100)  # ~10 FPS
         self._run_timer.timeout.connect(self._update_live_view)
-        self._run_timer.start()
+        # spúšťa sa až pri Live ON v _toggle_live()
 
         # ---------- SETUP panel ----------
         self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
@@ -244,6 +254,7 @@ class MainWindow(QMainWindow):
     def manual_trigger(self):
         try:
             frame = self.cam.last_frame()  # posledný kontinuálny frame
+            self._last_trigger_frame = frame.copy() if frame is not None else None
             meta = {"mode": "manual"}
 
             # D3: vyhodnotenie podľa receptu
@@ -282,6 +293,16 @@ class MainWindow(QMainWindow):
             # refresh stripu po uložení výsledku
             self.strip.reload()
 
+            # ak nie je live režim, zobraz práve triggernutý frame
+            if not self.live_enabled and self._last_trigger_frame is not None:
+                img = self._last_trigger_frame
+                if self.chk_heatmap.isChecked():
+                    try:
+                        img = self._make_heatmap_overlay(img)
+                    except Exception:
+                        pass
+                self._show_gray_or_bgr(self.live_view, img)
+
         except Exception:
             import traceback; traceback.print_exc()
 
@@ -301,37 +322,80 @@ class MainWindow(QMainWindow):
         self.scroll.setVisible(not is_visible)
         self.btn_strip_toggle.setText("▾ Posledné snímky" if not is_visible else "▸ Posledné snímky")
 
+    def _toggle_live(self):
+        self.live_enabled = self.btn_live.isChecked()
+        self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
+        if self.live_enabled:
+            self._run_timer.start()
+        else:
+            self._run_timer.stop()
+            # po vypnutí live zobraz posledný manuálny trigger, ak existuje
+            if self._last_trigger_frame is not None:
+                img = self._last_trigger_frame
+                if self.chk_heatmap.isChecked():
+                    try:
+                        img = self._make_heatmap_overlay(img)
+                    except Exception:
+                        pass
+                self._show_gray_or_bgr(self.live_view, img)
+
     def _update_live_view(self):
         try:
-            frame = self.cam.last_frame()
-            if frame is None:
+            # Zdroj podľa live stavu
+            if self.live_enabled:
+                src = self.cam.last_frame()
+            else:
+                src = self._last_trigger_frame
+            if src is None:
                 return
-            img = frame
+            img = src
             if self.chk_heatmap.isChecked():
                 try:
-                    img = self._make_heatmap_overlay(frame)
-                except Exception as e:
-                    # ak zlyhá heatmap, zobraz surový obraz
-                    img = frame
+                    img = self._make_heatmap_overlay(src)
+                except Exception:
+                    img = src
             self._show_gray_or_bgr(self.live_view, img)
         except Exception:
             pass
 
     def _show_gray_or_bgr(self, label: QLabel, img):
         import numpy as np
+        from PySide6.QtGui import QImage, QPixmap
+        if img is None:
+            label.clear()
+            return
+
+        # Zaruč kontiguitu (QImage rád dostane C-contiguous buffer)
+        if not img.flags['C_CONTIGUOUS']:
+            img = np.ascontiguousarray(img)
+
         if img.ndim == 2:  # GRAY8
             h, w = img.shape
             q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
-            pm = QPixmap.fromImage(q.copy()).scaled(label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pm = QPixmap.fromImage(q.copy()).scaled(
+                label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
             label.setPixmap(pm)
-        else:  # BGR
+        else:
             import cv2
             bgr = img
-            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            if bgr.shape[2] == 4:
+                # fallback, ak by niekde pretiekol BGRA
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGRA2RGB)
+                bytes_per_line = rgb.shape[1] * 3
+            else:
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                bytes_per_line = rgb.shape[1] * 3
+            # istota kontiguity po konverzii
+            if not rgb.flags['C_CONTIGUOUS']:
+                rgb = np.ascontiguousarray(rgb)
             h, w, _ = rgb.shape
-            q = QImage(rgb.data, w, h, w*3, QImage.Format_RGB888)
-            pm = QPixmap.fromImage(q.copy()).scaled(label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            q = QImage(rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            pm = QPixmap.fromImage(q.copy()).scaled(
+                label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
             label.setPixmap(pm)
+
 
     def _make_heatmap_overlay(self, frame_u8):
         """Vytvorí farebnú heatmapu rozdielov voči golden a preloží ju cez aktuálny obraz."""
