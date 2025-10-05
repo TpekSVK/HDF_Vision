@@ -105,6 +105,12 @@ class GoldenWizard(QDialog):
     # ---------- Live ----------
     def _toggle_live(self, checked: bool):
         if checked:
+            try:
+                self.cam.pause_for_external()
+            except Exception as e:
+                print("[GoldenWizard] pause_for_external:", e)
+
+
             # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
             self.view.hide()
             self.live_lbl.show()
@@ -165,6 +171,13 @@ class GoldenWizard(QDialog):
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
+
+            # po vypnutí live obnov kameru
+            try:
+                self.cam.resume_after_external()
+            except Exception as e:
+                print("[GoldenWizard] resume_after_external:", e)
+
             self._info("Golden zachytený z kamery.")
         except Exception as e:
             self._err(f"Zachytenie zlyhalo: {e}")

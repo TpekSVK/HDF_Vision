@@ -57,6 +57,10 @@ class CameraService:
         self._ring = deque(maxlen=5)
         self._t_ring = None
         self._stop_ring = threading.Event()
+        self._paused_external = False
+        self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
+                                "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY"}
+
     # =========================
     # GStreamer časť (preferovaná)
     # =========================
@@ -264,6 +268,12 @@ class CameraService:
             if self._start_v4l2(dev):
                 return
         self.start_continuous()
+        self._last_open_args.update({
+            "device": self.devices[0] if self.devices else "/dev/video0",
+            "width": int(self.width), "height": int(self.height),
+            "fps": int(self.fps), "fourcc": self.pixel_format  # napr. "GREY"
+        })
+
 
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
@@ -345,3 +355,38 @@ class CameraService:
             self._stop_ring.set()
         except Exception:
             pass
+        
+    def pause_for_external(self):
+        """Uvoľní V4L2 zariadenie pre externý klient (napr. GStreamer vo WIZARDe)."""
+        if self._paused_external:
+            return
+        try:
+            self.stop_continuous()
+        except Exception:
+            pass
+        try:
+            if getattr(self, "cap", None) is not None:
+                try:
+                    self.cap.release()
+                except Exception:
+                    pass
+                self.cap = None
+        finally:
+            self._paused_external = True
+        print("[CameraService] paused for external access")
+
+    def resume_after_external(self):
+        """Znovu otvorí kameru s poslednými parametrami a spustí ring buffer."""
+        if not self._paused_external:
+            return
+        args = self._last_open_args
+        # tu použi tvoju existujúcu logiku open() (V4L2/GST) s args
+        ok = self._open_v4l2(args["device"], args["width"], args["height"], args["fps"], args["fourcc"])
+        if not ok:
+            # fallback na GStreamer, ak tak máš
+            ok = self._open_gst(args["device"], args["width"], args["height"], args["fps"], args["fourcc"])
+        if not ok:
+            raise RuntimeError("Resume camera failed.")
+        self.start_continuous()
+        self._paused_external = False
+        print("[CameraService] resumed after external access")
