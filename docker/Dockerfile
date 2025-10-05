@@ -34,7 +34,7 @@ RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
 WORKDIR /workspace
 
 # --- OpenCV (CUDA) build on Jetson ---
-ARG OPENCV_VER=4.8.0
+ARG OPENCV_VER=4.10.0
 ARG OPENCV_CONTRIB=ON
 ARG CUDA_ARCH_BIN=8.7
 
@@ -53,7 +53,9 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 
 WORKDIR /tmp/opencv-build
 RUN git clone --branch ${OPENCV_VER} --depth 1 https://github.com/opencv/opencv.git
-RUN if [ "${OPENCV_CONTRIB}" = "ON" ]; then git clone --branch ${OPENCV_VER} --depth 1 https://github.com/opencv/opencv_contrib.git; fi
+RUN if [ "${OPENCV_CONTRIB}" = "ON" ]; then \
+      git clone --branch ${OPENCV_VER} --depth 1 https://github.com/opencv/opencv_contrib.git; \
+    fi
 
 RUN mkdir -p build && cd build && cmake \
   -D CMAKE_BUILD_TYPE=Release \
