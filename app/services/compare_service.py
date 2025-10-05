@@ -4,22 +4,13 @@ import cv2
 from typing import Dict, Any, Tuple
 from app.services.mask_utils import regions_to_masks
 
-
-# ----------------------------
-# Pomocné funkcie na zarovnanie
-# ----------------------------
+# ---------- Pomocné okná/filtre ----------
 def _hanning_window(shape):
-    """2D Hanning pre fázovú koreláciu (zvyšuje stabilitu pri okrajoch)."""
     hy = cv2.createHanningWindow((shape[1], 1), cv2.CV_32F)
     hx = cv2.createHanningWindow((1, shape[0]), cv2.CV_32F)
     return (hx @ hy).astype(np.float32)
 
-
-def estimate_translation_phasecorr(img_u8: np.ndarray, ref_u8: np.ndarray) -> tuple[float, float, float]:
-    """
-    Sub-pixel posun (dx, dy) medzi img a ref (oba GRAY8, rovnaký rozmer).
-    Vracia: dx, dy, response (kvalita 0..1).
-    """
+def estimate_translation_phasecorr(img_u8: np.ndarray, ref_u8: np.ndarray) -> tuple[float,float,float]:
     assert img_u8.shape == ref_u8.shape
     a = img_u8.astype(np.float32)
     b = ref_u8.astype(np.float32)
@@ -31,29 +22,17 @@ def estimate_translation_phasecorr(img_u8: np.ndarray, ref_u8: np.ndarray) -> tu
     dy = float(shift[1])
     return dx, dy, float(response)
 
-
 def warp_by_translation(frame_u8: np.ndarray, dx: float, dy: float) -> np.ndarray:
-    """Posunie obraz o (dx, dy). Kladné dx doprava, dy nadol. Border=reflect."""
     M = np.array([[1, 0, dx],
                   [0, 1, dy]], dtype=np.float32)
     h, w = frame_u8.shape[:2]
     return cv2.warpAffine(frame_u8, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
 
-
 def _gauss_soft(img_u8: np.ndarray, sigma: float = 0.8) -> np.ndarray:
-    """Jemné vyhladenie pred SSIM (stabilizácia). Sigma ~0.6–1.0."""
-    k = max(3, int(round(sigma * 6)) | 1)  # nepárne
+    k = max(3, int(round(sigma*6))|1)
     return cv2.GaussianBlur(img_u8, (k, k), sigmaX=sigma, sigmaY=sigma, borderType=cv2.BORDER_REFLECT101)
 
-
-# -------------
-# SSIM (maskované)
-# -------------
 def _ssim(img1_u8: np.ndarray, img2_u8: np.ndarray, mask_u8: np.ndarray | None = None) -> float:
-    """
-    SSIM nad 8-bit šedotónmi (0..255). Ak je maska, počítame len nad maskovanou oblasťou (>0).
-    Bez externých knižníc (skimage).
-    """
     x = img1_u8.astype(np.float32)
     y = img2_u8.astype(np.float32)
 
@@ -61,16 +40,12 @@ def _ssim(img1_u8: np.ndarray, img2_u8: np.ndarray, mask_u8: np.ndarray | None =
         m = mask_u8 > 0
         if not np.any(m):
             return 1.0
-        x = x[m]
-        y = y[m]
-
+        x = x[m]; y = y[m]
     if x.size == 0 or y.size == 0:
         return 1.0
 
-    ux = float(np.mean(x))
-    uy = float(np.mean(y))
-    vx = float(np.var(x))
-    vy = float(np.var(y))
+    ux, uy = float(np.mean(x)), float(np.mean(y))
+    vx, vy = float(np.var(x)), float(np.var(y))
     cxy = float(np.mean((x - ux) * (y - uy)))
 
     L = 255.0
@@ -83,31 +58,21 @@ def _ssim(img1_u8: np.ndarray, img2_u8: np.ndarray, mask_u8: np.ndarray | None =
         return 1.0 if np.allclose(x, y) else 0.0
     return float(num / den)
 
-
-# --------------------------
-# Zarovnanie (ECC + fallback)
-# --------------------------
+# ---------- Globálne zarovnanie (kamera/fixture) ----------
 def _prep_for_ecc(img_u8: np.ndarray) -> np.ndarray:
-    # normalizácia + jemné rozmazanie pre stabilnejší ECC
     f = img_u8.astype(np.float32)
     if f.max() > 0:
         f = f * (255.0 / f.max())
-    f = cv2.GaussianBlur(f, (5, 5), 1.2)
+    f = cv2.GaussianBlur(f, (5,5), 1.2)
     return f
 
-
 def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: np.ndarray | None):
-    """Pyramídové ECC (1/4 -> 1/2 -> 1×) + fallback na phaseCorrelate (čistý posun).
-       Vráti (aligned_u8, 2x3_warp)."""
     mp = None
     if mask_pose is not None and mask_pose.any():
-        mp = cv2.erode(mask_pose, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
+        mp = cv2.erode(mask_pose, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7)), iterations=1)
 
-    g0 = golden_u8
-    i0 = frame_u8
-
-    gF = _prep_for_ecc(g0)
-    iF = _prep_for_ecc(i0)
+    g0 = golden_u8; i0 = frame_u8
+    gF = _prep_for_ecc(g0); iF = _prep_for_ecc(i0)
     mF = (mp > 0).astype(np.uint8) if mp is not None else None
 
     def pyr(x):
@@ -123,30 +88,22 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: np.n
 
     warp = np.eye(2, 3, dtype=np.float32)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-7)
-    mode = cv2.MOTION_EUCLIDEAN  # translácia + rotácia (bez scale)
+    mode = cv2.MOTION_EUCLIDEAN
 
-    def ecc_step(g, i, m, warp_init):
-        w = warp_init.copy()
+    def ecc_step(g, i, m, w):
+        wloc = w.copy()
         try:
-            _ = cv2.findTransformECC(g, i, w, mode, crit, inputMask=m, gaussFiltSize=5)
-            return w, True
+            _ = cv2.findTransformECC(g, i, wloc, mode, crit, inputMask=m, gaussFiltSize=5)
+            wloc[:,2] *= 2.0  # upscaling posunu pre ďalšiu úroveň
+            return wloc, True
         except cv2.error:
-            return warp_init, False
+            return w, False
 
-    # 1/4
     w4, ok4 = ecc_step(g4, i4, m4, warp)
-    # pri prechode na vyššiu úroveň posun zväčšíme 2× (preklad)
-    w4_up = w4.copy(); w4_up[:, 2] *= 2.0
-
-    # 1/2
-    w2, ok2 = ecc_step(g2, i2, m2, w4_up)
-    w2_up = w2.copy(); w2_up[:, 2] *= 2.0
-
-    # 1×
-    w1, ok1 = ecc_step(g1, i1, m1, w2_up)
+    w2, ok2 = ecc_step(g2, i2, m2, w4)
+    w1, ok1 = ecc_step(g1, i1, m1, w2)
 
     if not (ok4 or ok2 or ok1):
-        # Fallback: phase correlation (čistý posun v pose maske alebo celej ploche)
         try:
             ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
             cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
@@ -156,39 +113,81 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: np.n
                                      flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
             return aligned, wfb
         except Exception:
-            return frame_u8, np.eye(2, 3, dtype=np.float32)
+            return frame_u8, np.eye(2,3, dtype=np.float32)
 
     warp_final = w1
     aligned = cv2.warpAffine(frame_u8, warp_final, (frame_u8.shape[1], frame_u8.shape[0]),
                              flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
     return aligned, warp_final
 
-
 def _align_by_pose(golden: np.ndarray, img: np.ndarray, mask_pose: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    # nahradené multi-scale verziou
     return _ecc_multiscale(golden, img, mask_pose)
 
+# ---------- NOVÉ: Lokálne „dosadenie“ objektu v ROI (template matching) ----------
+def _roi_bbox(mask_u8: np.ndarray) -> Tuple[int,int,int,int] | None:
+    ys, xs = np.where(mask_u8 > 0)
+    if xs.size == 0 or ys.size == 0:
+        return None
+    x, y, w, h = int(xs.min()), int(ys.min()), int(xs.max()-xs.min()+1), int(ys.max()-ys.min()+1)
+    return x, y, w, h
 
-# -------------
-# Hlavná analýza
-# -------------
+def _template_align_in_roi(golden_u8: np.ndarray,
+                           frame_u8: np.ndarray,
+                           mask_roi: np.ndarray,
+                           search_margin: int = 20) -> Tuple[np.ndarray, Dict[str, float]]:
+    """
+    V ROI vyreže template z golden-u a hľadá ho vo frame v okne ±margin.
+    Vráti zarovnaný frame (translačne) a metriky: dx, dy, corr.
+    """
+    bbox = _roi_bbox(mask_roi)
+    if bbox is None:
+        return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 1.0, "tm_used": 0}
+
+    x, y, w, h = bbox
+    # template (golden ROI, len pixle v maske – nepovinné; pre jednoduchosť berieme plný rect)
+    templ = golden_u8[y:y+h, x:x+w]
+
+    # vyhľadávacie okno vo frame
+    H, W = frame_u8.shape[:2]
+    xs = max(0, x - search_margin)
+    ys = max(0, y - search_margin)
+    xe = min(W, x + w + search_margin)
+    ye = min(H, y + h + search_margin)
+    search = frame_u8[ys:ye, xs:xe]
+    if search.shape[0] < h or search.shape[1] < w:
+        # okno je menšie než template – nedá sa hľadať
+        return frame_u8, {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 0.0, "tm_used": 0}
+
+    # match
+    res = cv2.matchTemplate(search, templ, cv2.TM_CCOEFF_NORMED)
+    minVal, maxVal, minLoc, maxLoc = cv2.minMaxLoc(res)
+    # pozícia nájdenia v rámci search
+    best_x, best_y = maxLoc
+    # posun frame ROI voči golden ROI (kladný znamená: obsah vo frame je posunutý doprava/dole)
+    dx = float((xs + best_x) - x)
+    dy = float((ys + best_y) - y)
+
+    # Na dorovnanie posunieme celý frame o (-dx, -dy)
+    aligned = warp_by_translation(frame_u8, -dx, -dy)
+
+    return aligned, {"tm_dx": dx, "tm_dy": dy, "tm_corr": float(maxVal), "tm_used": 1}
+
+# ---------- Hlavná analýza ----------
 def analyze(golden: np.ndarray,
             regions: list[dict],
             frame: np.ndarray,
             thresholds: Dict[str, float] | None = None) -> Dict[str, Any]:
-    """
-    golden, frame ........ GRAY8 (H, W)
-    regions .............. zoznam regiónov z regions.json (pose/roi/ignore)
-    thresholds ........... prahy (ssim_min, diff_thresh, min_blob_area, max_total_area, max_blob_count)
-    """
+
     th = dict(
         ssim_min=0.88,
         diff_thresh=22,
         min_blob_area=50,
         max_total_area=2000,
         max_blob_count=10,
-        # zarovnanie – môžeš UI doplniť neskôr
-        ssim_sigma=0.8
+        # Template matching tuning:
+        tm_enable=1,          # 1=zap., 0=vyp.
+        tm_margin=20,         # px okolo ROI
+        tm_min_corr=0.55      # ak korelácia veľmi nízka, efekt bude slabý
     )
     if thresholds:
         th.update(thresholds)
@@ -196,34 +195,33 @@ def analyze(golden: np.ndarray,
     H, W = golden.shape[:2]
     mask_pose, mask_roi_eff, _mask_ignore = regions_to_masks(regions, (H, W))
 
-    # 1) Zarovnanie (robustné)
+    # 1) Globálne zarovnanie podľa „pose“
     frame_aligned, warp = _align_by_pose(golden, frame, mask_pose)
 
-    # 2) Jemné vyhladenie pred SSIM (stabilizácia)
-    if th.get("ssim_sigma", 0) > 0:
-        g_eval = _gauss_soft(golden, th["ssim_sigma"])
-        f_eval = _gauss_soft(frame_aligned, th["ssim_sigma"])
-    else:
-        g_eval = golden
-        f_eval = frame_aligned
+    # 2) Lokálne dosadenie objektu v ROI (template matching)
+    tm_info = {"tm_dx": 0.0, "tm_dy": 0.0, "tm_corr": 0.0, "tm_used": 0}
+    if th["tm_enable"]:
+        frame_aligned, tm_info = _template_align_in_roi(
+            golden, frame_aligned, mask_roi_eff, search_margin=int(th["tm_margin"])
+        )
 
     # 3) SSIM v ROI
-    ssim_val = _ssim(g_eval, f_eval, mask_roi_eff)
+    ssim_val = _ssim(golden, frame_aligned, mask_roi_eff)
 
-    # 4) „Mäkší“ diff v ROI: blur → absdiff → threshold → morfológia
-    g_blur = cv2.GaussianBlur(golden, (3, 3), 0.8)
-    f_blur = cv2.GaussianBlur(frame_aligned, (3, 3), 0.8)
+    # 4) „Mäkší“ diff: blur → absdiff → threshold → morfológia
+    g_blur = cv2.GaussianBlur(golden, (3,3), 0.8)
+    f_blur = cv2.GaussianBlur(frame_aligned, (3,3), 0.8)
     diff = cv2.absdiff(g_blur, f_blur)
 
     if th["diff_thresh"] > 0:
         _, binm = cv2.threshold(diff, th["diff_thresh"], 255, cv2.THRESH_BINARY)
     else:
         _, binm = cv2.threshold(cv2.bitwise_and(diff, mask_roi_eff), 0, 255,
-                                cv2.THRESH_BINARY + cv2.OTSU)
+                                cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     binm = cv2.bitwise_and(binm, mask_roi_eff)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
     binm = cv2.morphologyEx(binm, cv2.MORPH_OPEN, kernel, iterations=1)
     binm = cv2.dilate(binm, kernel, iterations=1)
 
@@ -234,14 +232,18 @@ def analyze(golden: np.ndarray,
 
     nok = (ssim_val < th["ssim_min"]) or (total_area > th["max_total_area"]) or (blob_count > th["max_blob_count"])
 
-    return {
-        "ok": not nok,
-        "metrics": {
-            "ssim": round(float(ssim_val), 5),
-            "blob_count": blob_count,
-            "total_area": int(total_area),
-            "warp": warp.tolist(),
-            "diff_thresh": th["diff_thresh"],
-            "min_blob_area": th["min_blob_area"],
-        }
+    metrics = {
+        "ssim": round(float(ssim_val), 5),
+        "blob_count": blob_count,
+        "total_area": int(total_area),
+        "warp": warp.tolist(),
+        "diff_thresh": th["diff_thresh"],
+        "min_blob_area": th["min_blob_area"],
+        # template matching diagnostika:
+        "tm_used": int(tm_info.get("tm_used", 0)),
+        "tm_dx": round(float(tm_info.get("tm_dx", 0.0)), 3),
+        "tm_dy": round(float(tm_info.get("tm_dy", 0.0)), 3),
+        "tm_corr": round(float(tm_info.get("tm_corr", 0.0)), 4),
     }
+
+    return {"ok": not nok, "metrics": metrics}
