@@ -145,8 +145,8 @@ class MainWindow(QMainWindow):
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
-        self.live_view.setMinimumSize(1920, 1080)   # stabilný 16:9 priemyselný náhľad
-        self.live_view.setFixedSize(1920, 1080)
+        self.live_view.setMinimumSize(1280, 720)   # stabilný 16:9 priemyselný náhľad
+        self.live_view.setFixedSize(1280, 720)
         self.live_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
         self.live_view.setContentsMargins(0,0,0,0)
