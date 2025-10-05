@@ -37,7 +37,9 @@ WORKDIR /workspace
 ARG OPENCV_VER=4.8.0
 ARG OPENCV_CONTRIB=ON
 ARG CUDA_ARCH_BIN=8.7
-# Orin = 8.7 ; Xavier = 7.2 ; Nano = 5.3
+
+# (voliteľné) menej pamäťovo náročné knižnice
+ENV CMAKE_BUILD_PARALLEL_LEVEL=2
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config \
@@ -65,15 +67,16 @@ RUN mkdir -p build && cd build && cmake \
   -D CUDA_FAST_MATH=ON \
   -D WITH_GSTREAMER=ON \
   -D WITH_V4L=ON \
-  -D BUILD_opencv_python3=ON \
-  -D BUILD_opencv_python2=OFF \
+  -D BUILD_opencv_world=OFF \
   -D BUILD_TESTS=OFF \
   -D BUILD_PERF_TESTS=OFF \
   -D BUILD_EXAMPLES=OFF \
-  -D OPENCV_ENABLE_NONFREE=OFF \
+  -D BUILD_opencv_python2=OFF \
+  -D BUILD_opencv_python3=ON \
+  -D BUILD_LIST=core,imgproc,imgcodecs,highgui,videoio,features2d,calib3d,cudaarithm,cudaimgproc,cudawarping \
   $(if [ "${OPENCV_CONTRIB}" = "ON" ]; then echo "-D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv-build/opencv_contrib/modules"; fi) \
   ../opencv && \
-  make -j"$(nproc)" && make install && ldconfig && \
+  make -j2 && make install && ldconfig && \
   cd / && rm -rf /tmp/opencv-build
 
 COPY app /workspace/app
