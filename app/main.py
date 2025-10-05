@@ -9,7 +9,7 @@ def main():
     w.resize(900, 600)
     w.show()
     sys.exit(app.exec())
-    app.setStyleSheet(DARK_STYLE)
+    
 
 if __name__ == "__main__":
     try:
@@ -19,3 +19,5 @@ if __name__ == "__main__":
         print("[FATAL] Unhandled exception:", e)
         traceback.print_exc()
         raise
+    
+app.setStyleSheet(DARK_STYLE)
