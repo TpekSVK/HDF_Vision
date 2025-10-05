@@ -3,6 +3,6 @@
   "thumb_jpeg_quality": 30,
   "full_webp_quality": 95,
   "retention_days": 7,
-  "retention_max_gb": 5,
+  "retention_max_gb": 0.001,
   "disk_guard_min_free_percent": 10
 }
