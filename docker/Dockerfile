@@ -35,7 +35,7 @@ WORKDIR /workspace
 # --- OpenCV (CUDA) build on Jetson ---
 ARG OPENCV_VER=4.8.0
 ARG OPENCV_CONTRIB=ON
-ARG CUDA_ARCH_BIN=8.7   # Orin = 8.7; Xavier = 7.2; Nano = 5.3 (prepíš podľa HW)
+ARG CUDA_ARCH_BIN=8.7   # Orin = 8.7; Xavier = 7.2; Nano = 5.3 (8.7)
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     build-essential cmake git pkg-config \
