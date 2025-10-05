@@ -258,23 +258,41 @@ class CameraService:
     # Public API
     # =========================
     def start(self):
-        # 1) Skús GStreamer na kandidátoch device
-        for dev in self.devices:
-            if self._start_gst(dev):
-                return
+        # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
+        seen = set()
+        devs = []
+        for d in [self.device] + list(self.devices):
+            if d and d not in seen:
+                devs.append(d); seen.add(d)
+
+        # 1) GStreamer
+        if _GST_OK:
+            for dev in devs:
+                if self._start_gst(dev):
+                    self.device = dev
+                    self._last_open_args.update({
+                        "device": dev,
+                        "width": int(self.width),
+                        "height": int(self.height),
+                        "fps": int(self.fps),
+                        "fourcc": "GREY",
+                    })
+                    return
 
         # 2) Fallback: OpenCV V4L2
-        for dev in self.devices:
+        for dev in devs:
             if self._start_v4l2(dev):
+                self.device = dev
+                self._last_open_args.update({
+                    "device": dev,
+                    "width": int(self.width),
+                    "height": int(self.height),
+                    "fps": int(self.fps),
+                    "fourcc": "GREY",
+                })
                 return
-        self.start_continuous()
-        self._last_open_args.update({
-            "device": self.devices[0] if self.devices else "/dev/video0",
-            "width": int(self.width), "height": int(self.height),
-            "fps": int(self.fps), "fourcc": self.pixel_format  # napr. "GREY"
-        })
 
-
+        # nič sa neotvorilo
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
     def one_shot(self):
@@ -330,17 +348,23 @@ class CameraService:
     def _loop_ring(self):
         import time
         while not self._stop_ring.is_set():
-            ok, frame = self.cap.read()
+            if self._cap is None:
+                time.sleep(0.01)
+                continue
+            ok, frame = self._cap.read()
             if not ok or frame is None:
                 time.sleep(0.002); continue
             if frame.ndim == 3 and frame.shape[2] == 1:
-                frame = frame[:,:,0]
-            # Ak by bola Y16 -> previesť na u8 pre hodnotenie/uloženie
+                frame = frame[:, :, 0]
             if frame.dtype != np.uint8:
                 import cv2
                 f = frame
                 # normalizácia 16->8 (konzistentne)
-                f8 = cv2.convertScaleAbs(f, alpha=(255.0/4095.0) if f.dtype==np.uint16 else 1.0)
+                if f.dtype == np.uint16:
+                    # Y12 -> 8-bit
+                    f8 = cv2.convertScaleAbs(f, alpha=255.0/4095.0)
+                else:
+                    f8 = cv2.convertScaleAbs(f)
                 frame = f8
             self._ring.append(frame)
 
@@ -355,38 +379,33 @@ class CameraService:
             self._stop_ring.set()
         except Exception:
             pass
-        
+
     def pause_for_external(self):
-        """Uvoľní V4L2 zariadenie pre externý klient (napr. GStreamer vo WIZARDe)."""
+        """Uvoľní zariadenie pre externý klient (Live vo WIZARDe)."""
         if self._paused_external:
             return
-        try:
-            self.stop_continuous()
-        except Exception:
-            pass
-        try:
-            if getattr(self, "cap", None) is not None:
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-                self.cap = None
-        finally:
-            self._paused_external = True
+        # zapamätaj poslednú config
+        self._last_open_args.update({
+            "device": self.device,
+            "width": int(self.width),
+            "height": int(self.height),
+            "fps": int(self.fps),
+            "fourcc": "GREY",
+        })
+        # zastav všetko (cap aj GStreamer pipeline)
+        self.stop()
+        self._paused_external = True
         print("[CameraService] paused for external access")
 
     def resume_after_external(self):
-        """Znovu otvorí kameru s poslednými parametrami a spustí ring buffer."""
+        """Znovu otvorí kameru s poslednými parametrami a rozbehne capture."""
         if not self._paused_external:
             return
         args = self._last_open_args
-        # tu použi tvoju existujúcu logiku open() (V4L2/GST) s args
-        ok = self._open_v4l2(args["device"], args["width"], args["height"], args["fps"], args["fourcc"])
-        if not ok:
-            # fallback na GStreamer, ak tak máš
-            ok = self._open_gst(args["device"], args["width"], args["height"], args["fps"], args["fourcc"])
-        if not ok:
-            raise RuntimeError("Resume camera failed.")
-        self.start_continuous()
+        self.device = args.get("device", self.device)
+        self.width  = int(args.get("width", self.width))
+        self.height = int(args.get("height", self.height))
+        self.fps    = int(args.get("fps", self.fps))
+        self.start()
         self._paused_external = False
         print("[CameraService] resumed after external access")
