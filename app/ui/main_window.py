@@ -1,9 +1,9 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox,
-    QStackedWidget, QFrame, QScrollArea
+    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton
 )
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QImage, QPixmap
 
 from threading import Thread
 from app.services.retention_service import RetentionService
@@ -111,7 +111,7 @@ class MainWindow(QMainWindow):
 
         run.addLayout(status_row)
 
-        # Akcie
+        # Akcie (TRIGGER, Export, Wizard) + minimalizácia stripu
         actions = QHBoxLayout(); actions.setSpacing(8)
         self.btn_trigger = QPushButton("⏻ TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.clicked.connect(self.manual_trigger)
@@ -125,20 +125,47 @@ class MainWindow(QMainWindow):
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
 
+        # Live náhľad + Heatmap toggle
         actions.addStretch(1)
+        self.chk_heatmap = QCheckBox("Heatmap")
+        self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
+        actions.addWidget(self.chk_heatmap)
         run.addLayout(actions)
+
+        # Live view panel (aktuálny záber)
+        self.live_view = QLabel("— aktuálny záber —")
+        self.live_view.setAlignment(Qt.AlignCenter)
+        self.live_view.setMinimumHeight(320)
+        self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
+        run.addWidget(self.live_view)
 
         # deliaca čiara
         line2 = QFrame(); line2.setFrameShape(QFrame.HLine); line2.setFrameShadow(QFrame.Sunken)
         run.addWidget(line2)
 
-        # Strip v scroll area
-        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        # Strip v scroll area (minimalistické okraje)
+        strip_header = QHBoxLayout()
+        self.btn_strip_toggle = QToolButton()
+        self.btn_strip_toggle.setText("▾ Posledné snímky")
+        self.btn_strip_toggle.clicked.connect(self._toggle_strip)
+        strip_header.addWidget(self.btn_strip_toggle)
+        strip_header.addStretch(1)
+        run.addLayout(strip_header)
+
+        self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("QScrollArea{background-color:#181818; border: none;} ")
         strip_wrap = QWidget(); strip_layout = QVBoxLayout(strip_wrap); strip_layout.setContentsMargins(6,6,6,6)
         self.strip = ResultsStrip(self, limit=12)
+        self.strip.setStyleSheet("QLabel{border:1px solid #333; border-radius:4px;} ")
         strip_layout.addWidget(self.strip)
-        scroll.setWidget(strip_wrap)
-        run.addWidget(scroll, 1)
+        self.scroll.setWidget(strip_wrap)
+        run.addWidget(self.scroll, 1)
+
+        # timer pre RUN live view refresh
+        self._run_timer = QTimer(self)
+        self._run_timer.setInterval(100)  # ~10 FPS
+        self._run_timer.timeout.connect(self._update_live_view)
+        self._run_timer.start()
 
         # ---------- SETUP panel ----------
         self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
@@ -259,6 +286,72 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self)
         dlg.resize(1200, 800)
         dlg.exec()
+
+    def _toggle_strip(self):
+        # minimalizácia / rozbalenie výsledkového stripu
+        is_visible = self.scroll.isVisible()
+        self.scroll.setVisible(not is_visible)
+        self.btn_strip_toggle.setText("▾ Posledné snímky" if not is_visible else "▸ Posledné snímky")
+
+    def _update_live_view(self):
+        try:
+            frame = self.cam.last_frame()
+            if frame is None:
+                return
+            img = frame
+            if self.chk_heatmap.isChecked():
+                try:
+                    img = self._make_heatmap_overlay(frame)
+                except Exception as e:
+                    # ak zlyhá heatmap, zobraz surový obraz
+                    img = frame
+            self._show_gray_or_bgr(self.live_view, img)
+        except Exception:
+            pass
+
+    def _show_gray_or_bgr(self, label: QLabel, img):
+        import numpy as np
+        if img.ndim == 2:  # GRAY8
+            h, w = img.shape
+            q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+            pm = QPixmap.fromImage(q.copy()).scaled(label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(pm)
+        else:  # BGR
+            import cv2
+            bgr = img
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            h, w, _ = rgb.shape
+            q = QImage(rgb.data, w, h, w*3, QImage.Format_RGB888)
+            pm = QPixmap.fromImage(q.copy()).scaled(label.width(), label.height(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(pm)
+
+    def _make_heatmap_overlay(self, frame_u8):
+        """Vytvorí farebnú heatmapu rozdielov voči golden a preloží ju cez aktuálny obraz."""
+        import os
+        import imageio.v3 as iio
+        import cv2
+        import numpy as np
+        name = self.current_recipe_name()
+        golden_fp = f"/data/recipes/{name}/golden.png"
+        if not os.path.exists(golden_fp):
+            return frame_u8
+        g = iio.imread(golden_fp)
+        if g.ndim == 3:
+            g = cv2.cvtColor(g, cv2.COLOR_BGR2GRAY) if g.shape[2]==3 else g[:,:,0]
+        # veľkosť na aktuálny frame, pre istotu
+        if g.shape != frame_u8.shape:
+            g = cv2.resize(g, (frame_u8.shape[1], frame_u8.shape[0]), interpolation=cv2.INTER_AREA)
+        # absolútna diferencía, normalizácia 0..255
+        diff = cv2.absdiff(frame_u8, g)
+        if diff.max() > 0:
+            diff_norm = cv2.convertScaleAbs(diff, alpha=255.0/max(1, diff.max()))
+        else:
+            diff_norm = diff
+        heat = cv2.applyColorMap(diff_norm, cv2.COLORMAP_JET)  # BGR
+        # prehľadná zmes (alpha 0.45)
+        base = cv2.cvtColor(frame_u8, cv2.COLOR_GRAY2BGR)
+        out = cv2.addWeighted(base, 0.55, heat, 0.45, 0.0)
+        return out
 
     def closeEvent(self, e):
         try:
