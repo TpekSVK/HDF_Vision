@@ -62,7 +62,7 @@ RUN mkdir -p build && cd build && cmake \
   -D CUDA_ARCH_BIN=${CUDA_ARCH_BIN} \
   -D WITH_CUBLAS=ON \
   -D WITH_CUDNN=ON \
-  -D OPENCV_DNN_CUDA=ON \
+  -D OPENCV_DNN_CUDA=OFF \
   -D ENABLE_FAST_MATH=ON \
   -D CUDA_FAST_MATH=ON \
   -D WITH_GSTREAMER=ON \
