@@ -1,8 +1,12 @@
 from PySide6.QtWidgets import (
-    QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox
+    QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox,
+    QStackedWidget, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
+
+from threading import Thread
+from app.services.retention_service import RetentionService
 
 from app.ui.xu_panel import XUPanel
 
@@ -14,8 +18,6 @@ from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
-from threading import Thread
-from app.services.retention_service import RetentionService
 
 
 class MainWindow(QMainWindow):
@@ -35,7 +37,6 @@ class MainWindow(QMainWindow):
 
         # Tool/Recipe
         try:
-            # zaruč, že existuje "default"
             if "default" not in self.recipes.list():
                 self.recipes.create("default")
             self.recipes.load("default")
@@ -45,22 +46,28 @@ class MainWindow(QMainWindow):
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
 
-        # Root layout
-        root = QWidget()
-        self.setCentralWidget(root)
-        layout = QVBoxLayout(root)
+        # ========== Root & Top bar ==========
+        root = QWidget(); self.setCentralWidget(root)
+        root_layout = QVBoxLayout(root); root_layout.setContentsMargins(10, 10, 10, 10); root_layout.setSpacing(8)
 
-        # Prepínač RUN/SETUP
-        self.mode_btn = QPushButton("Prepnúť do SETUP")
+        top = QHBoxLayout(); top.setSpacing(8)
+        title = QLabel("HDF_Vision")
+        tf = QFont(); tf.setPointSize(14); tf.setBold(True)
+        title.setFont(tf)
+        top.addWidget(title)
+        top.addStretch(1)
+
+        # prepínač režimu (ikonový text)
+        self.mode_btn = QPushButton("⚙ SETUP")
         self.mode_btn.clicked.connect(self.toggle_mode)
-        layout.addWidget(self.mode_btn)
+        top.addWidget(self.mode_btn)
 
-        # ---------- Recipe bar ----------
-        bar = QHBoxLayout()
-        layout.addLayout(bar)
+        root_layout.addLayout(top)
+
+        # ========== Recipe bar (pod titulkom) ==========
+        bar = QHBoxLayout(); bar.setSpacing(8)
         bar.addWidget(QLabel("Recept:"))
-        self.cmb_recipe = QComboBox()
-        self._refresh_recipe_list()
+        self.cmb_recipe = QComboBox(); self._refresh_recipe_list()
         self.cmb_recipe.currentTextChanged.connect(self.on_recipe_changed)
         bar.addWidget(self.cmb_recipe)
 
@@ -73,55 +80,83 @@ class MainWindow(QMainWindow):
         self.btn_ren.clicked.connect(self.on_recipe_rename)
         self.btn_del.clicked.connect(self.on_recipe_delete)
 
-        # ---------- RUN panel ----------
-        self.panel_run = QWidget()
-        self.runLayout = QVBoxLayout(self.panel_run)
+        root_layout.addLayout(bar)
 
-        # Veľký OK/NOK + metriky
+        # deliaca čiara
+        line = QFrame(); line.setFrameShape(QFrame.HLine); line.setFrameShadow(QFrame.Sunken)
+        root_layout.addWidget(line)
+
+        # ========== Stacked RUN/SETUP ==========
+        self.stack = QStackedWidget()
+        root_layout.addWidget(self.stack, 1)
+
+        # ---------- RUN panel ----------
+        self.panel_run = QWidget(); self.stack.addWidget(self.panel_run)
+        run = QVBoxLayout(self.panel_run); run.setSpacing(8)
+
+        # Status + metriky + štatistiky v jednom riadku
+        status_row = QHBoxLayout(); status_row.setSpacing(16)
         self.lbl_status = QLabel("–")
-        f = QFont(); f.setPointSize(28); f.setBold(True)
-        self.lbl_status.setFont(f)
+        sf = QFont(); sf.setPointSize(28); sf.setBold(True)
+        self.lbl_status.setFont(sf)
         self.lbl_status.setAlignment(Qt.AlignLeft)
+        status_row.addWidget(self.lbl_status, 0)
 
         self.lbl_metrics = QLabel("")
-        self.lbl_metrics.setAlignment(Qt.AlignLeft)
+        self.lbl_metrics.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        status_row.addWidget(self.lbl_metrics, 1)
 
         self.lbl_stats_day = QLabel("Štatistiky dnes: –")
+        status_row.addWidget(self.lbl_stats_day, 0)
 
-        self.btn_trigger = QPushButton("Manuálny TRIGGER")  # berie posledný kontinuálny frame
+        run.addLayout(status_row)
+
+        # Akcie
+        actions = QHBoxLayout(); actions.setSpacing(8)
+        self.btn_trigger = QPushButton("⏻ TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.clicked.connect(self.manual_trigger)
+        actions.addWidget(self.btn_trigger)
 
-        # Strip posledných snímok + Export CSV
-        self.strip = ResultsStrip(self, limit=12)
-        self.btn_export = QPushButton("Export CSV (dnes)")
+        self.btn_export = QPushButton("📊 Export CSV (dnes)")
         self.btn_export.clicked.connect(self.export_csv_today)
+        actions.addWidget(self.btn_export)
 
-        # Poradie: status → metriky → stats → trigger → strip → export
-        self.runLayout.addWidget(self.lbl_status)
-        self.runLayout.addWidget(self.lbl_metrics)
-        self.runLayout.addWidget(self.lbl_stats_day)
-        self.runLayout.addWidget(self.btn_trigger)
-        self.runLayout.addWidget(self.strip)
-        self.runLayout.addWidget(self.btn_export)
+        self.btn_wizard_quick = QPushButton("📷 Golden WIZARD")
+        self.btn_wizard_quick.clicked.connect(self.open_wizard)
+        actions.addWidget(self.btn_wizard_quick)
 
-        layout.addWidget(self.panel_run)
+        actions.addStretch(1)
+        run.addLayout(actions)
+
+        # deliaca čiara
+        line2 = QFrame(); line2.setFrameShape(QFrame.HLine); line2.setFrameShadow(QFrame.Sunken)
+        run.addWidget(line2)
+
+        # Strip v scroll area
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        strip_wrap = QWidget(); strip_layout = QVBoxLayout(strip_wrap); strip_layout.setContentsMargins(6,6,6,6)
+        self.strip = ResultsStrip(self, limit=12)
+        strip_layout.addWidget(self.strip)
+        scroll.setWidget(strip_wrap)
+        run.addWidget(scroll, 1)
 
         # ---------- SETUP panel ----------
-        self.panel_setup = QWidget()
-        v = QVBoxLayout(self.panel_setup)
+        self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
+        s = QVBoxLayout(self.panel_setup); s.setSpacing(8)
 
-        v.addWidget(QLabel("Nastavenia kamery"))
-        self.btn_wizard = QPushButton("Golden WIZARD", self)
+        row1 = QHBoxLayout();
+        self.btn_wizard = QPushButton("🔧 Golden Wizard", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
-        v.addWidget(self.btn_wizard)
+        self.btn_save_golden = QPushButton("💾 Uložiť GOLDEN (one-shot)")
+        self.btn_save_golden.clicked.connect(self.save_golden_clicked)
+        row1.addWidget(self.btn_wizard); row1.addWidget(self.btn_save_golden); row1.addStretch(1)
+        s.addLayout(row1)
 
-        v.addWidget(QLabel("Limity / Prahy"))
-        self.th_panel = ThresholdsPanel(self)
-        v.addWidget(self.th_panel)
+        cam_title = QLabel("Nastavenia kamery"); tf2 = QFont(); tf2.setPointSize(12); tf2.setBold(True); cam_title.setFont(tf2)
+        s.addWidget(cam_title)
 
-        # Rozlíšenie (placeholder)
+        # Rozlíšenie
         res_line = QHBoxLayout()
-        v.addLayout(res_line)
         res_line.addWidget(QLabel("Rozlíšenie:"))
         self.cmb_res = QComboBox()
         self.cmb_res.addItems([
@@ -130,53 +165,46 @@ class MainWindow(QMainWindow):
             "2592x1944@30 Y8 (len setup/pomalé)"
         ])
         res_line.addWidget(self.cmb_res)
+        s.addLayout(res_line)
 
-        # Expo/gain (XU stub – doplníme neskôr)
-        v.addWidget(QLabel("Expo [us] (XU stub):"))
+        # Expo/Gain
+        eg_line = QHBoxLayout()
+        eg_line.addWidget(QLabel("Expo [µs] (XU stub):"))
         self.spin_expo = QSpinBox(); self.spin_expo.setRange(1, 1_000_000); self.spin_expo.setValue(8000)
-        v.addWidget(self.spin_expo)
-
-        v.addWidget(QLabel("Gain [dB] (XU stub):"))
+        eg_line.addWidget(self.spin_expo)
+        eg_line.addSpacing(12)
+        eg_line.addWidget(QLabel("Gain [dB] (XU stub):"))
         self.spin_gain = QSpinBox(); self.spin_gain.setRange(0, 48); self.spin_gain.setValue(0)
-        v.addWidget(self.spin_gain)
-
-        # Uložiť GOLDEN z aktuálneho one-shotu
-        self.btn_save_golden = QPushButton("Uložiť GOLDEN (current one-shot)")
-        self.btn_save_golden.clicked.connect(self.save_golden_clicked)
-        v.addWidget(self.btn_save_golden)
+        eg_line.addWidget(self.spin_gain)
+        eg_line.addStretch(1)
+        s.addLayout(eg_line)
 
         # XU panel
+        line3 = QFrame(); line3.setFrameShape(QFrame.HLine); line3.setFrameShadow(QFrame.Sunken)
+        s.addWidget(line3)
         self.xu = XUPanel(self)
-        v.addWidget(self.xu)
+        s.addWidget(self.xu)
 
-        layout.addWidget(self.panel_setup)
-        self.panel_setup.hide()  # default RUN
-        
-    # Spusť retenciu na pozadí (jednorazovo pri štarte)
-    def _run_retention():
-        try:
-            RetentionService().run_once(verbose=False)
-        except Exception as e:
-            print("[Retention][ERR]", e)
-    Thread(target=_run_retention, daemon=True).start()
+        # default RUN zobrazenie
+        self.stack.setCurrentWidget(self.panel_run)
+
+        # Spusť retenciu na pozadí (jednorazovo pri štarte)
+        Thread(target=lambda: RetentionService().run_once(verbose=False), daemon=True).start()
 
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
-        # Zatiaľ používame to, čo je v ToolService (alebo "default")
         return getattr(self.tool, "recipe", "default") or "default"
 
     # ---------- UI akcie ----------
     def toggle_mode(self):
-        if self.mode == "RUN":
+        if self.stack.currentWidget() is self.panel_run:
+            self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
-            self.mode_btn.setText("Prepnúť do RUN")
-            self.panel_setup.show()
-            self.panel_run.hide()
+            self.mode_btn.setText("▶ RUN")
         else:
+            self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
-            self.mode_btn.setText("Prepnúť do SETUP")
-            self.panel_setup.hide()
-            self.panel_run.show()
+            self.mode_btn.setText("⚙ SETUP")
 
     def manual_trigger(self):
         try:
@@ -188,7 +216,7 @@ class MainWindow(QMainWindow):
             metrics = {}
             try:
                 res = self.tool.evaluate(frame)
-                nok = (not res["ok"])
+                nok = (not res["ok"])   # True ak je nezhoda
                 metrics = res["metrics"]
             except Exception as e:
                 print("[Tool] evaluate failed:", e)
@@ -219,7 +247,7 @@ class MainWindow(QMainWindow):
             # refresh stripu po uložení výsledku
             self.strip.reload()
 
-        except Exception as e:
+        except Exception:
             import traceback; traceback.print_exc()
 
     def save_golden_clicked(self):
