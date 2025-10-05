@@ -19,7 +19,7 @@ CAM_DEV="${CAM_DEV:-/dev/video0}"
 
 # Spustenie (povolené V4L2 ioctl bez full privileged)
 exec docker run --rm -it \
-  --privileged \ 
+  --privileged \
   --runtime nvidia \
   --network host \
   --security-opt seccomp=unconfined \

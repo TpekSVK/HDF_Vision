@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
 
-import json
+import json, os
 from pathlib import Path
 
 from app.ui.draw_view import DrawView
@@ -25,14 +25,18 @@ class GoldenWizard(QDialog):
     """
     def __init__(self, camera, parent=None):
         super().__init__(parent)
+        
         self.setWindowTitle("Golden WIZARD")
         self.setModal(True)
         self.cam = camera
         self.current_img = None
 
         # --- Live infra (len video label, bez kreslenia) ---
-        dev = getattr(self.cam, "devices", ["/dev/video0"])[0]
+
+        dev = os.environ.get("CAM_DEV") or getattr(self.cam, "devices", ["/dev/video0"])[0]
+        print(f"[GoldenWizard] Live device: {dev}")
         self._lp = LivePreviewService(dev, 1280, 720, 60)
+
         self._live_timer = QTimer(self)
         self._live_timer.setInterval(50)  # ~20 FPS
         self._live_timer.timeout.connect(self._live_tick)
