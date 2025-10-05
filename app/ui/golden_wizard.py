@@ -1,8 +1,8 @@
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QPixmap, QAction, QImage
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QWidget
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
 )
 
 import json
@@ -21,7 +21,7 @@ class GoldenWizard(QDialog):
       2) Nakresliť oblasti (Blue pose×1, Green ROI×1, Magenta ignore≤5)
       3) Zbierať validáciu (OK/NOK)
       4) Uložiť recept (golden.png + regions.json)
-      5) Live feed (ON/OFF) – živý náhľad priamo vo wizarde
+      5) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
     """
     def __init__(self, camera, parent=None):
         super().__init__(parent)
@@ -30,7 +30,7 @@ class GoldenWizard(QDialog):
         self.cam = camera
         self.current_img = None
 
-        # --- Live feed infra ---
+        # --- Live infra (len video label, bez kreslenia) ---
         dev = getattr(self.cam, "devices", ["/dev/video0"])[0]
         self._lp = LivePreviewService(dev, 1280, 720, 60)
         self._live_timer = QTimer(self)
@@ -38,27 +38,36 @@ class GoldenWizard(QDialog):
         self._live_timer.timeout.connect(self._live_tick)
         self._live_on = False
 
-        # --- Horný panel ---
+        # ---- Horná lišta ----
         self.recipe_name = QLineEdit("default", self)
         self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
         self.type_sel    = QComboBox(self); self.type_sel.addItems(["pose","roi","ignore"])
 
-        # Live prepínač
-        self.live_sel    = QComboBox(self); self.live_sel.addItems(["Live OFF","Live ON"])
-        self.live_sel.currentIndexChanged.connect(self._toggle_live)
+        # Toggle Live
+        self.btn_live = QPushButton("Live OFF")
+        self.btn_live.setCheckable(True)
+        self.btn_live.clicked.connect(self._toggle_live)
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
         top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
         top.addWidget(QLabel("Typ:"));    top.addWidget(self.type_sel)
-        top.addWidget(QLabel("Náhľad:")); top.addWidget(self.live_sel)
+        top.addStretch(1)
+        top.addWidget(self.btn_live)
 
-        # --- Plátno s kreslením (pozadie meníme live) ---
+        # ---- Dva režimy zobrazenia ----
+        # 1) Live LABEL (video) – používa sa len pri Live ON
+        self.live_lbl = QLabel("—")
+        self.live_lbl.setAlignment(Qt.AlignCenter)
+        self.live_lbl.setMinimumHeight(360)
+        self.live_lbl.hide()  # default skryté
+
+        # 2) DrawView (kreslenie) – používa sa pri Live OFF
         self.view = DrawView(self)
         self.view.set_shape_type(self.shape_sel.currentText())
         self.view.set_region_type(self.type_sel.currentText())
 
-        # --- Ovládacie tlačidlá ---
+        # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
         btn_save_recipe  = QPushButton("Uložiť RECEPT")
@@ -73,8 +82,10 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_val_nok)
         buttons.addWidget(btn_save_recipe)
 
+        # ---- Layout ----
         layout = QVBoxLayout(self)
         layout.addLayout(top)
+        layout.addWidget(self.live_lbl)
         layout.addWidget(self.view)
         layout.addLayout(buttons)
 
@@ -87,31 +98,48 @@ class GoldenWizard(QDialog):
         btn_val_ok.clicked.connect(lambda: self._save_validation(True))
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
 
-    # ---------- Live feed ----------
-    def _toggle_live(self, idx: int):
-        if idx == 1 and not self._live_on:  # ON
+    # ---------- Live ----------
+    def _toggle_live(self, checked: bool):
+        if checked:
+            # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
+            self.view.hide()
+            self.live_lbl.show()
             try:
                 self._lp.start()
                 self._live_timer.start()
                 self._live_on = True
+                self.btn_live.setText("Live ON")
+                # Deaktivuj meniče tvar/typ počas live (čisto vizuálne)
+                self.shape_sel.setEnabled(False)
+                self.type_sel.setEnabled(False)
             except Exception as e:
                 self._err(f"Live feed sa nepodarilo spustiť: {e}")
-                self.live_sel.setCurrentIndex(0)
+                self.btn_live.setChecked(False)
+                self.live_lbl.setText("—")
                 self._live_on = False
-        elif idx == 0 and self._live_on:  # OFF
+        else:
+            # Vypnúť live: skryť label, ukázať DrawView
             self._live_timer.stop()
             try:
                 self._lp.stop()
             except Exception:
                 pass
             self._live_on = False
+            self.btn_live.setText("Live OFF")
+            self.live_lbl.hide()
+            self.view.show()
+            self.shape_sel.setEnabled(True)
+            self.type_sel.setEnabled(True)
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()
         if img is None:
             return
-        # Zobraz live ako pozadie do DrawView (prekresľuje len bitmapu; overlay/regiony zostanú)
-        self._set_pixmap(img)
+        h, w = img.shape[:2]
+        qimg = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
+        pm = QPixmap.fromImage(qimg.copy()).scaled(self.live_lbl.width(), self.live_lbl.height(),
+                                                   Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self.live_lbl.setPixmap(pm)
 
     # ---------- UI util ----------
     def _set_pixmap(self, img_u8):
@@ -124,12 +152,15 @@ class GoldenWizard(QDialog):
     # ---------- Akcie ----------
     def _capture_golden(self):
         try:
-            # Ak beží LIVE, vezmi aktuálny frame; inak sprav one-shot
-            frame = self._lp.last_frame_u8() if self._live_on else None
+            # ak je live ON, zober aktuálny frame a hneď live vypni (freeze)
+            frame = (self._lp.last_frame_u8() if self._live_on else None)
             if frame is None:
                 frame = self.cam.one_shot()
             self.current_img = frame
             self._set_pixmap(frame)
+            if self._live_on:
+                self.btn_live.setChecked(False)
+                self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
             self._info("Golden zachytený z kamery.")
         except Exception as e:
             self._err(f"Zachytenie zlyhalo: {e}")
@@ -139,14 +170,11 @@ class GoldenWizard(QDialog):
         fp, _ = QFileDialog.getOpenFileName(self, "Načítaj obrázok", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if not fp:
             return
-        import imageio.v3 as iio, numpy as np
+        import imageio.v3 as iio, numpy as np, cv2
         img = iio.imread(fp)
         if img.ndim == 3:
-            import cv2
             img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.shape[2]==3 else img[:,:,0]
         if img.dtype != np.uint8:
-            # pre istotu – konvertuj na 8-bit
-            import cv2
             img = cv2.convertScaleAbs(img)
         self.current_img = img
         self._set_pixmap(img)
