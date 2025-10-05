@@ -1,8 +1,154 @@
-# app/services/compare_service.py
+# --- hore v súbore (importy + CUDA detekcia) ---
 import numpy as np
 import cv2
 from typing import Dict, Any, Tuple
 from app.services.mask_utils import regions_to_masks
+
+USE_CUDA = hasattr(cv2, "cuda") and cv2.cuda.getCudaEnabledDeviceCount() > 0
+
+# Pomocné GPU funkcie
+def _gpu_upload(u8):
+    g = cv2.cuda_GpuMat()
+    g.upload(u8)
+    return g
+
+def _gpu_gauss(gpu_src, ksize=3, sigma=0.8):
+    k = (ksize, ksize)
+    gf = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_8UC1, k, sigma)
+    return gf.apply(gpu_src)
+
+def _gpu_absdiff(a, b):
+    return cv2.cuda.absdiff(a, b)
+
+def _gpu_threshold(gpu_src, thresh, maxv=255, typ=cv2.THRESH_BINARY):
+    return cv2.cuda.threshold(gpu_src, thresh, maxv, typ)[1]  # returns (retval, dst)
+
+def _gpu_morph_open_then_dilate(gpu_bin, k_open=3, k_dil=3):
+    se_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_open, k_open))
+    se_dil  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_dil, k_dil))
+    f_open = cv2.cuda.createMorphologyFilter(cv2.MORPH_OPEN, cv2.CV_8UC1, se_open)
+    f_dil  = cv2.cuda.createMorphologyFilter(cv2.MORPH_DILATE, cv2.CV_8UC1, se_dil)
+    out = f_open.apply(gpu_bin)
+    out = f_dil.apply(out)
+    return out
+
+def _gpu_warp_by_translation(gpu_src, dx, dy):
+    h, w = gpu_src.size()[0], gpu_src.size()[1]  # size() -> rows, cols
+    M = np.array([[1,0,dx],[0,1,dy]], np.float32)
+    return cv2.cuda.warpAffine(gpu_src, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+def _gpu_match_template_coarse_fine(frame_u8, templ_u8, xs, ys, xe, ye):
+    """
+    GPU coarse->fine matchTemplate v obdĺžniku [xs:xe, ys:ye].
+    Vracia (dx, dy, corr).
+    """
+    H, W = frame_u8.shape[:2]
+    search = frame_u8[ys:ye, xs:xe]
+    sh, sw = search.shape[:2]
+    th, tw = templ_u8.shape[:2]
+
+    # --- coarse scale ---
+    max_dim = max(sh, sw)
+    scale = 1.0 if max_dim <= 600 else 600.0 / max_dim
+    if scale < 1.0:
+        sS = cv2.resize(search, (int(sw*scale), int(sh*scale)), interpolation=cv2.INTER_AREA)
+        sT = cv2.resize(templ_u8, (int(tw*scale), int(th*scale)), interpolation=cv2.INTER_AREA)
+        gS, gT = _gpu_upload(sS), _gpu_upload(sT)
+        gRes = cv2.cuda.matchTemplate(gS, gT, cv2.TM_CCOEFF_NORMED)
+        res  = gRes.download()
+        _, maxVal_s, _, maxLoc_s = cv2.minMaxLoc(res)
+        coarse_x = int(round(maxLoc_s[0] / scale))
+        coarse_y = int(round(maxLoc_s[1] / scale))
+    else:
+        gS, gT = _gpu_upload(search), _gpu_upload(templ_u8)
+        gRes = cv2.cuda.matchTemplate(gS, gT, cv2.TM_CCOEFF_NORMED)
+        res  = gRes.download()
+        _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
+        dx = float((xs + maxLoc[0]))
+        dy = float((ys + maxLoc[1]))
+        return (dx - (xs), dy - (ys), float(maxVal))  # relatívne voči (x,y) vyrátame nižšie
+
+    # --- fine okno v plnom rozlíšení ---
+    pad = 20
+    fx1 = xs + max(0, coarse_x - pad)
+    fy1 = ys + max(0, coarse_y - pad)
+    fx2 = min(xe, fx1 + tw + 2*pad)
+    fy2 = min(ye, fy1 + th + 2*pad)
+    fine = frame_u8[fy1:fy2, fx1:fx2]
+    if fine.shape[0] < th or fine.shape[1] < tw:
+        return float(coarse_x), float(coarse_y), float(maxVal_s)
+
+    gF, gT = _gpu_upload(fine), _gpu_upload(templ_u8)
+    gRes = cv2.cuda.matchTemplate(gF, gT, cv2.TM_CCOEFF_NORMED)
+    res  = gRes.download()
+    _, maxVal_f, _, maxLoc_f = cv2.minMaxLoc(res)
+
+    best_x = (fx1 - xs) + maxLoc_f[0]
+    best_y = (fy1 - ys) + maxLoc_f[1]
+    return float(best_x), float(best_y), float(maxVal_f)
+
+def _gpu_ssim_u8(img_u8, ref_u8, mask_u8=None):
+    """
+    SSIM na GPU: (u,v,cov) cez Gaussian filtery a element-wise operácie.
+    Výsledok je skalar (download len malých medzivýsledkov).
+    """
+    gI = _gpu_upload(img_u8)
+    gR = _gpu_upload(ref_u8)
+
+    # Gaussian μ
+    gGauss = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_32FC1, (11,11), 1.5)
+    muI = gGauss.apply(gI)
+    muR = gGauss.apply(gR)
+
+    # square + product
+    sqI = cv2.cuda.multiply(gI, gI, scale=1.0)     # I^2 (8U*8U -> 8U; presnosť OK na SSIM? lepšie pretypovať)
+    sqR = cv2.cuda.multiply(gR, gR, scale=1.0)
+    gI32 = cv2.cuda.convertTo(gI, cv2.CV_32F)
+    gR32 = cv2.cuda.convertTo(gR, cv2.CV_32F)
+    muI32 = muI                              # 32F
+    muR32 = muR
+
+    # σ^2 = G(I^2) - μ^2
+    gi2 = cv2.cuda.multiply(gI32, gI32)      # 32F
+    gr2 = cv2.cuda.multiply(gR32, gR32)
+    GI2 = gGauss.apply(gi2)
+    GR2 = gGauss.apply(gr2)
+    muI2 = cv2.cuda.multiply(muI32, muI32)
+    muR2 = cv2.cuda.multiply(muR32, muR32)
+    varI = cv2.cuda.subtract(GI2, muI2)
+    varR = cv2.cuda.subtract(GR2, muR2)
+
+    # cov = G(I*R) - μI*μR
+    IR = cv2.cuda.multiply(gI32, gR32)
+    GIR = gGauss.apply(IR)
+    muImuR = cv2.cuda.multiply(muI32, muR32)
+    cov = cv2.cuda.subtract(GIR, muImuR)
+
+    # Ak je maska, aplikuj ju, stiahni len maskované pixely (lacné: 8-bit maska -> boolean filtrácia sa spraví CPU)
+    m = None
+    if mask_u8 is not None and mask_u8.any():
+        # stiahneme len nevyhnutné štatistiky a aplikujeme masku na CPU
+        muI_np = muI.download(); muR_np = muR.download()
+        varI_np = varI.download(); varR_np = varR.download(); cov_np = cov.download()
+        m = mask_u8 > 0
+        # SSIM skalar podľa vzorca
+        L = 255.0; C1 = (0.01*L)**2; C2 = (0.03*L)**2
+        ux = float(muI_np[m].mean()); uy = float(muR_np[m].mean())
+        vx = float(varI_np[m].mean()); vy = float(varR_np[m].mean())
+        cxy = float(cov_np[m].mean())
+    else:
+        # globálne priemery
+        muI_np = muI.download(); muR_np = muR.download()
+        varI_np = varI.download(); varR_np = varR.download(); cov_np = cov.download()
+        ux = float(muI_np.mean()); uy = float(muR_np.mean())
+        vx = float(varI_np.mean()); vy = float(varR_np.mean())
+        cxy = float(cov_np.mean())
+
+    L = 255.0; C1 = (0.01*L)**2; C2 = (0.03*L)**2
+    num = (2*ux*uy + C1) * (2*cxy + C2)
+    den = (ux*ux + uy*uy + C1) * (vx + vy + C2)
+    return 1.0 if den <= 0 else float(num/den)
+
 
 # ---------- Pomocné okná/filtre ----------
 def _hanning_window(shape):
