@@ -4,6 +4,45 @@ import cv2
 from typing import Dict, Any, Tuple
 from app.services.mask_utils import regions_to_masks
 
+def _ssim(img1_u8: np.ndarray, img2_u8: np.ndarray, mask_u8: np.ndarray | None = None) -> float:
+    """
+    SSIM nad 8-bit šedotónmi (0..255). Ak je maska, počítame len nad maskovanou oblasťou (>0).
+    Bez externých knižníc (skimage).
+    """
+    # konverzia na float
+    x = img1_u8.astype(np.float32)
+    y = img2_u8.astype(np.float32)
+
+    if mask_u8 is not None:
+        m = mask_u8 > 0
+        if not np.any(m):
+            # ak maska prázdna, nech sa SSIM netvári ako NOK
+            return 1.0
+        x = x[m]
+        y = y[m]
+
+    if x.size == 0 or y.size == 0:
+        return 1.0
+
+    # štatistiky
+    ux = float(np.mean(x))
+    uy = float(np.mean(y))
+    vx = float(np.var(x))
+    vy = float(np.var(y))
+    cxy = float(np.mean((x - ux) * (y - uy)))
+
+    # stabilizačné konštanty (klasická voľba)
+    L = 255.0
+    C1 = (0.01 * L) ** 2
+    C2 = (0.03 * L) ** 2
+
+    num = (2 * ux * uy + C1) * (2 * cxy + C2)
+    den = (ux * ux + uy * uy + C1) * (vx + vy + C2)
+    if den <= 0:
+        # degenerate prípad: obe rovnaké/konštantné
+        return 1.0 if np.allclose(x, y) else 0.0
+    return float(num / den)
+
 def _prep_for_ecc(img_u8: np.ndarray) -> np.ndarray:
     # normalizácia + jemné rozmazanie pre stabilnejší ECC
     f = img_u8.astype(np.float32)
