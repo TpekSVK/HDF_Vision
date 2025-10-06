@@ -30,7 +30,7 @@ def _gauss_soft(img_u8_src: np.ndarray, sigma: float = 0.8) -> np.ndarray:
     return img.blur_gaussian_u8(img_u8_src, sigma=sigma, kmin=3)
 
 
-# ---------- Globálne zarovnanie (kamera/fixture) – CPU ECC s maskou ----------
+# ---------- Globálne zarovnanie (kamera/fixture) – ECC s maskou + fallback ----------
 def _prep_for_ecc(img_u8: np.ndarray) -> np.ndarray:
     f = img_u8.astype(np.float32)
     m = float(f.max())
@@ -48,6 +48,22 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Opti
     iF = _prep_for_ecc(frame_u8)
     mF = (mp > 0).astype(np.uint8) if mp is not None else None
 
+    # Ak ECC v build-e nie je, urob okamžitý fallback na phase correlation
+    has_ecc = hasattr(cv2, "findTransformECC")
+    if not has_ecc:
+        try:
+            ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
+            cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
+            (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
+            wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
+            aligned = cv2.warpAffine(
+                frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
+                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+            )
+            return aligned, wfb
+        except Exception:
+            return frame_u8, np.eye(2, 3, dtype=np.float32)
+
     def pyr(x: np.ndarray):
         x2 = cv2.pyrDown(x) if min(x.shape[:2]) >= 4 else x
         x4 = cv2.pyrDown(x2) if min(x2.shape[:2]) >= 4 else x2
@@ -61,15 +77,15 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Opti
 
     warp = np.eye(2, 3, dtype=np.float32)
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 200, 1e-7)
-    mode = cv2.MOTION_EUCLIDEAN
+    mode = getattr(cv2, "MOTION_EUCLIDEAN", 1)  # 1 == Euclidean (posun + rotácia)
 
     def ecc_step(g, i, m, w):
         wloc = w.copy()
         try:
             _ = cv2.findTransformECC(g, i, wloc, mode, crit, inputMask=m, gaussFiltSize=5)
-            wloc[:, 2] *= 2.0  # zväčšenie posunu pri prechode na vyššiu úroveň
+            wloc[:, 2] *= 2.0  # zväčšenie posunu pri prechode na vyššiu úroveň pyramídy
             return wloc, True
-        except cv2.error:
+        except (cv2.error, AttributeError):
             return w, False
 
     w4, ok4 = ecc_step(g4, i4, m4, warp)
@@ -138,16 +154,16 @@ def _template_align_in_roi(
     xe = min(W, x + w + search_margin)
     ye = min(H, y + h + search_margin)
 
-    # použijeme spoločnú utilitu
+    # spoločná utilita – GPU/CPU podľa dostupnosti
     dx_rel, dy_rel, corr, used = img.match_template_u8(
         frame_u8,
         templ,
         roi=(xs, ys, xe - xs, ye - ys),
-        search_margin=0,   # search už sme obmedzili ROI vyššie
+        search_margin=0,   # search už je zúžený ROI vyššie
         coarse_cap=600,
     )
 
-    # dx_rel/dy_rel sú relatívne v ROI => pre posun voči originu:
+    # relatívne → globálne
     dx = float((xs + dx_rel) - x)
     dy = float((ys + dy_rel) - y)
 
@@ -172,7 +188,7 @@ def analyze(
         # Template matching tuning:
         tm_enable=1,        # 1=zap., 0=vyp.
         tm_margin=200,      # px okolo ROI
-        tm_min_corr=0.55,   # (len informačné – my zatiaľ nestriháme podľa toho)
+        tm_min_corr=0.55,   # (len informačné)
     )
     if thresholds:
         th.update(thresholds)
@@ -229,7 +245,7 @@ def analyze(
         "tm_dx": round(float(tm_info.get("tm_dx", 0.0)), 3),
         "tm_dy": round(float(tm_info.get("tm_dy", 0.0)), 3),
         "tm_corr": round(float(tm_info.get("tm_corr", 0.0)), 4),
-        # GPU info (informačne)
+        # GPU info (iba informačne)
         "gpu": 1 if img.USE_CUDA else 0,
     }
 
