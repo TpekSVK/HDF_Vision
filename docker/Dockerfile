@@ -79,8 +79,7 @@ RUN mkdir -p build && cd build && cmake \
   -D CMAKE_CUDA_ARCHITECTURES=87 \
   -D OPENCV_GENERATE_PKGCONFIG=ON \
   -D WITH_OPENCL=OFF \
-
-  $(if [ "${OPENCV_CONTRIB}" = "ON" ]; then echo "-D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv-build/opencv_contrib/modules"; fi) \
+ $(if [ "${OPENCV_CONTRIB}" = "ON" ]; then echo "-D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv-build/opencv_contrib/modules"; fi) \
   ../opencv && \
   make -j2 && make install && ldconfig && \
   cd / && rm -rf /tmp/opencv-build
