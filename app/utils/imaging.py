@@ -36,6 +36,7 @@ def device_info() -> Dict[str, str | int | float] | None:
 def ensure_initialized() -> None:
     """Jednorazový warm-up pre CUDA (bezpečný aj na CPU)."""
     global _INITIALIZED
+    global USE_CUDA
     if _INITIALIZED:
         return
     if USE_CUDA:
@@ -48,7 +49,7 @@ def ensure_initialized() -> None:
             _ = _.download()
         except Exception:
             # Ak by GPU cesta padla, prepni na CPU
-            global USE_CUDA  # type: ignore[redefined-outer-name]
+              # type: ignore[redefined-outer-name]
             USE_CUDA = False
     _INITIALIZED = True
 
