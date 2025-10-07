@@ -39,7 +39,13 @@ def _prep_for_ecc(img_u8: np.ndarray) -> np.ndarray:
     f = cv2.GaussianBlur(f, (5, 5), 1.2)
     return f
 
-def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Optional[np.ndarray]):
+def _ecc_multiscale(
+    golden_u8: np.ndarray,
+    frame_u8: np.ndarray,
+    mask_pose: Optional[np.ndarray],
+    ecc_iters: int = 80,
+    ecc_eps: float = 1e-6,
+):
     mp = None
     if mask_pose is not None and mask_pose.any():
         mp = cv2.erode(mask_pose, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
@@ -48,17 +54,18 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Opti
     iF = _prep_for_ecc(frame_u8)
     mF = (mp > 0).astype(np.uint8) if mp is not None else None
 
-    # Ak ECC v build-e nie je, urob okamžitý fallback na phase correlation
-    has_ecc = hasattr(cv2, "findTransformECC")
-    if not has_ecc:
+    # fallback ak chýba ECC
+    if not hasattr(cv2, "findTransformECC"):
         try:
             ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
             cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
             (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
             wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
             aligned = cv2.warpAffine(
-                frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
-                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP
+                frame_u8,
+                wfb,
+                (frame_u8.shape[1], frame_u8.shape[0]),
+                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
             )
             return aligned, wfb
         except Exception:
@@ -72,80 +79,54 @@ def _ecc_multiscale(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Opti
     g4, g2, g1 = pyr(gF)
     i4, i2, i1 = pyr(iF)
     m4 = cv2.pyrDown(mF) if mF is not None and min(mF.shape[:2]) >= 4 else mF
-    m2 = cv2.pyrDown(m4) if m4 is not None and min(m4.shape[:2]) >= 4 else (cv2.pyrDown(mF) if mF is not None else None)
+    m2 = (
+        cv2.pyrDown(m4)
+        if m4 is not None and min(m4.shape[:2]) >= 4
+        else (cv2.pyrDown(mF) if mF is not None else None)
+    )
     m1 = mF
 
     warp = np.eye(2, 3, dtype=np.float32)
-    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(th.get("ecc_iters", 80)), float(th.get("ecc_eps", 1e-6)))
+    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(ecc_iters), float(ecc_eps))
     mode = getattr(cv2, "MOTION_EUCLIDEAN", 1)
 
-    def _ecc_multiscale_cfg(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Optional[np.ndarray],
-                            ecc_iters: int = 80, ecc_eps: float = 1e-6):
-        mp = None
-        if mask_pose is not None and mask_pose.any():
-            mp = cv2.erode(mask_pose, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
+    def ecc_step(g, i, m, w):
+        wloc = w.copy()
+        try:
+            _ = cv2.findTransformECC(g, i, wloc, mode, crit, inputMask=m, gaussFiltSize=5)
+            wloc[:, 2] *= 2.0
+            return wloc, True
+        except (cv2.error, AttributeError):
+            return w, False
 
-        gF = _prep_for_ecc(golden_u8)
-        iF = _prep_for_ecc(frame_u8)
-        mF = (mp > 0).astype(np.uint8) if mp is not None else None
+    w4, ok4 = ecc_step(g4, i4, m4, warp)
+    w2, ok2 = ecc_step(g2, i2, m2, w4)
+    w1, ok1 = ecc_step(g1, i1, m1, w2)
 
-        # fallback ak chýba ECC
-        if not hasattr(cv2, "findTransformECC"):
-            try:
-                ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
-                cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
-                (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
-                wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
-                aligned = cv2.warpAffine(frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
-                                        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-                return aligned, wfb
-            except Exception:
-                return frame_u8, np.eye(2, 3, dtype=np.float32)
+    if not (ok4 or ok2 or ok1):
+        try:
+            ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
+            cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
+            (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
+            wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
+            aligned = cv2.warpAffine(
+                frame_u8,
+                wfb,
+                (frame_u8.shape[1], frame_u8.shape[0]),
+                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
+            )
+            return aligned, wfb
+        except Exception:
+            return frame_u8, np.eye(2, 3, dtype=np.float32)
 
-        def pyr(x: np.ndarray):
-            x2 = cv2.pyrDown(x) if min(x.shape[:2]) >= 4 else x
-            x4 = cv2.pyrDown(x2) if min(x2.shape[:2]) >= 4 else x2
-            return x4, x2, x
-
-        g4, g2, g1 = pyr(gF)
-        i4, i2, i1 = pyr(iF)
-        m4 = cv2.pyrDown(mF) if mF is not None and min(mF.shape[:2]) >= 4 else mF
-        m2 = cv2.pyrDown(m4) if m4 is not None and min(m4.shape[:2]) >= 4 else (cv2.pyrDown(mF) if mF is not None else None)
-        m1 = mF
-
-        warp = np.eye(2, 3, dtype=np.float32)
-        crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(ecc_iters), float(ecc_eps))
-        mode = getattr(cv2, "MOTION_EUCLIDEAN", 1)
-
-        def ecc_step(g, i, m, w):
-            wloc = w.copy()
-            try:
-                _ = cv2.findTransformECC(g, i, wloc, mode, crit, inputMask=m, gaussFiltSize=5)
-                wloc[:, 2] *= 2.0
-                return wloc, True
-            except (cv2.error, AttributeError):
-                return w, False
-
-        w4, ok4 = ecc_step(g4, i4, m4, warp)
-        w2, ok2 = ecc_step(g2, i2, m2, w4)
-        w1, ok1 = ecc_step(g1, i1, m1, w2)
-
-        if not (ok4 or ok2 or ok1):
-            try:
-                ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
-                cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
-                (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
-                wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
-                aligned = cv2.warpAffine(frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
-                                        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-                return aligned, wfb
-            except Exception:
-                return frame_u8, np.eye(2, 3, dtype=np.float32)
-
-        warp_final = w1
-        aligned = cv2.warpAffine(frame_u8, warp_final, (frame_u8.shape[1], frame_u8.shape[0]),
-                                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
-        return aligned, warp_final
+    warp_final = w1
+    aligned = cv2.warpAffine(
+        frame_u8,
+        warp_final,
+        (frame_u8.shape[1], frame_u8.shape[0]),
+        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
+    )
+    return aligned, warp_final
 
 def _align_by_pose(golden: np.ndarray, img_src: np.ndarray, mask_pose: Optional[np.ndarray],
                    mode: str = "phase",
@@ -168,7 +149,7 @@ def _align_by_pose(golden: np.ndarray, img_src: np.ndarray, mask_pose: Optional[
             return img_src, np.eye(2, 3, dtype=np.float32)
     else:
         # ECC s miernejšími kritériami
-        return _ecc_multiscale_cfg(golden, img_src, mask_pose, ecc_iters=ecc_iters, ecc_eps=ecc_eps)
+        return _ecc_multiscale(golden, img_src, mask_pose, ecc_iters=ecc_iters, ecc_eps=ecc_eps)
 
 
 
@@ -227,6 +208,7 @@ def analyze(
     regions: list[dict],
     frame: np.ndarray,
     thresholds: Optional[Dict[str, float]] = None,
+    pose_enabled: bool = True,
 ) -> Dict[str, Any]:
 
     th = dict(
@@ -252,12 +234,18 @@ def analyze(
 
     # 1) Globálne zarovnanie podľa „pose“
     t0 = time.perf_counter()
-    frame_aligned, warp = _align_by_pose(
-        golden, frame, mask_pose,
-        mode=str(th.get("pose_mode", "phase")),
-        ecc_iters=int(th.get("ecc_iters", 80)),
-        ecc_eps=float(th.get("ecc_eps", 1e-6)),
-    )
+    if pose_enabled:
+        frame_aligned, warp = _align_by_pose(
+            golden,
+            frame,
+            mask_pose,
+            mode=str(th.get("pose_mode", "phase")),
+            ecc_iters=int(th.get("ecc_iters", 80)),
+            ecc_eps=float(th.get("ecc_eps", 1e-6)),
+        )
+    else:
+        frame_aligned = frame.copy()
+        warp = np.eye(2, 3, dtype=np.float32)
     t_pose = time.perf_counter() - t0
 
     t1 = time.perf_counter()
@@ -315,6 +303,7 @@ def analyze(
         },
         "gpu": 1 if img.USE_CUDA else 0,
         "pose_mode": str(th.get("pose_mode", "phase")),
+        "pose_enabled": bool(pose_enabled),
     }
 
     return {"ok": not nok, "metrics": metrics}

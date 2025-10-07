@@ -53,6 +53,16 @@ def _ensure_dirs(recipe: str):
     (base / "validation" / "nok").mkdir(parents=True, exist_ok=True)
     return run_dir
 
+
+def _recipe_dir(recipe: str) -> Path:
+    return Path("/data") / "recipes" / recipe
+
+
+def _mask_dir(recipe: str) -> Path:
+    d = _recipe_dir(recipe) / "masks"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
 def _to_u8(img):
     if img is None:
         return None
@@ -136,6 +146,44 @@ def save_validation_image(frame_u8, ok: bool, recipe_name: str):
     payload = {"frame": _to_u8(frame_u8), "ffull": ffull, "fthumb": fthumb}
     _SAVEQ.put(("validation", payload))
     return {"full": str(ffull), "thumb": str(fthumb)}
+
+
+def save_tool_mask(mask_u8: np.ndarray | None, recipe_name: str, tool_id: str) -> str | None:
+    if mask_u8 is None:
+        return None
+    recipe = recipe_name or "default"
+    mask_dir = _mask_dir(recipe)
+    path = mask_dir / f"{tool_id}.png"
+    iio.imwrite(path, mask_u8.astype(np.uint8), extension=".png")
+    base = Path("/data")
+    try:
+        return str(path.relative_to(base))
+    except ValueError:
+        return str(path)
+
+
+def delete_tool_mask(recipe_name: str, tool_id: str):
+    recipe = recipe_name or "default"
+    path = _mask_dir(recipe) / f"{tool_id}.png"
+    if path.exists():
+        try:
+            path.unlink()
+        except Exception:
+            pass
+
+
+def load_tool_mask(mask_path: str | None) -> np.ndarray | None:
+    if not mask_path:
+        return None
+    path = Path(mask_path)
+    if not path.is_absolute():
+        path = Path("/data") / path
+    if not path.exists():
+        return None
+    mask = iio.imread(path)
+    if mask.ndim == 3:
+        mask = mask[:, :, 0]
+    return mask.astype(np.uint8, copy=False)
 
 def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_nok: bool, nok: bool):
     recipe = recipe_name or "default"
