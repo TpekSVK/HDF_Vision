@@ -90,6 +90,44 @@ def _ecc_multiscale(
     crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(ecc_iters), float(ecc_eps))
     mode = getattr(cv2, "MOTION_EUCLIDEAN", 1)
 
+def _ecc_multiscale_cfg(golden_u8: np.ndarray, frame_u8: np.ndarray, mask_pose: Optional[np.ndarray],
+                        ecc_iters: int = 80, ecc_eps: float = 1e-6):
+    mp = None
+    if mask_pose is not None and mask_pose.any():
+        mp = cv2.erode(mask_pose, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)), iterations=1)
+
+    gF = _prep_for_ecc(golden_u8)
+    iF = _prep_for_ecc(frame_u8)
+    mF = (mp > 0).astype(np.uint8) if mp is not None else None
+
+    # fallback ak chýba ECC
+    if not hasattr(cv2, "findTransformECC"):
+        try:
+            ref = gF if mF is None else cv2.bitwise_and(gF, gF, mask=mF)
+            cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
+            (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
+            wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
+            aligned = cv2.warpAffine(frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
+                                    flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
+            return aligned, wfb
+        except Exception:
+            return frame_u8, np.eye(2, 3, dtype=np.float32)
+
+    def pyr(x: np.ndarray):
+        x2 = cv2.pyrDown(x) if min(x.shape[:2]) >= 4 else x
+        x4 = cv2.pyrDown(x2) if min(x2.shape[:2]) >= 4 else x2
+        return x4, x2, x
+
+    g4, g2, g1 = pyr(gF)
+    i4, i2, i1 = pyr(iF)
+    m4 = cv2.pyrDown(mF) if mF is not None and min(mF.shape[:2]) >= 4 else mF
+    m2 = cv2.pyrDown(m4) if m4 is not None and min(m4.shape[:2]) >= 4 else (cv2.pyrDown(mF) if mF is not None else None)
+    m1 = mF
+
+    warp = np.eye(2, 3, dtype=np.float32)
+    crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, int(ecc_iters), float(ecc_eps))
+    mode = getattr(cv2, "MOTION_EUCLIDEAN", 1)
+
     def ecc_step(g, i, m, w):
         wloc = w.copy()
         try:
@@ -109,23 +147,15 @@ def _ecc_multiscale(
             cur = iF if mF is None else cv2.bitwise_and(iF, iF, mask=mF)
             (dx, dy), _ = cv2.phaseCorrelate(ref, cur)
             wfb = np.array([[1, 0, dx], [0, 1, dy]], dtype=np.float32)
-            aligned = cv2.warpAffine(
-                frame_u8,
-                wfb,
-                (frame_u8.shape[1], frame_u8.shape[0]),
-                flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
-            )
+            aligned = cv2.warpAffine(frame_u8, wfb, (frame_u8.shape[1], frame_u8.shape[0]),
+                                    flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
             return aligned, wfb
         except Exception:
             return frame_u8, np.eye(2, 3, dtype=np.float32)
 
     warp_final = w1
-    aligned = cv2.warpAffine(
-        frame_u8,
-        warp_final,
-        (frame_u8.shape[1], frame_u8.shape[0]),
-        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
-    )
+    aligned = cv2.warpAffine(frame_u8, warp_final, (frame_u8.shape[1], frame_u8.shape[0]),
+                            flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP)
     return aligned, warp_final
 
 def _align_by_pose(golden: np.ndarray, img_src: np.ndarray, mask_pose: Optional[np.ndarray],
