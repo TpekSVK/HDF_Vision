@@ -5,6 +5,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.services.compare_service import analyze
+from app.models.schema import RecipeData
 
 DEFAULT_THRESHOLDS = {
     "ssim_min": 0.92,
@@ -21,6 +22,7 @@ class ToolService:
         self.golden = None            # np.ndarray uint8
         self.regions = None           # list[dict]
         self.thresholds = DEFAULT_THRESHOLDS.copy()
+        self.pose_enabled = True
 
     def load_recipe(self, name: str):
         self.recipe = name
@@ -37,10 +39,12 @@ class ToolService:
             # ak by bol 16-bit, znormalizuj na uint8
             g = (g.astype(np.float32) * (255.0 / g.max())).astype(np.uint8)
         with open(rfp, "r", encoding="utf-8") as f:
-            regs = json.load(f)
+            data = json.load(f)
+        recipe = RecipeData.from_dict(data)
 
         self.golden = g
-        self.regions = regs
+        self.regions = recipe.regions
+        self.pose_enabled = recipe.pose_enabled
 
         # voliteľne načítaj thresholds.json ak existuje
         tfp = rdir / "thresholds.json"
@@ -58,4 +62,10 @@ class ToolService:
     def evaluate(self, frame_u8):
         if self.golden is None or self.regions is None:
             raise RuntimeError("Recept nie je načítaný.")
-        return analyze(self.golden, self.regions, frame_u8, self.thresholds)
+        return analyze(
+            self.golden,
+            self.regions,
+            frame_u8,
+            self.thresholds,
+            pose_enabled=self.pose_enabled,
+        )

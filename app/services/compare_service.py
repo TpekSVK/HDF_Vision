@@ -227,6 +227,8 @@ def analyze(
     regions: list[dict],
     frame: np.ndarray,
     thresholds: Optional[Dict[str, float]] = None,
+    *,
+    pose_enabled: bool = True,
 ) -> Dict[str, Any]:
 
     th = dict(
@@ -252,12 +254,20 @@ def analyze(
 
     # 1) Globálne zarovnanie podľa „pose“
     t0 = time.perf_counter()
-    frame_aligned, warp = _align_by_pose(
-        golden, frame, mask_pose,
-        mode=str(th.get("pose_mode", "phase")),
-        ecc_iters=int(th.get("ecc_iters", 80)),
-        ecc_eps=float(th.get("ecc_eps", 1e-6)),
-    )
+    if pose_enabled:
+        frame_aligned, warp = _align_by_pose(
+            golden,
+            frame,
+            mask_pose,
+            mode=str(th.get("pose_mode", "phase")),
+            ecc_iters=int(th.get("ecc_iters", 80)),
+            ecc_eps=float(th.get("ecc_eps", 1e-6)),
+        )
+        pose_mode = str(th.get("pose_mode", "phase"))
+    else:
+        frame_aligned = frame.copy()
+        warp = np.eye(2, 3, dtype=np.float32)
+        pose_mode = "off"
     t_pose = time.perf_counter() - t0
 
     t1 = time.perf_counter()
@@ -314,7 +324,8 @@ def analyze(
             "diff": int(t_diff*1000),
         },
         "gpu": 1 if img.USE_CUDA else 0,
-        "pose_mode": str(th.get("pose_mode", "phase")),
+        "pose_mode": pose_mode,
+        "pose_enabled": 1 if pose_enabled else 0,
     }
 
     return {"ok": not nok, "metrics": metrics}
