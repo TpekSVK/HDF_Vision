@@ -5,6 +5,7 @@ from typing import List, Literal, Dict, Any, Tuple
 RegionType = Literal["pose", "roi", "ignore"]
 ShapeType = Literal["rect", "circle", "poly"]
 
+
 @dataclass
 class Region:
     reg_type: RegionType   # "pose" | "roi" | "ignore"
@@ -22,12 +23,17 @@ class Region:
     def from_dict(d: Dict[str, Any]) -> "Region":
         return Region(reg_type=d["reg_type"], shape=d["shape"], geom=d["geom"])
 
-def validate_cardinality(regions: List["Region"]) -> Tuple[bool, str]:
+
+def validate_cardinality(regions: List["Region"], pose_required: bool = True) -> Tuple[bool, str]:
     pose = sum(1 for r in regions if r.reg_type == "pose")
     roi  = sum(1 for r in regions if r.reg_type == "roi")
     ign  = sum(1 for r in regions if r.reg_type == "ignore")
-    if pose != 1:
-        return False, "Musí byť presne 1× Modrá (pose)."
+    if pose_required:
+        if pose != 1:
+            return False, "Musí byť presne 1× Modrá (pose)."
+    else:
+        if pose > 1:
+            return False, "Modrá (pose) môže byť najviac 1× ak je globálne zarovnanie vypnuté."
     if roi != 1:
         return False, "Musí byť presne 1× Zelená (ROI)."
     if ign > 5:

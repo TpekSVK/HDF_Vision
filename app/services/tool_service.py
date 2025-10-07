@@ -4,6 +4,7 @@ from pathlib import Path
 import imageio.v3 as iio
 import numpy as np
 
+from app.models.schema import RecipeDefinition
 from app.services.compare_service import analyze
 
 DEFAULT_THRESHOLDS = {
@@ -21,6 +22,7 @@ class ToolService:
         self.golden = None            # np.ndarray uint8
         self.regions = None           # list[dict]
         self.thresholds = DEFAULT_THRESHOLDS.copy()
+        self.pose_enabled = True
 
     def load_recipe(self, name: str):
         self.recipe = name
@@ -35,12 +37,21 @@ class ToolService:
             g = g[:, :, 0]
         if g.dtype != np.uint8:
             # ak by bol 16-bit, znormalizuj na uint8
-            g = (g.astype(np.float32) * (255.0 / g.max())).astype(np.uint8)
+            g_f = g.astype(np.float32)
+            g_max = float(g_f.max())
+            if g_max > 0:
+                g = (g_f * (255.0 / g_max)).astype(np.uint8)
+            else:
+                g = np.zeros_like(g_f, dtype=np.uint8)
         with open(rfp, "r", encoding="utf-8") as f:
-            regs = json.load(f)
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("regions.json nemá očakávanú štruktúru.")
+        recipe = RecipeDefinition.from_dict(data)
 
         self.golden = g
-        self.regions = regs
+        self.regions = [r.to_dict() for r in recipe.regions]
+        self.pose_enabled = bool(recipe.pose_enabled)
 
         # voliteľne načítaj thresholds.json ak existuje
         tfp = rdir / "thresholds.json"
@@ -58,4 +69,10 @@ class ToolService:
     def evaluate(self, frame_u8):
         if self.golden is None or self.regions is None:
             raise RuntimeError("Recept nie je načítaný.")
-        return analyze(self.golden, self.regions, frame_u8, self.thresholds)
+        return analyze(
+            self.golden,
+            self.regions,
+            frame_u8,
+            self.thresholds,
+            pose_enabled=self.pose_enabled,
+        )

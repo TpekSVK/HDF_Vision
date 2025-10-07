@@ -4,6 +4,8 @@ import json
 import imageio.v3 as iio
 import numpy as np
 
+from app.models.regions import Region
+from app.models.schema import RecipeDefinition
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 
@@ -12,6 +14,7 @@ class RecipeService:
         self.base = Path(base_dir)
         self.db = db or DbService()
         self.tool = ToolService(base_dir=base_dir)
+        self.tool.pose_enabled = True
 
     def list(self) -> list[str]:
         # DB je master
@@ -37,8 +40,20 @@ class RecipeService:
         # priprav priečinky
         p = self.base / "recipes" / name
         p.mkdir(parents=True, exist_ok=True)
+        self.tool.pose_enabled = True
         # nechaj usera cez Wizard uložiť golden/regions
         return name
+
+    def save_recipe_data(self, name: str, pose_enabled: bool, regions: list[dict | Region]):
+        recipe_dir = self.base / "recipes" / name
+        recipe_dir.mkdir(parents=True, exist_ok=True)
+        regions_list = [r if isinstance(r, Region) else Region.from_dict(r) for r in regions]
+        recipe = RecipeDefinition(pose_enabled=pose_enabled, regions=regions_list)
+        with open(recipe_dir / "regions.json", "w", encoding="utf-8") as f:
+            json.dump(recipe.to_dict(), f, ensure_ascii=False, indent=2)
+        if getattr(self.tool, "recipe", None) == name:
+            self.tool.pose_enabled = pose_enabled
+            self.tool.regions = [r.to_dict() for r in regions_list]
 
     def rename(self, old: str, new: str):
         # premenuj v DB
