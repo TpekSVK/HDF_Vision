@@ -2,16 +2,18 @@
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QCheckBox
 )
 
-import json, os
+import os
 from pathlib import Path
 
 from app.ui.draw_view import DrawView
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
+from app.models.schema import RecipeData
+from app.services.recipe_service import RecipeService
 
 
 class GoldenWizard(QDialog):
@@ -23,12 +25,13 @@ class GoldenWizard(QDialog):
       4) Uložiť recept (golden.png + regions.json)
       5) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
     """
-    def __init__(self, camera, parent=None):
+    def __init__(self, camera, recipes: RecipeService, parent=None):
         super().__init__(parent)
-        
+
         self.setWindowTitle("Golden WIZARD")
         self.setModal(True)
         self.cam = camera
+        self.recipes = recipes
         self.current_img = None
 
         # --- Live infra (len video label, bez kreslenia) ---
@@ -43,9 +46,12 @@ class GoldenWizard(QDialog):
         self._live_on = False
 
         # ---- Horná lišta ----
-        self.recipe_name = QLineEdit("default", self)
+        current_recipe = getattr(self.recipes.tool, "recipe", "default")
+        self.recipe_name = QLineEdit(current_recipe, self)
         self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
         self.type_sel    = QComboBox(self); self.type_sel.addItems(["pose","roi","ignore"])
+        self.chk_pose    = QCheckBox("Použiť globálne zarovnanie (pose alignment)")
+        self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", True))
 
         # Toggle Live
         self.btn_live = QPushButton("Live OFF")
@@ -57,6 +63,7 @@ class GoldenWizard(QDialog):
         top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
         top.addWidget(QLabel("Typ:"));    top.addWidget(self.type_sel)
         top.addStretch(1)
+        top.addWidget(self.chk_pose)
         top.addWidget(self.btn_live)
 
         # ---- Dva režimy zobrazenia ----
@@ -202,7 +209,8 @@ class GoldenWizard(QDialog):
             self._err("Najprv zachyť alebo načítaj GOLDEN.")
             return
         regs = self.view.export_regions()
-        ok, msg = validate_cardinality([Region(**r) for r in regs])
+        pose_enabled = self.chk_pose.isChecked()
+        ok, msg = validate_cardinality([Region(**r) for r in regs], pose_required=pose_enabled)
         if not ok:
             self._err(msg); return
 
@@ -212,8 +220,8 @@ class GoldenWizard(QDialog):
         # ulož regions.json
         recipe_dir = Path("/data") / "recipes" / name
         recipe_dir.mkdir(parents=True, exist_ok=True)
-        with open(recipe_dir / "regions.json", "w", encoding="utf-8") as f:
-            json.dump(regs, f, ensure_ascii=False, indent=2)
+        recipe_data = RecipeData(pose_enabled=pose_enabled, regions=regs)
+        self.recipes.save_regions(name, recipe_data)
 
         self._info(f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}")
 

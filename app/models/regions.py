@@ -22,12 +22,14 @@ class Region:
     def from_dict(d: Dict[str, Any]) -> "Region":
         return Region(reg_type=d["reg_type"], shape=d["shape"], geom=d["geom"])
 
-def validate_cardinality(regions: List["Region"]) -> Tuple[bool, str]:
+def validate_cardinality(regions: List["Region"], *, pose_required: bool = True) -> Tuple[bool, str]:
     pose = sum(1 for r in regions if r.reg_type == "pose")
     roi  = sum(1 for r in regions if r.reg_type == "roi")
     ign  = sum(1 for r in regions if r.reg_type == "ignore")
-    if pose != 1:
+    if pose_required and pose != 1:
         return False, "Musí byť presne 1× Modrá (pose)."
+    if not pose_required and pose > 1:
+        return False, "Modrá (pose) najviac 1×, alebo vypni globálne zarovnanie."
     if roi != 1:
         return False, "Musí byť presne 1× Zelená (ROI)."
     if ign > 5:

@@ -158,6 +158,8 @@ class MainWindow(QMainWindow):
         side.addWidget(t)
         self.sb_recipe = QLabel("Recept: –")
         side.addWidget(self.sb_recipe)
+        self.sb_pose = QLabel("Pose alignment: –")
+        side.addWidget(self.sb_pose)
 
         # Denné štatistiky
         side.addWidget(QLabel("— Dnes —"))
@@ -349,9 +351,10 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(f"GOLDEN uložený: {path}")
 
     def open_wizard(self):
-        dlg = GoldenWizard(self.cam, self)
+        dlg = GoldenWizard(self.cam, self.recipes, self)
         dlg.resize(1200, 800)
         dlg.exec()
+        self._update_sidebar()
 
     def _toggle_strip(self):
         # minimalizácia / rozbalenie výsledkového stripu
@@ -458,6 +461,8 @@ class MainWindow(QMainWindow):
             self.sb_recipe.setText(f"Recept: {name}")
             if st is None:
                 st = self.stats.daily_for_recipe(name)
+            pose_enabled = getattr(self.tool, "pose_enabled", True)
+            self.sb_pose.setText(f"Pose alignment: {'ON' if pose_enabled else 'OFF'}")
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
