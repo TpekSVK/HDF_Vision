@@ -46,6 +46,9 @@ def test_run_locator_template_match_returns_expected_translation():
     assert run_result.status == "ok"
     assert run_result.metrics["dx"] == pytest.approx(2.0, abs=1e-3)
     assert run_result.metrics["dy"] == pytest.approx(3.0, abs=1e-3)
+    assert "latency_ms" in run_result.metrics
+    assert run_result.metrics["latency_ms"] >= 0.0
+    assert diagnostics["latency_ms"] >= 0.0
     expected_T = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=np.float32)
     assert np.allclose(diagnostics["T"], expected_T)
 
@@ -65,6 +68,9 @@ def test_run_locator_template_match_clamps_out_of_bounds_roi():
     assert run_result.metrics["dx"] == pytest.approx(0.0)
     assert run_result.metrics["dy"] == pytest.approx(0.0)
     assert run_result.status == "warn"
+    assert "latency_ms" in run_result.metrics
+    assert run_result.metrics["latency_ms"] >= 0.0
+    assert diagnostics["latency_ms"] >= 0.0
     assert np.allclose(
         diagnostics["T"], np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
     )
@@ -93,4 +99,6 @@ def test_locator_status_respects_threshold(threshold: float, expected_status: st
 
     assert run_result.status == expected_status
     assert diagnostics["status"] == expected_status
+    assert "latency_ms" in run_result.metrics
+    assert diagnostics["latency_ms"] >= 0.0
 
