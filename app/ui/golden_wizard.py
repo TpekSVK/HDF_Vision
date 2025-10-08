@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 import numpy as np
 import cv2
@@ -47,7 +47,12 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
-from app.services.tool_service import ToolRunResult, run_locator_template_match, ToolMeta
+from app.services.tool_service import (
+    ToolMeta,
+    ToolRunResult,
+    run_locator_template_match,
+    validate_tool_params,
+)
 
 
 class ToolCatalogDialog(QDialog):
@@ -203,6 +208,15 @@ class ToolEditDialog(QDialog):
         self._threshold_specs: dict[str, dict[str, Any]] = {}
         self._param_fields: dict[str, QWidget] = {}
         self._threshold_fields: dict[str, QWidget] = {}
+        self._param_wrappers: dict[str, QWidget] = {}
+        self._threshold_wrappers: dict[str, QWidget] = {}
+        self._param_error_labels: dict[str, QLabel] = {}
+        self._threshold_error_labels: dict[str, QLabel] = {}
+        self._validation_ok: bool = True
+        self._last_validation: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
+        self._current_form_values: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
+        self._form_errors: list[str] = []
+        self._updating_form = False
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -237,6 +251,13 @@ class ToolEditDialog(QDialog):
         self._config_form.setContentsMargins(8, 8, 8, 8)
         self._config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         config_layout.addLayout(self._config_form)
+
+        self._form_error_label = QLabel("", self._config_tab)
+        self._form_error_label.setStyleSheet("color: #b03030; padding: 4px 8px 0 8px;")
+        self._form_error_label.setWordWrap(True)
+        self._form_error_label.setVisible(False)
+        config_layout.addWidget(self._form_error_label)
+
         config_layout.addStretch(1)
         self._tabs.addTab(self._config_tab, "Thresholds & Params")
 
@@ -244,6 +265,8 @@ class ToolEditDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        self._button_box = buttons
+        self._ok_button = buttons.button(QDialogButtonBox.Ok)
 
         self._build_config_form()
 
@@ -597,6 +620,10 @@ class ToolEditDialog(QDialog):
     def _build_config_form(self) -> None:
         self._param_fields.clear()
         self._threshold_fields.clear()
+        self._param_wrappers.clear()
+        self._threshold_wrappers.clear()
+        self._param_error_labels.clear()
+        self._threshold_error_labels.clear()
 
         while self._config_form.rowCount():
             self._config_form.removeRow(0)
@@ -623,7 +650,12 @@ class ToolEditDialog(QDialog):
                 current_value = self._tool.params.values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._param_fields[name] = widget
-                self._config_form.addRow(spec.get("label", name), widget)
+                label_widget = QLabel(spec.get("label", name), self)
+                container, error_label = self._create_field_container(widget)
+                self._param_wrappers[name] = container
+                self._param_error_labels[name] = error_label
+                self._config_form.addRow(label_widget, container)
+                self._connect_field_signals(widget, spec, kind="param", name=name)
                 fields_added += 1
 
         if self._threshold_specs:
@@ -637,7 +669,12 @@ class ToolEditDialog(QDialog):
                 current_value = self._tool.thresholds.values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._threshold_fields[name] = widget
-                self._config_form.addRow(spec.get("label", name), widget)
+                label_widget = QLabel(spec.get("label", name), self)
+                container, error_label = self._create_field_container(widget)
+                self._threshold_wrappers[name] = container
+                self._threshold_error_labels[name] = error_label
+                self._config_form.addRow(label_widget, container)
+                self._connect_field_signals(widget, spec, kind="threshold", name=name)
                 fields_added += 1
 
         if not fields_added:
@@ -645,6 +682,8 @@ class ToolEditDialog(QDialog):
             placeholder.setStyleSheet("color: #666;")
             placeholder.setWordWrap(True)
             self._config_form.addRow(placeholder)
+
+        self._validate_form()
 
     def _normalize_field_definitions(self, definitions: dict[str, Any]) -> dict[str, dict[str, Any]]:
         normalized: dict[str, dict[str, Any]] = {}
@@ -706,11 +745,13 @@ class ToolEditDialog(QDialog):
             return combo if combo.count() else None
         if field_type == "int":
             spin = QSpinBox(self)
-            if (min_val := spec.get("min")) is not None:
+            min_val = spec.get("min")
+            max_val = spec.get("max")
+            if min_val is not None:
                 spin.setMinimum(int(min_val))
             else:
                 spin.setMinimum(-10_000_000)
-            if (max_val := spec.get("max")) is not None:
+            if max_val is not None:
                 spin.setMaximum(int(max_val))
             else:
                 spin.setMaximum(10_000_000)
@@ -727,7 +768,10 @@ class ToolEditDialog(QDialog):
             if max_val is None:
                 max_val = 1e9
             spin.setRange(float(min_val), float(max_val))
-            decimals = int(spec.get("decimals", 4))
+            precision = spec.get("precision")
+            if precision is None:
+                precision = spec.get("decimals", 4)
+            decimals = int(precision)
             spin.setDecimals(max(0, decimals))
             if (step := spec.get("step")) is not None:
                 spin.setSingleStep(float(step))
@@ -737,35 +781,72 @@ class ToolEditDialog(QDialog):
             return spin
         return None
 
+    def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
+        container = QWidget(self)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(widget)
+
+        error_label = QLabel("", container)
+        error_label.setStyleSheet("color: #b03030; font-size: 11px;")
+        error_label.setWordWrap(True)
+        error_label.setVisible(False)
+        layout.addWidget(error_label)
+
+        return container, error_label
+
+    def _connect_field_signals(
+        self, widget: QWidget, spec: dict[str, Any], *, kind: str, name: str
+    ) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.toggled.connect(lambda _checked, k=kind, n=name: self._on_field_event(k, n))
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(
+                lambda _index, k=kind, n=name: self._on_field_event(k, n)
+            )
+        elif isinstance(widget, (QSpinBox, QDoubleSpinBox)):
+            widget.editingFinished.connect(lambda k=kind, n=name: self._on_field_event(k, n))
+            widget.valueChanged.connect(lambda _value, k=kind, n=name: self._on_field_event(k, n))
+
+    def _on_field_event(self, kind: str, name: str) -> None:
+        if self._updating_form:
+            return
+        self._validate_form()
+
     def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
-        field_type = spec.get("type")
-        if value is None:
-            value = spec.get("default")
-        if field_type == "bool" and isinstance(widget, QCheckBox):
-            widget.setChecked(bool(value))
-        elif field_type == "enum" and isinstance(widget, QComboBox):
-            if widget.count() == 0:
-                return
-            idx = widget.findData(value)
-            if idx < 0:
-                idx = 0
-            widget.setCurrentIndex(idx)
-        elif field_type == "int" and isinstance(widget, QSpinBox):
-            try:
-                widget.setValue(int(round(float(value))))
-            except Exception:
-                fallback = spec.get("default")
-                if fallback is None:
-                    fallback = widget.minimum()
-                widget.setValue(int(round(float(fallback))))
-        elif field_type == "float" and isinstance(widget, QDoubleSpinBox):
-            try:
-                widget.setValue(float(value))
-            except Exception:
-                fallback = spec.get("default")
-                if fallback is None:
-                    fallback = widget.minimum()
-                widget.setValue(float(fallback))
+        self._updating_form = True
+        try:
+            field_type = spec.get("type")
+            if value is None:
+                value = spec.get("default")
+            if field_type == "bool" and isinstance(widget, QCheckBox):
+                widget.setChecked(bool(value))
+            elif field_type == "enum" and isinstance(widget, QComboBox):
+                if widget.count() == 0:
+                    return
+                idx = widget.findData(value)
+                if idx < 0:
+                    idx = 0
+                widget.setCurrentIndex(idx)
+            elif field_type == "int" and isinstance(widget, QSpinBox):
+                try:
+                    widget.setValue(int(round(float(value))))
+                except Exception:
+                    fallback = spec.get("default")
+                    if fallback is None:
+                        fallback = widget.minimum()
+                    widget.setValue(int(round(float(fallback))))
+            elif field_type == "float" and isinstance(widget, QDoubleSpinBox):
+                try:
+                    widget.setValue(float(value))
+                except Exception:
+                    fallback = spec.get("default")
+                    if fallback is None:
+                        fallback = widget.minimum()
+                    widget.setValue(float(fallback))
+        finally:
+            self._updating_form = False
 
     def _get_widget_value(self, widget: QWidget, spec: dict[str, Any]) -> Any:
         field_type = spec.get("type")
@@ -781,30 +862,130 @@ class ToolEditDialog(QDialog):
             return float(widget.value())
         return None
 
-    def _apply_config_changes(self) -> bool:
-        params = dict(getattr(self._tool.params, "values", {}))
-        thresholds = dict(getattr(self._tool.thresholds, "values", {}))
-        errors: list[str] = []
-
+    def _collect_form_values(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        params: dict[str, Any] = {}
+        thresholds: dict[str, Any] = {}
         for name, widget in self._param_fields.items():
             spec = self._param_specs.get(name, {})
-            value = self._get_widget_value(widget, spec)
-            if spec.get("required") and value in (None, ""):
-                errors.append(f"Parameter '{spec.get('label', name)}' is required.")
-                continue
-            params[name] = value
-
+            params[name] = self._get_widget_value(widget, spec)
         for name, widget in self._threshold_fields.items():
             spec = self._threshold_specs.get(name, {})
-            value = self._get_widget_value(widget, spec)
-            if spec.get("required") and value in (None, ""):
-                errors.append(f"Threshold '{spec.get('label', name)}' is required.")
-                continue
-            thresholds[name] = value
+            thresholds[name] = self._get_widget_value(widget, spec)
+        self._current_form_values = {"params": dict(params), "thresholds": dict(thresholds)}
+        return params, thresholds
 
+    def _validate_form(self) -> None:
+        params, thresholds = self._collect_form_values()
+        try:
+            ok, errors, normalized = validate_tool_params(self._tool.type, params, thresholds)
+        except KeyError:
+            ok = True
+            errors = {"params": {}, "thresholds": {}}
+            normalized = {"params": params, "thresholds": thresholds}
+
+        self._validation_ok = ok
+        self._last_validation = normalized
+
+        self._apply_validation_feedback(
+            params,
+            normalized.get("params", {}),
+            errors.get("params", {}),
+            self._param_fields,
+            self._param_wrappers,
+            self._param_error_labels,
+            self._param_specs,
+        )
+        self._apply_validation_feedback(
+            thresholds,
+            normalized.get("thresholds", {}),
+            errors.get("thresholds", {}),
+            self._threshold_fields,
+            self._threshold_wrappers,
+            self._threshold_error_labels,
+            self._threshold_specs,
+        )
+
+        messages: list[str] = []
+        for section, specs, section_errors in (
+            ("params", self._param_specs, errors.get("params", {})),
+            ("thresholds", self._threshold_specs, errors.get("thresholds", {})),
+        ):
+            for name, errs in section_errors.items():
+                label = specs.get(name, {}).get("label", name)
+                for err in errs:
+                    messages.append(f"{label}: {err}")
+
+        self._form_errors = messages
+        self._form_error_label.setVisible(bool(messages))
+        if messages:
+            self._form_error_label.setText("\n".join(messages))
+        else:
+            self._form_error_label.clear()
+
+        if hasattr(self, "_ok_button") and self._ok_button is not None:
+            self._ok_button.setEnabled(ok)
+
+    def _apply_validation_feedback(
+        self,
+        raw_values: dict[str, Any],
+        normalized_values: dict[str, Any],
+        error_map: dict[str, list[str]],
+        widgets: dict[str, QWidget],
+        containers: dict[str, QWidget],
+        labels: dict[str, QLabel],
+        specs: dict[str, dict[str, Any]],
+    ) -> None:
+        for name, widget in widgets.items():
+            container = containers.get(name)
+            error_label = labels.get(name)
+            errors = error_map.get(name, [])
+            self._set_field_error(container, error_label, errors)
+            if errors:
+                continue
+            if name not in normalized_values:
+                continue
+            normalized_value = normalized_values.get(name)
+            if self._values_equal(normalized_value, raw_values.get(name)):
+                continue
+            spec = specs.get(name, {})
+            self._set_widget_value(widget, spec, normalized_value)
+
+    @staticmethod
+    def _values_equal(a: Any, b: Any) -> bool:
+        if isinstance(a, float) or isinstance(b, float):
+            try:
+                return abs(float(a) - float(b)) < 1e-9
+            except (TypeError, ValueError):
+                return False
+        return a == b
+
+    @staticmethod
+    def _set_field_error(container: Optional[QWidget], label: Optional[QLabel], errors: list[str]) -> None:
+        if container is None or label is None:
+            return
         if errors:
-            QMessageBox.warning(self, "Validation failed", "\n".join(errors))
+            label.setText(" \n".join(errors))
+            label.setVisible(True)
+            container.setStyleSheet(
+                "border: 1px solid #c14842; border-radius: 4px; padding: 4px; background-color: rgba(193, 72, 66, 0.08);"
+            )
+        else:
+            label.clear()
+            label.setVisible(False)
+            container.setStyleSheet("")
+
+    def _apply_config_changes(self) -> bool:
+        self._validate_form()
+        if not self._validation_ok:
+            message = "\n".join(self._form_errors) if self._form_errors else "Please fix validation errors before saving."
+            QMessageBox.warning(self, "Validation failed", message)
             return False
+
+        params = dict(self._current_form_values.get("params", {}))
+        params.update(self._last_validation.get("params", {}))
+
+        thresholds = dict(self._current_form_values.get("thresholds", {}))
+        thresholds.update(self._last_validation.get("thresholds", {}))
 
         if self._is_locator_template:
             use_golden = bool(params.get("use_golden_crop", True))
@@ -855,6 +1036,13 @@ class ToolConfigPanel(QWidget):
         self._param_widgets: dict[str, QWidget] = {}
         self._threshold_widgets: dict[str, QWidget] = {}
         self._updating = False
+        self._param_wrappers: dict[str, QWidget] = {}
+        self._threshold_wrappers: dict[str, QWidget] = {}
+        self._param_error_labels: dict[str, QLabel] = {}
+        self._threshold_error_labels: dict[str, QLabel] = {}
+        self._validation_ok: bool = True
+        self._current_form_values: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
+        self._last_normalized: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -879,6 +1067,12 @@ class ToolConfigPanel(QWidget):
         self._form_layout.setSpacing(6)
         self._form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         layout.addWidget(self._form_container, 1)
+
+        self._form_error_label = QLabel("", self)
+        self._form_error_label.setStyleSheet("color: #b03030; padding-top: 4px;")
+        self._form_error_label.setWordWrap(True)
+        self._form_error_label.setVisible(False)
+        layout.addWidget(self._form_error_label)
 
         self._placeholder_label = QLabel(
             "Vyber v tabuľke nástroj pre úpravu parametrov a prahov.",
@@ -944,6 +1138,8 @@ class ToolConfigPanel(QWidget):
         finally:
             self._updating = False
 
+        self._validate_current_values()
+
     def _rebuild_form(self) -> None:
         params = getattr(self._current_tool, "params", ToolParams()).values
         thresholds = getattr(self._current_tool, "thresholds", ToolThresholds()).values
@@ -976,7 +1172,10 @@ class ToolConfigPanel(QWidget):
                 self._set_widget_value(widget, spec, params.get(name))
                 self._connect_widget(widget, spec, kind="param", name=name)
                 self._param_widgets[name] = widget
-                self._form_layout.addRow(label, widget)
+                container, error_label = self._create_field_container(widget)
+                self._param_wrappers[name] = container
+                self._param_error_labels[name] = error_label
+                self._form_layout.addRow(label, container)
                 added_fields = True
 
         if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
@@ -998,7 +1197,10 @@ class ToolConfigPanel(QWidget):
                 self._set_widget_value(widget, spec, thresholds.get(name))
                 self._connect_widget(widget, spec, kind="threshold", name=name)
                 self._threshold_widgets[name] = widget
-                self._form_layout.addRow(label, widget)
+                container, error_label = self._create_field_container(widget)
+                self._threshold_wrappers[name] = container
+                self._threshold_error_labels[name] = error_label
+                self._form_layout.addRow(label, container)
                 added_fields = True
 
         if not added_fields:
@@ -1012,11 +1214,20 @@ class ToolConfigPanel(QWidget):
 
         self._btn_defaults.setEnabled(added_fields)
 
+        if added_fields:
+            self._validate_current_values()
+
     def _clear_form(self) -> None:
         while self._form_layout.rowCount():
             self._form_layout.removeRow(0)
         self._param_widgets.clear()
         self._threshold_widgets.clear()
+        self._param_wrappers.clear()
+        self._threshold_wrappers.clear()
+        self._param_error_labels.clear()
+        self._threshold_error_labels.clear()
+        self._form_error_label.clear()
+        self._form_error_label.setVisible(False)
 
     def _is_supported_spec(self, spec: dict[str, Any]) -> bool:
         field_type = (spec or {}).get("type")
@@ -1060,33 +1271,169 @@ class ToolConfigPanel(QWidget):
             return spin
         return None
 
+    def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
+        container = QWidget(self)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(widget)
+
+        error_label = QLabel("", container)
+        error_label.setStyleSheet("color: #b03030; font-size: 11px;")
+        error_label.setWordWrap(True)
+        error_label.setVisible(False)
+        layout.addWidget(error_label)
+
+        return container, error_label
+
     def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
-        if isinstance(widget, QCheckBox):
-            widget.setChecked(bool(value if value is not None else spec.get("default", False)))
+        self._updating = True
+        try:
+            if isinstance(widget, QCheckBox):
+                widget.setChecked(bool(value if value is not None else spec.get("default", False)))
+                return
+            if isinstance(widget, QComboBox):
+                target = value
+                if target is None:
+                    target = spec.get("default")
+                idx = widget.findData(target)
+                if idx < 0 and widget.count():
+                    idx = 0
+                if idx >= 0:
+                    widget.setCurrentIndex(idx)
+                return
+            if isinstance(widget, QSpinBox):
+                try:
+                    widget.setValue(int(round(float(value))))
+                except Exception:
+                    default = spec.get("default", widget.value())
+                    widget.setValue(int(round(float(default))))
+                return
+            if isinstance(widget, QDoubleSpinBox):
+                try:
+                    widget.setValue(float(value))
+                except Exception:
+                    default = spec.get("default", widget.value())
+                    widget.setValue(float(default))
+        finally:
+            self._updating = False
+
+    def _collect_current_values(self) -> tuple[dict[str, Any], dict[str, Any]]:
+        params: dict[str, Any] = {}
+        thresholds: dict[str, Any] = {}
+        for name, widget in self._param_widgets.items():
+            spec = self._param_specs.get(name, {})
+            params[name] = self._get_widget_value(widget, spec)
+        for name, widget in self._threshold_widgets.items():
+            spec = self._threshold_specs.get(name, {})
+            thresholds[name] = self._get_widget_value(widget, spec)
+        self._current_form_values = {"params": dict(params), "thresholds": dict(thresholds)}
+        return params, thresholds
+
+    def _validate_current_values(
+        self,
+    ) -> tuple[bool, dict[str, Dict[str, list[str]]], dict[str, dict[str, Any]]]:
+        if self._current_tool is None:
+            return True, {"params": {}, "thresholds": {}}, self._current_form_values
+
+        params, thresholds = self._collect_current_values()
+        try:
+            ok, errors, normalized = validate_tool_params(
+                self._current_tool.type, params, thresholds
+            )
+        except KeyError:
+            ok = True
+            errors = {"params": {}, "thresholds": {}}
+            normalized = {"params": params, "thresholds": thresholds}
+
+        self._validation_ok = ok
+        self._last_normalized = normalized
+
+        self._apply_validation_feedback(
+            params,
+            normalized.get("params", {}),
+            errors.get("params", {}),
+            self._param_widgets,
+            self._param_wrappers,
+            self._param_error_labels,
+            self._param_specs,
+        )
+        self._apply_validation_feedback(
+            thresholds,
+            normalized.get("thresholds", {}),
+            errors.get("thresholds", {}),
+            self._threshold_widgets,
+            self._threshold_wrappers,
+            self._threshold_error_labels,
+            self._threshold_specs,
+        )
+
+        messages: list[str] = []
+        for specs, section_errors in (
+            (self._param_specs, errors.get("params", {})),
+            (self._threshold_specs, errors.get("thresholds", {})),
+        ):
+            for name, errs in section_errors.items():
+                label = specs.get(name, {}).get("label", name)
+                for err in errs:
+                    messages.append(f"{label}: {err}")
+
+        self._form_error_label.setVisible(bool(messages))
+        if messages:
+            self._form_error_label.setText("\n".join(messages))
+        else:
+            self._form_error_label.clear()
+
+        return ok, errors, normalized
+
+    def _apply_validation_feedback(
+        self,
+        raw_values: dict[str, Any],
+        normalized_values: dict[str, Any],
+        error_map: dict[str, list[str]],
+        widgets: dict[str, QWidget],
+        containers: dict[str, QWidget],
+        labels: dict[str, QLabel],
+        specs: dict[str, dict[str, Any]],
+    ) -> None:
+        for name, widget in widgets.items():
+            container = containers.get(name)
+            error_label = labels.get(name)
+            errors = error_map.get(name, [])
+            self._set_field_error(container, error_label, errors)
+            if errors:
+                continue
+            if name not in normalized_values:
+                continue
+            normalized_value = normalized_values.get(name)
+            if self._values_equal(normalized_value, raw_values.get(name)):
+                continue
+            spec = specs.get(name, {})
+            self._set_widget_value(widget, spec, normalized_value)
+
+    @staticmethod
+    def _set_field_error(container: Optional[QWidget], label: Optional[QLabel], errors: list[str]) -> None:
+        if container is None or label is None:
             return
-        if isinstance(widget, QComboBox):
-            target = value
-            if target is None:
-                target = spec.get("default")
-            idx = widget.findData(target)
-            if idx < 0 and widget.count():
-                idx = 0
-            if idx >= 0:
-                widget.setCurrentIndex(idx)
-            return
-        if isinstance(widget, QSpinBox):
+        if errors:
+            label.setText(" \n".join(errors))
+            label.setVisible(True)
+            container.setStyleSheet(
+                "border: 1px solid #c14842; border-radius: 4px; padding: 4px; background-color: rgba(193, 72, 66, 0.08);"
+            )
+        else:
+            label.clear()
+            label.setVisible(False)
+            container.setStyleSheet("")
+
+    @staticmethod
+    def _values_equal(a: Any, b: Any) -> bool:
+        if isinstance(a, float) or isinstance(b, float):
             try:
-                widget.setValue(int(round(float(value))))
-            except Exception:
-                default = spec.get("default", widget.value())
-                widget.setValue(int(round(float(default))))
-            return
-        if isinstance(widget, QDoubleSpinBox):
-            try:
-                widget.setValue(float(value))
-            except Exception:
-                default = spec.get("default", widget.value())
-                widget.setValue(float(default))
+                return abs(float(a) - float(b)) < 1e-9
+            except (TypeError, ValueError):
+                return False
+        return a == b
 
     def _connect_widget(self, widget: QWidget, spec: dict[str, Any], *, kind: str, name: str) -> None:
         if isinstance(widget, QCheckBox):
@@ -1111,10 +1458,16 @@ class ToolConfigPanel(QWidget):
     def _on_field_changed(self, kind: str, name: str, value: Any) -> None:
         if self._updating:
             return
+        ok, _, normalized = self._validate_current_values()
+        if not ok:
+            return
+        section = "params" if kind == "param" else "thresholds"
+        normalized_section = normalized.get(section, {})
+        new_value = normalized_section.get(name, self._current_form_values.get(section, {}).get(name))
         if kind == "param":
-            self.paramChanged.emit(name, value)
+            self.paramChanged.emit(name, new_value)
         elif kind == "threshold":
-            self.thresholdChanged.emit(name, value)
+            self.thresholdChanged.emit(name, new_value)
 
     def _on_restore_defaults(self) -> None:
         if self._current_tool is None:
@@ -1138,6 +1491,8 @@ class ToolConfigPanel(QWidget):
             spec = self._threshold_specs.get(name, {})
             default = spec.get("default")
             self.thresholdChanged.emit(name, default)
+
+        self._validate_current_values()
 
     def _update_visibility(self) -> None:
         has_tool = self._current_tool is not None

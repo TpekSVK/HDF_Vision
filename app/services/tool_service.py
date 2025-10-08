@@ -7,6 +7,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
+import math
+
 import imageio.v3 as iio
 import numpy as np
 
@@ -238,6 +240,177 @@ class ToolRegistry:
     }
 
     _SUPPORTED_FIELD_TYPES = {"int", "float", "bool", "enum", "roi"}
+
+
+def _coerce_bool(value: Any) -> tuple[Optional[bool], Optional[str]]:
+    if isinstance(value, bool):
+        return value, None
+    if isinstance(value, (int, float)):
+        return bool(value), None
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True, None
+        if text in {"0", "false", "no", "n", "off"}:
+            return False, None
+        return None, "Value must be 'true' or 'false'."
+    return None, "Invalid boolean value."
+
+
+def _coerce_numeric(value: Any, *, number_type: str) -> tuple[Optional[float], Optional[str]]:
+    if value is None or value == "":
+        return None, None
+    if isinstance(value, bool):
+        return None, "Boolean value is not allowed."
+    if isinstance(value, (int, float)):
+        return float(value), None
+    if isinstance(value, str):
+        text = value.strip().replace(",", ".")
+        if not text:
+            return None, None
+        try:
+            if number_type == "int":
+                return float(int(text, 10)), None
+            return float(text)
+        except (ValueError, TypeError):
+            return None, "Value must be a number."
+    return None, "Value must be a number."
+
+
+def _apply_numeric_constraints(
+    value: float,
+    spec: Dict[str, Any],
+    *,
+    number_type: str,
+) -> tuple[Any, list[str]]:
+    errors: list[str] = []
+    if math.isnan(value) or math.isinf(value):
+        return None, ["Value must be a finite number."]
+
+    min_val = spec.get("min")
+    max_val = spec.get("max")
+
+    if min_val is not None and value < float(min_val):
+        errors.append(f"Value must be ≥ {min_val}.")
+    if max_val is not None and value > float(max_val):
+        errors.append(f"Value must be ≤ {max_val}.")
+
+    clamped = value
+    if min_val is not None:
+        clamped = max(clamped, float(min_val))
+    if max_val is not None:
+        clamped = min(clamped, float(max_val))
+
+    if number_type == "int":
+        rounded = int(round(clamped))
+        return rounded, errors
+
+    precision = spec.get("precision")
+    if precision is None:
+        precision = spec.get("decimals")
+    if isinstance(precision, int) and precision >= 0:
+        clamped = round(clamped, precision)
+
+    return float(clamped), errors
+
+
+def _normalize_field_value(value: Any, spec: Dict[str, Any]) -> tuple[Any, list[str]]:
+    errors: list[str] = []
+    required = bool(spec.get("required"))
+    field_type = spec.get("type")
+
+    if value is None or value == "":
+        if required:
+            errors.append("This field is required.")
+            return None, errors
+        default = spec.get("default")
+        return default, errors
+
+    if field_type == "bool":
+        coerced, err = _coerce_bool(value)
+        if err:
+            errors.append(err)
+            return None, errors
+        return coerced, errors
+
+    if field_type == "enum":
+        valid_choices = {choice[0] for choice in spec.get("choices", []) or []}
+        if value not in valid_choices:
+            errors.append("Select one of the available options.")
+            return None, errors
+        return value, errors
+
+    if field_type in {"int", "float"}:
+        coerced, err = _coerce_numeric(value, number_type=field_type)
+        if err:
+            errors.append(err)
+            return None, errors
+        if coerced is None:
+            if required:
+                errors.append("This field is required.")
+            return None, errors
+        normalized, range_errors = _apply_numeric_constraints(
+            coerced, spec, number_type=field_type
+        )
+        errors.extend(range_errors)
+        return normalized, errors
+
+    return value, errors
+
+
+def validate_tool_params(
+    type_id: str,
+    params: Optional[Dict[str, Any]],
+    thresholds: Optional[Dict[str, Any]],
+) -> tuple[bool, Dict[str, Dict[str, list[str]]], Dict[str, Dict[str, Any]]]:
+    """Validate and normalize tool parameters against the registry schema.
+
+    Returns
+    -------
+    ok:
+        ``True`` when all values satisfy the schema.
+    errors:
+        Mapping containing error messages per parameter/threshold key.
+    normalized:
+        Mapping of normalized values respecting types, precision and ranges.
+    """
+
+    schema = ToolRegistry.get_tool_schema(type_id)
+    param_specs = schema.get("params", {}) or {}
+    threshold_specs = schema.get("thresholds", {}) or {}
+
+    params_input = dict(params or {})
+    thresholds_input = dict(thresholds or {})
+
+    normalized_params = dict(params_input)
+    normalized_thresholds = dict(thresholds_input)
+    param_errors: Dict[str, list[str]] = {}
+    threshold_errors: Dict[str, list[str]] = {}
+
+    for name, spec in param_specs.items():
+        raw_value = params_input.get(name)
+        value, errors = _normalize_field_value(raw_value, spec)
+        if errors:
+            param_errors[name] = errors
+        if value is None and name in normalized_params:
+            normalized_params.pop(name, None)
+        elif value is not None:
+            normalized_params[name] = value
+
+    for name, spec in threshold_specs.items():
+        raw_value = thresholds_input.get(name)
+        value, errors = _normalize_field_value(raw_value, spec)
+        if errors:
+            threshold_errors[name] = errors
+        if value is None and name in normalized_thresholds:
+            normalized_thresholds.pop(name, None)
+        elif value is not None:
+            normalized_thresholds[name] = value
+
+    ok = not param_errors and not threshold_errors
+    errors = {"params": param_errors, "thresholds": threshold_errors}
+    normalized = {"params": normalized_params, "thresholds": normalized_thresholds}
+    return ok, errors, normalized
 
     @classmethod
     def list_tool_types(cls) -> List[str]:
