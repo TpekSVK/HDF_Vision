@@ -76,6 +76,8 @@ def test_locator_updates_context_with_alignment() -> None:
     assert results[0].status == "ok"
     assert results[0].metrics["dx"] == pytest.approx(dx)
     assert results[0].metrics["dy"] == pytest.approx(dy)
+    assert "latency_ms" in results[0].metrics
+    assert locator_diag["latency_ms"] >= 0.0
 
     assert context.T_total is not None
     assert np.allclose(context.T_total, expected_T)
@@ -96,6 +98,8 @@ def test_locator_keeps_frame_when_alignment_disabled() -> None:
 
     assert results
     assert results[0].status == "ok"
+    assert "latency_ms" in results[0].metrics
+    assert locator_diag["latency_ms"] >= 0.0
 
     assert context.T_total is not None
     assert np.allclose(context.T_total, expected_T)
@@ -136,12 +140,16 @@ def test_pipeline_alignment_modes_produce_consistent_ssim() -> None:
     assert locator_a.metrics["dy"] == pytest.approx(-2.0, abs=1.0)
     assert locator_b.metrics["dx"] == pytest.approx(3.0, abs=1.0)
     assert locator_b.metrics["dy"] == pytest.approx(-2.0, abs=1.0)
+    assert "latency_ms" in locator_a.metrics
+    assert "latency_ms" in locator_b.metrics
 
     ssim_a = results_a[1].metrics["ssim"]
     ssim_b = results_b[1].metrics["ssim"]
     assert ssim_a > 0.99
     assert ssim_b > 0.99
     assert ssim_a == pytest.approx(ssim_b, abs=1e-4)
+    assert "latency_ms" in results_a[1].metrics
+    assert "latency_ms" in results_b[1].metrics
 
     assert diagnostics_a[1]["virtual_alignment"] is False
     assert diagnostics_b[1]["virtual_alignment"] is True
@@ -161,9 +169,12 @@ def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     assert locator_result.status == "nok"
     assert diagnostics[0]["status"] == "nok"
     assert locator_result.metrics["corr"] == pytest.approx(0.0)
+    assert "latency_ms" in locator_result.metrics
+    assert diagnostics[0]["latency_ms"] >= 0.0
 
     assert ssim_result.status == "nok"
     assert ssim_result.metrics["ssim"] < 0.5
+    assert "latency_ms" in ssim_result.metrics
     assert diagnostics[1]["virtual_alignment"] is False
 
     assert context.frame_is_aligned is True

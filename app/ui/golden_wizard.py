@@ -25,10 +25,12 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QGroupBox,
     QSizePolicy,
+    QButtonGroup,
 )
 
 import os
 import time
+import math
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -1047,6 +1049,11 @@ class ToolConfigPanel(QWidget):
         self._validation_ok: bool = True
         self._current_form_values: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
         self._last_normalized: dict[str, dict[str, Any]] = {"params": {}, "thresholds": {}}
+        self._preview_cache: dict[str, QPixmap] = {}
+        self._preview_before_key: Optional[str] = None
+        self._preview_aligned_key: Optional[str] = None
+        self._preview_binarized_key: Optional[str] = None
+        self._active_preview_key: Optional[str] = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1104,6 +1111,99 @@ class ToolConfigPanel(QWidget):
         controls_layout.addStretch(1)
         layout.addLayout(controls_layout)
 
+        self._diagnostics_group = QGroupBox("Diagnostics", self)
+        diag_layout = QVBoxLayout(self._diagnostics_group)
+        diag_layout.setContentsMargins(8, 8, 8, 8)
+        diag_layout.setSpacing(6)
+
+        status_row = QHBoxLayout()
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(6)
+
+        self._status_indicator = QLabel(self._diagnostics_group)
+        self._status_indicator.setFixedSize(12, 12)
+        status_row.addWidget(self._status_indicator)
+
+        self._status_value_label = QLabel("—", self._diagnostics_group)
+        self._status_value_label.setStyleSheet("font-weight: 600;")
+        status_row.addWidget(self._status_value_label)
+        status_row.addStretch(1)
+        diag_layout.addLayout(status_row)
+
+        self._status_message_label = QLabel("", self._diagnostics_group)
+        self._status_message_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._status_message_label.setWordWrap(True)
+        self._status_message_label.setVisible(False)
+        diag_layout.addWidget(self._status_message_label)
+
+        self._latency_label = QLabel("Čas: —", self._diagnostics_group)
+        self._latency_label.setStyleSheet("color: #888;")
+        diag_layout.addWidget(self._latency_label)
+
+        self._metrics_table = QTableWidget(0, 2, self._diagnostics_group)
+        self._metrics_table.setHorizontalHeaderLabels(["Metric", "Value"])
+        self._metrics_table.horizontalHeader().setStretchLastSection(True)
+        self._metrics_table.verticalHeader().setVisible(False)
+        self._metrics_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._metrics_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self._metrics_table.setFocusPolicy(Qt.NoFocus)
+        self._metrics_table.setVisible(False)
+        diag_layout.addWidget(self._metrics_table)
+
+        self._preview_toggle_container = QWidget(self._diagnostics_group)
+        toggle_layout = QHBoxLayout(self._preview_toggle_container)
+        toggle_layout.setContentsMargins(0, 0, 0, 0)
+        toggle_layout.setSpacing(8)
+
+        self._preview_toggle_aligned = QCheckBox("Preview aligned", self._preview_toggle_container)
+        self._preview_toggle_aligned.toggled.connect(
+            lambda checked: self._on_preview_toggle_changed("aligned", checked)
+        )
+        toggle_layout.addWidget(self._preview_toggle_aligned)
+
+        self._preview_toggle_binarized = QCheckBox("Preview binarization", self._preview_toggle_container)
+        self._preview_toggle_binarized.toggled.connect(
+            lambda checked: self._on_preview_toggle_changed("binarization", checked)
+        )
+        toggle_layout.addWidget(self._preview_toggle_binarized)
+        toggle_layout.addStretch(1)
+
+        self._preview_button_group = QButtonGroup(self)
+        self._preview_button_group.setExclusive(True)
+        self._preview_button_group.addButton(self._preview_toggle_aligned)
+        self._preview_button_group.addButton(self._preview_toggle_binarized)
+
+        diag_layout.addWidget(self._preview_toggle_container)
+
+        self._preview_widget = QWidget(self._diagnostics_group)
+        preview_layout = QHBoxLayout(self._preview_widget)
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(8)
+
+        self._preview_before_label = QLabel("No preview", self._preview_widget)
+        self._preview_before_label.setAlignment(Qt.AlignCenter)
+        self._preview_before_label.setMinimumSize(160, 160)
+        self._preview_before_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_before_label.setStyleSheet(
+            "background-color: #111; color: #777; border: 1px solid #333;"
+        )
+        self._preview_before_label.setScaledContents(True)
+        preview_layout.addWidget(self._preview_before_label, 1)
+
+        self._preview_after_label = QLabel("No preview", self._preview_widget)
+        self._preview_after_label.setAlignment(Qt.AlignCenter)
+        self._preview_after_label.setMinimumSize(160, 160)
+        self._preview_after_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._preview_after_label.setStyleSheet(
+            "background-color: #111; color: #777; border: 1px solid #333;"
+        )
+        self._preview_after_label.setScaledContents(True)
+        preview_layout.addWidget(self._preview_after_label, 1)
+
+        diag_layout.addWidget(self._preview_widget)
+
+        layout.addWidget(self._diagnostics_group)
+
         self._test_result_label = QLabel("", self)
         self._test_result_label.setStyleSheet(
             "color: #444; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px;"
@@ -1113,6 +1213,7 @@ class ToolConfigPanel(QWidget):
         layout.addWidget(self._test_result_label)
 
         self._update_visibility()
+        self._reset_diagnostics()
 
     def clear(self) -> None:
         self._current_tool = None
@@ -1261,6 +1362,7 @@ class ToolConfigPanel(QWidget):
     def _clear_test_result(self) -> None:
         self._test_result_label.clear()
         self._test_result_label.setVisible(False)
+        self._reset_diagnostics()
 
     def set_test_running(self, running: bool) -> None:
         if running:
@@ -1270,21 +1372,13 @@ class ToolConfigPanel(QWidget):
             self._btn_test.setEnabled(bool(self._current_tool) and not self._updating)
 
     def show_test_result(self, result: ToolRunResult, elapsed_ms: float) -> None:
-        status_color = {
-            "ok": "#237804",
-            "warn": "#b36b00",
-            "nok": "#b03030",
-        }.get(result.status, "#444")
-        lines = [f"Status: {result.status.upper()}"]
-        lines.append(f"Čas: {elapsed_ms:.1f} ms")
-        metrics = result.metrics or {}
-        if metrics:
-            lines.append("Metriky:")
-            for key, value in metrics.items():
-                lines.append(f"  • {key}: {value}")
-        self._set_test_message("\n".join(lines), status_color)
+        metrics = dict(result.metrics or {})
+        self._update_diagnostics(result.status, metrics, result.preview, elapsed_ms=elapsed_ms)
+        self._test_result_label.clear()
+        self._test_result_label.setVisible(False)
 
     def show_test_error(self, message: str) -> None:
+        self._update_diagnostics("nok", {}, None)
         self._set_test_message(message, "#b03030")
 
     def _set_test_message(self, message: str, color: str) -> None:
@@ -1295,6 +1389,229 @@ class ToolConfigPanel(QWidget):
             )
         )
         self._test_result_label.setVisible(True)
+
+    def _reset_diagnostics(self) -> None:
+        self._set_status_indicator_color("#555")
+        self._status_value_label.setText("—")
+        self._status_message_label.clear()
+        self._status_message_label.setVisible(False)
+        self._latency_label.setText("Čas: —")
+        self._metrics_table.setRowCount(0)
+        self._metrics_table.setVisible(False)
+        self._preview_cache.clear()
+        self._preview_before_key = None
+        self._preview_aligned_key = None
+        self._preview_binarized_key = None
+        self._active_preview_key = None
+        self._preview_toggle_container.setVisible(False)
+        for toggle in (self._preview_toggle_aligned, self._preview_toggle_binarized):
+            toggle.blockSignals(True)
+            toggle.setChecked(False)
+            toggle.setVisible(False)
+            toggle.blockSignals(False)
+        self._preview_widget.setVisible(False)
+        self._preview_before_label.setText("No preview")
+        self._preview_before_label.setPixmap(QPixmap())
+        self._preview_after_label.setText("No preview")
+        self._preview_after_label.setPixmap(QPixmap())
+
+    def _update_diagnostics(
+        self,
+        status: Optional[str],
+        metrics: dict[str, Any],
+        preview: Optional[Any],
+        *,
+        elapsed_ms: Optional[float] = None,
+        message: Optional[str] = None,
+    ) -> None:
+        status_key = (status or "").lower()
+        color_map = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
+        color = color_map.get(status_key, "#555")
+        self._set_status_indicator_color(color)
+        self._status_value_label.setText(status.upper() if status else "—")
+
+        if message:
+            self._status_message_label.setText(message)
+            self._status_message_label.setVisible(True)
+        else:
+            self._status_message_label.clear()
+            self._status_message_label.setVisible(False)
+
+        latency_value = metrics.pop("latency_ms", None)
+        if latency_value is None:
+            latency_value = elapsed_ms
+        if latency_value is not None:
+            try:
+                latency_text = f"{float(latency_value):.1f} ms"
+            except (TypeError, ValueError):
+                latency_text = str(latency_value)
+        else:
+            latency_text = "—"
+        self._latency_label.setText(f"Čas: {latency_text}")
+
+        self._populate_metrics_table(metrics)
+        self._prepare_preview_data(preview)
+
+    def _set_status_indicator_color(self, color: str) -> None:
+        self._status_indicator.setStyleSheet(
+            "border-radius: 6px; border: 1px solid #333; background: {color};".format(color=color)
+        )
+
+    def _populate_metrics_table(self, metrics: dict[str, Any]) -> None:
+        if not metrics:
+            self._metrics_table.setRowCount(0)
+            self._metrics_table.setVisible(False)
+            return
+
+        rows = []
+        for key, value in sorted(metrics.items(), key=lambda item: item[0]):
+            rows.append((str(key), self._format_metric_value(value)))
+
+        self._metrics_table.setRowCount(len(rows))
+        for row, (name, value) in enumerate(rows):
+            name_item = QTableWidgetItem(name)
+            value_item = QTableWidgetItem(value)
+            name_item.setFlags(Qt.ItemIsEnabled)
+            value_item.setFlags(Qt.ItemIsEnabled)
+            self._metrics_table.setItem(row, 0, name_item)
+            self._metrics_table.setItem(row, 1, value_item)
+        self._metrics_table.resizeRowsToContents()
+        self._metrics_table.setVisible(True)
+
+    @staticmethod
+    def _format_metric_value(value: Any) -> str:
+        if isinstance(value, (int, np.integer)):
+            return str(int(value))
+        if isinstance(value, (float, np.floating)):
+            if math.isnan(value) or math.isinf(value):
+                return str(value)
+            if abs(value) >= 1000 or (0 < abs(value) < 0.01):
+                return f"{value:.3g}"
+            return f"{value:.4f}".rstrip("0").rstrip(".")
+        if value is None:
+            return "—"
+        return str(value)
+
+    def _prepare_preview_data(self, preview: Optional[Any]) -> None:
+        self._preview_cache.clear()
+        self._preview_before_key = None
+        self._preview_aligned_key = None
+        self._preview_binarized_key = None
+        self._active_preview_key = None
+
+        if isinstance(preview, dict):
+            for key, value in preview.items():
+                pixmap = self._pixmap_from_any(value)
+                if pixmap is not None:
+                    self._preview_cache[key] = pixmap
+
+        candidates_before = ("before", "input", "frame")
+        for name in candidates_before:
+            if name in self._preview_cache:
+                self._preview_before_key = name
+                break
+
+        for name in ("aligned", "after", "result"):
+            if name in self._preview_cache:
+                self._preview_aligned_key = name
+                break
+
+        for name in ("binarization", "binarized", "mask"):
+            if name in self._preview_cache:
+                self._preview_binarized_key = name
+                break
+
+        if self._preview_aligned_key is not None:
+            self._active_preview_key = self._preview_aligned_key
+        elif self._preview_binarized_key is not None:
+            self._active_preview_key = self._preview_binarized_key
+        else:
+            remaining = [key for key in self._preview_cache.keys() if key != self._preview_before_key]
+            self._active_preview_key = remaining[0] if remaining else None
+
+        self._update_preview_controls()
+        self._refresh_preview_images()
+
+    def _update_preview_controls(self) -> None:
+        has_aligned = self._preview_aligned_key is not None
+        has_binarized = self._preview_binarized_key is not None
+
+        self._preview_toggle_container.setVisible(has_aligned or has_binarized)
+
+        self._preview_toggle_aligned.blockSignals(True)
+        self._preview_toggle_aligned.setVisible(has_aligned)
+        self._preview_toggle_aligned.setChecked(has_aligned and self._active_preview_key == self._preview_aligned_key)
+        self._preview_toggle_aligned.blockSignals(False)
+
+        self._preview_toggle_binarized.blockSignals(True)
+        self._preview_toggle_binarized.setVisible(has_binarized)
+        self._preview_toggle_binarized.setChecked(
+            has_binarized and self._active_preview_key == self._preview_binarized_key
+        )
+        self._preview_toggle_binarized.blockSignals(False)
+
+    def _refresh_preview_images(self) -> None:
+        before_pixmap = None
+        if self._preview_before_key and self._preview_before_key in self._preview_cache:
+            before_pixmap = self._preview_cache[self._preview_before_key]
+
+        after_pixmap = None
+        if self._active_preview_key and self._active_preview_key in self._preview_cache:
+            after_pixmap = self._preview_cache[self._active_preview_key]
+        elif self._preview_aligned_key and self._preview_aligned_key in self._preview_cache:
+            after_pixmap = self._preview_cache[self._preview_aligned_key]
+        elif self._preview_binarized_key and self._preview_binarized_key in self._preview_cache:
+            after_pixmap = self._preview_cache[self._preview_binarized_key]
+
+        self._apply_preview_pixmap(self._preview_before_label, before_pixmap, "No preview")
+        self._apply_preview_pixmap(self._preview_after_label, after_pixmap, "No preview")
+        self._preview_widget.setVisible(bool(before_pixmap or after_pixmap))
+
+    def _on_preview_toggle_changed(self, mode: str, checked: bool) -> None:
+        if not checked:
+            if self._active_preview_key is None:
+                return
+            if mode == "aligned" and self._active_preview_key == self._preview_aligned_key:
+                self._active_preview_key = self._preview_binarized_key or self._preview_aligned_key
+            elif mode == "binarization" and self._active_preview_key == self._preview_binarized_key:
+                self._active_preview_key = self._preview_aligned_key or self._preview_binarized_key
+        else:
+            if mode == "aligned" and self._preview_aligned_key is not None:
+                self._active_preview_key = self._preview_aligned_key
+            elif mode == "binarization" and self._preview_binarized_key is not None:
+                self._active_preview_key = self._preview_binarized_key
+        self._refresh_preview_images()
+
+    def _apply_preview_pixmap(
+        self, label: QLabel, pixmap: Optional[QPixmap], placeholder: str
+    ) -> None:
+        if pixmap is None:
+            label.setPixmap(QPixmap())
+            label.setText(placeholder)
+        else:
+            label.setText("")
+            label.setPixmap(pixmap)
+
+    @staticmethod
+    def _pixmap_from_any(value: Any) -> Optional[QPixmap]:
+        if value is None:
+            return None
+        if isinstance(value, QPixmap):
+            return value
+        if isinstance(value, QImage):
+            return QPixmap.fromImage(value)
+        if isinstance(value, np.ndarray):
+            arr = np.asarray(value)
+            if arr.ndim == 3:
+                arr = arr[:, :, 0]
+            if arr.ndim != 2:
+                return None
+            arr_u8 = np.ascontiguousarray(arr.astype(np.uint8))
+            height, width = arr_u8.shape
+            bytes_per_line = arr_u8.strides[0]
+            qimg = QImage(arr_u8.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+            return QPixmap.fromImage(qimg.copy())
+        return None
 
     def _create_widget(self, spec: dict[str, Any]) -> Optional[QWidget]:
         field_type = spec.get("type")
@@ -1589,6 +1906,7 @@ class ToolConfigPanel(QWidget):
         enabled_controls = has_tool and bool(self._param_widgets or self._threshold_widgets)
         self._btn_defaults.setEnabled(enabled_controls)
         self._btn_test.setEnabled(has_tool and not self._updating)
+        self._diagnostics_group.setVisible(has_tool)
 
 class GoldenWizard(QDialog):
     """

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import math
+import time
 
 import imageio.v3 as iio
 import numpy as np
@@ -1007,6 +1008,8 @@ def run_locator_template_match(
         ``dx``, ``dy``, ``corr`` and affine transform ``T``.
     """
 
+    start_time = time.perf_counter()
+
     params_dict = (
         params.values if isinstance(params, ToolParams) else dict(params or {})
     )
@@ -1073,6 +1076,10 @@ def run_locator_template_match(
 
     metrics = {"dx": dx, "dy": dy, "corr": corr}
     diagnostics = {**metrics, "T": T, "status": status}
+
+    latency_ms = (time.perf_counter() - start_time) * 1000.0
+    metrics["latency_ms"] = latency_ms
+    diagnostics["latency_ms"] = latency_ms
     result = ToolRunResult(
         tool_id=tool_id,
         type="locator.template_match",
@@ -1094,6 +1101,8 @@ def run_ssim_tool(
     tool_id: str = "ssim",
 ) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Compute SSIM within ROI, honoring optional locator alignment."""
+
+    start_time = time.perf_counter()
 
     golden_u8 = _ensure_gray_u8(golden)
     frame_u8 = _ensure_gray_u8(frame)
@@ -1134,6 +1143,10 @@ def run_ssim_tool(
         "dx_total": dx_total,
         "dy_total": dy_total,
     }
+
+    latency_ms = (time.perf_counter() - start_time) * 1000.0
+    metrics["latency_ms"] = latency_ms
+    diagnostics["latency_ms"] = latency_ms
 
     result = ToolRunResult(
         tool_id=tool_id,
