@@ -1,4 +1,5 @@
 # app/services/db_service.py
+import json
 import sqlite3
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -39,6 +40,8 @@ class DbService:
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.recipes_base = self.db_path.parent / "recipes"
+        self.recipes_base.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._init_schema()
@@ -74,6 +77,34 @@ class DbService:
         cur = self._conn.cursor()
         cur.execute("DELETE FROM recipes WHERE name=?", (name,))
         self._conn.commit()
+
+    # -------- recipe json (tools etc.) --------
+    def _recipe_json_path(self, name: str) -> Path:
+        return self.recipes_base / name / "recipe.json"
+
+    def load_recipe_json(self, name: str) -> Dict[str, Any]:
+        path = self._recipe_json_path(name)
+        if not path.exists():
+            return {}
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+
+    def save_recipe_json(self, name: str, data: Dict[str, Any]) -> Path:
+        path = self._recipe_json_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return path
+
+    def get_recipe_tools(self, name: str) -> List[Dict[str, Any]]:
+        data = self.load_recipe_json(name)
+        tools = data.get("tools", [])
+        return list(tools) if isinstance(tools, list) else []
+
+    def set_recipe_tools(self, name: str, tools: List[Dict[str, Any]]) -> Path:
+        data = self.load_recipe_json(name)
+        data["tools"] = list(tools)
+        return self.save_recipe_json(name, data)
 
     def recipe_id(self, name: str) -> Optional[int]:
         cur = self._conn.cursor()

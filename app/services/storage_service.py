@@ -5,6 +5,8 @@ from datetime import datetime
 import imageio.v3 as iio
 import numpy as np
 
+from app.models.schema import RecipeData, RecipeV2
+
 # --- Konfigurácia ---
 _CFG_PATH = Path("/data/config.json")
 _CFG_DEFAULT = {
@@ -110,6 +112,41 @@ class _SaveQueue:
 
 _SAVEQ = _SaveQueue()
 _SAVEQ.start()
+
+
+def _recipe_json_path(recipe: str, base_dir: str | Path = "/data") -> Path:
+    return Path(base_dir) / "recipes" / recipe / "recipe.json"
+
+
+def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> RecipeV2:
+    """Load recipe configuration including tool pipeline."""
+
+    path = _recipe_json_path(recipe, base_dir)
+    if path.exists():
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return RecipeV2.from_dict(data)
+
+    # Fallback to legacy regions.json if present
+    legacy = Path(base_dir) / "recipes" / recipe / "regions.json"
+    if legacy.exists():
+        with open(legacy, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        recipe_v2 = RecipeV2.from_recipe_data(RecipeData.from_dict(data))
+        save_recipe_config(recipe, recipe_v2, base_dir=base_dir)
+        return recipe_v2
+
+    return RecipeV2()
+
+
+def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/data") -> Path:
+    """Persist recipe configuration with normalized structure."""
+
+    path = _recipe_json_path(recipe, base_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data.to_dict(), f, ensure_ascii=False, indent=2)
+    return path
 
 # --- Public API (zachovávame signatúry) ---
 def save_golden(frame_u8, recipe_name: str):
