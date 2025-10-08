@@ -111,6 +111,14 @@ class RecipeService:
             self._normalize_draft_orders(draft)
         return [tool.copy() for tool in draft]
 
+    def update_tool(self, recipe_id: str, tool_index: int, tool: Tool | dict) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id)
+        if tool_index < 0 or tool_index >= len(draft):
+            raise IndexError("tool_index out of range")
+        draft[tool_index] = Tool.from_dict(tool)
+        self._normalize_draft_orders(draft)
+        return [entry.copy() for entry in draft]
+
     def reorder_tools(self, recipe_id: str, new_order: Sequence[int]) -> List[Tool]:
         draft = self._ensure_draft_tools(recipe_id)
         if len(new_order) != len(draft):

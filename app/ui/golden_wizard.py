@@ -23,12 +23,15 @@ from PySide6.QtWidgets import (
 
 import os
 from pathlib import Path
+from typing import Optional
 
-from app.ui.draw_view import DrawView
+import numpy as np
+
+from app.ui.draw_view import DrawView, RoiMaskEditor
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
-from app.models.schema import RecipeData
+from app.models.schema import RecipeData, Tool, ToolMask, ToolRoi
 from app.services.recipe_service import RecipeService
 
 
@@ -99,6 +102,100 @@ class ToolCatalogDialog(QDialog):
 
     def selected_type(self) -> str | None:
         return self._selected_type
+
+
+class ToolEditDialog(QDialog):
+    """Dialog providing ROI and ignore mask editing for a tool."""
+
+    def __init__(self, tool: Tool, golden_image: Optional[np.ndarray], meta, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle(f"Edit Tool – {tool.name}")
+        self._tool = tool.copy()
+        self._meta = meta
+
+        self._editor = RoiMaskEditor(self)
+        self._editor.set_roi_enabled(getattr(meta, "supports_roi", True))
+        self._editor.set_mask_enabled(getattr(meta, "supports_ignore_mask", True))
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        header = QLabel(f"{tool.name} ({tool.type})", self)
+        header.setStyleSheet("font-weight: 600; font-size: 14px;")
+        layout.addWidget(header)
+
+        layout.addWidget(self._editor, 1)
+
+        self._info_label = QLabel("", self)
+        self._info_label.setStyleSheet("color: #666;")
+        self._info_label.setWordWrap(True)
+        layout.addWidget(self._info_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        pixmap = self._pixmap_from_array(golden_image)
+        if pixmap is not None:
+            self._editor.set_background(pixmap)
+            self._info_label.setText("ROI mode selects the inspection window. Mask mode ignores painted pixels.")
+            if getattr(meta, "supports_roi", True):
+                self._editor.set_roi(self._tool.roi.rect())
+            if getattr(meta, "supports_ignore_mask", True):
+                mask_value = self._tool.ignore_mask.value
+                if mask_value is not None:
+                    self._editor.set_mask(mask_value)
+        else:
+            self._info_label.setText("Golden snapshot is not available – editing is disabled.")
+            self._editor.setEnabled(False)
+
+        self.resize(900, 640)
+
+    def result_tool(self) -> Tool:
+        return self._tool.copy()
+
+    def accept(self) -> None:
+        supports_roi = bool(getattr(self._meta, "supports_roi", True))
+        supports_mask = bool(getattr(self._meta, "supports_ignore_mask", False))
+
+        if supports_roi:
+            roi_rect = self._editor.roi()
+            roi = ToolRoi()
+            roi.set_rect(roi_rect)
+            self._tool.roi = roi
+        else:
+            self._tool.roi = ToolRoi()
+
+        if supports_mask:
+            mask = self._editor.mask()
+            if mask is None or not np.any(mask):
+                self._tool.ignore_mask = ToolMask(None)
+            else:
+                self._tool.ignore_mask = ToolMask(mask)
+        else:
+            self._tool.ignore_mask = ToolMask(None)
+
+        super().accept()
+
+    @staticmethod
+    def _pixmap_from_array(img: Optional[np.ndarray]) -> Optional[QPixmap]:
+        if img is None:
+            return None
+        arr = np.asarray(img)
+        if arr.size == 0:
+            return None
+        if arr.ndim == 3:
+            arr = arr[:, :, 0]
+        if arr.ndim != 2:
+            arr = np.mean(arr, axis=-1)
+        arr_u8 = np.ascontiguousarray(arr.astype(np.uint8))
+        height, width = arr_u8.shape
+        bytes_per_line = arr_u8.strides[0]
+        qimg = QImage(arr_u8.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+        return QPixmap.fromImage(qimg.copy())
 
 
 class GoldenWizard(QDialog):
@@ -275,6 +372,32 @@ class GoldenWizard(QDialog):
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
 
+    def _current_golden_image(self) -> Optional[np.ndarray]:
+        if self.current_img is not None:
+            return self.current_img
+
+        golden = getattr(self.recipes.tool, "golden", None)
+        if isinstance(golden, np.ndarray):
+            return golden
+
+        recipe = self._current_recipe_name()
+        path = Path("/data") / "recipes" / recipe / "golden.png"
+        if not path.exists():
+            return None
+
+        try:
+            import imageio.v3 as iio
+
+            img = iio.imread(path)
+        except Exception:
+            return None
+
+        if img.ndim == 3:
+            img = img[:, :, 0]
+        if img.dtype != np.uint8:
+            img = np.clip(img, 0, 255).astype(np.uint8)
+        return img
+
     # ---------- Akcie ----------
     def _capture_golden(self):
         try:
@@ -449,7 +572,24 @@ class GoldenWizard(QDialog):
         tools = self.recipes.get_draft_tools(recipe)
         if 0 <= index < len(tools):
             tool = tools[index]
-            self._info(f"Úprava nástroja '{tool.name}' bude dostupná v ďalšom kroku.")
+            try:
+                meta = self.recipes.tool.get_tool_meta(tool.type)
+            except KeyError:
+                self._err(f"Neznámy typ nástroja: {tool.type}")
+                return
+
+            golden_img = self._current_golden_image()
+            dialog = ToolEditDialog(tool, golden_img, meta, self)
+            if dialog.exec() != QDialog.Accepted:
+                return
+
+            updated_tool = dialog.result_tool()
+            try:
+                self.recipes.update_tool(recipe, index, updated_tool)
+            except Exception as exc:
+                self._err(f"Uloženie nástroja zlyhalo: {exc}")
+                return
+            self._refresh_tools_table()
 
     def _persist_tools(self, recipe: str) -> bool:
         tools = self.recipes.get_draft_tools(recipe)
