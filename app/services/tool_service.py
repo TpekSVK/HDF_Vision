@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -29,15 +30,28 @@ class ToolMeta:
     supports_roi: bool
     supports_ignore_mask: bool
     default_params: Dict[str, Any] = field(default_factory=dict)
-    default_thresholds: Dict[str, float] = field(default_factory=dict)
+    default_thresholds: Dict[str, Any] = field(default_factory=dict)
     category: str = "General"
 
-    def copy_defaults(self) -> tuple[Dict[str, Any], Dict[str, float]]:
+    def copy_defaults(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
         """Return deep copies of the default params and thresholds."""
 
-        params = dict(self.default_params)
-        thresholds = dict(self.default_thresholds)
+        params = self._extract_defaults(self.default_params)
+        thresholds = self._extract_defaults(self.default_thresholds)
         return params, thresholds
+
+    @staticmethod
+    def _extract_defaults(definitions: Dict[str, Any]) -> Dict[str, Any]:
+        """Extract plain default values from a definition dictionary."""
+
+        defaults: Dict[str, Any] = {}
+        for key, spec in definitions.items():
+            if isinstance(spec, dict):
+                value = deepcopy(spec.get("default"))
+            else:
+                value = deepcopy(spec)
+            defaults[key] = value
+        return defaults
 
 
 class ToolRegistry:
@@ -51,7 +65,15 @@ class ToolRegistry:
             supports_ignore_mask=True,
             default_params={},
             default_thresholds={
-                "ssim_min": 0.92,
+                "ssim_min": {
+                    "type": "float",
+                    "label": "ssim_min",
+                    "default": 0.92,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "required": True,
+                },
             },
             category="Similarity",
         ),
@@ -60,11 +82,40 @@ class ToolRegistry:
             description="Lokalizácia objektu pomocou template matching.",
             supports_roi=True,
             supports_ignore_mask=False,
-            default_params={},
+            default_params={
+                "coarse_cap": {
+                    "type": "int",
+                    "label": "coarse_cap",
+                    "default": 600,
+                    "min": 64,
+                    "max": 4096,
+                    "step": 16,
+                    "required": True,
+                },
+            },
             default_thresholds={
-                "tm_enable": 1.0,
-                "tm_margin": 200.0,
-                "tm_min_corr": 0.55,
+                "tm_enable": {
+                    "type": "bool",
+                    "label": "enable_template_match",
+                    "default": True,
+                },
+                "tm_margin": {
+                    "type": "int",
+                    "label": "search_margin",
+                    "default": 200,
+                    "min": 0,
+                    "max": 2000,
+                    "step": 10,
+                },
+                "tm_min_corr": {
+                    "type": "float",
+                    "label": "threshold_corr",
+                    "default": 0.55,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "required": True,
+                },
             },
             category="Locator",
         ),
@@ -75,10 +126,34 @@ class ToolRegistry:
             supports_ignore_mask=True,
             default_params={},
             default_thresholds={
-                "diff_thresh": 15.0,
-                "min_blob_area": 20.0,
-                "max_total_area": 2000.0,
-                "max_blob_count": 10.0,
+                "diff_thresh": {
+                    "type": "int",
+                    "label": "diff_thresh",
+                    "default": 15,
+                    "min": 0,
+                    "max": 255,
+                },
+                "min_blob_area": {
+                    "type": "int",
+                    "label": "min_blob_area",
+                    "default": 20,
+                    "min": 0,
+                    "max": 1_000_000,
+                },
+                "max_total_area": {
+                    "type": "int",
+                    "label": "max_total_area",
+                    "default": 2000,
+                    "min": 0,
+                    "max": 10_000_000,
+                },
+                "max_blob_count": {
+                    "type": "int",
+                    "label": "max_blob_count",
+                    "default": 10,
+                    "min": 0,
+                    "max": 10_000,
+                },
             },
             category="Inspection",
         ),
