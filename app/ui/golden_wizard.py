@@ -19,11 +19,15 @@ from PySide6.QtWidgets import (
     QWidget,
     QHeaderView,
     QAbstractItemView,
+    QTabWidget,
+    QFormLayout,
+    QSpinBox,
+    QDoubleSpinBox,
 )
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -31,7 +35,14 @@ from app.ui.draw_view import DrawView, RoiMaskEditor
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
-from app.models.schema import RecipeData, Tool, ToolMask, ToolRoi
+from app.models.schema import (
+    RecipeData,
+    Tool,
+    ToolMask,
+    ToolParams,
+    ToolRoi,
+    ToolThresholds,
+)
 from app.services.recipe_service import RecipeService
 
 
@@ -118,6 +129,11 @@ class ToolEditDialog(QDialog):
         self._editor.set_roi_enabled(getattr(meta, "supports_roi", True))
         self._editor.set_mask_enabled(getattr(meta, "supports_ignore_mask", True))
 
+        self._param_specs: dict[str, dict[str, Any]] = {}
+        self._threshold_specs: dict[str, dict[str, Any]] = {}
+        self._param_fields: dict[str, QWidget] = {}
+        self._threshold_fields: dict[str, QWidget] = {}
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
@@ -126,17 +142,39 @@ class ToolEditDialog(QDialog):
         header.setStyleSheet("font-weight: 600; font-size: 14px;")
         layout.addWidget(header)
 
-        layout.addWidget(self._editor, 1)
+        self._tabs = QTabWidget(self)
+        self._tabs.setDocumentMode(True)
+        layout.addWidget(self._tabs, 1)
+
+        roi_tab = QWidget(self)
+        roi_layout = QVBoxLayout(roi_tab)
+        roi_layout.setContentsMargins(0, 0, 0, 0)
+        roi_layout.setSpacing(8)
+        roi_layout.addWidget(self._editor, 1)
 
         self._info_label = QLabel("", self)
         self._info_label.setStyleSheet("color: #666;")
         self._info_label.setWordWrap(True)
-        layout.addWidget(self._info_label)
+        roi_layout.addWidget(self._info_label)
+        self._tabs.addTab(roi_tab, "ROI & Mask")
+
+        self._config_tab = QWidget(self)
+        config_layout = QVBoxLayout(self._config_tab)
+        config_layout.setContentsMargins(0, 0, 0, 0)
+        config_layout.setSpacing(0)
+        self._config_form = QFormLayout()
+        self._config_form.setContentsMargins(8, 8, 8, 8)
+        self._config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        config_layout.addLayout(self._config_form)
+        config_layout.addStretch(1)
+        self._tabs.addTab(self._config_tab, "Thresholds & Params")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+
+        self._build_config_form()
 
         pixmap = self._pixmap_from_array(golden_image)
         if pixmap is not None:
@@ -158,6 +196,8 @@ class ToolEditDialog(QDialog):
         return self._tool.copy()
 
     def accept(self) -> None:
+        if not self._apply_config_changes():
+            return
         supports_roi = bool(getattr(self._meta, "supports_roi", True))
         supports_mask = bool(getattr(self._meta, "supports_ignore_mask", False))
 
@@ -179,6 +219,216 @@ class ToolEditDialog(QDialog):
             self._tool.ignore_mask = ToolMask(None)
 
         super().accept()
+
+    def _build_config_form(self) -> None:
+        self._param_fields.clear()
+        self._threshold_fields.clear()
+
+        while self._config_form.rowCount():
+            self._config_form.removeRow(0)
+
+        self._param_specs = self._normalize_field_definitions(getattr(self._meta, "default_params", {}))
+        self._threshold_specs = self._normalize_field_definitions(getattr(self._meta, "default_thresholds", {}))
+
+        fields_added = 0
+
+        if self._param_specs:
+            header = QLabel("Parameters", self)
+            header.setStyleSheet("font-weight: 600; padding-top: 4px;")
+            self._config_form.addRow(header)
+            for name, spec in self._param_specs.items():
+                widget = self._create_input_widget(spec)
+                if widget is None:
+                    continue
+                current_value = self._tool.params.values.get(name)
+                self._set_widget_value(widget, spec, current_value)
+                self._param_fields[name] = widget
+                self._config_form.addRow(spec.get("label", name), widget)
+                fields_added += 1
+
+        if self._threshold_specs:
+            header = QLabel("Thresholds", self)
+            header.setStyleSheet("font-weight: 600; padding-top: 8px;")
+            self._config_form.addRow(header)
+            for name, spec in self._threshold_specs.items():
+                widget = self._create_input_widget(spec)
+                if widget is None:
+                    continue
+                current_value = self._tool.thresholds.values.get(name)
+                self._set_widget_value(widget, spec, current_value)
+                self._threshold_fields[name] = widget
+                self._config_form.addRow(spec.get("label", name), widget)
+                fields_added += 1
+
+        if not fields_added:
+            placeholder = QLabel("No configurable thresholds or parameters for this tool.", self)
+            placeholder.setStyleSheet("color: #666;")
+            placeholder.setWordWrap(True)
+            self._config_form.addRow(placeholder)
+
+    def _normalize_field_definitions(self, definitions: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        normalized: dict[str, dict[str, Any]] = {}
+        for name, raw in (definitions or {}).items():
+            if isinstance(raw, dict):
+                spec = dict(raw)
+            else:
+                spec = {"default": raw}
+            spec.setdefault("label", name)
+            type_name = spec.get("type")
+            if type_name is None:
+                type_name = self._infer_field_type(spec.get("default"))
+            else:
+                type_name = str(type_name).lower()
+            if type_name == "enum" and "choices" not in spec and "options" in spec:
+                spec["choices"] = spec.get("options")
+            if type_name not in {"int", "float", "bool", "enum"}:
+                continue
+            if type_name == "enum":
+                choices = spec.get("choices") or []
+                normalized_choices: list[tuple[Any, str]] = []
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        value = choice.get("value")
+                        label = choice.get("label", str(value))
+                    elif isinstance(choice, (list, tuple)) and len(choice) >= 1:
+                        value = choice[0]
+                        label = choice[1] if len(choice) > 1 else str(choice[0])
+                    else:
+                        value = choice
+                        label = str(choice)
+                    normalized_choices.append((value, label))
+                spec["choices"] = normalized_choices
+            spec["type"] = type_name
+            normalized[name] = spec
+        return normalized
+
+    @staticmethod
+    def _infer_field_type(value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        return None
+
+    def _create_input_widget(self, spec: dict[str, Any]) -> QWidget | None:
+        field_type = spec.get("type")
+        if field_type == "bool":
+            checkbox = QCheckBox(self)
+            checkbox.setTristate(False)
+            checkbox.setChecked(bool(spec.get("default", False)))
+            return checkbox
+        if field_type == "enum":
+            combo = QComboBox(self)
+            for value, label in spec.get("choices", []):
+                combo.addItem(str(label), value)
+            return combo if combo.count() else None
+        if field_type == "int":
+            spin = QSpinBox(self)
+            if (min_val := spec.get("min")) is not None:
+                spin.setMinimum(int(min_val))
+            else:
+                spin.setMinimum(-10_000_000)
+            if (max_val := spec.get("max")) is not None:
+                spin.setMaximum(int(max_val))
+            else:
+                spin.setMaximum(10_000_000)
+            if (step := spec.get("step")) is not None:
+                spin.setSingleStep(max(1, int(step)))
+            spin.setValue(int(spec.get("default", 0) or 0))
+            return spin
+        if field_type == "float":
+            spin = QDoubleSpinBox(self)
+            min_val = spec.get("min")
+            max_val = spec.get("max")
+            if min_val is None:
+                min_val = -1e9
+            if max_val is None:
+                max_val = 1e9
+            spin.setRange(float(min_val), float(max_val))
+            decimals = int(spec.get("decimals", 4))
+            spin.setDecimals(max(0, decimals))
+            if (step := spec.get("step")) is not None:
+                spin.setSingleStep(float(step))
+            else:
+                spin.setSingleStep(0.01)
+            spin.setValue(float(spec.get("default", 0.0) or 0.0))
+            return spin
+        return None
+
+    def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
+        field_type = spec.get("type")
+        if value is None:
+            value = spec.get("default")
+        if field_type == "bool" and isinstance(widget, QCheckBox):
+            widget.setChecked(bool(value))
+        elif field_type == "enum" and isinstance(widget, QComboBox):
+            if widget.count() == 0:
+                return
+            idx = widget.findData(value)
+            if idx < 0:
+                idx = 0
+            widget.setCurrentIndex(idx)
+        elif field_type == "int" and isinstance(widget, QSpinBox):
+            try:
+                widget.setValue(int(round(float(value))))
+            except Exception:
+                fallback = spec.get("default")
+                if fallback is None:
+                    fallback = widget.minimum()
+                widget.setValue(int(round(float(fallback))))
+        elif field_type == "float" and isinstance(widget, QDoubleSpinBox):
+            try:
+                widget.setValue(float(value))
+            except Exception:
+                fallback = spec.get("default")
+                if fallback is None:
+                    fallback = widget.minimum()
+                widget.setValue(float(fallback))
+
+    def _get_widget_value(self, widget: QWidget, spec: dict[str, Any]) -> Any:
+        field_type = spec.get("type")
+        if field_type == "bool" and isinstance(widget, QCheckBox):
+            return bool(widget.isChecked())
+        if field_type == "enum" and isinstance(widget, QComboBox):
+            if widget.count() == 0:
+                return None
+            return widget.currentData()
+        if field_type == "int" and isinstance(widget, QSpinBox):
+            return int(widget.value())
+        if field_type == "float" and isinstance(widget, QDoubleSpinBox):
+            return float(widget.value())
+        return None
+
+    def _apply_config_changes(self) -> bool:
+        params = dict(getattr(self._tool.params, "values", {}))
+        thresholds = dict(getattr(self._tool.thresholds, "values", {}))
+        errors: list[str] = []
+
+        for name, widget in self._param_fields.items():
+            spec = self._param_specs.get(name, {})
+            value = self._get_widget_value(widget, spec)
+            if spec.get("required") and value in (None, ""):
+                errors.append(f"Parameter '{spec.get('label', name)}' is required.")
+                continue
+            params[name] = value
+
+        for name, widget in self._threshold_fields.items():
+            spec = self._threshold_specs.get(name, {})
+            value = self._get_widget_value(widget, spec)
+            if spec.get("required") and value in (None, ""):
+                errors.append(f"Threshold '{spec.get('label', name)}' is required.")
+                continue
+            thresholds[name] = value
+
+        if errors:
+            QMessageBox.warning(self, "Validation failed", "\n".join(errors))
+            return False
+
+        self._tool.params = ToolParams(params)
+        self._tool.thresholds = ToolThresholds(thresholds)
+        return True
 
     @staticmethod
     def _pixmap_from_array(img: Optional[np.ndarray]) -> Optional[QPixmap]:
