@@ -77,15 +77,16 @@ class RecipeService:
         recipe_v2.pose_enabled = recipe.pose_enabled
         recipe_v2.regions = list(recipe.regions)
         self._save_recipe_config(name, recipe_v2)
+        self.db.mark_recipe_draft_updated(name)
 
     # --- tools ---
-    def load_tools(self, name: str, *, use_draft: bool = False) -> List[Tool]:
+    def load_tools(self, name: str, *, use_draft: bool = True) -> List[Tool]:
         if use_draft:
-            return self.get_draft_tools(name)
+            tools = self._get_persisted_tools(name)
+            self._draft_tools[name] = [tool.copy() for tool in tools]
+            return [tool.copy() for tool in tools]
 
-        tools = self._get_persisted_tools(name)
-        self._draft_tools[name] = [tool.copy() for tool in tools]
-        return [tool.copy() for tool in tools]
+        return [tool.copy() for tool in self.get_published_tools(name)]
 
     def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
@@ -93,7 +94,43 @@ class RecipeService:
         normalized = self._save_recipe_config(name, recipe)
         autosorted = self._locator_autosort.pop(name, False)
         self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
+        self.db.mark_recipe_draft_updated(name)
         return [tool.copy() for tool in normalized.tools], autosorted
+
+    def publish_recipe(self, name: str) -> tuple[List[Tool], bool]:
+        recipe = self._load_recipe_config(name)
+        publish_copy = recipe.copy()
+        normalized_tools, autosorted = self._normalize_tools(publish_copy.tools)
+        publish_copy.tools = normalized_tools
+        self._save_published_recipe_config(name, publish_copy)
+        self.db.mark_recipe_published(name)
+        self._draft_tools[name] = [tool.copy() for tool in publish_copy.tools]
+        return [tool.copy() for tool in publish_copy.tools], autosorted
+
+    def get_published_tools(self, name: str) -> List[Tool]:
+        recipe = self._load_published_recipe_config(name)
+        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+
+    def has_unpublished_changes(self, name: str) -> bool:
+        state = self.db.recipe_publish_state(name)
+        draft_ts = state.get("draft_updated_at")
+        published_ts = state.get("published_at")
+        if draft_ts is None:
+            return False
+        if published_ts is None:
+            return True
+        return str(draft_ts) > str(published_ts)
+
+    def publish_state(self, name: str) -> dict[str, str | None | bool]:
+        state = self.db.recipe_publish_state(name)
+        return {
+            "draft_updated_at": state.get("draft_updated_at"),
+            "published_at": state.get("published_at"),
+            "has_unpublished_changes": self.has_unpublished_changes(name),
+        }
+
+    def mark_draft_updated(self, name: str) -> None:
+        self.db.mark_recipe_draft_updated(name)
 
     # --- draft tool management ---
     def get_draft_tools(self, name: str) -> List[Tool]:
@@ -193,3 +230,20 @@ class RecipeService:
         path = self.base / "recipes" / name / "recipe.json"
         if not path.exists():
             self._save_recipe_config(name, recipe)
+
+    def _published_recipe_path(self, name: str) -> Path:
+        return self.base / "recipes" / name / "recipe.published.json"
+
+    def _load_published_recipe_config(self, name: str) -> RecipeV2:
+        path = self._published_recipe_path(name)
+        if path.exists():
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return RecipeV2.from_dict(data)
+        return self._load_recipe_config(name)
+
+    def _save_published_recipe_config(self, name: str, recipe: RecipeV2) -> None:
+        path = self._published_recipe_path(name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(recipe.to_dict(), f, ensure_ascii=False, indent=2)

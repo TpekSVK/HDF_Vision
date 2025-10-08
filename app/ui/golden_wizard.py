@@ -1646,6 +1646,8 @@ class GoldenWizard(QDialog):
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
+        self.btn_save_tool = QPushButton("Save Tool")
+        self.btn_publish_recipe = QPushButton("Publish Recipe")
         btn_save_recipe  = QPushButton("Uložiť RECEPT")
         btn_val_ok       = QPushButton("Validačný zber: uložiť Ⓞ OK")
         btn_val_nok      = QPushButton("Validačný zber: uložiť ✕ NOK")
@@ -1654,6 +1656,13 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_cap_golden)
         buttons.addWidget(btn_load_golden)
         buttons.addStretch(1)
+        buttons.addWidget(self.btn_save_tool)
+        self._publish_state_label = QLabel("", self)
+        self._publish_state_label.setStyleSheet("color: #999; font-style: italic;")
+        self._publish_state_label.setMinimumWidth(160)
+        self._publish_state_label.setAlignment(Qt.AlignCenter)
+        buttons.addWidget(self._publish_state_label)
+        buttons.addWidget(self.btn_publish_recipe)
         buttons.addWidget(btn_val_ok)
         buttons.addWidget(btn_val_nok)
         buttons.addWidget(btn_save_recipe)
@@ -1713,6 +1722,8 @@ class GoldenWizard(QDialog):
         self.type_sel.currentTextChanged.connect(self.view.set_region_type)
         btn_cap_golden.clicked.connect(self._capture_golden)
         btn_load_golden.clicked.connect(self._load_golden)
+        self.btn_save_tool.clicked.connect(self._save_tool_draft)
+        self.btn_publish_recipe.clicked.connect(self._publish_recipe)
         btn_save_recipe.clicked.connect(self._save_recipe)
         btn_val_ok.clicked.connect(lambda: self._save_validation(True))
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
@@ -1726,11 +1737,12 @@ class GoldenWizard(QDialog):
 
         self._last_recipe = self._current_recipe_name()
         try:
-            self.recipes.load_tools(self._last_recipe)
+            self.recipes.load_tools(self._last_recipe, use_draft=True)
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {self._last_recipe}: {exc}")
         self._refresh_tools_table()
         self._on_tool_selection_changed()
+        self._refresh_publish_state()
 
     # ---------- Live ----------
     def _toggle_live(self, checked: bool):
@@ -1875,11 +1887,80 @@ class GoldenWizard(QDialog):
         ok, autosorted = self._persist_tools(name)
         if not ok:
             return
+        self._refresh_tools_table()
 
         message = f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}"
         if autosorted:
             message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
         self._info(message)
+        self._refresh_publish_state()
+
+    def _save_tool_draft(self):
+        recipe = self._current_recipe_name()
+        ok, autosorted = self._persist_tools(recipe)
+        if not ok:
+            return
+        self._refresh_tools_table()
+        message = "Nástroje uložené do draftu."
+        if autosorted:
+            message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
+        self._info(message)
+        self._refresh_publish_state()
+
+    def _publish_recipe(self):
+        recipe = self._current_recipe_name()
+        ok, autosorted_draft = self._persist_tools(recipe)
+        if not ok:
+            return
+        try:
+            _, autosorted_publish = self.recipes.publish_recipe(recipe)
+        except Exception as exc:
+            self._err(f"Publikovanie receptu zlyhalo: {exc}")
+            return
+        self._refresh_tools_table()
+        message = "Recept publikovaný."
+        if autosorted_draft or autosorted_publish:
+            message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
+        self._info(message)
+        try:
+            self.recipes.load(recipe)
+        except Exception as exc:
+            print(f"[GoldenWizard] reload after publish failed for {recipe}: {exc}")
+        self._refresh_publish_state()
+
+    def _refresh_publish_state(self) -> None:
+        recipe = self._current_recipe_name()
+        try:
+            state = self.recipes.publish_state(recipe)
+        except Exception:
+            state = {"draft_updated_at": None, "published_at": None, "has_unpublished_changes": False}
+
+        draft_at = state.get("draft_updated_at")
+        published_at = state.get("published_at")
+        dirty = bool(state.get("has_unpublished_changes"))
+
+        if dirty:
+            text = "Unpublished changes"
+            style = "color: #d9534f; font-weight: bold;"
+        elif published_at:
+            published_str = str(published_at)
+            text = f"Published {published_str.split('.', 1)[0]}"
+            style = "color: #28a745; font-weight: bold;"
+        else:
+            text = "Not published"
+            style = "color: #999; font-style: italic;"
+
+        self._publish_state_label.setText(text)
+        self._publish_state_label.setStyleSheet(style)
+
+        tooltip_parts: list[str] = []
+        if draft_at:
+            tooltip_parts.append(f"Draft updated: {draft_at}")
+        if published_at:
+            tooltip_parts.append(f"Published: {published_at}")
+        self._publish_state_label.setToolTip("\n".join(tooltip_parts) if tooltip_parts else "")
+
+        self.btn_publish_recipe.setText("Publish Recipe" if not published_at else "Update Recipe")
 
     def _save_validation(self, is_ok: bool):
         if self.current_img is None:
@@ -1908,11 +1989,12 @@ class GoldenWizard(QDialog):
         if recipe == getattr(self, "_last_recipe", None):
             return
         try:
-            self.recipes.load_tools(recipe)
+            self.recipes.load_tools(recipe, use_draft=True)
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {recipe}: {exc}")
         self._last_recipe = recipe
         self._refresh_tools_table()
+        self._refresh_publish_state()
 
     def _open_tool_catalog(self):
         dialog = ToolCatalogDialog(self.recipes.tool, self)
