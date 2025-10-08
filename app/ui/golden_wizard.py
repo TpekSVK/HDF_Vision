@@ -1,6 +1,6 @@
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap, QImage, QColor
+from PySide6.QtGui import QPixmap, QImage, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -1663,6 +1663,11 @@ class ToolConfigPanel(QWidget):
         self.set_test_running(True)
         self.testRequested.emit(params, thresholds)
 
+    def trigger_test(self) -> None:
+        if not self._btn_test.isEnabled():
+            return
+        self._on_test_clicked()
+
     def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
         container = QWidget(self)
         layout = QVBoxLayout(container)
@@ -1920,11 +1925,15 @@ class GoldenWizard(QDialog):
     def __init__(self, camera, recipes: RecipeService, parent=None):
         super().__init__(parent)
 
-        self.setWindowTitle("Golden WIZARD")
+        self._base_title = "Golden WIZARD"
+        self.setWindowTitle(self._base_title)
         self.setModal(True)
         self.cam = camera
         self.recipes = recipes
         self.current_img = None
+
+        self._saved_snapshots: dict[str, list[dict[str, Any]]] = {}
+        self._dirty_recipes: dict[str, bool] = {}
 
         # --- Live infra (len video label, bez kreslenia) ---
 
@@ -1978,6 +1987,9 @@ class GoldenWizard(QDialog):
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
         self.btn_save_tool = QPushButton("Save Tool")
+        self.btn_revert_tool = QPushButton("Revert")
+        self.btn_revert_tool.setEnabled(False)
+        self.btn_revert_tool.setToolTip("Restore the draft to the last saved state.")
         self.btn_publish_recipe = QPushButton("Publish Recipe")
         btn_save_recipe  = QPushButton("Uložiť RECEPT")
         btn_val_ok       = QPushButton("Validačný zber: uložiť Ⓞ OK")
@@ -1988,6 +2000,7 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_load_golden)
         buttons.addStretch(1)
         buttons.addWidget(self.btn_save_tool)
+        buttons.addWidget(self.btn_revert_tool)
         self._publish_state_label = QLabel("", self)
         self._publish_state_label.setStyleSheet("color: #999; font-style: italic;")
         self._publish_state_label.setMinimumWidth(160)
@@ -2055,6 +2068,7 @@ class GoldenWizard(QDialog):
         btn_load_golden.clicked.connect(self._load_golden)
         self.btn_save_tool.clicked.connect(self._save_tool_draft)
         self.btn_publish_recipe.clicked.connect(self._publish_recipe)
+        self.btn_revert_tool.clicked.connect(self._revert_tool_changes)
         btn_save_recipe.clicked.connect(self._save_recipe)
         btn_val_ok.clicked.connect(lambda: self._save_validation(True))
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
@@ -2066,11 +2080,21 @@ class GoldenWizard(QDialog):
 
         self._selected_tool_row = -1
 
+        self._shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
+        self._shortcut_save.activated.connect(self._save_tool_draft)
+        self._shortcut_publish = QShortcut(QKeySequence("Ctrl+P"), self)
+        self._shortcut_publish.activated.connect(self._publish_recipe)
+        self._shortcut_test_return = QShortcut(QKeySequence(Qt.CTRL | Qt.Key_Return), self)
+        self._shortcut_test_return.activated.connect(self._trigger_test_shortcut)
+        self._shortcut_test_enter = QShortcut(QKeySequence(Qt.CTRL | Qt.Key_Enter), self)
+        self._shortcut_test_enter.activated.connect(self._trigger_test_shortcut)
+
         self._last_recipe = self._current_recipe_name()
         try:
             self.recipes.load_tools(self._last_recipe, use_draft=True)
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {self._last_recipe}: {exc}")
+        self._record_saved_snapshot(self._last_recipe)
         self._refresh_tools_table()
         self._on_tool_selection_changed()
         self._refresh_publish_state()
@@ -2218,6 +2242,7 @@ class GoldenWizard(QDialog):
         ok, autosorted = self._persist_tools(name)
         if not ok:
             return
+        self._record_saved_snapshot(name)
         self._refresh_tools_table()
 
         message = f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}"
@@ -2226,11 +2251,25 @@ class GoldenWizard(QDialog):
         self._info(message)
         self._refresh_publish_state()
 
+    def _revert_tool_changes(self) -> None:
+        recipe = self._current_recipe_name()
+        if not self._dirty_recipes.get(recipe, False):
+            return
+        try:
+            self.recipes.load_tools(recipe, use_draft=True)
+        except Exception as exc:
+            self._err(f"Obnovenie draftu zlyhalo: {exc}")
+            return
+        self._record_saved_snapshot(recipe)
+        self._refresh_tools_table()
+        self._refresh_publish_state()
+
     def _save_tool_draft(self):
         recipe = self._current_recipe_name()
         ok, autosorted = self._persist_tools(recipe)
         if not ok:
             return
+        self._record_saved_snapshot(recipe)
         self._refresh_tools_table()
         message = "Nástroje uložené do draftu."
         if autosorted:
@@ -2243,11 +2282,13 @@ class GoldenWizard(QDialog):
         ok, autosorted_draft = self._persist_tools(recipe)
         if not ok:
             return
+        self._record_saved_snapshot(recipe)
         try:
             _, autosorted_publish = self.recipes.publish_recipe(recipe)
         except Exception as exc:
             self._err(f"Publikovanie receptu zlyhalo: {exc}")
             return
+        self._record_saved_snapshot(recipe)
         self._refresh_tools_table()
         message = "Recept publikovaný."
         if autosorted_draft or autosorted_publish:
@@ -2293,6 +2334,53 @@ class GoldenWizard(QDialog):
 
         self.btn_publish_recipe.setText("Publish Recipe" if not published_at else "Update Recipe")
 
+    # ---------- Draft state management ----------
+    def _snapshot_tools(self, recipe: str) -> list[dict[str, Any]]:
+        try:
+            tools = self.recipes.get_draft_tools(recipe)
+        except Exception:
+            return []
+        return [tool.to_dict() for tool in tools]
+
+    def _record_saved_snapshot(self, recipe: str) -> None:
+        snapshot = self._snapshot_tools(recipe)
+        self._saved_snapshots[recipe] = snapshot
+        self._dirty_recipes[recipe] = False
+        self._update_dirty_state(recipe)
+
+    def _update_dirty_state(self, recipe: Optional[str] = None) -> None:
+        if not hasattr(self, "_saved_snapshots"):
+            return
+        recipe = recipe or self._current_recipe_name()
+        current = self._snapshot_tools(recipe)
+        saved = self._saved_snapshots.get(recipe)
+        dirty = saved is None or current != saved
+        self._dirty_recipes[recipe] = dirty
+        if hasattr(self, "btn_revert_tool") and self.btn_revert_tool is not None:
+            self.btn_revert_tool.setEnabled(dirty)
+        self._update_window_title_dirty()
+
+    def _update_window_title_dirty(self) -> None:
+        if not hasattr(self, "_base_title"):
+            return
+        current_recipe = self._current_recipe_name()
+        dirty = self._dirty_recipes.get(current_recipe, False)
+        title = self._base_title + (" *" if dirty else "")
+        self.setWindowTitle(title)
+
+    def _has_unsaved_changes(self) -> bool:
+        if not hasattr(self, "_dirty_recipes"):
+            return False
+        return any(self._dirty_recipes.values())
+
+    def _trigger_test_shortcut(self) -> None:
+        panel = getattr(self, "_tool_panel", None)
+        if panel is None:
+            return
+        trigger = getattr(panel, "trigger_test", None)
+        if callable(trigger):
+            trigger()
+
     def _save_validation(self, is_ok: bool):
         if self.current_img is None:
             try:
@@ -2324,6 +2412,7 @@ class GoldenWizard(QDialog):
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {recipe}: {exc}")
         self._last_recipe = recipe
+        self._record_saved_snapshot(recipe)
         self._refresh_tools_table()
         self._refresh_publish_state()
 
@@ -2407,6 +2496,8 @@ class GoldenWizard(QDialog):
             self._selected_tool_row = -1
             self._on_tool_selection_changed()
 
+        self._update_dirty_state(recipe)
+
     def _move_tool(self, index: int, delta: int):
         recipe = self._current_recipe_name()
         tools = self.recipes.get_draft_tools(recipe)
@@ -2466,6 +2557,7 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+        self._update_dirty_state(recipe)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
@@ -2486,6 +2578,7 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+        self._update_dirty_state(recipe)
 
     def _on_tool_test_requested(self, params: dict[str, Any], thresholds: dict[str, Any]) -> None:
         try:
@@ -2622,6 +2715,17 @@ class GoldenWizard(QDialog):
 
     # ---------- Shutdown ----------
     def closeEvent(self, e):
+        if self._has_unsaved_changes():
+            result = QMessageBox.question(
+                self,
+                "Neuložené zmeny",
+                "Máte neuložené zmeny. Naozaj chcete zavrieť bez uloženia?",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if result != QMessageBox.Yes:
+                e.ignore()
+                return
         try:
             self._live_timer.stop()
             self._lp.stop()

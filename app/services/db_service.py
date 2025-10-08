@@ -127,8 +127,10 @@ class DbService:
     def save_recipe_json(self, name: str, data: Dict[str, Any]) -> Path:
         path = self._recipe_json_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
+        serialized = json.dumps(data, ensure_ascii=False, indent=2)
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write(serialized)
+        self._write_backup(name, serialized)
         return path
 
     def get_recipe_tools(self, name: str) -> List[Dict[str, Any]]:
@@ -235,7 +237,17 @@ class DbService:
             for r in rows:
                 w.writerow(r)
         return out_path
-    
+
+    def _write_backup(self, name: str, serialized: str) -> None:
+        try:
+            backup_dir = self.db_path.parent / "tmp" / "recipes"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            backup_path = backup_dir / f"{name}_draft.json"
+            with open(backup_path, "w", encoding="utf-8") as backup_file:
+                backup_file.write(serialized)
+        except Exception as exc:
+            print(f"[DbService] Failed to write draft backup for {name}: {exc}")
+
     def _ensure_indices(self):
         cur = self._conn.cursor()
         try:
