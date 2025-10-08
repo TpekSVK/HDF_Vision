@@ -12,6 +12,69 @@ from app.utils import imaging
 
 
 @dataclass(slots=True)
+class ToolMetricSpec:
+    """Specification describing how a tool metric should be presented."""
+
+    key: str
+    label: str | None = None
+    unit: str | None = None
+    priority: int = 0
+
+
+@dataclass(slots=True)
+class ToolDefinitionMetaSchema:
+    """Container for parameter and threshold metadata definitions."""
+
+    params: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    thresholds: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ToolDefinitionMeta:
+    """Extended metadata used by UI editors and runners."""
+
+    description: str = ""
+    category: str = "General"
+    supports_roi: bool = False
+    supports_ignore_mask: bool = False
+    schema: ToolDefinitionMetaSchema = field(default_factory=ToolDefinitionMetaSchema)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ToolDefinition:
+    """Normalized tool definition exposed to UI and pipeline runners."""
+
+    type: str
+    display_name: str
+    meta: ToolDefinitionMeta = field(default_factory=ToolDefinitionMeta)
+    metrics_spec: Dict[str, ToolMetricSpec] = field(default_factory=dict)
+
+    def copy(self) -> "ToolDefinition":
+        return ToolDefinition(
+            type=self.type,
+            display_name=self.display_name,
+            meta=ToolDefinitionMeta(
+                description=self.meta.description,
+                category=self.meta.category,
+                supports_roi=self.meta.supports_roi,
+                supports_ignore_mask=self.meta.supports_ignore_mask,
+                schema=ToolDefinitionMetaSchema(
+                    params={k: dict(v) for k, v in self.meta.schema.params.items()},
+                    thresholds={k: dict(v) for k, v in self.meta.schema.thresholds.items()},
+                ),
+                extra={k: deepcopy(v) for k, v in self.meta.extra.items()},
+            ),
+            metrics_spec={k: ToolMetricSpec(
+                key=spec.key,
+                label=spec.label,
+                unit=spec.unit,
+                priority=spec.priority,
+            ) for k, spec in self.metrics_spec.items()},
+        )
+
+
+@dataclass(slots=True)
 class ToolParams:
     """Container for tool specific parameters."""
 
