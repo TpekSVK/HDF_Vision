@@ -1,5 +1,5 @@
 # app/ui/golden_wizard.py
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QDialog,
@@ -23,6 +23,8 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QSpinBox,
     QDoubleSpinBox,
+    QGroupBox,
+    QSizePolicy,
 )
 
 import os
@@ -30,8 +32,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
+import cv2
 
-from app.ui.draw_view import DrawView, RoiMaskEditor
+from app.ui.draw_view import DrawView, RoiMaskEditor, RoiMaskGraphicsView
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
@@ -44,6 +47,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
+from app.services.tool_service import run_locator_template_match
 
 
 class ToolCatalogDialog(QDialog):
@@ -115,15 +119,81 @@ class ToolCatalogDialog(QDialog):
         return self._selected_type
 
 
+class TemplateRoiEditor(QWidget):
+    """Lightweight ROI editor dedicated to template ROI selection."""
+
+    roiChanged = Signal(object)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+
+        self._view = RoiMaskGraphicsView(self)
+        self._view.set_mode(RoiMaskGraphicsView.MODE_ROI)
+        self._view.maskChanged.connect(lambda *_: None)
+        self._view.roiChanged.connect(self.roiChanged)
+
+        self._btn_reset = QPushButton("Reset Template ROI", self)
+        self._btn_reset.clicked.connect(self._view.reset_roi)
+
+        view_layout = QVBoxLayout(self)
+        view_layout.setContentsMargins(0, 0, 0, 0)
+        view_layout.setSpacing(4)
+        view_layout.addWidget(self._view, 1)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        controls.addStretch(1)
+        controls.addWidget(self._btn_reset)
+        view_layout.addLayout(controls)
+
+    def set_background(self, pixmap: Optional[QPixmap]) -> None:
+        self._view.set_background(pixmap)
+
+    def set_roi(self, roi: Optional[tuple[int, int, int, int]]) -> None:
+        self._view.set_roi(roi)
+
+    def roi(self) -> Optional[tuple[int, int, int, int]]:
+        return self._view.roi()
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 - Qt API
+        super().setEnabled(enabled)
+        self._btn_reset.setEnabled(bool(enabled))
+
+
 class ToolEditDialog(QDialog):
     """Dialog providing ROI and ignore mask editing for a tool."""
 
-    def __init__(self, tool: Tool, golden_image: Optional[np.ndarray], meta, parent=None):
+    def __init__(
+        self,
+        tool: Tool,
+        golden_image: Optional[np.ndarray],
+        meta,
+        camera_service=None,
+        live_preview: Optional[LivePreviewService] = None,
+        parent=None,
+    ):
         super().__init__(parent)
 
         self.setWindowTitle(f"Edit Tool – {tool.name}")
         self._tool = tool.copy()
         self._meta = meta
+        self._camera_service = camera_service
+        self._live_preview = live_preview
+        self._golden_image: Optional[np.ndarray] = None if golden_image is None else np.asarray(golden_image).copy()
+        self._golden_pixmap: Optional[QPixmap] = None
+        self._locator_template_specs: dict[str, dict[str, Any]] = {}
+
+        self._is_locator_template = self._tool.type == "locator.template_match"
+        self._use_golden_checkbox: Optional[QCheckBox] = None
+        self._template_editor: Optional[TemplateRoiEditor] = None
+        self._template_container: Optional[QWidget] = None
+        self._locator_panel: Optional[QWidget] = None
+        self._locator_metrics_label: Optional[QLabel] = None
+        self._locator_message_label: Optional[QLabel] = None
+        self._locator_preview_before: Optional[QLabel] = None
+        self._locator_preview_after: Optional[QLabel] = None
+        self._btn_locator_evaluate: Optional[QPushButton] = None
 
         self._editor = RoiMaskEditor(self)
         self._editor.set_roi_enabled(getattr(meta, "supports_roi", True))
@@ -151,6 +221,7 @@ class ToolEditDialog(QDialog):
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
         roi_layout.addWidget(self._editor, 1)
+        self._roi_layout = roi_layout
 
         self._info_label = QLabel("", self)
         self._info_label.setStyleSheet("color: #666;")
@@ -176,9 +247,9 @@ class ToolEditDialog(QDialog):
 
         self._build_config_form()
 
-        pixmap = self._pixmap_from_array(golden_image)
-        if pixmap is not None:
-            self._editor.set_background(pixmap)
+        self._golden_pixmap = self._pixmap_from_array(golden_image)
+        if self._golden_pixmap is not None:
+            self._editor.set_background(self._golden_pixmap)
             self._info_label.setText("ROI mode selects the inspection window. Mask mode ignores painted pixels.")
             if getattr(meta, "supports_roi", True):
                 self._editor.set_roi(self._tool.roi.rect())
@@ -190,7 +261,300 @@ class ToolEditDialog(QDialog):
             self._info_label.setText("Golden snapshot is not available – editing is disabled.")
             self._editor.setEnabled(False)
 
+        if self._is_locator_template:
+            self._init_locator_template_panel()
+
         self.resize(900, 640)
+
+    def _init_locator_template_panel(self) -> None:
+        if getattr(self, "_roi_layout", None) is None:
+            return
+
+        panel = QGroupBox("Locator preview", self)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(8, 8, 8, 8)
+        panel_layout.setSpacing(8)
+
+        params_values = dict(getattr(self._tool.params, "values", {}) or {})
+        template_roi_rect = self._tool.template_roi.rect()
+
+        use_spec = self._locator_template_specs.get("use_golden_crop", {"type": "bool", "label": "use_golden_crop", "default": True})
+        use_golden_value = params_values.get("use_golden_crop")
+        if use_golden_value is None and template_roi_rect:
+            use_golden_value = False
+        if use_golden_value is None:
+            use_golden_value = use_spec.get("default", True)
+
+        self._use_golden_checkbox = QCheckBox("Use golden crop as template", panel)
+        self._use_golden_checkbox.setChecked(bool(use_golden_value))
+        self._use_golden_checkbox.toggled.connect(self._on_locator_use_golden_changed)
+        panel_layout.addWidget(self._use_golden_checkbox)
+
+        self._param_specs["use_golden_crop"] = use_spec
+        self._param_fields["use_golden_crop"] = self._use_golden_checkbox
+
+        self._template_container = QWidget(panel)
+        template_container_layout = QVBoxLayout(self._template_container)
+        template_container_layout.setContentsMargins(0, 0, 0, 0)
+        template_container_layout.setSpacing(4)
+
+        template_hint = QLabel("Manual template ROI is drawn on the golden reference image.", self._template_container)
+        template_hint.setStyleSheet("color: #666;")
+        template_container_layout.addWidget(template_hint)
+
+        self._template_editor = TemplateRoiEditor(self._template_container)
+        template_container_layout.addWidget(self._template_editor, 1)
+        if self._golden_pixmap is not None:
+            self._template_editor.set_background(self._golden_pixmap)
+        if template_roi_rect:
+            self._template_editor.set_roi(template_roi_rect)
+
+        self._template_container.setVisible(not self._use_golden_checkbox.isChecked())
+        panel_layout.addWidget(self._template_container, 1)
+
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(8)
+
+        self._btn_locator_evaluate = QPushButton("Evaluate", panel)
+        self._btn_locator_evaluate.clicked.connect(self._on_locator_evaluate)
+        self._btn_locator_evaluate.setEnabled(self._golden_image is not None)
+        controls_layout.addWidget(self._btn_locator_evaluate)
+
+        self._locator_metrics_label = QLabel("corr: —    dx: —    dy: —", panel)
+        controls_layout.addWidget(self._locator_metrics_label)
+        controls_layout.addStretch(1)
+        panel_layout.addLayout(controls_layout)
+
+        self._locator_message_label = QLabel("", panel)
+        self._locator_message_label.setStyleSheet("color: #a33;")
+        self._locator_message_label.setVisible(False)
+        panel_layout.addWidget(self._locator_message_label)
+
+        preview_layout = QHBoxLayout()
+        preview_layout.setContentsMargins(0, 0, 0, 0)
+        preview_layout.setSpacing(12)
+
+        before_title = QLabel("Captured frame", panel)
+        before_title.setAlignment(Qt.AlignCenter)
+        before_label = QLabel("No preview", panel)
+        before_label.setAlignment(Qt.AlignCenter)
+        before_label.setMinimumSize(200, 200)
+        before_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        before_label.setStyleSheet("background-color: #111; color: #777; border: 1px solid #444;")
+
+        after_title = QLabel("Aligned preview", panel)
+        after_title.setAlignment(Qt.AlignCenter)
+        after_label = QLabel("No preview", panel)
+        after_label.setAlignment(Qt.AlignCenter)
+        after_label.setMinimumSize(200, 200)
+        after_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        after_label.setStyleSheet("background-color: #111; color: #777; border: 1px solid #444;")
+
+        before_container = QVBoxLayout()
+        before_container.setContentsMargins(0, 0, 0, 0)
+        before_container.setSpacing(4)
+        before_container.addWidget(before_title)
+        before_container.addWidget(before_label, 1)
+
+        after_container = QVBoxLayout()
+        after_container.setContentsMargins(0, 0, 0, 0)
+        after_container.setSpacing(4)
+        after_container.addWidget(after_title)
+        after_container.addWidget(after_label, 1)
+
+        preview_layout.addLayout(before_container, 1)
+        preview_layout.addLayout(after_container, 1)
+        panel_layout.addLayout(preview_layout)
+
+        panel_layout.addStretch(1)
+
+        self._locator_panel = panel
+        self._locator_preview_before = before_label
+        self._locator_preview_after = after_label
+
+        self._roi_layout.insertWidget(1, panel)
+        self._on_locator_use_golden_changed(self._use_golden_checkbox.isChecked())
+
+    def _set_locator_message(self, text: str, color: Optional[str] = None) -> None:
+        if self._locator_message_label is None:
+            return
+        if not text:
+            self._locator_message_label.clear()
+            self._locator_message_label.setVisible(False)
+            return
+        if not color:
+            color = "#a33"
+        self._locator_message_label.setStyleSheet(f"color: {color};")
+        self._locator_message_label.setText(text)
+        self._locator_message_label.setVisible(True)
+
+    def _on_locator_use_golden_changed(self, checked: bool) -> None:
+        if self._template_container is not None:
+            self._template_container.setVisible(not checked)
+        if self._template_editor is not None:
+            self._template_editor.setEnabled(self._golden_pixmap is not None and not checked)
+
+    def _gather_params_from_widgets(self) -> dict[str, Any]:
+        params = dict(getattr(self._tool.params, "values", {}) or {})
+        for name, widget in self._param_fields.items():
+            spec = self._param_specs.get(name, {})
+            params[name] = self._get_widget_value(widget, spec)
+
+        if self._is_locator_template:
+            use_golden = True
+            if self._use_golden_checkbox is not None:
+                use_golden = bool(self._use_golden_checkbox.isChecked())
+            params["use_golden_crop"] = use_golden
+            if use_golden:
+                params["template_roi"] = None
+            else:
+                rect = self._template_editor.roi() if self._template_editor is not None else None
+                params["template_roi"] = self._rect_to_dict(rect)
+
+        return params
+
+    def _gather_thresholds_from_widgets(self) -> dict[str, Any]:
+        thresholds = dict(getattr(self._tool.thresholds, "values", {}) or {})
+        for name, widget in self._threshold_fields.items():
+            spec = self._threshold_specs.get(name, {})
+            thresholds[name] = self._get_widget_value(widget, spec)
+        return thresholds
+
+    @staticmethod
+    def _rect_to_dict(rect: Optional[tuple[int, int, int, int]]) -> Optional[dict[str, int]]:
+        if rect is None:
+            return None
+        x, y, w, h = rect
+        return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
+    @staticmethod
+    def _ensure_gray_u8(image: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if image is None:
+            return None
+        arr = np.asarray(image)
+        if arr.ndim == 3:
+            arr = arr[:, :, 0]
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        return arr
+
+    @staticmethod
+    def _align_preview(frame: np.ndarray, dx: float, dy: float) -> np.ndarray:
+        h, w = frame.shape[:2]
+        matrix = np.array([[1.0, 0.0, -float(dx)], [0.0, 1.0, -float(dy)]], dtype=np.float32)
+        aligned = cv2.warpAffine(
+            frame,
+            matrix,
+            (int(w), int(h)),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        return aligned
+
+    def _update_locator_metrics(self, result: Optional[dict[str, Any]]) -> None:
+        if self._locator_metrics_label is None:
+            return
+        if not result:
+            self._locator_metrics_label.setText("corr: —    dx: —    dy: —")
+            return
+        corr = float(result.get("corr", 0.0))
+        dx = float(result.get("dx", 0.0))
+        dy = float(result.get("dy", 0.0))
+        self._locator_metrics_label.setText(f"corr: {corr:.4f}    dx: {dx:.2f}    dy: {dy:.2f}")
+
+        status = str(result.get("status", "")).upper()
+        if status:
+            color_map = {"OK": "#2d8a34", "WARN": "#e67e22", "NOK": "#a33"}
+            self._set_locator_message(f"Status: {status}", color_map.get(status, "#666"))
+        else:
+            self._set_locator_message("")
+
+    def _update_locator_preview(
+        self,
+        before: Optional[np.ndarray],
+        after: Optional[np.ndarray],
+    ) -> None:
+        def _apply(label: Optional[QLabel], image: Optional[np.ndarray]) -> None:
+            if label is None:
+                return
+            if image is None:
+                label.setPixmap(QPixmap())
+                label.setText("No preview")
+                return
+            pixmap = self._pixmap_from_array(image)
+            if pixmap is None:
+                label.setPixmap(QPixmap())
+                label.setText("No preview")
+                return
+            size = label.size()
+            if size.width() > 0 and size.height() > 0:
+                pixmap = pixmap.scaled(size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            label.setPixmap(pixmap)
+            label.setText("")
+
+        _apply(self._locator_preview_before, before)
+        _apply(self._locator_preview_after, after)
+
+    def _on_locator_evaluate(self) -> None:
+        if self._golden_image is None:
+            self._set_locator_message("Golden image not available.")
+            self._update_locator_metrics(None)
+            self._update_locator_preview(None, None)
+            return
+
+        frame: Optional[np.ndarray] = None
+        if self._live_preview is not None:
+            try:
+                frame = self._live_preview.last_frame_u8()
+            except Exception as exc:  # pragma: no cover - defensive
+                self._set_locator_message(f"Live preview error: {exc}")
+        if frame is None and self._camera_service is not None:
+            try:
+                frame = self._camera_service.one_shot()
+            except Exception as exc:  # pragma: no cover - capture fallback
+                self._set_locator_message(f"Capture failed: {exc}")
+        if frame is None:
+            self._set_locator_message("Frame not available for evaluation.")
+            self._update_locator_metrics(None)
+            self._update_locator_preview(None, None)
+            return
+
+        frame_u8 = self._ensure_gray_u8(frame)
+        golden_u8 = self._ensure_gray_u8(self._golden_image)
+        if frame_u8 is None or golden_u8 is None:
+            self._set_locator_message("Frame conversion failed.")
+            self._update_locator_metrics(None)
+            self._update_locator_preview(None, None)
+            return
+
+        params = self._gather_params_from_widgets()
+        thresholds = self._gather_thresholds_from_widgets()
+
+        search_rect = self._editor.roi() if self._editor is not None else None
+        search_roi_obj: Optional[ToolRoi] = None
+        if search_rect is not None:
+            search_roi_obj = ToolRoi()
+            search_roi_obj.set_rect(search_rect)
+
+        try:
+            result = run_locator_template_match(
+                golden_u8,
+                frame_u8,
+                params,
+                thresholds,
+                search_roi_obj,
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            self._set_locator_message(f"Locator evaluation failed: {exc}")
+            self._update_locator_metrics(None)
+            self._update_locator_preview(frame_u8, None)
+            return
+
+        aligned = self._align_preview(frame_u8, result.get("dx", 0.0), result.get("dy", 0.0))
+        self._update_locator_metrics(result)
+        self._update_locator_preview(frame_u8, aligned)
 
     def result_tool(self) -> Tool:
         return self._tool.copy()
@@ -229,6 +593,12 @@ class ToolEditDialog(QDialog):
 
         self._param_specs = self._normalize_field_definitions(getattr(self._meta, "default_params", {}))
         self._threshold_specs = self._normalize_field_definitions(getattr(self._meta, "default_thresholds", {}))
+
+        if self._is_locator_template:
+            for key in ("use_golden_crop", "template_roi"):
+                spec = self._param_specs.pop(key, None)
+                if spec is not None:
+                    self._locator_template_specs[key] = spec
 
         fields_added = 0
 
@@ -425,6 +795,18 @@ class ToolEditDialog(QDialog):
         if errors:
             QMessageBox.warning(self, "Validation failed", "\n".join(errors))
             return False
+
+        if self._is_locator_template:
+            use_golden = bool(params.get("use_golden_crop", True))
+            if use_golden:
+                params["template_roi"] = None
+                self._tool.template_roi = ToolRoi()
+            else:
+                rect = self._template_editor.roi() if self._template_editor is not None else None
+                params["template_roi"] = self._rect_to_dict(rect)
+                roi_obj = ToolRoi()
+                roi_obj.set_rect(rect)
+                self._tool.template_roi = roi_obj
 
         self._tool.params = ToolParams(params)
         self._tool.thresholds = ToolThresholds(thresholds)
@@ -829,7 +1211,14 @@ class GoldenWizard(QDialog):
                 return
 
             golden_img = self._current_golden_image()
-            dialog = ToolEditDialog(tool, golden_img, meta, self)
+            dialog = ToolEditDialog(
+                tool,
+                golden_img,
+                meta,
+                camera_service=self.cam,
+                live_preview=getattr(self, "_lp", None),
+                parent=self,
+            )
             if dialog.exec() != QDialog.Accepted:
                 return
 
