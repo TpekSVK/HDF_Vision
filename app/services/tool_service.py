@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import imageio.v3 as iio
 import numpy as np
@@ -13,6 +13,7 @@ import numpy as np
 from app.services.compare_service import analyze
 from app.models.schema import (
     RecipeData,
+    RecipeV2,
     Tool,
     ToolMask,
     ToolParams,
@@ -279,3 +280,75 @@ class ToolService:
             self.thresholds,
             pose_enabled=self.pose_enabled,
         )
+
+
+@dataclass(slots=True)
+class ToolRunnerContext:
+    """Context shared across tool execution within the pipeline."""
+
+    frame: np.ndarray
+    T_total: Optional[np.ndarray] = None
+
+
+def _validate_roi(tool: Tool, meta: ToolMeta) -> None:
+    roi_rect = tool.roi.rect()
+    if roi_rect is None:
+        return
+    if not meta.supports_roi:
+        raise ValueError(
+            f"Tool '{tool.name}' of type '{tool.type}' does not support ROI but one was provided"
+        )
+    x, y, w, h = roi_rect
+    if w <= 0 or h <= 0:
+        raise ValueError(f"Invalid ROI dimensions for tool '{tool.name}'")
+
+
+def _validate_ignore_mask(tool: Tool, meta: ToolMeta) -> None:
+    mask = tool.ignore_mask.value
+    if mask is None:
+        return
+    if not meta.supports_ignore_mask:
+        raise ValueError(
+            f"Tool '{tool.name}' of type '{tool.type}' does not support ignore mask"
+        )
+    if mask.ndim != 2:
+        raise ValueError(f"Ignore mask for tool '{tool.name}' must be 2D")
+
+
+def _validate_params(tool: Tool) -> None:
+    params = tool.params.values
+    if params is None:
+        return
+    if not isinstance(params, dict):
+        raise ValueError(f"Params for tool '{tool.name}' must be a dictionary")
+
+
+def run_pipeline_prepare(
+    recipe: RecipeV2, golden: np.ndarray, frame: np.ndarray
+) -> Tuple[ToolRunnerContext, List[Dict[str, Any]]]:
+    """Iterate through tool pipeline and prepare shared context."""
+
+    diagnostics: List[Dict[str, Any]] = []
+    context = ToolRunnerContext(frame=frame, T_total=None)
+
+    tools: Sequence[Tool] = sorted(recipe.tools, key=lambda t: t.order)
+
+    for tool in tools:
+        meta = ToolRegistry.get_tool_meta(tool.type)
+        if meta is None:
+            raise ValueError(f"Tool type '{tool.type}' is not registered")
+
+        _validate_roi(tool, meta)
+        _validate_ignore_mask(tool, meta)
+        _validate_params(tool)
+
+        diagnostics.append(
+            {
+                "tool_id": tool.name or f"tool_{tool.order}",
+                "type": tool.type,
+                "status": "skipped" if tool.enabled else "disabled",
+            }
+        )
+
+    return context, diagnostics
+
