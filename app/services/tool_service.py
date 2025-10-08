@@ -305,7 +305,36 @@ class ToolRunnerContext:
     """Context shared across tool execution within the pipeline."""
 
     frame: np.ndarray
-    T_total: Optional[np.ndarray] = None
+    frame_aligned: np.ndarray | None = None
+    T_total: np.ndarray | None = None
+
+
+def compose_affine(
+    T_total: np.ndarray | None, T_new: np.ndarray | None
+) -> np.ndarray:
+    """Left-compose 2×3 affine transforms.
+
+    The resulting matrix corresponds to applying ``T_total`` first and then
+    ``T_new`` (``T_new ∘ T_total``). ``None`` inputs are treated as identity
+    transforms.
+    """
+
+    def _to_homogeneous(mat: np.ndarray | None) -> np.ndarray:
+        if mat is None:
+            return np.eye(3, dtype=np.float32)
+
+        arr = np.asarray(mat, dtype=np.float32)
+        if arr.shape != (2, 3):  # pragma: no cover - defensive programming
+            raise ValueError("Affine transform must have shape (2, 3)")
+
+        homo = np.eye(3, dtype=np.float32)
+        homo[:2, :3] = arr
+        return homo
+
+    M_total = _to_homogeneous(T_total)
+    M_new = _to_homogeneous(T_new)
+    composed = M_new @ M_total
+    return composed[:2, :3]
 
 
 def _validate_roi(tool: Tool, meta: ToolMeta) -> None:
@@ -341,13 +370,17 @@ def _validate_params(tool: Tool) -> None:
         raise ValueError(f"Params for tool '{tool.name}' must be a dictionary")
 
 
-def run_pipeline_prepare(
+def run_pipeline(
     recipe: RecipeV2, golden: np.ndarray, frame: np.ndarray
 ) -> Tuple[ToolRunnerContext, List[Dict[str, Any]]]:
-    """Iterate through tool pipeline and prepare shared context."""
+    """Iterate through tool pipeline and update shared context."""
 
     diagnostics: List[Dict[str, Any]] = []
-    context = ToolRunnerContext(frame=frame, T_total=None)
+    context = ToolRunnerContext(
+        frame=frame,
+        frame_aligned=frame,
+        T_total=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
+    )
 
     tools: Sequence[Tool] = sorted(recipe.tools, key=lambda t: t.order)
 
@@ -360,13 +393,49 @@ def run_pipeline_prepare(
         _validate_ignore_mask(tool, meta)
         _validate_params(tool)
 
-        diagnostics.append(
-            {
-                "tool_id": tool.name or f"tool_{tool.order}",
-                "type": tool.type,
-                "status": "skipped" if tool.enabled else "disabled",
-            }
-        )
+        diag_entry: Dict[str, Any] = {
+            "tool_id": tool.name or f"tool_{tool.order}",
+            "type": tool.type,
+            "status": "disabled" if not tool.enabled else "skipped",
+        }
+
+        if not tool.enabled:
+            diagnostics.append(diag_entry)
+            continue
+
+        if tool.type == "locator.template_match":
+            params_dict = dict(tool.params.values or {})
+
+            frame_for_locator = (
+                context.frame_aligned if context.frame_aligned is not None else context.frame
+            )
+
+            result = run_locator_template_match(
+                golden,
+                frame_for_locator,
+                tool.params,
+                tool.thresholds,
+                tool.roi,
+            )
+
+            diag_entry.update(result)
+            diag_entry["status"] = result.get("status", "skipped")
+
+            T_new = result.get("T")
+            context.T_total = compose_affine(context.T_total, T_new)
+
+            apply_alignment = bool(params_dict.get("apply_alignment", True))
+            if apply_alignment:
+                source = (
+                    context.frame_aligned
+                    if context.frame_aligned is not None
+                    else context.frame
+                )
+                dx = float(result.get("dx", 0.0))
+                dy = float(result.get("dy", 0.0))
+                context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
+
+        diagnostics.append(diag_entry)
 
     return context, diagnostics
 
