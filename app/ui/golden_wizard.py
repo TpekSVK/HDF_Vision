@@ -37,7 +37,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import cv2
 
-from app.ui.draw_view import DrawView, RoiMaskEditor, RoiMaskGraphicsView
+from app.ui.draw_view import DrawView
+from app.ui.roi_mask_editor import MaskEditor, ROIEditor
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
@@ -137,18 +138,16 @@ class TemplateRoiEditor(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
-        self._view = RoiMaskGraphicsView(self)
-        self._view.set_mode(RoiMaskGraphicsView.MODE_ROI)
-        self._view.maskChanged.connect(lambda *_: None)
-        self._view.roiChanged.connect(self.roiChanged)
+        self._editor = ROIEditor(self, show_toolbar=False)
+        self._editor.roiChanged.connect(self.roiChanged)
 
         self._btn_reset = QPushButton("Reset Template ROI", self)
-        self._btn_reset.clicked.connect(self._view.reset_roi)
+        self._btn_reset.clicked.connect(self._editor.reset_roi)
 
         view_layout = QVBoxLayout(self)
         view_layout.setContentsMargins(0, 0, 0, 0)
         view_layout.setSpacing(4)
-        view_layout.addWidget(self._view, 1)
+        view_layout.addWidget(self._editor, 1)
 
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
@@ -158,16 +157,17 @@ class TemplateRoiEditor(QWidget):
         view_layout.addLayout(controls)
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
-        self._view.set_background(pixmap)
+        self._editor.set_background(pixmap)
 
     def set_roi(self, roi: Optional[tuple[int, int, int, int]]) -> None:
-        self._view.set_roi(roi)
+        self._editor.set_roi(roi)
 
     def roi(self) -> Optional[tuple[int, int, int, int]]:
-        return self._view.roi()
+        return self._editor.roi()
 
     def setEnabled(self, enabled: bool) -> None:  # noqa: N802 - Qt API
         super().setEnabled(enabled)
+        self._editor.setEnabled(bool(enabled))
         self._btn_reset.setEnabled(bool(enabled))
 
 
@@ -205,9 +205,11 @@ class ToolEditDialog(QDialog):
         self._locator_preview_after: Optional[QLabel] = None
         self._btn_locator_evaluate: Optional[QPushButton] = None
 
-        self._editor = RoiMaskEditor(self)
-        self._editor.set_roi_enabled(getattr(meta, "supports_roi", True))
-        self._editor.set_mask_enabled(getattr(meta, "supports_ignore_mask", True))
+        self._supports_roi = bool(getattr(meta, "supports_roi", True))
+        self._supports_mask = bool(getattr(meta, "supports_ignore_mask", True))
+
+        self._roi_editor: Optional[ROIEditor] = ROIEditor(self) if self._supports_roi else None
+        self._mask_editor: Optional[MaskEditor] = MaskEditor(self) if self._supports_mask else None
 
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
@@ -239,13 +241,36 @@ class ToolEditDialog(QDialog):
         roi_layout = QVBoxLayout(roi_tab)
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
-        roi_layout.addWidget(self._editor, 1)
+
+        if self._supports_roi and self._roi_editor is not None:
+            roi_group = QGroupBox("Region of interest", roi_tab)
+            roi_group_layout = QVBoxLayout(roi_group)
+            roi_group_layout.setContentsMargins(6, 6, 6, 6)
+            roi_group_layout.setSpacing(6)
+            roi_group_layout.addWidget(self._roi_editor, 1)
+            roi_layout.addWidget(roi_group, 1)
+
+        if self._supports_mask and self._mask_editor is not None:
+            mask_group = QGroupBox("Ignore mask", roi_tab)
+            mask_group_layout = QVBoxLayout(mask_group)
+            mask_group_layout.setContentsMargins(6, 6, 6, 6)
+            mask_group_layout.setSpacing(6)
+            mask_group_layout.addWidget(self._mask_editor, 1)
+            roi_layout.addWidget(mask_group, 1)
+
+        if not self._supports_roi and not self._supports_mask:
+            info = QLabel("Selected tool does not support ROI or ignore mask editing.", roi_tab)
+            info.setStyleSheet("color: #666;")
+            info.setWordWrap(True)
+            roi_layout.addWidget(info)
+
         self._roi_layout = roi_layout
 
         self._info_label = QLabel("", self)
         self._info_label.setStyleSheet("color: #666;")
         self._info_label.setWordWrap(True)
         roi_layout.addWidget(self._info_label)
+        roi_layout.addStretch(1)
         self._tabs.addTab(roi_tab, "ROI & Mask")
 
         self._config_tab = QWidget(self)
@@ -276,18 +301,70 @@ class ToolEditDialog(QDialog):
         self._build_config_form()
 
         self._golden_pixmap = self._pixmap_from_array(golden_image)
+        params_values = dict(getattr(self._tool.params, "values", {}) or {})
+
+        initial_roi: Optional[tuple[int, int, int, int]] = None
+        roi_value = params_values.get("roi") if isinstance(params_values, dict) else None
+        if isinstance(roi_value, ToolRoi):
+            initial_roi = roi_value.rect()
+        elif isinstance(roi_value, dict):
+            try:
+                x = int(round(float(roi_value.get("x", 0))))
+                y = int(round(float(roi_value.get("y", 0))))
+                w = int(round(float(roi_value.get("w", 0))))
+                h = int(round(float(roi_value.get("h", 0))))
+                if w > 0 and h > 0:
+                    initial_roi = (x, y, w, h)
+            except Exception:  # pragma: no cover - defensive
+                initial_roi = None
+        elif isinstance(roi_value, (tuple, list)) and len(roi_value) == 4:
+            try:
+                rx, ry, rw, rh = [int(round(float(v))) for v in roi_value]
+                if rw > 0 and rh > 0:
+                    initial_roi = (rx, ry, rw, rh)
+            except Exception:  # pragma: no cover - defensive
+                initial_roi = None
+        if initial_roi is None:
+            initial_roi = self._tool.roi.rect()
+
+        initial_mask: Optional[np.ndarray] = None
+        mask_value = params_values.get("ignore_mask") if isinstance(params_values, dict) else None
+        if isinstance(mask_value, ToolMask):
+            initial_mask = mask_value.value
+        elif mask_value is not None:
+            try:
+                mask_obj = ToolMask.from_obj(mask_value)
+                initial_mask = mask_obj.value
+            except Exception:  # pragma: no cover - defensive
+                initial_mask = None
+        elif self._tool.ignore_mask.value is not None:
+            initial_mask = np.asarray(self._tool.ignore_mask.value)
+
         if self._golden_pixmap is not None:
-            self._editor.set_background(self._golden_pixmap)
-            self._info_label.setText("ROI mode selects the inspection window. Mask mode ignores painted pixels.")
-            if getattr(meta, "supports_roi", True):
-                self._editor.set_roi(self._tool.roi.rect())
-            if getattr(meta, "supports_ignore_mask", True):
-                mask_value = self._tool.ignore_mask.value
-                if mask_value is not None:
-                    self._editor.set_mask(mask_value)
+            if self._roi_editor is not None:
+                self._roi_editor.set_background(self._golden_pixmap)
+                if initial_roi is not None:
+                    self._roi_editor.set_roi(initial_roi)
+            if self._mask_editor is not None:
+                self._mask_editor.set_background(self._golden_pixmap)
+                if initial_mask is not None:
+                    self._mask_editor.set_mask(initial_mask)
+            instructions = [
+                "Scroll to zoom, use the middle mouse button or space + drag to pan."
+            ]
+            if self._supports_roi and self._supports_mask:
+                instructions.append("Draw the ROI rectangle and paint the ignore mask directly on the golden image.")
+            elif self._supports_roi:
+                instructions.append("Draw the ROI rectangle directly on the golden image.")
+            elif self._supports_mask:
+                instructions.append("Paint the ignore mask directly on the golden image.")
+            self._info_label.setText(" ".join(instructions))
         else:
             self._info_label.setText("Golden snapshot is not available – editing is disabled.")
-            self._editor.setEnabled(False)
+            if self._roi_editor is not None:
+                self._roi_editor.setEnabled(False)
+            if self._mask_editor is not None:
+                self._mask_editor.setEnabled(False)
 
         if self._is_locator_template:
             self._init_locator_template_panel()
@@ -568,7 +645,7 @@ class ToolEditDialog(QDialog):
         params = self._gather_params_from_widgets()
         thresholds = self._gather_thresholds_from_widgets()
 
-        search_rect = self._editor.roi() if self._editor is not None else None
+        search_rect = self._roi_editor.roi() if self._roi_editor is not None else None
         search_roi_obj: Optional[ToolRoi] = None
         if search_rect is not None:
             search_roi_obj = ToolRoi()
@@ -603,22 +680,36 @@ class ToolEditDialog(QDialog):
         supports_roi = bool(getattr(self._meta, "supports_roi", True))
         supports_mask = bool(getattr(self._meta, "supports_ignore_mask", False))
 
+        params_values = dict(self._tool.params.values)
+
         if supports_roi:
-            roi_rect = self._editor.roi()
+            roi_rect = self._roi_editor.roi() if self._roi_editor is not None else None
             roi = ToolRoi()
             roi.set_rect(roi_rect)
             self._tool.roi = roi
+            params_values["roi"] = roi.to_dict() if roi_rect is not None else None
         else:
             self._tool.roi = ToolRoi()
+            params_values.pop("roi", None)
 
         if supports_mask:
-            mask = self._editor.mask()
+            mask = self._mask_editor.mask() if self._mask_editor is not None else None
             if mask is None or not np.any(mask):
                 self._tool.ignore_mask = ToolMask(None)
+                params_values.pop("ignore_mask", None)
             else:
-                self._tool.ignore_mask = ToolMask(mask)
+                mask_obj = ToolMask(mask)
+                self._tool.ignore_mask = mask_obj
+                encoded_mask = mask_obj.to_dict()
+                if encoded_mask is None:
+                    params_values.pop("ignore_mask", None)
+                else:
+                    params_values["ignore_mask"] = encoded_mask
         else:
             self._tool.ignore_mask = ToolMask(None)
+            params_values.pop("ignore_mask", None)
+
+        self._tool.params = ToolParams(params_values)
 
         super().accept()
 
