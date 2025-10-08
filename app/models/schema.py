@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
+
+from app.utils import imaging
 
 
 @dataclass(slots=True)
@@ -76,11 +78,55 @@ class ToolRoi:
     def __post_init__(self) -> None:
         if self.data is None:
             self.data = {}
-        else:
+            return
+
+        if not isinstance(self.data, dict):
             self.data = dict(self.data)
 
+        keys = {"x", "y", "w", "h"}
+        if keys.issubset(self.data.keys()):
+            try:
+                x = int(round(float(self.data["x"])))
+                y = int(round(float(self.data["y"])))
+                w = int(round(float(self.data["w"])))
+                h = int(round(float(self.data["h"])))
+            except Exception:
+                self.data = {}
+                return
+            if w <= 0 or h <= 0:
+                self.data = {}
+                return
+            self.data = {"x": x, "y": y, "w": w, "h": h}
+        else:
+            self.data = {}
+
+    def rect(self) -> Optional[Tuple[int, int, int, int]]:
+        if not self.data:
+            return None
+        try:
+            x = int(self.data["x"])
+            y = int(self.data["y"])
+            w = int(self.data["w"])
+            h = int(self.data["h"])
+        except Exception:
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        return x, y, w, h
+
+    def set_rect(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        if rect is None:
+            self.data = {}
+            return
+        x, y, w, h = rect
+        self.data = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self.data)
+        rect = self.rect()
+        if rect is None:
+            return {}
+        x, y, w, h = rect
+        return {"x": x, "y": y, "w": w, "h": h}
 
     @classmethod
     def from_obj(cls, obj: Any | None) -> "ToolRoi":
@@ -100,50 +146,72 @@ class ToolRoi:
 class ToolMask:
     """Mask used to ignore pixels within a tool."""
 
-    value: Optional[np.ndarray | Dict[str, Any]] = None
+    value: Optional[np.ndarray] = None
 
     def __post_init__(self) -> None:
-        if isinstance(self.value, list):
-            self.value = np.asarray(self.value)
+        if self.value is None:
+            return
+        if isinstance(self.value, np.ndarray):
+            arr = self.value
+        elif isinstance(self.value, (list, tuple)):
+            arr = np.asarray(self.value)
+        elif isinstance(self.value, dict):
+            arr = imaging.decode_mask_from_blob(self.value)
+            if arr is None and self.value.get("type") == "ndarray":
+                try:
+                    dtype = self.value.get("dtype", "uint8")
+                    data = np.asarray(self.value.get("data", []), dtype=dtype)
+                    shape = tuple(self.value.get("shape", []))
+                    arr = data.reshape(shape)
+                except Exception:
+                    arr = None
+        else:
+            arr = np.asarray(self.value)
 
-    def to_dict(self) -> Optional[Dict[str, Any] | List[Any]]:
+        if arr is None:
+            self.value = None
+            return
+
+        if arr.ndim == 3:
+            arr = arr[:, :, 0]
+        if arr.ndim != 2:
+            raise ValueError("Mask must be 2D")
+        self.value = arr.astype(np.uint8, copy=False)
+
+    def to_dict(self) -> Optional[Dict[str, Any]]:
         if self.value is None:
             return None
-        if isinstance(self.value, np.ndarray):
-            return {
-                "type": "ndarray",
-                "dtype": str(self.value.dtype),
-                "shape": list(self.value.shape),
-                "data": self.value.flatten().tolist(),
-            }
-        return deepcopy(self.value)
+        return imaging.encode_mask_to_blob(self.value)
 
     @classmethod
     def from_obj(cls, obj: Any | None) -> "ToolMask":
         if isinstance(obj, ToolMask):
-            return cls(obj.value.copy() if isinstance(obj.value, np.ndarray) else deepcopy(obj.value))
+            return cls(obj.value.copy() if obj.value is not None else None)
         if obj is None:
             return cls(None)
         if isinstance(obj, np.ndarray):
             return cls(obj)
         if isinstance(obj, dict):
+            decoded = imaging.decode_mask_from_blob(obj)
+            if decoded is not None:
+                return cls(decoded)
             if obj.get("type") == "ndarray" and "data" in obj and "shape" in obj:
-                dtype = obj.get("dtype", "float32")
+                dtype = obj.get("dtype", "uint8")
                 arr = np.asarray(obj["data"], dtype=dtype)
                 try:
                     arr = arr.reshape(tuple(obj["shape"]))
                 except Exception:
                     arr = arr.reshape(-1)
                 return cls(arr)
-            return cls(deepcopy(obj))
+            return cls(None)
         if isinstance(obj, (list, tuple)):
             return cls(np.asarray(obj))
-        return cls(obj)
+        return cls(None)
 
     def copy(self) -> "ToolMask":
-        if isinstance(self.value, np.ndarray):
-            return ToolMask(self.value.copy())
-        return ToolMask(deepcopy(self.value))
+        if self.value is None:
+            return ToolMask(None)
+        return ToolMask(self.value.copy())
 
 
 @dataclass(slots=True)

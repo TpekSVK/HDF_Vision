@@ -1,7 +1,8 @@
 # app/utils/imaging.py
 from __future__ import annotations
+import base64
 import math
-from typing import Dict, Tuple, Optional
+from typing import Any, Dict, Tuple, Optional
 
 import numpy as np
 import cv2
@@ -352,3 +353,59 @@ def ssim_u8(img_u8: np.ndarray, ref_u8: np.ndarray, mask_u8: Optional[np.ndarray
     if den <= 0:
         return 1.0 if np.allclose(x, y) else 0.0
     return float(num / den)
+
+
+def encode_mask_to_blob(mask: Optional[np.ndarray]) -> Optional[Dict[str, Any]]:
+    """Encode a binary mask into a JSON-serializable blob."""
+
+    if mask is None:
+        return None
+
+    arr = np.asarray(mask)
+    if arr.ndim == 3:
+        arr = arr[:, :, 0]
+    if arr.ndim != 2:
+        raise ValueError("Mask must be a 2D array")
+
+    arr_u8 = arr.astype(np.uint8, copy=False)
+    h, w = arr_u8.shape[:2]
+
+    success, buf = cv2.imencode(".png", arr_u8)
+    if not success:
+        raise ValueError("Failed to encode mask as PNG")
+
+    data_b64 = base64.b64encode(buf.tobytes()).decode("ascii")
+    return {
+        "encoding": "png_base64",
+        "width": int(w),
+        "height": int(h),
+        "data": data_b64,
+    }
+
+
+def decode_mask_from_blob(blob: Optional[Dict[str, Any]]) -> Optional[np.ndarray]:
+    """Decode a JSON blob created by :func:`encode_mask_to_blob`."""
+
+    if not blob:
+        return None
+
+    if blob.get("encoding") != "png_base64":
+        return None
+
+    try:
+        raw = base64.b64decode(blob.get("data", ""))
+    except Exception:
+        return None
+
+    if not raw:
+        return None
+
+    buf = np.frombuffer(raw, dtype=np.uint8)
+    img = cv2.imdecode(buf, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+
+    if img.ndim == 3:
+        img = img[:, :, 0]
+
+    return img.astype(np.uint8, copy=False)
