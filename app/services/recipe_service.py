@@ -13,6 +13,7 @@ class RecipeService:
         self.base = Path(base_dir)
         self.db = db or DbService(self.base / "HDF_Vision.db")
         self.tool = ToolService(base_dir=base_dir)
+        self._draft_tools: dict[str, List[Tool]] = {}
 
     def list(self) -> list[str]:
         # DB je master
@@ -77,15 +78,49 @@ class RecipeService:
         self._save_recipe_config(name, recipe_v2)
 
     # --- tools ---
-    def load_tools(self, name: str) -> List[Tool]:
-        recipe = self._load_recipe_config(name)
-        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+    def load_tools(self, name: str, *, use_draft: bool = False) -> List[Tool]:
+        if use_draft:
+            return self.get_draft_tools(name)
+
+        tools = self._get_persisted_tools(name)
+        self._draft_tools[name] = [tool.copy() for tool in tools]
+        return [tool.copy() for tool in tools]
 
     def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> List[Tool]:
         recipe = self._load_recipe_config(name)
         recipe.tools = self._coerce_tools(tools)
         normalized = self._save_recipe_config(name, recipe)
+        self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
         return [tool.copy() for tool in normalized.tools]
+
+    # --- draft tool management ---
+    def get_draft_tools(self, name: str) -> List[Tool]:
+        draft = self._ensure_draft_tools(name)
+        return [tool.copy() for tool in draft]
+
+    def add_tool(self, recipe_id: str, tool: Tool | dict) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id)
+        draft.append(Tool.from_dict(tool))
+        self._normalize_draft_orders(draft)
+        return [tool.copy() for tool in draft]
+
+    def remove_tool(self, recipe_id: str, tool_index: int) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id)
+        if 0 <= tool_index < len(draft):
+            del draft[tool_index]
+            self._normalize_draft_orders(draft)
+        return [tool.copy() for tool in draft]
+
+    def reorder_tools(self, recipe_id: str, new_order: Sequence[int]) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id)
+        if len(new_order) != len(draft):
+            raise ValueError("new_order must match number of tools")
+        if sorted(new_order) != list(range(len(draft))):
+            raise ValueError("new_order must be a permutation of current indices")
+        reordered = [draft[idx] for idx in new_order]
+        draft[:] = reordered
+        self._normalize_draft_orders(draft)
+        return [tool.copy() for tool in draft]
 
     # --- internals ---
     def _coerce_tools(self, tools: Sequence[Tool | dict]) -> List[Tool]:
@@ -99,12 +134,28 @@ class RecipeService:
                 raise TypeError(f"Unsupported tool entry: {type(tool)!r}")
         return coerced
 
+    def _get_persisted_tools(self, name: str) -> List[Tool]:
+        recipe = self._load_recipe_config(name)
+        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+
     def _sort_tools(self, tools: Iterable[Tool]) -> List[Tool]:
         return [tool.copy() for tool in sorted(tools, key=lambda t: (t.order, t.name))]
 
     def _normalize_tools(self, tools: Iterable[Tool]) -> List[Tool]:
         sorted_tools = self._sort_tools(tools)
         return [tool.with_order(idx) for idx, tool in enumerate(sorted_tools)]
+
+    def _ensure_draft_tools(self, name: str) -> List[Tool]:
+        draft = self._draft_tools.get(name)
+        if draft is None:
+            draft = self._get_persisted_tools(name)
+            self._draft_tools[name] = [tool.copy() for tool in draft]
+            draft = self._draft_tools[name]
+        return draft
+
+    def _normalize_draft_orders(self, draft: List[Tool]) -> None:
+        for idx, tool in enumerate(draft):
+            tool.order = idx
 
     def _load_recipe_config(self, name: str) -> RecipeV2:
         recipe = load_recipe_config(name, base_dir=self.base)
