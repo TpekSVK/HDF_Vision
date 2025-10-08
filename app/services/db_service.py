@@ -11,7 +11,9 @@ PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS recipes (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   name TEXT UNIQUE NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  draft_updated_at TIMESTAMP,
+  published_at TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS thresholds (
   recipe_id INTEGER NOT NULL,
@@ -49,6 +51,12 @@ class DbService:
     def _init_schema(self):
         cur = self._conn.cursor()
         cur.executescript(SCHEMA)
+        cur.execute("PRAGMA table_info(recipes)")
+        columns = {row[1] for row in cur.fetchall()}
+        if "draft_updated_at" not in columns:
+            cur.execute("ALTER TABLE recipes ADD COLUMN draft_updated_at TIMESTAMP")
+        if "published_at" not in columns:
+            cur.execute("ALTER TABLE recipes ADD COLUMN published_at TIMESTAMP")
         self._conn.commit()
 
     def conn(self):
@@ -72,6 +80,33 @@ class DbService:
         cur = self._conn.cursor()
         cur.execute("UPDATE recipes SET name=? WHERE name=?", (new, old))
         self._conn.commit()
+
+    def mark_recipe_draft_updated(self, name: str) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "UPDATE recipes SET draft_updated_at=CURRENT_TIMESTAMP WHERE name=?",
+            (name,),
+        )
+        self._conn.commit()
+
+    def mark_recipe_published(self, name: str) -> None:
+        cur = self._conn.cursor()
+        cur.execute(
+            "UPDATE recipes SET published_at=CURRENT_TIMESTAMP WHERE name=?",
+            (name,),
+        )
+        self._conn.commit()
+
+    def recipe_publish_state(self, name: str) -> Dict[str, Optional[str]]:
+        cur = self._conn.cursor()
+        cur.execute(
+            "SELECT draft_updated_at, published_at FROM recipes WHERE name=?",
+            (name,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return {"draft_updated_at": None, "published_at": None}
+        return {"draft_updated_at": row[0], "published_at": row[1]}
 
     def delete_recipe(self, name: str):
         cur = self._conn.cursor()
