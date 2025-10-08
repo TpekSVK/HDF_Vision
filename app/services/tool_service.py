@@ -7,11 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Protocol, Sequence, Tuple
 
-import imageio.v3 as iio
 import numpy as np
 
 from app.models.schema import (
-    RecipeData,
     RecipeV2,
     Tool,
     ToolParams,
@@ -36,6 +34,9 @@ class ToolRunResult:
     latency_ms: float = 0.0
     debug_artifacts: Optional[Dict[str, Any]] = None
 
+    @staticmethod
+    def make_default_tool(type_id: str, name: str | None = None) -> Tool:
+        return registry.make_default_tool(type_id, name=name)
 
 class ITool(Protocol):
     """Interface implemented by all concrete tools."""
@@ -115,14 +116,28 @@ ToolMeta = ToolMetaView
 # Backwards compatible ToolService facade
 # ---------------------------------------------------------------------------
 
+        if template_rect is not None and search_rect is not None:
+            tx, ty, tw, th = template_rect
+            sx, sy, sw, sh = search_rect
+            templ = golden_u8[ty : ty + th, tx : tx + tw]
+            if templ.size > 0 and sw >= tw and sh >= th:
+                dx_rel, dy_rel, corr, used = imaging.match_template_u8(
+                    frame_u8,
+                    templ,
+                    roi=(sx, sy, sw, sh),
+                    search_margin=0,
+                    coarse_cap=int(coarse_cap),
+                )
+                dx = float((sx + dx_rel) - tx)
+                dy = float((sy + dy_rel) - ty)
 
-DEFAULT_THRESHOLDS = {
-    "ssim_min": 0.92,
-    "diff_thresh": 15,
-    "min_blob_area": 20,
-    "max_total_area": 2000,
-    "max_blob_count": 10,
-}
+        status: Literal["ok", "nok", "warn"]
+        if used == 0:
+            status = "warn"
+        elif corr >= threshold_corr:
+            status = "ok"
+        else:
+            status = "nok"
 
 
 class ToolService:
@@ -205,6 +220,7 @@ class ToolService:
             pose_enabled=self.pose_enabled,
         )
 
+_register_builtin_tools()
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -302,10 +318,10 @@ def compose_affine(
         homo[:2, :3] = arr
         return homo
 
-    M_total = _to_homogeneous(T_total)
-    M_new = _to_homogeneous(T_new)
-    composed = M_new @ M_total
-    return composed[:2, :3]
+    ok = not param_errors and not threshold_errors
+    errors = {"params": param_errors, "thresholds": threshold_errors}
+    normalized = {"params": normalized_params, "thresholds": normalized_thresholds}
+    return ok, errors, normalized
 
 
 def _extract_translation_from_affine(T: np.ndarray | None) -> Tuple[float, float]:
