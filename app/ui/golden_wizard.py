@@ -47,7 +47,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
-from app.services.tool_service import ToolRunResult, run_locator_template_match
+from app.services.tool_service import ToolRunResult, run_locator_template_match, ToolMeta
 
 
 class ToolCatalogDialog(QDialog):
@@ -840,6 +840,311 @@ class ToolEditDialog(QDialog):
         return QPixmap.fromImage(qimg.copy())
 
 
+class ToolConfigPanel(QWidget):
+    """Side panel for editing tool parameters and thresholds."""
+
+    paramChanged = Signal(str, object)
+    thresholdChanged = Signal(str, object)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+
+        self._current_tool: Optional[Tool] = None
+        self._param_specs: dict[str, dict[str, Any]] = {}
+        self._threshold_specs: dict[str, dict[str, Any]] = {}
+        self._param_widgets: dict[str, QWidget] = {}
+        self._threshold_widgets: dict[str, QWidget] = {}
+        self._updating = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        title = QLabel("Thresholds & Params", self)
+        title.setStyleSheet("font-weight: 600; font-size: 14px;")
+        layout.addWidget(title)
+
+        self._tool_label = QLabel("", self)
+        self._tool_label.setStyleSheet("font-weight: 600;")
+        layout.addWidget(self._tool_label)
+
+        self._description_label = QLabel("", self)
+        self._description_label.setStyleSheet("color: #666;")
+        self._description_label.setWordWrap(True)
+        layout.addWidget(self._description_label)
+
+        self._form_container = QWidget(self)
+        self._form_layout = QFormLayout(self._form_container)
+        self._form_layout.setContentsMargins(0, 0, 0, 0)
+        self._form_layout.setSpacing(6)
+        self._form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        layout.addWidget(self._form_container, 1)
+
+        self._placeholder_label = QLabel(
+            "Vyber v tabuľke nástroj pre úpravu parametrov a prahov.",
+            self,
+        )
+        self._placeholder_label.setStyleSheet("color: #666; font-style: italic;")
+        self._placeholder_label.setWordWrap(True)
+        self._placeholder_label.setAlignment(Qt.AlignTop)
+        layout.addWidget(self._placeholder_label, 1)
+
+        layout.addStretch(1)
+
+        self._btn_defaults = QPushButton("Restore defaults", self)
+        self._btn_defaults.clicked.connect(self._on_restore_defaults)
+        layout.addWidget(self._btn_defaults, 0, Qt.AlignLeft)
+
+        self._update_visibility()
+
+    def clear(self) -> None:
+        self._current_tool = None
+        self._param_specs.clear()
+        self._threshold_specs.clear()
+        self._clear_form()
+        self._tool_label.setText("No tool selected")
+        self._description_label.clear()
+        self._update_visibility()
+
+    def set_tool(
+        self,
+        tool: Tool,
+        meta: ToolMeta,
+        schema: dict[str, dict[str, dict[str, Any]]],
+    ) -> None:
+        self._current_tool = tool
+        self._param_specs = {k: dict(v) for k, v in (schema.get("params") or {}).items()}
+        self._threshold_specs = {
+            k: dict(v) for k, v in (schema.get("thresholds") or {}).items()
+        }
+
+        self._tool_label.setText(f"{tool.name} ({tool.type})")
+        description = getattr(meta, "description", "") or ""
+        self._description_label.setText(description)
+        self._description_label.setVisible(bool(description))
+
+        self._rebuild_form()
+        self._update_visibility()
+
+    def refresh_values(self, tool: Tool) -> None:
+        if tool is None:
+            return
+        self._current_tool = tool
+        self._tool_label.setText(f"{tool.name} ({tool.type})")
+        self._updating = True
+        try:
+            params = getattr(tool.params, "values", {}) or {}
+            thresholds = getattr(tool.thresholds, "values", {}) or {}
+            for name, widget in self._param_widgets.items():
+                spec = self._param_specs.get(name, {})
+                self._set_widget_value(widget, spec, params.get(name))
+            for name, widget in self._threshold_widgets.items():
+                spec = self._threshold_specs.get(name, {})
+                self._set_widget_value(widget, spec, thresholds.get(name))
+        finally:
+            self._updating = False
+
+    def _rebuild_form(self) -> None:
+        params = getattr(self._current_tool, "params", ToolParams()).values
+        thresholds = getattr(self._current_tool, "thresholds", ToolThresholds()).values
+        params = dict(params or {})
+        thresholds = dict(thresholds or {})
+
+        self._clear_form()
+
+        if self._current_tool is None:
+            return
+
+        added_fields = False
+
+        if any(self._is_supported_spec(spec) for spec in self._param_specs.values()):
+            header = QLabel("Parameters", self)
+            header.setStyleSheet("font-weight: 600; padding-top: 2px;")
+            self._form_layout.addRow(header)
+            for name, spec in self._param_specs.items():
+                if not self._is_supported_spec(spec):
+                    continue
+                widget = self._create_widget(spec)
+                if widget is None:
+                    continue
+                tooltip = spec.get("description") or ""
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                label = QLabel(spec.get("label", name), self)
+                if tooltip:
+                    label.setToolTip(tooltip)
+                self._set_widget_value(widget, spec, params.get(name))
+                self._connect_widget(widget, spec, kind="param", name=name)
+                self._param_widgets[name] = widget
+                self._form_layout.addRow(label, widget)
+                added_fields = True
+
+        if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
+            header = QLabel("Thresholds", self)
+            header.setStyleSheet("font-weight: 600; padding-top: 6px;")
+            self._form_layout.addRow(header)
+            for name, spec in self._threshold_specs.items():
+                if not self._is_supported_spec(spec):
+                    continue
+                widget = self._create_widget(spec)
+                if widget is None:
+                    continue
+                tooltip = spec.get("description") or ""
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                label = QLabel(spec.get("label", name), self)
+                if tooltip:
+                    label.setToolTip(tooltip)
+                self._set_widget_value(widget, spec, thresholds.get(name))
+                self._connect_widget(widget, spec, kind="threshold", name=name)
+                self._threshold_widgets[name] = widget
+                self._form_layout.addRow(label, widget)
+                added_fields = True
+
+        if not added_fields:
+            placeholder = QLabel(
+                "Tento nástroj nemá editovateľné parametre ani prahy.",
+                self,
+            )
+            placeholder.setStyleSheet("color: #666;")
+            placeholder.setWordWrap(True)
+            self._form_layout.addRow(placeholder)
+
+        self._btn_defaults.setEnabled(added_fields)
+
+    def _clear_form(self) -> None:
+        while self._form_layout.rowCount():
+            self._form_layout.removeRow(0)
+        self._param_widgets.clear()
+        self._threshold_widgets.clear()
+
+    def _is_supported_spec(self, spec: dict[str, Any]) -> bool:
+        field_type = (spec or {}).get("type")
+        return field_type in {"int", "float", "bool", "enum"}
+
+    def _create_widget(self, spec: dict[str, Any]) -> Optional[QWidget]:
+        field_type = spec.get("type")
+        if field_type == "bool":
+            widget = QCheckBox(self)
+            widget.setTristate(False)
+            widget.setChecked(bool(spec.get("default", False)))
+            return widget
+        if field_type == "enum":
+            combo = QComboBox(self)
+            for value, label in spec.get("choices", []):
+                combo.addItem(str(label), value)
+            return combo if combo.count() else None
+        if field_type == "int":
+            spin = QSpinBox(self)
+            if (min_val := spec.get("min")) is not None:
+                spin.setMinimum(int(min_val))
+            if (max_val := spec.get("max")) is not None:
+                spin.setMaximum(int(max_val))
+            if (step := spec.get("step")) is not None:
+                spin.setSingleStep(max(1, int(step)))
+            spin.setValue(int(spec.get("default", 0) or 0))
+            return spin
+        if field_type == "float":
+            spin = QDoubleSpinBox(self)
+            min_val = spec.get("min")
+            max_val = spec.get("max")
+            if min_val is not None:
+                spin.setMinimum(float(min_val))
+            if max_val is not None:
+                spin.setMaximum(float(max_val))
+            decimals = int(spec.get("decimals", 4))
+            spin.setDecimals(max(0, decimals))
+            if (step := spec.get("step")) is not None:
+                spin.setSingleStep(float(step))
+            spin.setValue(float(spec.get("default", 0.0) or 0.0))
+            return spin
+        return None
+
+    def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.setChecked(bool(value if value is not None else spec.get("default", False)))
+            return
+        if isinstance(widget, QComboBox):
+            target = value
+            if target is None:
+                target = spec.get("default")
+            idx = widget.findData(target)
+            if idx < 0 and widget.count():
+                idx = 0
+            if idx >= 0:
+                widget.setCurrentIndex(idx)
+            return
+        if isinstance(widget, QSpinBox):
+            try:
+                widget.setValue(int(round(float(value))))
+            except Exception:
+                default = spec.get("default", widget.value())
+                widget.setValue(int(round(float(default))))
+            return
+        if isinstance(widget, QDoubleSpinBox):
+            try:
+                widget.setValue(float(value))
+            except Exception:
+                default = spec.get("default", widget.value())
+                widget.setValue(float(default))
+
+    def _connect_widget(self, widget: QWidget, spec: dict[str, Any], *, kind: str, name: str) -> None:
+        if isinstance(widget, QCheckBox):
+            widget.toggled.connect(
+                lambda checked, n=name: self._on_field_changed(kind, n, bool(checked))
+            )
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(
+                lambda _index, w=widget, n=name: self._on_field_changed(
+                    kind, n, w.currentData()
+                )
+            )
+        elif isinstance(widget, QSpinBox):
+            widget.valueChanged.connect(
+                lambda value, n=name: self._on_field_changed(kind, n, int(value))
+            )
+        elif isinstance(widget, QDoubleSpinBox):
+            widget.valueChanged.connect(
+                lambda value, n=name: self._on_field_changed(kind, n, float(value))
+            )
+
+    def _on_field_changed(self, kind: str, name: str, value: Any) -> None:
+        if self._updating:
+            return
+        if kind == "param":
+            self.paramChanged.emit(name, value)
+        elif kind == "threshold":
+            self.thresholdChanged.emit(name, value)
+
+    def _on_restore_defaults(self) -> None:
+        if self._current_tool is None:
+            return
+        self._updating = True
+        try:
+            for name, widget in self._param_widgets.items():
+                spec = self._param_specs.get(name, {})
+                self._set_widget_value(widget, spec, spec.get("default"))
+            for name, widget in self._threshold_widgets.items():
+                spec = self._threshold_specs.get(name, {})
+                self._set_widget_value(widget, spec, spec.get("default"))
+        finally:
+            self._updating = False
+
+        for name in self._param_widgets:
+            spec = self._param_specs.get(name, {})
+            default = spec.get("default")
+            self.paramChanged.emit(name, default)
+        for name in self._threshold_widgets:
+            spec = self._threshold_specs.get(name, {})
+            default = spec.get("default")
+            self.thresholdChanged.emit(name, default)
+
+    def _update_visibility(self) -> None:
+        has_tool = self._current_tool is not None
+        self._form_container.setVisible(has_tool)
+        self._placeholder_label.setVisible(not has_tool)
+        self._btn_defaults.setEnabled(has_tool and bool(self._param_widgets or self._threshold_widgets))
+
 class GoldenWizard(QDialog):
     """
     Jediné miesto na nastavenie nástroja:
@@ -922,10 +1227,10 @@ class GoldenWizard(QDialog):
         buttons.addWidget(btn_save_recipe)
 
         # ---- Layout ----
-        layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addWidget(self.live_lbl)
-        layout.addWidget(self.view)
+        self._tool_panel = ToolConfigPanel(self)
+        self._tool_panel.setMinimumWidth(280)
+        self._tool_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
         self.tools_table = QTableWidget(0, 5, self)
         self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
         header = self.tools_table.horizontalHeader()
@@ -936,8 +1241,7 @@ class GoldenWizard(QDialog):
         self.tools_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tools_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tools_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        layout.addWidget(QLabel("Tools in recipe:"))
-        layout.addWidget(self.tools_table)
+        tools_label = QLabel("Tools in recipe:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
             header_item.setToolTip("Locator nástroje musia bežať pred analyzátormi.")
@@ -948,8 +1252,29 @@ class GoldenWizard(QDialog):
         )
         self.locator_hint_label.setWordWrap(True)
         self.locator_hint_label.setStyleSheet("color: #555; font-style: italic;")
-        layout.addWidget(self.locator_hint_label)
-        layout.addLayout(buttons)
+
+        content_layout = QHBoxLayout()
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(12)
+
+        left_layout = QVBoxLayout()
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+        left_layout.addWidget(self.live_lbl, 1)
+        left_layout.addWidget(self.view, 1)
+        left_layout.addWidget(tools_label)
+        left_layout.addWidget(self.tools_table)
+        left_layout.addWidget(self.locator_hint_label)
+        left_layout.addLayout(buttons)
+
+        content_layout.addLayout(left_layout, 3)
+        content_layout.addWidget(self._tool_panel, 2)
+
+        layout = QVBoxLayout(self)
+        layout.addLayout(top)
+        layout.addLayout(content_layout, 1)
+
+        self._tool_panel.clear()
 
         # signály
         self.shape_sel.currentTextChanged.connect(self.view.set_shape_type)
@@ -960,6 +1285,11 @@ class GoldenWizard(QDialog):
         btn_val_ok.clicked.connect(lambda: self._save_validation(True))
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
         self.recipe_name.editingFinished.connect(self._on_recipe_changed)
+        self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
+        self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
+        self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
+
+        self._selected_tool_row = -1
 
         self._last_recipe = self._current_recipe_name()
         try:
@@ -967,6 +1297,7 @@ class GoldenWizard(QDialog):
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {self._last_recipe}: {exc}")
         self._refresh_tools_table()
+        self._on_tool_selection_changed()
 
     # ---------- Live ----------
     def _toggle_live(self, checked: bool):
@@ -1167,6 +1498,8 @@ class GoldenWizard(QDialog):
     def _refresh_tools_table(self):
         recipe = self._current_recipe_name()
         tools = self.recipes.get_draft_tools(recipe)
+        previous_row = self._selected_tool_row if hasattr(self, "_selected_tool_row") else -1
+        self.tools_table.blockSignals(True)
         self.tools_table.setRowCount(len(tools))
         for row, tool in enumerate(tools):
             order_item = QTableWidgetItem(str(tool.order + 1))
@@ -1212,6 +1545,21 @@ class GoldenWizard(QDialog):
             self.tools_table.setCellWidget(row, 4, actions_widget)
 
         self.tools_table.resizeRowsToContents()
+        self.tools_table.blockSignals(False)
+
+        if tools:
+            if previous_row < 0:
+                target_row = 0
+            elif previous_row >= len(tools):
+                target_row = len(tools) - 1
+            else:
+                target_row = previous_row
+            self.tools_table.selectRow(target_row)
+            self._selected_tool_row = target_row
+        else:
+            self.tools_table.clearSelection()
+            self._selected_tool_row = -1
+            self._on_tool_selection_changed()
 
     def _move_tool(self, index: int, delta: int):
         recipe = self._current_recipe_name()
@@ -1232,6 +1580,66 @@ class GoldenWizard(QDialog):
         recipe = self._current_recipe_name()
         self.recipes.remove_tool(recipe, index)
         self._refresh_tools_table()
+
+    def _on_tool_selection_changed(self) -> None:
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        row = self.tools_table.currentRow()
+        if 0 <= row < len(tools):
+            tool = tools[row]
+            try:
+                meta = self.recipes.tool.get_tool_meta(tool.type)
+                schema = self.recipes.tool.get_tool_schema(tool.type)
+            except KeyError as exc:
+                print(f"[GoldenWizard] Missing tool metadata for {tool.type}: {exc}")
+                self._tool_panel.clear()
+                self._selected_tool_row = -1
+                return
+            self._tool_panel.set_tool(tool, meta, schema)
+            self._selected_tool_row = row
+        else:
+            self._tool_panel.clear()
+            self._selected_tool_row = -1
+
+    def _on_tool_param_changed(self, name: str, value: Any) -> None:
+        row = getattr(self, "_selected_tool_row", -1)
+        if row < 0:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        params = dict(getattr(tool.params, "values", {}) or {})
+        params[name] = value
+        tool.params = ToolParams(params)
+        try:
+            self.recipes.update_tool(recipe, row, tool)
+        except Exception as exc:
+            self._err(f"Uloženie parametra zlyhalo: {exc}")
+            self._refresh_tools_table()
+            return
+        self._tool_panel.refresh_values(tool)
+
+    def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
+        row = getattr(self, "_selected_tool_row", -1)
+        if row < 0:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
+        thresholds[name] = value
+        tool.thresholds = ToolThresholds(thresholds)
+        try:
+            self.recipes.update_tool(recipe, row, tool)
+        except Exception as exc:
+            self._err(f"Uloženie thresholdu zlyhalo: {exc}")
+            self._refresh_tools_table()
+            return
+        self._tool_panel.refresh_values(tool)
 
     def _edit_tool(self, index: int):
         recipe = self._current_recipe_name()
