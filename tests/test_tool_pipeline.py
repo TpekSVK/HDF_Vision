@@ -12,7 +12,7 @@ if str(ROOT) not in sys.path:
 pytest.importorskip("cv2")
 
 from app.models.schema import RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
-from app.services.tool_service import run_pipeline
+from app.services.tool_service import ToolRunResult, run_pipeline
 from app.utils import imaging
 
 
@@ -59,12 +59,18 @@ def test_locator_updates_context_with_alignment() -> None:
     golden, frame = _make_test_images()
     recipe = _make_recipe(apply_alignment=True)
 
-    context, diagnostics = run_pipeline(recipe, golden, frame)
+    context, diagnostics, results = run_pipeline(recipe, golden, frame)
 
     locator_diag = diagnostics[0]
     dx = locator_diag["dx"]
     dy = locator_diag["dy"]
     expected_T = locator_diag["T"]
+
+    assert results
+    assert isinstance(results[0], ToolRunResult)
+    assert results[0].status == "ok"
+    assert results[0].metrics["dx"] == pytest.approx(dx)
+    assert results[0].metrics["dy"] == pytest.approx(dy)
 
     assert context.T_total is not None
     assert np.allclose(context.T_total, expected_T)
@@ -78,10 +84,13 @@ def test_locator_keeps_frame_when_alignment_disabled() -> None:
     golden, frame = _make_test_images()
     recipe = _make_recipe(apply_alignment=False)
 
-    context, diagnostics = run_pipeline(recipe, golden, frame)
+    context, diagnostics, results = run_pipeline(recipe, golden, frame)
 
     locator_diag = diagnostics[0]
     expected_T = locator_diag["T"]
+
+    assert results
+    assert results[0].status == "ok"
 
     assert context.T_total is not None
     assert np.allclose(context.T_total, expected_T)
@@ -92,7 +101,7 @@ def test_ssim_benefits_from_aligned_frame() -> None:
     golden, frame = _make_test_images()
     recipe = _make_recipe(apply_alignment=True)
 
-    context, _ = run_pipeline(recipe, golden, frame)
+    context, _, _ = run_pipeline(recipe, golden, frame)
 
     assert context.frame_aligned is not None
     ssim_original = imaging.ssim_u8(golden, frame)

@@ -5,7 +5,7 @@ import json
 from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
 
 import imageio.v3 as iio
 import numpy as np
@@ -54,6 +54,28 @@ class ToolMeta:
                 value = deepcopy(spec)
             defaults[key] = value
         return defaults
+
+
+@dataclass(frozen=True)
+class ToolRunResult:
+    """Normalized result information returned by tool runners."""
+
+    tool_id: str
+    type: str
+    status: Literal["ok", "warn", "nok"]
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    preview: Optional[Any] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        data = {
+            "tool_id": self.tool_id,
+            "type": self.type,
+            "status": self.status,
+            "metrics": dict(self.metrics),
+        }
+        if self.preview is not None:
+            data["preview"] = self.preview
+        return data
 
 
 class ToolRegistry:
@@ -380,10 +402,15 @@ def _ensure_locator_first(tools: Sequence[Tool]) -> List[Tool]:
 
 def run_pipeline(
     recipe: RecipeV2, golden: np.ndarray, frame: np.ndarray
-) -> Tuple[ToolRunnerContext, List[Dict[str, Any]]]:
-    """Iterate through tool pipeline and update shared context."""
+) -> Tuple[ToolRunnerContext, List[Dict[str, Any]], List[ToolRunResult]]:
+    """Iterate through tool pipeline and update shared context.
+
+    Returns the updated context, diagnostic payloads and normalized
+    :class:`ToolRunResult` entries in execution order.
+    """
 
     diagnostics: List[Dict[str, Any]] = []
+    results: List[ToolRunResult] = []
     context = ToolRunnerContext(
         frame=frame,
         frame_aligned=frame,
@@ -402,8 +429,9 @@ def run_pipeline(
         _validate_ignore_mask(tool, meta)
         _validate_params(tool)
 
+        tool_id = tool.name or f"tool_{tool.order}"
         diag_entry: Dict[str, Any] = {
-            "tool_id": tool.name or f"tool_{tool.order}",
+            "tool_id": tool_id,
             "type": tool.type,
             "status": "disabled" if not tool.enabled else "skipped",
         }
@@ -419,18 +447,21 @@ def run_pipeline(
                 context.frame_aligned if context.frame_aligned is not None else context.frame
             )
 
-            result = run_locator_template_match(
+            tool_result, locator_diag = run_locator_template_match(
                 golden,
                 frame_for_locator,
                 tool.params,
                 tool.thresholds,
                 tool.roi,
+                tool_id=tool_id,
             )
 
-            diag_entry.update(result)
-            diag_entry["status"] = result.get("status", "skipped")
+            diag_entry.update(locator_diag)
+            diag_entry["status"] = locator_diag.get("status", tool_result.status)
 
-            T_new = result.get("T")
+            results.append(tool_result)
+
+            T_new = locator_diag.get("T")
             context.T_total = compose_affine(context.T_total, T_new)
 
             apply_alignment = bool(params_dict.get("apply_alignment", True))
@@ -440,13 +471,13 @@ def run_pipeline(
                     if context.frame_aligned is not None
                     else context.frame
                 )
-                dx = float(result.get("dx", 0.0))
-                dy = float(result.get("dy", 0.0))
+                dx = float(locator_diag.get("dx", 0.0))
+                dy = float(locator_diag.get("dy", 0.0))
                 context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
 
         diagnostics.append(diag_entry)
 
-    return context, diagnostics
+    return context, diagnostics, results
 
 
 def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
@@ -537,7 +568,9 @@ def run_locator_template_match(
     params: Dict[str, Any] | ToolParams,
     thresholds: Dict[str, Any] | ToolThresholds,
     roi: Optional[ToolRoi | Dict[str, Any] | Sequence[int]],
-) -> Dict[str, Any]:
+    *,
+    tool_id: str = "locator",
+) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Run template matching locator core logic.
 
     Parameters
@@ -557,9 +590,9 @@ def run_locator_template_match(
 
     Returns
     -------
-    dict
-        Dictionary with ``dx``, ``dy``, ``corr``, ``T`` (2x3 matrix) and
-        ``status`` describing match quality (``OK``/``WARN``/``NOK``).
+    tuple
+        ``(ToolRunResult, diagnostics)`` pair. Diagnostics include
+        ``dx``, ``dy``, ``corr`` and affine transform ``T``.
     """
 
     params_dict = (
@@ -595,7 +628,7 @@ def run_locator_template_match(
     dx = 0.0
     dy = 0.0
     corr = 0.0
-    status = "WARN"
+    status: Literal["ok", "warn", "nok"] = "warn"
     used = 0
 
     if template_rect is not None and search_rect is not None:
@@ -618,13 +651,21 @@ def run_locator_template_match(
                 dy = float((sy + dy_rel) - ty)
 
     if used == 0 and corr == 0.0:
-        status = "WARN"
+        status = "warn"
     elif corr >= threshold_corr:
-        status = "OK"
+        status = "ok"
     else:
-        status = "NOK"
+        status = "nok"
 
     T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
 
-    return {"dx": dx, "dy": dy, "corr": corr, "T": T, "status": status}
+    metrics = {"dx": dx, "dy": dy, "corr": corr}
+    diagnostics = {**metrics, "T": T, "status": status}
+    result = ToolRunResult(
+        tool_id=tool_id,
+        type="locator.template_match",
+        status=status,
+        metrics=metrics,
+    )
+    return result, diagnostics
 
