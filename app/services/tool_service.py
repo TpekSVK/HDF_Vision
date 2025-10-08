@@ -97,6 +97,7 @@ class ToolRegistry:
                     "max": 1.0,
                     "step": 0.01,
                     "required": True,
+                    "description": "Minimálna povolená hodnota štrukturálnej podobnosti (SSIM).",
                 },
             },
             category="Similarity",
@@ -149,14 +150,50 @@ class ToolRegistry:
             supports_roi=True,
             supports_ignore_mask=False,
             default_params={
-                "template_roi": None,
-                "use_golden_crop": True,
-                "coarse_to_fine": True,
-                "coarse_cap": 600,
-                "apply_alignment": True,
+                "use_golden_crop": {
+                    "type": "bool",
+                    "label": "use_golden_crop",
+                    "default": True,
+                    "description": "Použiť golden snapshot ako šablónu bez manuálneho výrezu.",
+                },
+                "coarse_to_fine": {
+                    "type": "bool",
+                    "label": "coarse_to_fine",
+                    "default": True,
+                    "description": "Povoliť dvojfázové hľadanie od hrubého po jemné zarovnanie.",
+                },
+                "coarse_cap": {
+                    "type": "int",
+                    "label": "coarse_cap",
+                    "default": 600,
+                    "min": 64,
+                    "max": 4096,
+                    "step": 16,
+                    "description": "Maximálna veľkosť hrubého search okna (px).",
+                },
+                "apply_alignment": {
+                    "type": "bool",
+                    "label": "apply_alignment",
+                    "default": True,
+                    "description": "Aplikovať výsledné posunutie na nasledujúce nástroje.",
+                },
+                "template_roi": {
+                    "type": "roi",
+                    "label": "template_roi",
+                    "default": None,
+                    "description": "Manuálne definovaný template výrez na golden obrázku.",
+                },
             },
             default_thresholds={
-                "threshold_corr": 0.55,
+                "threshold_corr": {
+                    "type": "float",
+                    "label": "threshold_corr",
+                    "default": 0.55,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "description": "Minimálna korelácia potrebná na úspešné zarovnanie.",
+                },
             },
             category="Locator",
         ),
@@ -200,6 +237,8 @@ class ToolRegistry:
         ),
     }
 
+    _SUPPORTED_FIELD_TYPES = {"int", "float", "bool", "enum", "roi"}
+
     @classmethod
     def list_tool_types(cls) -> List[str]:
         """Return available tool type identifiers."""
@@ -211,6 +250,63 @@ class ToolRegistry:
         """Return metadata for a tool type if registered."""
 
         return cls._TOOLS.get(tool_type)
+
+    @classmethod
+    def get_tool_schema(cls, tool_type: str) -> Dict[str, Dict[str, Any]]:
+        """Return normalized parameter/threshold definitions for the tool."""
+
+        meta = cls.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+        params = cls._normalize_field_definitions(meta.default_params)
+        thresholds = cls._normalize_field_definitions(meta.default_thresholds)
+        return {"params": params, "thresholds": thresholds}
+
+    @classmethod
+    def _normalize_field_definitions(cls, definitions: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for name, raw in (definitions or {}).items():
+            if isinstance(raw, dict):
+                spec = dict(raw)
+            else:
+                spec = {"default": raw}
+            spec.setdefault("label", name)
+            type_name = spec.get("type")
+            if type_name is None:
+                type_name = cls._infer_field_type(spec.get("default"))
+            else:
+                type_name = str(type_name).lower()
+            if type_name == "enum" and "choices" not in spec and "options" in spec:
+                spec["choices"] = spec.get("options")
+            if type_name not in cls._SUPPORTED_FIELD_TYPES:
+                continue
+            if type_name == "enum":
+                normalized_choices: list[tuple[Any, str]] = []
+                for choice in spec.get("choices", []) or []:
+                    if isinstance(choice, dict):
+                        value = choice.get("value")
+                        label = choice.get("label", str(value))
+                    elif isinstance(choice, (list, tuple)) and choice:
+                        value = choice[0]
+                        label = choice[1] if len(choice) > 1 else str(choice[0])
+                    else:
+                        value = choice
+                        label = str(choice)
+                    normalized_choices.append((value, label))
+                spec["choices"] = normalized_choices
+            spec["type"] = type_name
+            normalized[name] = spec
+        return normalized
+
+    @staticmethod
+    def _infer_field_type(value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        return None
 
     @classmethod
     def make_default_tool(cls, tool_type: str, name: Optional[str] = None) -> Tool:
@@ -269,6 +365,11 @@ class ToolService:
         if meta is None:
             raise KeyError(f"Tool type '{tool_type}' is not registered")
         return meta
+
+    def get_tool_schema(self, tool_type: str) -> Dict[str, Dict[str, Any]]:
+        """Expose registry schema information for UI consumption."""
+
+        return ToolRegistry.get_tool_schema(tool_type)
 
     def make_default_tool(self, tool_type: str, name: Optional[str] = None) -> Tool:
         """Create a ``Tool`` instance with registry defaults."""
