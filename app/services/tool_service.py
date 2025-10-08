@@ -783,6 +783,102 @@ def run_pipeline(
     return context, diagnostics, results
 
 
+def run_tool_isolated(
+    tool_type: str,
+    params: Dict[str, Any] | ToolParams,
+    thresholds: Dict[str, Any] | ToolThresholds,
+    context: ToolRunnerContext,
+    golden: np.ndarray,
+    frame: np.ndarray | None,
+) -> ToolRunResult:
+    """Execute a single tool using an existing runner context."""
+
+    if context is None:
+        raise ValueError("Context is required for isolated tool run")
+    if golden is None:
+        raise ValueError("Golden image is required for isolated tool run")
+
+    frame_array: np.ndarray | None = None
+    if frame is not None:
+        frame_array = np.asarray(frame)
+
+    if context.frame is None:
+        if frame_array is None:
+            raise ValueError("Frame image is required for isolated tool run")
+        context.frame = frame_array
+    else:
+        context.frame = np.asarray(context.frame)
+        frame_array = context.frame
+
+    if context.frame_aligned is None:
+        context.frame_aligned = context.frame
+    if context.T_total is None:
+        context.T_total = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    if context.frame_is_aligned is None:
+        context.frame_is_aligned = False
+
+    params_dict = dict(getattr(params, "values", params) or {})
+    thresholds_dict = dict(getattr(thresholds, "values", thresholds) or {})
+    roi_value = params_dict.pop("__roi__", None)
+    if roi_value is None:
+        roi_value = thresholds_dict.pop("__roi__", None)
+    roi = ToolRoi.from_obj(roi_value) if roi_value is not None else ToolRoi()
+
+    if tool_type == "locator.template_match":
+        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
+        if frame_for_tool is None:
+            raise ValueError("Frame not available for locator tool")
+
+        params_obj = ToolParams(params_dict)
+        thresholds_obj = ToolThresholds(thresholds_dict)
+        result, diagnostics = run_locator_template_match(
+            golden,
+            frame_for_tool,
+            params_obj,
+            thresholds_obj,
+            roi,
+            tool_id=tool_type,
+        )
+
+        T_new = diagnostics.get("T")
+        context.T_total = compose_affine(context.T_total, T_new)
+
+        apply_alignment = bool(params_dict.get("apply_alignment", True))
+        if apply_alignment:
+            source = context.frame_aligned if context.frame_aligned is not None else context.frame
+            if source is None:
+                raise ValueError("Aligned frame source not available")
+            dx = float(diagnostics.get("dx", 0.0))
+            dy = float(diagnostics.get("dy", 0.0))
+            context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
+            context.frame_is_aligned = True
+        else:
+            context.frame_aligned = context.frame
+            context.frame_is_aligned = False
+
+        return result
+
+    if tool_type == "ssim":
+        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
+        if frame_for_tool is None:
+            raise ValueError("Frame not available for SSIM tool")
+
+        thresholds_obj = ToolThresholds(thresholds_dict)
+        result, _ = run_ssim_tool(
+            golden,
+            frame_for_tool,
+            thresholds_obj,
+            roi,
+            frame_original=context.frame if context.frame is not None else frame_for_tool,
+            T_total=context.T_total,
+            frame_is_aligned=context.frame_is_aligned,
+            tool_id=tool_type,
+        )
+        return result
+
+    raise ValueError(f"Unsupported tool type '{tool_type}' for isolated run")
+
+
 def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
     """Normalize various ROI representations to an (x, y, w, h) tuple."""
 
