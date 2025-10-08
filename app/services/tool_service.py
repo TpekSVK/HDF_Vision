@@ -11,6 +11,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.services.compare_service import analyze
+from app.utils import imaging
 from app.models.schema import (
     RecipeData,
     RecipeV2,
@@ -368,4 +369,184 @@ def run_pipeline_prepare(
         )
 
     return context, diagnostics
+
+
+def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
+    """Normalize various ROI representations to an (x, y, w, h) tuple."""
+
+    if value is None:
+        return None
+    if isinstance(value, ToolRoi):
+        return value.rect()
+    if isinstance(value, dict):
+        keys = ("x", "y", "w", "h")
+        if all(k in value for k in keys):
+            try:
+                return (
+                    int(round(float(value["x"]))),
+                    int(round(float(value["y"]))),
+                    int(round(float(value["w"]))),
+                    int(round(float(value["h"]))),
+                )
+            except Exception:
+                return None
+        return None
+    if isinstance(value, (list, tuple)) and len(value) >= 4:
+        try:
+            x, y, w, h = value[:4]
+            return (
+                int(round(float(x))),
+                int(round(float(y))),
+                int(round(float(w))),
+                int(round(float(h))),
+            )
+        except Exception:
+            return None
+    return None
+
+
+def _clamp_rect(
+    rect: Optional[Tuple[int, int, int, int]], width: int, height: int
+) -> Optional[Tuple[int, int, int, int]]:
+    """Clamp a rectangle to image bounds. Returns ``None`` if empty."""
+
+    if rect is None:
+        return (0, 0, width, height)
+
+    x, y, w, h = rect
+    if w <= 0 or h <= 0:
+        return None
+
+    x1 = max(0, min(width, x))
+    y1 = max(0, min(height, y))
+    x2 = max(0, min(width, x + w))
+    y2 = max(0, min(height, y + h))
+
+    if x2 <= x1 or y2 <= y1:
+        return None
+
+    return x1, y1, x2 - x1, y2 - y1
+
+
+def _ensure_gray_u8(image: np.ndarray) -> np.ndarray:
+    """Convert an image to a 2D ``uint8`` array without copying when possible."""
+
+    arr = np.asarray(image)
+    if arr.ndim == 3:
+        arr = arr[:, :, 0]
+    if arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8, copy=False)
+    return arr
+
+
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def run_locator_template_match(
+    golden: np.ndarray,
+    frame: np.ndarray,
+    params: Dict[str, Any] | ToolParams,
+    thresholds: Dict[str, Any] | ToolThresholds,
+    roi: Optional[ToolRoi | Dict[str, Any] | Sequence[int]],
+) -> Dict[str, Any]:
+    """Run template matching locator core logic.
+
+    Parameters
+    ----------
+    golden, frame:
+        Golden reference and frame images. Only the first channel is used if
+        images are multi-channel.
+    params:
+        Tool parameters or plain dictionary. Recognized keys are
+        ``use_golden_crop`` (bool), ``template_roi`` (ROI descriptor) and
+        ``coarse_cap`` (int).
+    thresholds:
+        Threshold dictionary or :class:`ToolThresholds`. Uses
+        ``threshold_corr`` if present.
+    roi:
+        Search ROI descriptor applied on the frame.
+
+    Returns
+    -------
+    dict
+        Dictionary with ``dx``, ``dy``, ``corr``, ``T`` (2x3 matrix) and
+        ``status`` describing match quality (``OK``/``WARN``/``NOK``).
+    """
+
+    params_dict = (
+        params.values if isinstance(params, ToolParams) else dict(params or {})
+    )
+    thresholds_dict = (
+        thresholds.values
+        if isinstance(thresholds, ToolThresholds)
+        else dict(thresholds or {})
+    )
+
+    golden_u8 = _ensure_gray_u8(golden)
+    frame_u8 = _ensure_gray_u8(frame)
+
+    frame_h, frame_w = frame_u8.shape[:2]
+    golden_h, golden_w = golden_u8.shape[:2]
+
+    search_rect = _rect_from_any(roi)
+    search_rect = _clamp_rect(search_rect, frame_w, frame_h)
+
+    use_golden_crop = bool(params_dict.get("use_golden_crop", True))
+    template_source = None
+    if not use_golden_crop:
+        template_source = _rect_from_any(params_dict.get("template_roi"))
+    if template_source is None:
+        template_source = _rect_from_any(search_rect)
+
+    template_rect = _clamp_rect(template_source, golden_w, golden_h)
+
+    coarse_cap = _safe_int(params_dict.get("coarse_cap", 600), 600)
+    threshold_corr = _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55)
+
+    dx = 0.0
+    dy = 0.0
+    corr = 0.0
+    status = "WARN"
+    used = 0
+
+    if template_rect is not None and search_rect is not None:
+        tx, ty, tw, th = template_rect
+        templ = golden_u8[ty : ty + th, tx : tx + tw]
+
+        if templ.size > 0 and tw > 0 and th > 0:
+            sx, sy, sw, sh = search_rect
+
+            if sw >= tw and sh >= th:
+                dx_rel, dy_rel, corr, used = imaging.match_template_u8(
+                    frame_u8,
+                    templ,
+                    roi=(sx, sy, sw, sh),
+                    search_margin=0,
+                    coarse_cap=int(max(1, coarse_cap)),
+                )
+
+                dx = float((sx + dx_rel) - tx)
+                dy = float((sy + dy_rel) - ty)
+
+    if used == 0 and corr == 0.0:
+        status = "WARN"
+    elif corr >= threshold_corr:
+        status = "OK"
+    else:
+        status = "NOK"
+
+    T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
+
+    return {"dx": dx, "dy": dy, "corr": corr, "T": T, "status": status}
 
