@@ -329,6 +329,7 @@ class ToolRunnerContext:
     frame: np.ndarray
     frame_aligned: np.ndarray | None = None
     T_total: np.ndarray | None = None
+    frame_is_aligned: bool = False
 
 
 def compose_affine(
@@ -415,6 +416,7 @@ def run_pipeline(
         frame=frame,
         frame_aligned=frame,
         T_total=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
+        frame_is_aligned=False,
     )
 
     tools: Sequence[Tool] = sorted(recipe.tools, key=lambda t: t.order)
@@ -474,6 +476,33 @@ def run_pipeline(
                 dx = float(locator_diag.get("dx", 0.0))
                 dy = float(locator_diag.get("dy", 0.0))
                 context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
+                context.frame_is_aligned = True
+            else:
+                context.frame_aligned = context.frame
+                context.frame_is_aligned = False
+
+        elif tool.type == "ssim":
+            frame_for_ssim = (
+                context.frame_aligned if context.frame_aligned is not None else context.frame
+            )
+
+            tool_result, ssim_diag = run_ssim_tool(
+                golden,
+                frame_for_ssim,
+                tool.thresholds,
+                tool.roi,
+                frame_original=context.frame,
+                T_total=context.T_total,
+                frame_is_aligned=context.frame_is_aligned,
+                tool_id=tool_id,
+            )
+
+            diag_entry.update(ssim_diag)
+            diag_entry["status"] = tool_result.status
+            results.append(tool_result)
+
+        else:
+            diag_entry["status"] = "skipped"
 
         diagnostics.append(diag_entry)
 
@@ -560,6 +589,19 @@ def _safe_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _extract_translation_from_affine(T: np.ndarray | None) -> tuple[float, float]:
+    """Return translation components from a 2×3 affine transform."""
+
+    if T is None:
+        return 0.0, 0.0
+
+    arr = np.asarray(T, dtype=np.float32)
+    if arr.shape != (2, 3):  # pragma: no cover - defensive fallback
+        return 0.0, 0.0
+
+    return float(arr[0, 2]), float(arr[1, 2])
 
 
 def run_locator_template_match(
@@ -664,6 +706,68 @@ def run_locator_template_match(
     result = ToolRunResult(
         tool_id=tool_id,
         type="locator.template_match",
+        status=status,
+        metrics=metrics,
+    )
+    return result, diagnostics
+
+
+def run_ssim_tool(
+    golden: np.ndarray,
+    frame: np.ndarray,
+    thresholds: Dict[str, Any] | ToolThresholds,
+    roi: Optional[ToolRoi | Dict[str, Any] | Sequence[int]],
+    *,
+    frame_original: np.ndarray,
+    T_total: np.ndarray | None,
+    frame_is_aligned: bool,
+    tool_id: str = "ssim",
+) -> Tuple[ToolRunResult, Dict[str, Any]]:
+    """Compute SSIM within ROI, honoring optional locator alignment."""
+
+    golden_u8 = _ensure_gray_u8(golden)
+    frame_u8 = _ensure_gray_u8(frame)
+    frame_orig_u8 = _ensure_gray_u8(frame_original)
+
+    thresholds_dict = (
+        thresholds.values
+        if isinstance(thresholds, ToolThresholds)
+        else dict(thresholds or {})
+    )
+    ssim_min = float(thresholds_dict.get("ssim_min", DEFAULT_THRESHOLDS.get("ssim_min", 0.92)))
+
+    roi_rect = _rect_from_any(roi)
+    gh, gw = golden_u8.shape[:2]
+    roi_rect = _clamp_rect(roi_rect, gw, gh)
+    if roi_rect is None:
+        roi_rect = (0, 0, gw, gh)
+
+    dx_total, dy_total = _extract_translation_from_affine(T_total)
+    virtual_alignment = False
+    if not frame_is_aligned and (abs(dx_total) > 1e-3 or abs(dy_total) > 1e-3):
+        frame_u8 = imaging.warp_by_translation_u8(frame_orig_u8, -dx_total, -dy_total)
+        virtual_alignment = True
+
+    x, y, w, h = roi_rect
+    golden_crop = golden_u8[y : y + h, x : x + w]
+    frame_crop = frame_u8[y : y + h, x : x + w]
+
+    ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
+    status: Literal["ok", "warn", "nok"] = "ok" if ssim_val >= ssim_min else "nok"
+
+    metrics = {"ssim": round(ssim_val, 5)}
+    diagnostics = {
+        "ssim": ssim_val,
+        "roi": {"x": x, "y": y, "w": w, "h": h},
+        "virtual_alignment": virtual_alignment,
+        "ssim_min": ssim_min,
+        "dx_total": dx_total,
+        "dy_total": dy_total,
+    }
+
+    result = ToolRunResult(
+        tool_id=tool_id,
+        type="ssim",
         status=status,
         metrics=metrics,
     )
