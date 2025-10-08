@@ -53,12 +53,179 @@ from app.models.schema import (
 from app.services.recipe_service import RecipeService
 from app.services.tool_service import (
     ToolMeta,
+    ToolRegistry,
     ToolRunResult,
     ToolRunnerContext,
     run_locator_template_match,
     run_tool_isolated,
     validate_tool_params,
 )
+
+
+_SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
+
+
+def _format_number(value: Any) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    return str(value)
+
+
+def _format_spec_tooltip(spec: dict[str, Any]) -> str:
+    parts: list[str] = []
+    description = (spec.get("description") or "").strip()
+    if description:
+        parts.append(description)
+
+    min_val = spec.get("min")
+    max_val = spec.get("max")
+    if min_val is not None or max_val is not None:
+        if min_val is not None and max_val is not None:
+            parts.append(
+                f"Valid range: {_format_number(min_val)} – {_format_number(max_val)}"
+            )
+        elif min_val is not None:
+            parts.append(f"Minimum: {_format_number(min_val)}")
+        elif max_val is not None:
+            parts.append(f"Maximum: {_format_number(max_val)}")
+
+    step = spec.get("step")
+    if step not in (None, 0):
+        parts.append(f"Step: {_format_number(step)}")
+
+    if "default" in spec and spec.get("default") is not None:
+        parts.append(f"Default: {_format_number(spec.get('default'))}")
+
+    return "\n".join(parts)
+
+
+def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None:
+    field_type = (spec.get("type") or "").lower()
+    if field_type == "bool":
+        checkbox = QCheckBox(parent)
+        checkbox.setTristate(False)
+        default = spec.get("default")
+        if default is not None:
+            checkbox.setChecked(bool(default))
+        return checkbox
+    if field_type == "enum":
+        combo = QComboBox(parent)
+        for value, label in spec.get("choices", []) or []:
+            combo.addItem(str(label), value)
+        default = spec.get("default")
+        if default is not None and combo.count():
+            index = combo.findData(default)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        return combo if combo.count() else None
+    if field_type == "int":
+        spin = QSpinBox(parent)
+        spin.setKeyboardTracking(False)
+        min_val = spec.get("min")
+        max_val = spec.get("max")
+        if min_val is None:
+            min_val = -10_000_000
+        if max_val is None:
+            max_val = 10_000_000
+        spin.setRange(int(min_val), int(max_val))
+        step = spec.get("step")
+        if step is not None:
+            try:
+                spin.setSingleStep(max(1, int(step)))
+            except Exception:  # pragma: no cover - defensive fallback
+                pass
+        default = spec.get("default")
+        if default is not None:
+            try:
+                spin.setValue(int(round(float(default))))
+            except Exception:  # pragma: no cover - defensive fallback
+                spin.setValue(int(min_val))
+        return spin
+    if field_type == "float":
+        spin = QDoubleSpinBox(parent)
+        spin.setKeyboardTracking(False)
+        min_val = spec.get("min")
+        max_val = spec.get("max")
+        if min_val is None:
+            min_val = -1e9
+        if max_val is None:
+            max_val = 1e9
+        spin.setRange(float(min_val), float(max_val))
+        precision = spec.get("precision")
+        if precision is None:
+            precision = spec.get("decimals", 4)
+        try:
+            decimals = max(0, int(precision))
+        except Exception:  # pragma: no cover - defensive fallback
+            decimals = 4
+        spin.setDecimals(decimals)
+        step = spec.get("step")
+        if step is not None:
+            try:
+                spin.setSingleStep(float(step))
+            except Exception:  # pragma: no cover - defensive fallback
+                pass
+        default = spec.get("default")
+        if default is not None:
+            try:
+                spin.setValue(float(default))
+            except Exception:  # pragma: no cover - defensive fallback
+                spin.setValue(float(min_val))
+        return spin
+    return None
+
+
+def _set_form_widget_value(widget: QWidget, spec: dict[str, Any], value: Any) -> None:
+    field_type = (spec.get("type") or "").lower()
+    if value is None:
+        value = spec.get("default")
+    if field_type == "bool" and isinstance(widget, QCheckBox):
+        widget.setChecked(bool(value))
+        return
+    if field_type == "enum" and isinstance(widget, QComboBox):
+        if widget.count() == 0:
+            return
+        index = widget.findData(value)
+        if index < 0 and spec.get("default") is not None:
+            index = widget.findData(spec.get("default"))
+        if index < 0:
+            index = 0
+        widget.setCurrentIndex(max(0, index))
+        return
+    if field_type == "int" and isinstance(widget, QSpinBox):
+        fallback = spec.get("default")
+        if fallback is None:
+            fallback = widget.minimum()
+        try:
+            widget.setValue(int(round(float(value))))
+        except Exception:  # pragma: no cover - defensive fallback
+            widget.setValue(int(round(float(fallback))))
+        return
+    if field_type == "float" and isinstance(widget, QDoubleSpinBox):
+        fallback = spec.get("default")
+        if fallback is None:
+            fallback = widget.minimum()
+        try:
+            widget.setValue(float(value))
+        except Exception:  # pragma: no cover - defensive fallback
+            widget.setValue(float(fallback))
+
+
+def _get_form_widget_value(widget: QWidget, spec: dict[str, Any]) -> Any:
+    field_type = (spec.get("type") or "").lower()
+    if field_type == "bool" and isinstance(widget, QCheckBox):
+        return bool(widget.isChecked())
+    if field_type == "enum" and isinstance(widget, QComboBox):
+        if widget.count() == 0:
+            return None
+        return widget.currentData()
+    if field_type == "int" and isinstance(widget, QSpinBox):
+        return int(widget.value())
+    if field_type == "float" and isinstance(widget, QDoubleSpinBox):
+        return float(widget.value())
+    return None
 
 
 class ToolCatalogDialog(QDialog):
@@ -282,6 +449,16 @@ class ToolEditDialog(QDialog):
         self._config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         config_layout.addLayout(self._config_form)
 
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(8, 4, 8, 0)
+        controls_layout.setSpacing(6)
+        controls_layout.addStretch(1)
+        self._btn_restore_defaults = QPushButton("Restore defaults", self._config_tab)
+        self._btn_restore_defaults.clicked.connect(self._on_restore_defaults_clicked)
+        self._btn_restore_defaults.setEnabled(False)
+        controls_layout.addWidget(self._btn_restore_defaults)
+        config_layout.addLayout(controls_layout)
+
         self._form_error_label = QLabel("", self._config_tab)
         self._form_error_label.setStyleSheet("color: #b03030; padding: 4px 8px 0 8px;")
         self._form_error_label.setWordWrap(True)
@@ -392,6 +569,9 @@ class ToolEditDialog(QDialog):
 
         self._use_golden_checkbox = QCheckBox("Use golden crop as template", panel)
         self._use_golden_checkbox.setChecked(bool(use_golden_value))
+        tooltip = _format_spec_tooltip(use_spec)
+        if tooltip:
+            self._use_golden_checkbox.setToolTip(tooltip)
         self._use_golden_checkbox.toggled.connect(self._on_locator_use_golden_changed)
         panel_layout.addWidget(self._use_golden_checkbox)
 
@@ -724,8 +904,15 @@ class ToolEditDialog(QDialog):
         while self._config_form.rowCount():
             self._config_form.removeRow(0)
 
-        self._param_specs = self._normalize_field_definitions(getattr(self._meta, "default_params", {}))
-        self._threshold_specs = self._normalize_field_definitions(getattr(self._meta, "default_thresholds", {}))
+        self._locator_template_specs.clear()
+
+        try:
+            schema = ToolRegistry.get_tool_schema(self._tool.type)
+        except KeyError:
+            schema = {"params": {}, "thresholds": {}}
+
+        self._param_specs = {k: dict(v) for k, v in (schema.get("params") or {}).items()}
+        self._threshold_specs = {k: dict(v) for k, v in (schema.get("thresholds") or {}).items()}
 
         if self._is_locator_template:
             for key in ("use_golden_crop", "template_roi"):
@@ -735,21 +922,31 @@ class ToolEditDialog(QDialog):
 
         fields_added = 0
 
+        param_values = dict(getattr(self._tool.params, "values", {}) or {})
+        threshold_values = dict(getattr(self._tool.thresholds, "values", {}) or {})
+
         if self._param_specs:
             header = QLabel("Parameters", self)
             header.setStyleSheet("font-weight: 600; padding-top: 4px;")
             self._config_form.addRow(header)
             for name, spec in self._param_specs.items():
-                widget = self._create_input_widget(spec)
+                if spec.get("type") not in _SUPPORTED_FORM_FIELD_TYPES:
+                    continue
+                widget = _create_form_widget(spec, self)
                 if widget is None:
                     continue
-                current_value = self._tool.params.values.get(name)
+                current_value = param_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._param_fields[name] = widget
                 label_widget = QLabel(spec.get("label", name), self)
                 container, error_label = self._create_field_container(widget)
                 self._param_wrappers[name] = container
                 self._param_error_labels[name] = error_label
+                tooltip = _format_spec_tooltip(spec)
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                    label_widget.setToolTip(tooltip)
+                    container.setToolTip(tooltip)
                 self._config_form.addRow(label_widget, container)
                 self._connect_field_signals(widget, spec, kind="param", name=name)
                 fields_added += 1
@@ -759,16 +956,23 @@ class ToolEditDialog(QDialog):
             header.setStyleSheet("font-weight: 600; padding-top: 8px;")
             self._config_form.addRow(header)
             for name, spec in self._threshold_specs.items():
-                widget = self._create_input_widget(spec)
+                if spec.get("type") not in _SUPPORTED_FORM_FIELD_TYPES:
+                    continue
+                widget = _create_form_widget(spec, self)
                 if widget is None:
                     continue
-                current_value = self._tool.thresholds.values.get(name)
+                current_value = threshold_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._threshold_fields[name] = widget
                 label_widget = QLabel(spec.get("label", name), self)
                 container, error_label = self._create_field_container(widget)
                 self._threshold_wrappers[name] = container
                 self._threshold_error_labels[name] = error_label
+                tooltip = _format_spec_tooltip(spec)
+                if tooltip:
+                    widget.setToolTip(tooltip)
+                    label_widget.setToolTip(tooltip)
+                    container.setToolTip(tooltip)
                 self._config_form.addRow(label_widget, container)
                 self._connect_field_signals(widget, spec, kind="threshold", name=name)
                 fields_added += 1
@@ -779,103 +983,10 @@ class ToolEditDialog(QDialog):
             placeholder.setWordWrap(True)
             self._config_form.addRow(placeholder)
 
+        if hasattr(self, "_btn_restore_defaults") and self._btn_restore_defaults is not None:
+            self._btn_restore_defaults.setEnabled(bool(fields_added))
+
         self._validate_form()
-
-    def _normalize_field_definitions(self, definitions: dict[str, Any]) -> dict[str, dict[str, Any]]:
-        normalized: dict[str, dict[str, Any]] = {}
-        for name, raw in (definitions or {}).items():
-            if isinstance(raw, dict):
-                spec = dict(raw)
-            else:
-                spec = {"default": raw}
-            spec.setdefault("label", name)
-            type_name = spec.get("type")
-            if type_name is None:
-                type_name = self._infer_field_type(spec.get("default"))
-            else:
-                type_name = str(type_name).lower()
-            if type_name == "enum" and "choices" not in spec and "options" in spec:
-                spec["choices"] = spec.get("options")
-            if type_name not in {"int", "float", "bool", "enum"}:
-                continue
-            if type_name == "enum":
-                choices = spec.get("choices") or []
-                normalized_choices: list[tuple[Any, str]] = []
-                for choice in choices:
-                    if isinstance(choice, dict):
-                        value = choice.get("value")
-                        label = choice.get("label", str(value))
-                    elif isinstance(choice, (list, tuple)) and len(choice) >= 1:
-                        value = choice[0]
-                        label = choice[1] if len(choice) > 1 else str(choice[0])
-                    else:
-                        value = choice
-                        label = str(choice)
-                    normalized_choices.append((value, label))
-                spec["choices"] = normalized_choices
-            spec["type"] = type_name
-            normalized[name] = spec
-        return normalized
-
-    @staticmethod
-    def _infer_field_type(value: Any) -> str | None:
-        if isinstance(value, bool):
-            return "bool"
-        if isinstance(value, int) and not isinstance(value, bool):
-            return "int"
-        if isinstance(value, float):
-            return "float"
-        return None
-
-    def _create_input_widget(self, spec: dict[str, Any]) -> QWidget | None:
-        field_type = spec.get("type")
-        if field_type == "bool":
-            checkbox = QCheckBox(self)
-            checkbox.setTristate(False)
-            checkbox.setChecked(bool(spec.get("default", False)))
-            return checkbox
-        if field_type == "enum":
-            combo = QComboBox(self)
-            for value, label in spec.get("choices", []):
-                combo.addItem(str(label), value)
-            return combo if combo.count() else None
-        if field_type == "int":
-            spin = QSpinBox(self)
-            min_val = spec.get("min")
-            max_val = spec.get("max")
-            if min_val is not None:
-                spin.setMinimum(int(min_val))
-            else:
-                spin.setMinimum(-10_000_000)
-            if max_val is not None:
-                spin.setMaximum(int(max_val))
-            else:
-                spin.setMaximum(10_000_000)
-            if (step := spec.get("step")) is not None:
-                spin.setSingleStep(max(1, int(step)))
-            spin.setValue(int(spec.get("default", 0) or 0))
-            return spin
-        if field_type == "float":
-            spin = QDoubleSpinBox(self)
-            min_val = spec.get("min")
-            max_val = spec.get("max")
-            if min_val is None:
-                min_val = -1e9
-            if max_val is None:
-                max_val = 1e9
-            spin.setRange(float(min_val), float(max_val))
-            precision = spec.get("precision")
-            if precision is None:
-                precision = spec.get("decimals", 4)
-            decimals = int(precision)
-            spin.setDecimals(max(0, decimals))
-            if (step := spec.get("step")) is not None:
-                spin.setSingleStep(float(step))
-            else:
-                spin.setSingleStep(0.01)
-            spin.setValue(float(spec.get("default", 0.0) or 0.0))
-            return spin
-        return None
 
     def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
         container = QWidget(self)
@@ -910,53 +1021,26 @@ class ToolEditDialog(QDialog):
             return
         self._validate_form()
 
+    def _on_restore_defaults_clicked(self) -> None:
+        if self._updating_form:
+            return
+        for name, widget in self._param_fields.items():
+            spec = self._param_specs.get(name, {})
+            self._set_widget_value(widget, spec, spec.get("default"))
+        for name, widget in self._threshold_fields.items():
+            spec = self._threshold_specs.get(name, {})
+            self._set_widget_value(widget, spec, spec.get("default"))
+        self._validate_form()
+
     def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
         self._updating_form = True
         try:
-            field_type = spec.get("type")
-            if value is None:
-                value = spec.get("default")
-            if field_type == "bool" and isinstance(widget, QCheckBox):
-                widget.setChecked(bool(value))
-            elif field_type == "enum" and isinstance(widget, QComboBox):
-                if widget.count() == 0:
-                    return
-                idx = widget.findData(value)
-                if idx < 0:
-                    idx = 0
-                widget.setCurrentIndex(idx)
-            elif field_type == "int" and isinstance(widget, QSpinBox):
-                try:
-                    widget.setValue(int(round(float(value))))
-                except Exception:
-                    fallback = spec.get("default")
-                    if fallback is None:
-                        fallback = widget.minimum()
-                    widget.setValue(int(round(float(fallback))))
-            elif field_type == "float" and isinstance(widget, QDoubleSpinBox):
-                try:
-                    widget.setValue(float(value))
-                except Exception:
-                    fallback = spec.get("default")
-                    if fallback is None:
-                        fallback = widget.minimum()
-                    widget.setValue(float(fallback))
+            _set_form_widget_value(widget, spec, value)
         finally:
             self._updating_form = False
 
     def _get_widget_value(self, widget: QWidget, spec: dict[str, Any]) -> Any:
-        field_type = spec.get("type")
-        if field_type == "bool" and isinstance(widget, QCheckBox):
-            return bool(widget.isChecked())
-        if field_type == "enum" and isinstance(widget, QComboBox):
-            if widget.count() == 0:
-                return None
-            return widget.currentData()
-        if field_type == "int" and isinstance(widget, QSpinBox):
-            return int(widget.value())
-        if field_type == "float" and isinstance(widget, QDoubleSpinBox):
-            return float(widget.value())
-        return None
+        return _get_form_widget_value(widget, spec)
 
     def _collect_form_values(self) -> tuple[dict[str, Any], dict[str, Any]]:
         params: dict[str, Any] = {}
@@ -1380,7 +1464,7 @@ class ToolConfigPanel(QWidget):
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
-                tooltip = spec.get("description") or ""
+                tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
                 label = QLabel(spec.get("label", name), self)
@@ -1392,6 +1476,8 @@ class ToolConfigPanel(QWidget):
                 container, error_label = self._create_field_container(widget)
                 self._param_wrappers[name] = container
                 self._param_error_labels[name] = error_label
+                if tooltip:
+                    container.setToolTip(tooltip)
                 self._form_layout.addRow(label, container)
                 added_fields = True
 
@@ -1405,7 +1491,7 @@ class ToolConfigPanel(QWidget):
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
-                tooltip = spec.get("description") or ""
+                tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
                 label = QLabel(spec.get("label", name), self)
@@ -1417,6 +1503,8 @@ class ToolConfigPanel(QWidget):
                 container, error_label = self._create_field_container(widget)
                 self._threshold_wrappers[name] = container
                 self._threshold_error_labels[name] = error_label
+                if tooltip:
+                    container.setToolTip(tooltip)
                 self._form_layout.addRow(label, container)
                 added_fields = True
 
@@ -1448,7 +1536,7 @@ class ToolConfigPanel(QWidget):
 
     def _is_supported_spec(self, spec: dict[str, Any]) -> bool:
         field_type = (spec or {}).get("type")
-        return field_type in {"int", "float", "bool", "enum"}
+        return field_type in _SUPPORTED_FORM_FIELD_TYPES
 
     def _clear_test_result(self) -> None:
         self._test_result_label.clear()
@@ -1705,42 +1793,9 @@ class ToolConfigPanel(QWidget):
         return None
 
     def _create_widget(self, spec: dict[str, Any]) -> Optional[QWidget]:
-        field_type = spec.get("type")
-        if field_type == "bool":
-            widget = QCheckBox(self)
-            widget.setTristate(False)
-            widget.setChecked(bool(spec.get("default", False)))
-            return widget
-        if field_type == "enum":
-            combo = QComboBox(self)
-            for value, label in spec.get("choices", []):
-                combo.addItem(str(label), value)
-            return combo if combo.count() else None
-        if field_type == "int":
-            spin = QSpinBox(self)
-            if (min_val := spec.get("min")) is not None:
-                spin.setMinimum(int(min_val))
-            if (max_val := spec.get("max")) is not None:
-                spin.setMaximum(int(max_val))
-            if (step := spec.get("step")) is not None:
-                spin.setSingleStep(max(1, int(step)))
-            spin.setValue(int(spec.get("default", 0) or 0))
-            return spin
-        if field_type == "float":
-            spin = QDoubleSpinBox(self)
-            min_val = spec.get("min")
-            max_val = spec.get("max")
-            if min_val is not None:
-                spin.setMinimum(float(min_val))
-            if max_val is not None:
-                spin.setMaximum(float(max_val))
-            decimals = int(spec.get("decimals", 4))
-            spin.setDecimals(max(0, decimals))
-            if (step := spec.get("step")) is not None:
-                spin.setSingleStep(float(step))
-            spin.setValue(float(spec.get("default", 0.0) or 0.0))
-            return spin
-        return None
+        if spec.get("type") not in _SUPPORTED_FORM_FIELD_TYPES:
+            return None
+        return _create_form_widget(spec, self)
 
     def _on_test_clicked(self) -> None:
         if self._current_tool is None:
@@ -1777,47 +1832,12 @@ class ToolConfigPanel(QWidget):
     def _set_widget_value(self, widget: QWidget, spec: dict[str, Any], value: Any) -> None:
         self._updating = True
         try:
-            if isinstance(widget, QCheckBox):
-                widget.setChecked(bool(value if value is not None else spec.get("default", False)))
-                return
-            if isinstance(widget, QComboBox):
-                target = value
-                if target is None:
-                    target = spec.get("default")
-                idx = widget.findData(target)
-                if idx < 0 and widget.count():
-                    idx = 0
-                if idx >= 0:
-                    widget.setCurrentIndex(idx)
-                return
-            if isinstance(widget, QSpinBox):
-                try:
-                    widget.setValue(int(round(float(value))))
-                except Exception:
-                    default = spec.get("default", widget.value())
-                    widget.setValue(int(round(float(default))))
-                return
-            if isinstance(widget, QDoubleSpinBox):
-                try:
-                    widget.setValue(float(value))
-                except Exception:
-                    default = spec.get("default", widget.value())
-                    widget.setValue(float(default))
+            _set_form_widget_value(widget, spec, value)
         finally:
             self._updating = False
 
     def _get_widget_value(self, widget: QWidget, spec: dict[str, Any]) -> Any:
-        if isinstance(widget, QCheckBox):
-            return bool(widget.isChecked())
-        if isinstance(widget, QComboBox):
-            if widget.count() == 0:
-                return spec.get("default")
-            return widget.currentData()
-        if isinstance(widget, QSpinBox):
-            return int(widget.value())
-        if isinstance(widget, QDoubleSpinBox):
-            return float(widget.value())
-        return spec.get("default")
+        return _get_form_widget_value(widget, spec)
 
     def _collect_current_values(self) -> tuple[dict[str, Any], dict[str, Any]]:
         params: dict[str, Any] = {}
