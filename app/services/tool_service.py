@@ -241,6 +241,99 @@ class ToolRegistry:
 
     _SUPPORTED_FIELD_TYPES = {"int", "float", "bool", "enum", "roi"}
 
+    @classmethod
+    def list_tool_types(cls) -> List[str]:
+        """Return available tool type identifiers."""
+
+        return sorted(cls._TOOLS.keys())
+
+    @classmethod
+    def get_tool_meta(cls, tool_type: str) -> Optional[ToolMeta]:
+        """Return metadata for a tool type if registered."""
+
+        return cls._TOOLS.get(tool_type)
+
+    @classmethod
+    def get_tool_schema(cls, tool_type: str) -> Dict[str, Dict[str, Any]]:
+        """Return normalized parameter/threshold definitions for the tool."""
+
+        meta = cls.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+        params = cls._normalize_field_definitions(meta.default_params)
+        thresholds = cls._normalize_field_definitions(meta.default_thresholds)
+        return {"params": params, "thresholds": thresholds}
+
+    @classmethod
+    def _normalize_field_definitions(cls, definitions: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        normalized: Dict[str, Dict[str, Any]] = {}
+        for name, raw in (definitions or {}).items():
+            if isinstance(raw, dict):
+                spec = dict(raw)
+            else:
+                spec = {"default": raw}
+            spec.setdefault("label", name)
+            type_name = spec.get("type")
+            if type_name is None:
+                type_name = cls._infer_field_type(spec.get("default"))
+            else:
+                type_name = str(type_name).lower()
+            if type_name == "enum" and "choices" not in spec and "options" in spec:
+                spec["choices"] = spec.get("options")
+            if type_name not in cls._SUPPORTED_FIELD_TYPES:
+                continue
+            if type_name == "enum":
+                normalized_choices: list[tuple[Any, str]] = []
+                for choice in spec.get("choices", []) or []:
+                    if isinstance(choice, dict):
+                        value = choice.get("value")
+                        label = choice.get("label", str(value))
+                    elif isinstance(choice, (list, tuple)) and choice:
+                        value = choice[0]
+                        label = choice[1] if len(choice) > 1 else str(choice[0])
+                    else:
+                        value = choice
+                        label = str(choice)
+                    normalized_choices.append((value, label))
+                spec["choices"] = normalized_choices
+            spec["type"] = type_name
+            normalized[name] = spec
+        return normalized
+
+    @staticmethod
+    def _infer_field_type(value: Any) -> str | None:
+        if isinstance(value, bool):
+            return "bool"
+        if isinstance(value, int) and not isinstance(value, bool):
+            return "int"
+        if isinstance(value, float):
+            return "float"
+        return None
+
+    @classmethod
+    def make_default_tool(cls, tool_type: str, name: Optional[str] = None) -> Tool:
+        """Instantiate a Tool with default metadata for the given type."""
+
+        meta = cls.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+
+        params, thresholds = meta.copy_defaults()
+        tool_name = name if name is not None else meta.display_name
+
+        ignore_mask = ToolMask() if meta.supports_ignore_mask else ToolMask(None)
+
+        return Tool(
+            type=tool_type,
+            name=tool_name,
+            enabled=True,
+            order=0,
+            roi=ToolRoi(),
+            ignore_mask=ignore_mask,
+            params=ToolParams(params),
+            thresholds=ToolThresholds(thresholds),
+        )
+
 
 def _coerce_bool(value: Any) -> tuple[Optional[bool], Optional[str]]:
     if isinstance(value, bool):
@@ -411,99 +504,6 @@ def validate_tool_params(
     errors = {"params": param_errors, "thresholds": threshold_errors}
     normalized = {"params": normalized_params, "thresholds": normalized_thresholds}
     return ok, errors, normalized
-
-    @classmethod
-    def list_tool_types(cls) -> List[str]:
-        """Return available tool type identifiers."""
-
-        return sorted(cls._TOOLS.keys())
-
-    @classmethod
-    def get_tool_meta(cls, tool_type: str) -> Optional[ToolMeta]:
-        """Return metadata for a tool type if registered."""
-
-        return cls._TOOLS.get(tool_type)
-
-    @classmethod
-    def get_tool_schema(cls, tool_type: str) -> Dict[str, Dict[str, Any]]:
-        """Return normalized parameter/threshold definitions for the tool."""
-
-        meta = cls.get_tool_meta(tool_type)
-        if meta is None:
-            raise KeyError(f"Tool type '{tool_type}' is not registered")
-        params = cls._normalize_field_definitions(meta.default_params)
-        thresholds = cls._normalize_field_definitions(meta.default_thresholds)
-        return {"params": params, "thresholds": thresholds}
-
-    @classmethod
-    def _normalize_field_definitions(cls, definitions: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        normalized: Dict[str, Dict[str, Any]] = {}
-        for name, raw in (definitions or {}).items():
-            if isinstance(raw, dict):
-                spec = dict(raw)
-            else:
-                spec = {"default": raw}
-            spec.setdefault("label", name)
-            type_name = spec.get("type")
-            if type_name is None:
-                type_name = cls._infer_field_type(spec.get("default"))
-            else:
-                type_name = str(type_name).lower()
-            if type_name == "enum" and "choices" not in spec and "options" in spec:
-                spec["choices"] = spec.get("options")
-            if type_name not in cls._SUPPORTED_FIELD_TYPES:
-                continue
-            if type_name == "enum":
-                normalized_choices: list[tuple[Any, str]] = []
-                for choice in spec.get("choices", []) or []:
-                    if isinstance(choice, dict):
-                        value = choice.get("value")
-                        label = choice.get("label", str(value))
-                    elif isinstance(choice, (list, tuple)) and choice:
-                        value = choice[0]
-                        label = choice[1] if len(choice) > 1 else str(choice[0])
-                    else:
-                        value = choice
-                        label = str(choice)
-                    normalized_choices.append((value, label))
-                spec["choices"] = normalized_choices
-            spec["type"] = type_name
-            normalized[name] = spec
-        return normalized
-
-    @staticmethod
-    def _infer_field_type(value: Any) -> str | None:
-        if isinstance(value, bool):
-            return "bool"
-        if isinstance(value, int) and not isinstance(value, bool):
-            return "int"
-        if isinstance(value, float):
-            return "float"
-        return None
-
-    @classmethod
-    def make_default_tool(cls, tool_type: str, name: Optional[str] = None) -> Tool:
-        """Instantiate a Tool with default metadata for the given type."""
-
-        meta = cls.get_tool_meta(tool_type)
-        if meta is None:
-            raise KeyError(f"Tool type '{tool_type}' is not registered")
-
-        params, thresholds = meta.copy_defaults()
-        tool_name = name if name is not None else meta.display_name
-
-        ignore_mask = ToolMask() if meta.supports_ignore_mask else ToolMask(None)
-
-        return Tool(
-            type=tool_type,
-            name=tool_name,
-            enabled=True,
-            order=0,
-            roi=ToolRoi(),
-            ignore_mask=ignore_mask,
-            params=ToolParams(params),
-            thresholds=ToolThresholds(thresholds),
-        )
 
 
 DEFAULT_THRESHOLDS = {
