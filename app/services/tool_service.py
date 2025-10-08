@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import math
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
@@ -18,6 +20,7 @@ from app.models.schema import (
     ToolDefinitionMetaSchema,
     ToolMetricSpec,
 )
+from app.services.compare_service import analyze
 from app.services.tool_registry import registry, ToolRegistry
 from app.utils import imaging
 
@@ -102,9 +105,112 @@ class ToolRegistry:
     def make_default_tool(type_id: str, name: str | None = None) -> Tool:
         return registry.make_default_tool(type_id, name=name)
 
+    @staticmethod
+    def make_default_tool(type_id: str, name: str | None = None) -> Tool:
+        return registry.make_default_tool(type_id, name=name)
 
 ToolMeta = ToolMetaView
 
+
+# ---------------------------------------------------------------------------
+# Backwards compatible ToolService facade
+# ---------------------------------------------------------------------------
+
+
+DEFAULT_THRESHOLDS = {
+    "ssim_min": 0.92,
+    "diff_thresh": 15,
+    "min_blob_area": 20,
+    "max_total_area": 2000,
+    "max_blob_count": 10,
+}
+
+
+class ToolService:
+    """Facade preserved for UI/services that expect the legacy API."""
+
+    def __init__(self, base_dir: str = "/data"):
+        self.base = Path(base_dir)
+        self.recipe = "default"
+        self.golden: np.ndarray | None = None
+        self.regions: list[dict[str, Any]] | None = None
+        self.thresholds: dict[str, Any] = dict(DEFAULT_THRESHOLDS)
+        self.pose_enabled: bool = True
+
+    # ------------------------------------------------------------------
+    # Tool registry helpers
+    # ------------------------------------------------------------------
+    def list_tool_types(self) -> list[str]:
+        return ToolRegistry.list_tool_types()
+
+    def get_tool_meta(self, tool_type: str) -> ToolMetaView:
+        meta = ToolRegistry.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+        return meta
+
+    def get_tool_schema(self, tool_type: str) -> Dict[str, Dict[str, Any]]:
+        return ToolRegistry.get_tool_schema(tool_type)
+
+    def make_default_tool(self, tool_type: str, name: str | None = None) -> Tool:
+        return ToolRegistry.make_default_tool(tool_type, name=name)
+
+    # ------------------------------------------------------------------
+    # Persistence helpers reused by UI
+    # ------------------------------------------------------------------
+    def load_recipe(self, name: str) -> None:
+        self.recipe = name
+        recipe_dir = self.base / "recipes" / name
+        golden_path = recipe_dir / "golden.png"
+        regions_path = recipe_dir / "regions.json"
+        if not golden_path.exists() or not regions_path.exists():
+            raise FileNotFoundError(
+                f"Recept {name} nie je kompletný (chýba golden alebo regions.json)"
+            )
+
+        golden = iio.imread(golden_path)
+        if golden.ndim == 3:
+            golden = golden[:, :, 0]
+        if golden.dtype != np.uint8:
+            scale = 255.0 / float(golden.max() or 1)
+            golden = (golden.astype(np.float32) * scale).astype(np.uint8)
+
+        with open(regions_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        recipe = RecipeData.from_dict(data)
+
+        self.golden = golden
+        self.regions = recipe.regions
+        self.pose_enabled = recipe.pose_enabled
+
+        thresholds_path = recipe_dir / "thresholds.json"
+        if thresholds_path.exists():
+            with open(thresholds_path, "r", encoding="utf-8") as fh:
+                stored = json.load(fh)
+            self.thresholds.update(stored)
+
+    def save_thresholds(self) -> None:
+        recipe_dir = self.base / "recipes" / self.recipe
+        recipe_dir.mkdir(parents=True, exist_ok=True)
+        with open(recipe_dir / "thresholds.json", "w", encoding="utf-8") as fh:
+            json.dump(self.thresholds, fh, ensure_ascii=False, indent=2)
+
+    def evaluate(self, frame_u8: np.ndarray) -> Any:
+        if self.golden is None or self.regions is None:
+            raise RuntimeError("Recept nie je načítaný.")
+        return analyze(
+            self.golden,
+            self.regions,
+            frame_u8,
+            self.thresholds,
+            pose_enabled=self.pose_enabled,
+        )
+
+def _rect_to_dict(rect: Optional[Tuple[int, int, int, int]]) -> Optional[Dict[str, int]]:
+    if rect is None:
+        return None
+    x, y, w, h = rect
+    return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -147,6 +253,11 @@ def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
             return None
     return None
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return int(default)
 
 def _rect_to_dict(rect: Optional[Tuple[int, int, int, int]]) -> Optional[Dict[str, int]]:
     if rect is None:
@@ -732,11 +843,13 @@ def run_tool_isolated(
 
 
 __all__ = [
+    "DEFAULT_THRESHOLDS",
     "ITool",
     "ToolMeta",
     "ToolMetaView",
     "ToolRunResult",
     "ToolRunnerContext",
+    "ToolService",
     "ToolRegistry",
     "compose_affine",
     "run_pipeline",
