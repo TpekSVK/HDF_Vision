@@ -120,6 +120,23 @@ class ToolRegistry:
             },
             category="Locator",
         ),
+        "locator.template_match": ToolMeta(
+            display_name="Locator (Template Match)",
+            description="Vyhľadávanie šablóny s podporou search a template ROI.",
+            supports_roi=True,
+            supports_ignore_mask=False,
+            default_params={
+                "template_roi": None,
+                "use_golden_crop": True,
+                "coarse_to_fine": True,
+                "coarse_cap": 600,
+                "apply_alignment": True,
+            },
+            default_thresholds={
+                "threshold_corr": 0.55,
+            },
+            category="Locator",
+        ),
         "absdiff": ToolMeta(
             display_name="Abs Diff",
             description="Porovnanie absolútnych rozdielov s blob analýzou.",

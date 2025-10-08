@@ -24,7 +24,14 @@ class ToolParams:
             self.values = dict(self.values)
 
     def to_dict(self) -> Dict[str, Any]:
-        return dict(self.values)
+        result: Dict[str, Any] = {}
+        for key, value in self.values.items():
+            if isinstance(value, ToolRoi):
+                rect_dict = value.to_dict()
+                result[key] = rect_dict if rect_dict else None
+            else:
+                result[key] = value
+        return result
 
     @classmethod
     def from_obj(cls, obj: Any | None) -> "ToolParams":
@@ -226,6 +233,7 @@ class Tool:
     ignore_mask: ToolMask = field(default_factory=ToolMask)
     params: ToolParams = field(default_factory=ToolParams)
     thresholds: ToolThresholds = field(default_factory=ToolThresholds)
+    template_roi: ToolRoi = field(default_factory=ToolRoi)
 
     def __post_init__(self) -> None:
         self.type = str(self.type)
@@ -236,6 +244,19 @@ class Tool:
         self.ignore_mask = ToolMask.from_obj(self.ignore_mask)
         self.params = ToolParams.from_obj(self.params)
         self.thresholds = ToolThresholds.from_obj(self.thresholds)
+        has_template_key = isinstance(self.params.values, dict) and "template_roi" in self.params.values
+        raw_template_roi = None
+        if has_template_key:
+            raw_template_roi = self.params.values.get("template_roi")
+        if raw_template_roi is None and isinstance(self.template_roi, ToolRoi):
+            raw_template_roi = self.template_roi.to_dict()
+        self.template_roi = ToolRoi.from_obj(raw_template_roi)
+        template_roi_dict = self.template_roi.to_dict()
+        if isinstance(self.params.values, dict) and (has_template_key or template_roi_dict):
+            if template_roi_dict:
+                self.params.values["template_roi"] = template_roi_dict
+            elif has_template_key:
+                self.params.values["template_roi"] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -247,6 +268,7 @@ class Tool:
             "ignore_mask": self.ignore_mask.to_dict(),
             "params": self.params.to_dict(),
             "thresholds": self.thresholds.to_dict(),
+            "template_roi": self.template_roi.to_dict() if self.template_roi.rect() else None,
         }
 
     @classmethod
@@ -255,6 +277,10 @@ class Tool:
             return data.copy()
         if not isinstance(data, dict):
             raise TypeError("Tool.from_dict expects a dict or Tool instance")
+        params = ToolParams.from_obj(data.get("params"))
+        template_roi_data = data.get("template_roi")
+        if template_roi_data is not None and isinstance(params.values, dict):
+            params.values.setdefault("template_roi", template_roi_data)
         return cls(
             type=data.get("type", ""),
             name=data.get("name", ""),
@@ -262,8 +288,9 @@ class Tool:
             order=data.get("order", 0),
             roi=ToolRoi.from_obj(data.get("roi")),
             ignore_mask=ToolMask.from_obj(data.get("ignore_mask")),
-            params=ToolParams.from_obj(data.get("params")),
+            params=params,
             thresholds=ToolThresholds.from_obj(data.get("thresholds")),
+            template_roi=ToolRoi.from_obj(template_roi_data),
         )
 
     def copy(self) -> "Tool":
@@ -276,6 +303,7 @@ class Tool:
             ignore_mask=self.ignore_mask.copy(),
             params=self.params.copy(),
             thresholds=self.thresholds.copy(),
+            template_roi=self.template_roi.copy(),
         )
 
     def with_order(self, order: int) -> "Tool":
