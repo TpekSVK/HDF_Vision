@@ -47,7 +47,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
-from app.services.tool_service import run_locator_template_match
+from app.services.tool_service import ToolRunResult, run_locator_template_match
 
 
 class ToolCatalogDialog(QDialog):
@@ -453,21 +453,29 @@ class ToolEditDialog(QDialog):
         )
         return aligned
 
-    def _update_locator_metrics(self, result: Optional[dict[str, Any]]) -> None:
+    def _update_locator_metrics(
+        self,
+        result: Optional[ToolRunResult],
+        diagnostics: Optional[dict[str, Any]] = None,
+    ) -> None:
         if self._locator_metrics_label is None:
             return
         if not result:
             self._locator_metrics_label.setText("corr: —    dx: —    dy: —")
             return
-        corr = float(result.get("corr", 0.0))
-        dx = float(result.get("dx", 0.0))
-        dy = float(result.get("dy", 0.0))
+        metrics = result.metrics if result.metrics is not None else {}
+        diag_metrics = diagnostics or {}
+        corr = float(metrics.get("corr", diag_metrics.get("corr", 0.0)))
+        dx = float(metrics.get("dx", diag_metrics.get("dx", 0.0)))
+        dy = float(metrics.get("dy", diag_metrics.get("dy", 0.0)))
         self._locator_metrics_label.setText(f"corr: {corr:.4f}    dx: {dx:.2f}    dy: {dy:.2f}")
 
-        status = str(result.get("status", "")).upper()
+        status = result.status
         if status:
-            color_map = {"OK": "#2d8a34", "WARN": "#e67e22", "NOK": "#a33"}
-            self._set_locator_message(f"Status: {status}", color_map.get(status, "#666"))
+            color_map = {"ok": "#2d8a34", "warn": "#e67e22", "nok": "#a33"}
+            self._set_locator_message(
+                f"Status: {status.upper()}", color_map.get(status, "#666")
+            )
         else:
             self._set_locator_message("")
 
@@ -539,7 +547,7 @@ class ToolEditDialog(QDialog):
             search_roi_obj.set_rect(search_rect)
 
         try:
-            result = run_locator_template_match(
+            tool_result, diagnostics = run_locator_template_match(
                 golden_u8,
                 frame_u8,
                 params,
@@ -552,8 +560,10 @@ class ToolEditDialog(QDialog):
             self._update_locator_preview(frame_u8, None)
             return
 
-        aligned = self._align_preview(frame_u8, result.get("dx", 0.0), result.get("dy", 0.0))
-        self._update_locator_metrics(result)
+        dx = float(tool_result.metrics.get("dx", diagnostics.get("dx", 0.0)))
+        dy = float(tool_result.metrics.get("dy", diagnostics.get("dy", 0.0)))
+        aligned = self._align_preview(frame_u8, dx, dy)
+        self._update_locator_metrics(tool_result, diagnostics)
         self._update_locator_preview(frame_u8, aligned)
 
     def result_tool(self) -> Tool:

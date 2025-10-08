@@ -1,5 +1,5 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -39,13 +39,15 @@ def test_run_locator_template_match_returns_expected_translation():
     thresholds = {"threshold_corr": 0.1}
     search_roi = {"x": 5, "y": 3, "w": 12, "h": 12}
 
-    result = run_locator_template_match(golden, frame, params, thresholds, search_roi)
+    run_result, diagnostics = run_locator_template_match(
+        golden, frame, params, thresholds, search_roi
+    )
 
-    assert result["status"] == "OK"
-    assert result["dx"] == pytest.approx(2.0, abs=1e-3)
-    assert result["dy"] == pytest.approx(3.0, abs=1e-3)
+    assert run_result.status == "ok"
+    assert run_result.metrics["dx"] == pytest.approx(2.0, abs=1e-3)
+    assert run_result.metrics["dy"] == pytest.approx(3.0, abs=1e-3)
     expected_T = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=np.float32)
-    assert np.allclose(result["T"], expected_T)
+    assert np.allclose(diagnostics["T"], expected_T)
 
 
 def test_run_locator_template_match_clamps_out_of_bounds_roi():
@@ -56,12 +58,39 @@ def test_run_locator_template_match_clamps_out_of_bounds_roi():
     thresholds = {"threshold_corr": 0.9}
     search_roi = {"x": -5, "y": -5, "w": 4, "h": 4}
 
-    result = run_locator_template_match(golden, frame, params, thresholds, search_roi)
-
-    assert result["dx"] == pytest.approx(0.0)
-    assert result["dy"] == pytest.approx(0.0)
-    assert result["status"] == "WARN"
-    assert np.allclose(
-        result["T"], np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    run_result, diagnostics = run_locator_template_match(
+        golden, frame, params, thresholds, search_roi
     )
+
+    assert run_result.metrics["dx"] == pytest.approx(0.0)
+    assert run_result.metrics["dy"] == pytest.approx(0.0)
+    assert run_result.status == "warn"
+    assert np.allclose(
+        diagnostics["T"], np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+    )
+
+
+@pytest.mark.parametrize(
+    "threshold, expected_status",
+    [
+        (0.99, "nok"),
+        (0.10, "ok"),
+    ],
+)
+def test_locator_status_respects_threshold(threshold: float, expected_status: str) -> None:
+    golden = np.zeros((20, 20), dtype=np.uint8)
+    golden[4:12, 5:13] = 180
+    frame = np.zeros_like(golden)
+    frame[6:14, 7:15] = 180
+
+    params = {"use_golden_crop": True, "coarse_cap": 32}
+    thresholds = {"threshold_corr": threshold}
+    search_roi = {"x": 0, "y": 0, "w": 20, "h": 20}
+
+    run_result, diagnostics = run_locator_template_match(
+        golden, frame, params, thresholds, search_roi
+    )
+
+    assert run_result.status == expected_status
+    assert diagnostics["status"] == expected_status
 
