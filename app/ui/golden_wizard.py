@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -50,7 +51,9 @@ from app.services.recipe_service import RecipeService
 from app.services.tool_service import (
     ToolMeta,
     ToolRunResult,
+    ToolRunnerContext,
     run_locator_template_match,
+    run_tool_isolated,
     validate_tool_params,
 )
 
@@ -1026,6 +1029,7 @@ class ToolConfigPanel(QWidget):
 
     paramChanged = Signal(str, object)
     thresholdChanged = Signal(str, object)
+    testRequested = Signal(dict, dict)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -1085,9 +1089,28 @@ class ToolConfigPanel(QWidget):
 
         layout.addStretch(1)
 
+        controls_layout = QHBoxLayout()
+        controls_layout.setContentsMargins(0, 0, 0, 0)
+        controls_layout.setSpacing(6)
+
+        self._btn_test = QPushButton("Test", self)
+        self._btn_test.clicked.connect(self._on_test_clicked)
+
         self._btn_defaults = QPushButton("Restore defaults", self)
         self._btn_defaults.clicked.connect(self._on_restore_defaults)
-        layout.addWidget(self._btn_defaults, 0, Qt.AlignLeft)
+
+        controls_layout.addWidget(self._btn_test)
+        controls_layout.addWidget(self._btn_defaults)
+        controls_layout.addStretch(1)
+        layout.addLayout(controls_layout)
+
+        self._test_result_label = QLabel("", self)
+        self._test_result_label.setStyleSheet(
+            "color: #444; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px;"
+        )
+        self._test_result_label.setWordWrap(True)
+        self._test_result_label.setVisible(False)
+        layout.addWidget(self._test_result_label)
 
         self._update_visibility()
 
@@ -1098,6 +1121,7 @@ class ToolConfigPanel(QWidget):
         self._clear_form()
         self._tool_label.setText("No tool selected")
         self._description_label.clear()
+        self._clear_test_result()
         self._update_visibility()
 
     def set_tool(
@@ -1118,6 +1142,7 @@ class ToolConfigPanel(QWidget):
         self._description_label.setVisible(bool(description))
 
         self._rebuild_form()
+        self._clear_test_result()
         self._update_visibility()
 
     def refresh_values(self, tool: Tool) -> None:
@@ -1233,6 +1258,44 @@ class ToolConfigPanel(QWidget):
         field_type = (spec or {}).get("type")
         return field_type in {"int", "float", "bool", "enum"}
 
+    def _clear_test_result(self) -> None:
+        self._test_result_label.clear()
+        self._test_result_label.setVisible(False)
+
+    def set_test_running(self, running: bool) -> None:
+        if running:
+            self._btn_test.setEnabled(False)
+            self._set_test_message("Test prebieha…", "#666")
+        else:
+            self._btn_test.setEnabled(bool(self._current_tool) and not self._updating)
+
+    def show_test_result(self, result: ToolRunResult, elapsed_ms: float) -> None:
+        status_color = {
+            "ok": "#237804",
+            "warn": "#b36b00",
+            "nok": "#b03030",
+        }.get(result.status, "#444")
+        lines = [f"Status: {result.status.upper()}"]
+        lines.append(f"Čas: {elapsed_ms:.1f} ms")
+        metrics = result.metrics or {}
+        if metrics:
+            lines.append("Metriky:")
+            for key, value in metrics.items():
+                lines.append(f"  • {key}: {value}")
+        self._set_test_message("\n".join(lines), status_color)
+
+    def show_test_error(self, message: str) -> None:
+        self._set_test_message(message, "#b03030")
+
+    def _set_test_message(self, message: str, color: str) -> None:
+        self._test_result_label.setText(message)
+        self._test_result_label.setStyleSheet(
+            "color: {color}; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px;".format(
+                color=color
+            )
+        )
+        self._test_result_label.setVisible(True)
+
     def _create_widget(self, spec: dict[str, Any]) -> Optional[QWidget]:
         field_type = spec.get("type")
         if field_type == "bool":
@@ -1270,6 +1333,18 @@ class ToolConfigPanel(QWidget):
             spin.setValue(float(spec.get("default", 0.0) or 0.0))
             return spin
         return None
+
+    def _on_test_clicked(self) -> None:
+        if self._current_tool is None:
+            return
+        ok, _, normalized = self._validate_current_values()
+        if not ok:
+            self.show_test_error("Najprv oprav chyby vo formulári.")
+            return
+        params = dict(normalized.get("params", {}))
+        thresholds = dict(normalized.get("thresholds", {}))
+        self.set_test_running(True)
+        self.testRequested.emit(params, thresholds)
 
     def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
         container = QWidget(self)
@@ -1498,7 +1573,9 @@ class ToolConfigPanel(QWidget):
         has_tool = self._current_tool is not None
         self._form_container.setVisible(has_tool)
         self._placeholder_label.setVisible(not has_tool)
-        self._btn_defaults.setEnabled(has_tool and bool(self._param_widgets or self._threshold_widgets))
+        enabled_controls = has_tool and bool(self._param_widgets or self._threshold_widgets)
+        self._btn_defaults.setEnabled(enabled_controls)
+        self._btn_test.setEnabled(has_tool and not self._updating)
 
 class GoldenWizard(QDialog):
     """
@@ -1643,6 +1720,7 @@ class GoldenWizard(QDialog):
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
+        self._tool_panel.testRequested.connect(self._on_tool_test_requested)
 
         self._selected_tool_row = -1
 
@@ -1995,6 +2073,99 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+
+    def _on_tool_test_requested(self, params: dict[str, Any], thresholds: dict[str, Any]) -> None:
+        try:
+            row = getattr(self, "_selected_tool_row", -1)
+            if row < 0:
+                self._tool_panel.show_test_error("Najprv vyber nástroj v tabuľke.")
+                return
+
+            recipe = self._current_recipe_name()
+            tools = self.recipes.get_draft_tools(recipe)
+            if not (0 <= row < len(tools)):
+                self._tool_panel.show_test_error("Vybraný nástroj nie je dostupný.")
+                return
+
+            target_tool = tools[row]
+            golden = self._current_golden_image()
+            if golden is None:
+                self._tool_panel.show_test_error("Nie je dostupný GOLDEN obrázok.")
+                return
+
+            frame: Optional[np.ndarray] = None
+            capture_errors: list[str] = []
+            if self._live_on:
+                try:
+                    frame = self._lp.last_frame_u8()
+                except Exception as exc:  # pragma: no cover - defensive
+                    capture_errors.append(f"Live preview zlyhal: {exc}")
+            if frame is None:
+                try:
+                    frame = self.cam.one_shot()
+                except Exception as exc:  # pragma: no cover - fallback
+                    capture_errors.append(f"Zachytenie zlyhalo: {exc}")
+
+            if frame is None:
+                message = capture_errors[-1] if capture_errors else "Frame nie je dostupný."
+                self._tool_panel.show_test_error(message)
+                return
+
+            frame_array = np.asarray(frame)
+            context = ToolRunnerContext(
+                frame=frame_array,
+                frame_aligned=frame_array,
+                T_total=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
+                frame_is_aligned=False,
+            )
+
+            preceding = [tool.copy() for tool in tools if tool.order < target_tool.order]
+            preceding.sort(key=lambda tool: tool.order)
+
+            for tool in preceding:
+                if not tool.enabled:
+                    continue
+                payload_params = dict(getattr(tool.params, "values", {}) or {})
+                payload_thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
+                payload_params["__roi__"] = tool.roi.copy()
+                try:
+                    run_tool_isolated(
+                        tool.type,
+                        payload_params,
+                        payload_thresholds,
+                        context,
+                        golden,
+                        frame_array,
+                    )
+                except Exception as exc:
+                    self._tool_panel.show_test_error(
+                        f"Mini-runner zlyhal pri '{tool.name}': {exc}"
+                    )
+                    return
+
+            params_payload = dict(params or {})
+            thresholds_payload = dict(thresholds or {})
+            params_payload["__roi__"] = target_tool.roi.copy()
+
+            start = time.perf_counter()
+            try:
+                result = run_tool_isolated(
+                    target_tool.type,
+                    params_payload,
+                    thresholds_payload,
+                    context,
+                    golden,
+                    frame_array,
+                )
+            except Exception as exc:
+                self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
+                return
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            self._tool_panel.show_test_result(result, elapsed_ms)
+        except Exception as exc:
+            self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
+        finally:
+            self._tool_panel.set_test_running(False)
 
     def _edit_tool(self, index: int):
         recipe = self._current_recipe_name()
