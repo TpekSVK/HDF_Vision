@@ -1,11 +1,125 @@
 # app/services/tool_service.py
+from __future__ import annotations
+
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any, Dict, List, Optional
+
 import imageio.v3 as iio
 import numpy as np
 
 from app.services.compare_service import analyze
-from app.models.schema import RecipeData
+from app.models.schema import (
+    RecipeData,
+    Tool,
+    ToolMask,
+    ToolParams,
+    ToolRoi,
+    ToolThresholds,
+)
+
+
+@dataclass(frozen=True)
+class ToolMeta:
+    """Metadata describing capabilities and defaults for a tool type."""
+
+    display_name: str
+    description: str
+    supports_roi: bool
+    supports_ignore_mask: bool
+    default_params: Dict[str, Any] = field(default_factory=dict)
+    default_thresholds: Dict[str, float] = field(default_factory=dict)
+    category: str = "General"
+
+    def copy_defaults(self) -> tuple[Dict[str, Any], Dict[str, float]]:
+        """Return deep copies of the default params and thresholds."""
+
+        params = dict(self.default_params)
+        thresholds = dict(self.default_thresholds)
+        return params, thresholds
+
+
+class ToolRegistry:
+    """Central registry of available tool types and their metadata."""
+
+    _TOOLS: Dict[str, ToolMeta] = {
+        "ssim": ToolMeta(
+            display_name="SSIM",
+            description="Porovnanie štrukturálnej podobnosti v ROI.",
+            supports_roi=True,
+            supports_ignore_mask=True,
+            default_params={},
+            default_thresholds={
+                "ssim_min": 0.92,
+            },
+            category="Similarity",
+        ),
+        "template_match": ToolMeta(
+            display_name="Template Match",
+            description="Lokalizácia objektu pomocou template matching.",
+            supports_roi=True,
+            supports_ignore_mask=False,
+            default_params={},
+            default_thresholds={
+                "tm_enable": 1.0,
+                "tm_margin": 200.0,
+                "tm_min_corr": 0.55,
+            },
+            category="Locator",
+        ),
+        "absdiff": ToolMeta(
+            display_name="Abs Diff",
+            description="Porovnanie absolútnych rozdielov s blob analýzou.",
+            supports_roi=True,
+            supports_ignore_mask=True,
+            default_params={},
+            default_thresholds={
+                "diff_thresh": 15.0,
+                "min_blob_area": 20.0,
+                "max_total_area": 2000.0,
+                "max_blob_count": 10.0,
+            },
+            category="Inspection",
+        ),
+    }
+
+    @classmethod
+    def list_tool_types(cls) -> List[str]:
+        """Return available tool type identifiers."""
+
+        return sorted(cls._TOOLS.keys())
+
+    @classmethod
+    def get_tool_meta(cls, tool_type: str) -> Optional[ToolMeta]:
+        """Return metadata for a tool type if registered."""
+
+        return cls._TOOLS.get(tool_type)
+
+    @classmethod
+    def make_default_tool(cls, tool_type: str, name: Optional[str] = None) -> Tool:
+        """Instantiate a Tool with default metadata for the given type."""
+
+        meta = cls.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+
+        params, thresholds = meta.copy_defaults()
+        tool_name = name if name is not None else meta.display_name
+
+        ignore_mask = ToolMask() if meta.supports_ignore_mask else ToolMask(None)
+
+        return Tool(
+            type=tool_type,
+            name=tool_name,
+            enabled=True,
+            order=0,
+            roi=ToolRoi(),
+            ignore_mask=ignore_mask,
+            params=ToolParams(params),
+            thresholds=ToolThresholds(thresholds),
+        )
+
 
 DEFAULT_THRESHOLDS = {
     "ssim_min": 0.92,
@@ -23,6 +137,27 @@ class ToolService:
         self.regions = None           # list[dict]
         self.thresholds = DEFAULT_THRESHOLDS.copy()
         self.pose_enabled = True
+
+    # ------------------------------------------------------------------
+    # Tool registry API
+    # ------------------------------------------------------------------
+    def list_tool_types(self) -> List[str]:
+        """Return registered tool types."""
+
+        return ToolRegistry.list_tool_types()
+
+    def get_tool_meta(self, tool_type: str) -> ToolMeta:
+        """Retrieve metadata for a given tool type."""
+
+        meta = ToolRegistry.get_tool_meta(tool_type)
+        if meta is None:
+            raise KeyError(f"Tool type '{tool_type}' is not registered")
+        return meta
+
+    def make_default_tool(self, tool_type: str, name: Optional[str] = None) -> Tool:
+        """Create a ``Tool`` instance with registry defaults."""
+
+        return ToolRegistry.make_default_tool(tool_type, name=name)
 
     def load_recipe(self, name: str):
         self.recipe = name
