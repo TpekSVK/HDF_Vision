@@ -370,6 +370,14 @@ def _validate_params(tool: Tool) -> None:
         raise ValueError(f"Params for tool '{tool.name}' must be a dictionary")
 
 
+def _ensure_locator_first(tools: Sequence[Tool]) -> List[Tool]:
+    """Ensure locator tools are positioned before other tools."""
+
+    locators = [tool for tool in tools if tool.type.startswith("locator.")]
+    analyzers = [tool for tool in tools if not tool.type.startswith("locator.")]
+    return list(locators + analyzers)
+
+
 def run_pipeline(
     recipe: RecipeV2, golden: np.ndarray, frame: np.ndarray
 ) -> Tuple[ToolRunnerContext, List[Dict[str, Any]]]:
@@ -383,6 +391,7 @@ def run_pipeline(
     )
 
     tools: Sequence[Tool] = sorted(recipe.tools, key=lambda t: t.order)
+    tools = _ensure_locator_first(tools)
 
     for tool in tools:
         meta = ToolRegistry.get_tool_meta(tool.type)

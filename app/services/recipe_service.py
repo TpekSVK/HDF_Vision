@@ -14,6 +14,7 @@ class RecipeService:
         self.db = db or DbService(self.base / "HDF_Vision.db")
         self.tool = ToolService(base_dir=base_dir)
         self._draft_tools: dict[str, List[Tool]] = {}
+        self._locator_autosort: dict[str, bool] = {}
 
     def list(self) -> list[str]:
         # DB je master
@@ -86,12 +87,13 @@ class RecipeService:
         self._draft_tools[name] = [tool.copy() for tool in tools]
         return [tool.copy() for tool in tools]
 
-    def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> List[Tool]:
+    def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
         recipe.tools = self._coerce_tools(tools)
         normalized = self._save_recipe_config(name, recipe)
+        autosorted = self._locator_autosort.pop(name, False)
         self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
-        return [tool.copy() for tool in normalized.tools]
+        return [tool.copy() for tool in normalized.tools], autosorted
 
     # --- draft tool management ---
     def get_draft_tools(self, name: str) -> List[Tool]:
@@ -149,9 +151,17 @@ class RecipeService:
     def _sort_tools(self, tools: Iterable[Tool]) -> List[Tool]:
         return [tool.copy() for tool in sorted(tools, key=lambda t: (t.order, t.name))]
 
-    def _normalize_tools(self, tools: Iterable[Tool]) -> List[Tool]:
+    def _normalize_tools(self, tools: Iterable[Tool]) -> tuple[List[Tool], bool]:
         sorted_tools = self._sort_tools(tools)
-        return [tool.with_order(idx) for idx, tool in enumerate(sorted_tools)]
+        locators: List[Tool] = []
+        analyzers: List[Tool] = []
+        for tool in sorted_tools:
+            (locators if tool.type.startswith("locator.") else analyzers).append(tool)
+
+        enforced_order = locators + analyzers
+        autosorted = enforced_order != sorted_tools
+        normalized = [tool.with_order(idx) for idx, tool in enumerate(enforced_order)]
+        return normalized, autosorted
 
     def _ensure_draft_tools(self, name: str) -> List[Tool]:
         draft = self._draft_tools.get(name)
@@ -173,7 +183,9 @@ class RecipeService:
 
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
         recipe_copy = recipe.copy()
-        recipe_copy.tools = self._normalize_tools(recipe_copy.tools)
+        normalized_tools, autosorted = self._normalize_tools(recipe_copy.tools)
+        recipe_copy.tools = normalized_tools
+        self._locator_autosort[name] = autosorted
         save_recipe_config(name, recipe_copy, base_dir=self.base)
         return recipe_copy
 

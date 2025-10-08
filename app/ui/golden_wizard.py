@@ -1,6 +1,6 @@
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QColor
 from PySide6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -928,6 +928,17 @@ class GoldenWizard(QDialog):
         self.tools_table.setSelectionMode(QAbstractItemView.SingleSelection)
         layout.addWidget(QLabel("Tools in recipe:"))
         layout.addWidget(self.tools_table)
+        header_item = self.tools_table.horizontalHeaderItem(2)
+        if header_item:
+            header_item.setToolTip("Locator nástroje musia bežať pred analyzátormi.")
+
+        self.locator_hint_label = QLabel(
+            "Locator nástroje (zvýraznené) sú automaticky spúšťané ako prvé v pipeline.",
+            self,
+        )
+        self.locator_hint_label.setWordWrap(True)
+        self.locator_hint_label.setStyleSheet("color: #555; font-style: italic;")
+        layout.addWidget(self.locator_hint_label)
         layout.addLayout(buttons)
 
         # signály
@@ -1087,10 +1098,14 @@ class GoldenWizard(QDialog):
         recipe_data = RecipeData(pose_enabled=pose_enabled, regions=regs)
         self.recipes.save_regions(name, recipe_data)
 
-        if not self._persist_tools(name):
+        ok, autosorted = self._persist_tools(name)
+        if not ok:
             return
 
-        self._info(f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}")
+        message = f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}"
+        if autosorted:
+            message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
+        self._info(message)
 
     def _save_validation(self, is_ok: bool):
         if self.current_img is None:
@@ -1150,6 +1165,15 @@ class GoldenWizard(QDialog):
             enabled_item = QTableWidgetItem("Yes" if tool.enabled else "No")
             enabled_item.setTextAlignment(Qt.AlignCenter)
             order_item.setTextAlignment(Qt.AlignCenter)
+            is_locator = tool.type.startswith("locator.")
+            if is_locator:
+                highlight = QColor("#fff2cc")
+                type_item.setBackground(highlight)
+                order_item.setBackground(highlight)
+                type_item.setText(f"{tool.type}  (Locator)")
+                type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
+            else:
+                type_item.setToolTip("Analyzátory bežia po locator nástrojoch.")
             self.tools_table.setItem(row, 0, order_item)
             self.tools_table.setItem(row, 1, name_item)
             self.tools_table.setItem(row, 2, type_item)
@@ -1230,14 +1254,14 @@ class GoldenWizard(QDialog):
                 return
             self._refresh_tools_table()
 
-    def _persist_tools(self, recipe: str) -> bool:
+    def _persist_tools(self, recipe: str) -> tuple[bool, bool]:
         tools = self.recipes.get_draft_tools(recipe)
         try:
-            self.recipes.save_tools(recipe, tools)
+            _, autosorted = self.recipes.save_tools(recipe, tools)
         except Exception as exc:
             self._err(f"Ukladanie nástrojov zlyhalo: {exc}")
-            return False
-        return True
+            return False, False
+        return True, autosorted
 
     # ---------- Shutdown ----------
     def closeEvent(self, e):
