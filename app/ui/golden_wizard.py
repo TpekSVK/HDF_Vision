@@ -1393,6 +1393,19 @@ class ToolConfigPanel(QWidget):
         finally:
             self._updating = False
 
+    def _get_widget_value(self, widget: QWidget, spec: dict[str, Any]) -> Any:
+        if isinstance(widget, QCheckBox):
+            return bool(widget.isChecked())
+        if isinstance(widget, QComboBox):
+            if widget.count() == 0:
+                return spec.get("default")
+            return widget.currentData()
+        if isinstance(widget, QSpinBox):
+            return int(widget.value())
+        if isinstance(widget, QDoubleSpinBox):
+            return float(widget.value())
+        return spec.get("default")
+
     def _collect_current_values(self) -> tuple[dict[str, Any], dict[str, Any]]:
         params: dict[str, Any] = {}
         thresholds: dict[str, Any] = {}
