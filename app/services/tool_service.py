@@ -7,11 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Protocol, Sequence, Tuple
 
-import imageio.v3 as iio
 import numpy as np
 
 from app.models.schema import (
-    RecipeData,
     RecipeV2,
     Tool,
     ToolParams,
@@ -107,6 +105,9 @@ class ToolRegistry:
     def make_default_tool(type_id: str, name: str | None = None) -> Tool:
         return registry.make_default_tool(type_id, name=name)
 
+    @staticmethod
+    def make_default_tool(type_id: str, name: str | None = None) -> Tool:
+        return registry.make_default_tool(type_id, name=name)
 
 ToolMeta = ToolMetaView
 
@@ -205,6 +206,11 @@ class ToolService:
             pose_enabled=self.pose_enabled,
         )
 
+def _rect_to_dict(rect: Optional[Tuple[int, int, int, int]]) -> Optional[Dict[str, int]]:
+    if rect is None:
+        return None
+    x, y, w, h = rect
+    return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
 
 # ---------------------------------------------------------------------------
 # Helper utilities
@@ -247,6 +253,11 @@ def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
             return None
     return None
 
+def _safe_int(value: Any, default: int) -> int:
+    try:
+        return int(round(float(value)))
+    except Exception:
+        return int(default)
 
 def _rect_to_dict(rect: Optional[Tuple[int, int, int, int]]) -> Optional[Dict[str, int]]:
     if rect is None:
