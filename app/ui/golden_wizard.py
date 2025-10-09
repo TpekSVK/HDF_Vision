@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QSizePolicy,
     QButtonGroup,
+    QFileDialog,
+    QToolButton,
 )
 
 import os
@@ -64,6 +66,7 @@ from app.models.schema import (
 )
 from app.services.recipe_service import RecipeService
 from app.services.tool_registry import ToolRegistry
+from app.services import settings_service
 from app.services.tool_service import (
     ToolRunResult,
     ToolRunnerContext,
@@ -74,6 +77,119 @@ from app.services.tool_service import (
 
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
+
+
+class SessionSettingsDialog(QDialog):
+    """Modal dialog for editing runtime session toggles."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Session settings")
+        self.setModal(True)
+
+        self._settings = settings_service.get_session_settings()
+
+        layout = QVBoxLayout(self)
+
+        self._logging_checkbox = QCheckBox("Enable logging for new runs", self)
+        self._logging_checkbox.setChecked(bool(self._settings.logging_enabled))
+
+        layout.addWidget(self._logging_checkbox)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        layout.addLayout(form)
+
+        target_dir = self._settings.logging_path
+        if not isinstance(target_dir, Path):
+            target_dir = Path(str(target_dir))
+        if isinstance(target_dir, Path) and target_dir.suffix:
+            target_dir = target_dir.parent
+
+        self._path_edit = QLineEdit(str(target_dir), self)
+        self._path_edit.setPlaceholderText("/data/logs")
+        browse_btn = QPushButton("Browse…", self)
+        browse_btn.clicked.connect(self._on_browse_clicked)
+
+        path_row = QHBoxLayout()
+        path_row.addWidget(self._path_edit)
+        path_row.addWidget(browse_btn)
+
+        path_widget = QWidget(self)
+        path_widget.setLayout(path_row)
+        form.addRow("Target directory", path_widget)
+
+        self._artifacts_checkbox = QCheckBox("Export aligned frame PNG", self)
+        self._artifacts_checkbox.setChecked(bool(self._settings.export_artifacts))
+        form.addRow("Artifacts", self._artifacts_checkbox)
+
+        self._overlay_checkbox = QCheckBox("Include overlay PNG", self)
+        self._overlay_checkbox.setChecked(bool(self._settings.export_overlay))
+        form.addRow("Overlay", self._overlay_checkbox)
+
+        self._artifacts_checkbox.toggled.connect(self._on_artifacts_toggled)
+        self._on_artifacts_toggled(self._artifacts_checkbox.isChecked())
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, self)
+        button_box.accepted.connect(self._on_accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def _on_browse_clicked(self) -> None:
+        current = self._path_edit.text().strip() or str(self._settings.logging_path)
+        directory = QFileDialog.getExistingDirectory(self, "Select target directory", current)
+        if directory:
+            self._path_edit.setText(directory)
+
+    def _on_artifacts_toggled(self, enabled: bool) -> None:
+        self._overlay_checkbox.setEnabled(bool(enabled))
+
+    def _on_accept(self) -> None:
+        path_text = self._path_edit.text().strip()
+        if not path_text:
+            QMessageBox.warning(self, "Missing path", "Please specify the target directory.")
+            return
+
+        target = Path(path_text).expanduser()
+        if target.exists() and not target.is_dir():
+            QMessageBox.critical(self, "Invalid path", "The target must be a directory.")
+            return
+
+        if not target.exists():
+            answer = QMessageBox.question(
+                self,
+                "Create directory?",
+                f"The directory '{target}' does not exist.\nCreate it?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.Yes,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            try:
+                target.mkdir(parents=True, exist_ok=True)
+            except Exception as exc:
+                QMessageBox.critical(
+                    self,
+                    "Creation failed",
+                    f"Unable to create directory:\n{exc}",
+                )
+                return
+
+        try:
+            settings_service.update_session_settings(
+                logging_enabled=self._logging_checkbox.isChecked(),
+                logging_path=target,
+                export_artifacts=self._artifacts_checkbox.isChecked(),
+                export_overlay=(
+                    self._overlay_checkbox.isChecked()
+                    and self._artifacts_checkbox.isChecked()
+                ),
+            )
+        except Exception as exc:  # pragma: no cover - defensive
+            QMessageBox.critical(self, "Update failed", str(exc))
+            return
+
+        self.accept()
 
 
 class ToolsTableWidget(QTableWidget):
@@ -2428,6 +2544,12 @@ class GoldenWizard(QDialog):
         self.btn_live.setCheckable(True)
         self.btn_live.clicked.connect(self._toggle_live)
 
+        self._session_settings_button = QToolButton(self)
+        self._session_settings_button.setText("⚙")
+        self._session_settings_button.setToolTip("Session settings")
+        self._session_settings_button.setAutoRaise(True)
+        self._session_settings_button.clicked.connect(self._open_session_settings)
+
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
         top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
@@ -2436,6 +2558,7 @@ class GoldenWizard(QDialog):
         top.addWidget(self.chk_pose)
         top.addWidget(QLabel("Zlyhanie locatora:", self))
         top.addWidget(self.failure_policy_combo)
+        top.addWidget(self._session_settings_button)
         top.addWidget(self.btn_add_tool)
         top.addWidget(self.btn_live)
 
@@ -2697,7 +2820,6 @@ class GoldenWizard(QDialog):
             self._err(f"Zachytenie zlyhalo: {e}")
 
     def _load_golden(self):
-        from PySide6.QtWidgets import QFileDialog
         fp, _ = QFileDialog.getOpenFileName(self, "Načítaj obrázok", "", "Images (*.png *.jpg *.jpeg *.bmp)")
         if not fp:
             return
@@ -2754,6 +2876,10 @@ class GoldenWizard(QDialog):
         self._record_saved_snapshot(recipe)
         self._refresh_tools_table()
         self._refresh_publish_state()
+
+    def _open_session_settings(self) -> None:
+        dialog = SessionSettingsDialog(self)
+        dialog.exec()
 
     def _save_tool_draft(self):
         recipe = self._current_recipe_name()

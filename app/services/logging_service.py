@@ -15,14 +15,15 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.models.schema import RecipeV2, Tool
+from app.services.settings_service import DEFAULT_LOG_DIR, get_session_settings
 from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     from app.services.tool_service import PipelineResult, PipelineToolReport
 
 
-_DEFAULT_LOG_PATH = Path("/data/logs/pipeline_runs.jsonl")
-_DEFAULT_ARTIFACT_DIR = Path("/data/logs/artifacts")
+_DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "pipeline_runs.jsonl"
+_DEFAULT_ARTIFACT_DIR = DEFAULT_LOG_DIR / "artifacts"
 
 
 def _utc_now_iso() -> str:
@@ -151,6 +152,8 @@ def _export_artifacts(
     recipe_name: Optional[str],
     result: "PipelineResult",
     recipe: RecipeV2,
+    artifact_root: Path,
+    export_overlay: bool,
 ) -> Dict[str, str]:
     context = result.context
     frame = getattr(context, "frame_aligned", None)
@@ -163,7 +166,7 @@ def _export_artifacts(
     safe_name = _sanitize_recipe_name(recipe_name)
     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     run_id = uuid.uuid4().hex[:8]
-    base_dir = _DEFAULT_ARTIFACT_DIR / datetime.utcnow().strftime("%Y%m%d")
+    base_dir = artifact_root / datetime.utcnow().strftime("%Y%m%d")
     base_dir.mkdir(parents=True, exist_ok=True)
 
     aligned_path = base_dir / f"{safe_name}_{ts}_{run_id}_aligned.png"
@@ -173,7 +176,7 @@ def _export_artifacts(
 
     overlay_items = getattr(result, "overlay_items", None)
     overlay = None
-    if overlay_items:
+    if export_overlay and overlay_items:
         overlay = overlay_utils.render_overlay(frame_u8.shape[:2], overlay_items)
     if overlay is not None:
         overlay_path = base_dir / f"{safe_name}_{ts}_{run_id}_overlay.png"
@@ -222,6 +225,27 @@ def record_pipeline_run(
     recipe_name: Optional[str] = None,
     notes: Optional[str] = None,
 ) -> None:
+    settings = get_session_settings()
+    if not settings.logging_enabled:
+        return
+
+    logging_path = getattr(settings, "logging_path", DEFAULT_LOG_DIR)
+    if not isinstance(logging_path, Path):
+        logging_path = Path(str(logging_path))
+    base_dir = logging_path
+    log_file = logging_path
+    if not log_file.suffix:
+        base_dir = logging_path
+        log_file = logging_path / "pipeline_runs.jsonl"
+    else:
+        base_dir = logging_path.parent or DEFAULT_LOG_DIR
+
+    artifact_root = base_dir / "artifacts"
+
+    if _RUN_LOGGER.path != log_file:
+        _RUN_LOGGER.flush()
+        _RUN_LOGGER.path = log_file
+
     timestamp = _utc_now_iso()
     run_entry: Dict[str, Any] = {
         "timestamp": timestamp,
@@ -253,12 +277,14 @@ def record_pipeline_run(
         run_entry["notes"] = str(notes)
 
     artifacts: Dict[str, str] = {}
-    if bool(getattr(recipe, "export_artifacts", False)):
+    if settings.export_artifacts and bool(getattr(recipe, "export_artifacts", False)):
         try:
             artifacts = _export_artifacts(
                 recipe_name=recipe_name,
                 result=result,
                 recipe=recipe,
+                artifact_root=artifact_root,
+                export_overlay=settings.export_overlay,
             )
         except Exception as exc:
             run_entry.setdefault("notes", "")
