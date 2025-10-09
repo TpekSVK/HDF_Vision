@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import cv2
 import numpy as np
@@ -10,6 +10,7 @@ from app.models.schema import ToolParams, ToolThresholds
 from app.services.tool_service import ToolRunResult
 from app.services.tools.common import PairTool
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult, time_block
 
 
 class EdgeChangeTool(PairTool):
@@ -24,12 +25,14 @@ class EdgeChangeTool(PairTool):
         context: Dict[str, Any],
     ) -> ToolRunResult:
         start = time.perf_counter()
+        timings: List[TimeBlockResult] = []
 
         params_dict = self._coerce_params_dict(params)
         thresholds_dict = self._coerce_thresholds_dict(thresholds)
 
-        self._ensure_pair_cache(frame, params_dict, thresholds_dict)
-        prepared = self._prepare_pair(golden, frame, context)
+        with time_block("prepare_pair", timings):
+            self._ensure_pair_cache(frame, params_dict, thresholds_dict)
+            prepared = self._prepare_pair(golden, frame, context)
 
         sigma = max(0.0, float(params_dict.get("blur_sigma", 1.0)))
         diff_threshold = float(params_dict.get("diff_threshold", 25.0))
@@ -42,14 +45,22 @@ class EdgeChangeTool(PairTool):
         frame_roi = prepared.frame_roi
 
         if sigma > 1e-6:
-            golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
-            frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
+            with time_block("blur", timings):
+                golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
+                frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        diff = imaging.absdiff_u8(golden_roi, frame_roi)
-        binary = imaging.threshold_bin_u8(diff, diff_threshold, typ=cv2.THRESH_BINARY)
+        with time_block("absdiff", timings):
+            diff = imaging.absdiff_u8(golden_roi, frame_roi)
+        with time_block("threshold", timings):
+            binary = imaging.threshold_bin_u8(diff, diff_threshold, typ=cv2.THRESH_BINARY)
 
         if use_morph:
-            binary = imaging.morphology_open_then_dilate_u8(binary, k_open=max(1, morph_open), k_dil=max(1, morph_dilate))
+            with time_block("morphology", timings):
+                binary = imaging.morphology_open_then_dilate_u8(
+                    binary,
+                    k_open=max(1, morph_open),
+                    k_dil=max(1, morph_dilate),
+                )
 
         diff_float = diff.astype(np.float32)
 
@@ -103,4 +114,5 @@ class EdgeChangeTool(PairTool):
             latency_ms=latency_ms,
             tool_id=self._prepared_context.get("tool_id", "edge_change"),
             debug_type="edge_change",
+            timings=timings,
         )

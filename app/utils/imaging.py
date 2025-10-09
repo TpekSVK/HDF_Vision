@@ -1,8 +1,13 @@
 # app/utils/imaging.py
 from __future__ import annotations
+
 import base64
 import math
-from typing import Any, Dict, Tuple, Optional
+import os
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Any, Dict, Iterator, Optional, Tuple
 
 import numpy as np
 import cv2
@@ -22,9 +27,64 @@ def _detect_cuda() -> bool:
 USE_CUDA: bool = _detect_cuda()
 _INITIALIZED: bool = False
 
+def _parse_force_cpu_flag(value: str | None) -> bool:
+    if value is None:
+        return False
+    text = value.strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return False
+
+FORCE_CPU: bool = _parse_force_cpu_flag(os.getenv("HDF_FORCE_CPU"))
+
+
+@dataclass(slots=True)
+class TimeBlockResult:
+    """Result container for :func:`time_block` measurements."""
+
+    name: str
+    elapsed_ms: float = 0.0
+
+
+@contextmanager
+def time_block(name: str, collector: Optional[list[TimeBlockResult]] = None) -> Iterator[TimeBlockResult]:
+    """Context manager measuring elapsed wall time in milliseconds.
+
+    Parameters
+    ----------
+    name:
+        Identifier of the measured block.
+    collector:
+        Optional list used to collect :class:`TimeBlockResult` instances.
+    """
+
+    start = time.perf_counter()
+    result = TimeBlockResult(name=name, elapsed_ms=0.0)
+    try:
+        yield result
+    finally:
+        result.elapsed_ms = (time.perf_counter() - start) * 1000.0
+        if collector is not None:
+            collector.append(result)
+
+
+def set_force_cpu(enabled: bool) -> None:
+    """Force CPU code paths regardless of CUDA availability."""
+
+    global FORCE_CPU
+    FORCE_CPU = bool(enabled)
+
+
+def is_gpu_enabled() -> bool:
+    """Return ``True`` when GPU execution is allowed and available."""
+
+    return USE_CUDA and not FORCE_CPU
+
 def device_info() -> Dict[str, str | int | float] | None:
     """Vráti info o CUDA zariadení alebo None, ak GPU nepoužívame."""
-    if not USE_CUDA:
+    if not is_gpu_enabled():
         return None
     try:
         # cv2 nemá priamu Python API na získanie všetkých polí; vypíšeme aspoň krátky súhrn
@@ -40,7 +100,11 @@ def ensure_initialized() -> None:
     global USE_CUDA
     if _INITIALIZED:
         return
-    if USE_CUDA:
+    if FORCE_CPU:
+        _INITIALIZED = True
+        return
+
+    if USE_CUDA and not FORCE_CPU:
         try:
             a = np.zeros((8, 8), np.uint8)
             g = cv2.cuda_GpuMat()
@@ -50,7 +114,6 @@ def ensure_initialized() -> None:
             _ = _.download()
         except Exception:
             # Ak by GPU cesta padla, prepni na CPU
-              # type: ignore[redefined-outer-name]
             USE_CUDA = False
     _INITIALIZED = True
 
@@ -114,7 +177,7 @@ def blur_gaussian_u8(src: np.ndarray, sigma: float = 0.8, kmin: int = 3) -> np.n
     """Gaussian blur (u8→u8), GPU fallback na CPU. K = roundup(σ*6)|1, aspoň kmin."""
     ensure_initialized()
     k = max(kmin, int(round(sigma * 6)) | 1)
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             gf = _get_gauss_filter(k, sigma)
             g = _gpu_upload(src)
@@ -127,7 +190,7 @@ def blur_gaussian_u8(src: np.ndarray, sigma: float = 0.8, kmin: int = 3) -> np.n
 def absdiff_u8(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     """|a - b| (u8), GPU fallback na CPU."""
     ensure_initialized()
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             ga, gb = _gpu_upload(a), _gpu_upload(b)
             out = cv2.cuda.absdiff(ga, gb)
@@ -139,7 +202,7 @@ def absdiff_u8(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 def threshold_bin_u8(src: np.ndarray, thresh: float, maxv: int = 255, typ: int = cv2.THRESH_BINARY) -> np.ndarray:
     """Threshold (u8), GPU fallback na CPU."""
     ensure_initialized()
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             g = _gpu_upload(src)
             _, out = cv2.cuda.threshold(g, thresh, float(maxv), typ)
@@ -152,7 +215,7 @@ def threshold_bin_u8(src: np.ndarray, thresh: float, maxv: int = 255, typ: int =
 def morphology_open_then_dilate_u8(src_bin: np.ndarray, k_open: int = 3, k_dil: int = 3) -> np.ndarray:
     """(Open ⟶ Dilate) na binárnom obraze u8, GPU fallback na CPU."""
     ensure_initialized()
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             g = _gpu_upload(src_bin)
             f_open = _get_morph_filter(cv2.MORPH_OPEN, k_open)
@@ -173,7 +236,7 @@ def warp_by_translation_u8(src: np.ndarray, dx: float, dy: float) -> np.ndarray:
     ensure_initialized()
     h, w = src.shape[:2]
     M = np.array([[1, 0, dx], [0, 1, dy]], np.float32)
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             g = _gpu_upload(src)
             out = cv2.cuda.warpAffine(g, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
@@ -185,7 +248,7 @@ def warp_by_translation_u8(src: np.ndarray, dx: float, dy: float) -> np.ndarray:
 def minmax_u8(src: np.ndarray) -> Tuple[float, float]:
     """Min, max; ak je GPU, použije cv2.cuda.minMax (rýchlejší)."""
     ensure_initialized()
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             g = _gpu_upload(src)
             mn, mx = cv2.cuda.minMax(g)
@@ -265,7 +328,7 @@ def match_template_u8(
         else:
             templ_s = cv2.resize(templ_u8, dsize_t, interpolation=cv2.INTER_AREA)
 
-        try_gpu = USE_CUDA
+        try_gpu = is_gpu_enabled()
         try:
             corr_s, maxLoc_s = _run_mt(search_s, templ_s, try_gpu)
         except Exception:
@@ -294,7 +357,7 @@ def match_template_u8(
             best_y = (fy1 - ys) + maxLoc_f[1]
             corr = corr_f
     else:
-        try_gpu = USE_CUDA
+        try_gpu = is_gpu_enabled()
         try:
             corr, maxLoc = _run_mt(search, templ_u8, try_gpu)
         except Exception:
@@ -311,7 +374,7 @@ def ssim_u8(img_u8: np.ndarray, ref_u8: np.ndarray, mask_u8: Optional[np.ndarray
     if img_u8.shape != ref_u8.shape:
         raise ValueError("ssim_u8: obraz a referenčný musia mať rovnaký tvar")
     # GPU cesta
-    if USE_CUDA:
+    if is_gpu_enabled():
         try:
             gI = _gpu_upload(img_u8)
             gR = _gpu_upload(ref_u8)

@@ -38,7 +38,14 @@ import numpy as np
 import cv2
 
 from app.ui.draw_view import DrawView
-from app.ui.roi_mask_editor import MaskEditor, ROIEditor
+from app.ui.roi_mask_editor import (
+    MASK_WARN_PIXELS,
+    MAX_MASK_PIXELS,
+    MAX_ROI_PIXELS,
+    ROI_WARN_PIXELS,
+    MaskEditor,
+    ROIEditor,
+)
 from app.services.storage_service import save_golden, save_validation_image
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
@@ -1330,6 +1337,14 @@ class ToolConfigPanel(QWidget):
         self._latency_label.setStyleSheet("color: #888;")
         diag_layout.addWidget(self._latency_label)
 
+        self._perf_overlay_label = QLabel("", self._diagnostics_group)
+        self._perf_overlay_label.setStyleSheet(
+            "color: #999; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 11px;"
+        )
+        self._perf_overlay_label.setWordWrap(True)
+        self._perf_overlay_label.setVisible(False)
+        diag_layout.addWidget(self._perf_overlay_label)
+
         self._metrics_table = QTableWidget(0, 2, self._diagnostics_group)
         self._metrics_table.setHorizontalHeaderLabels(["Metric", "Value"])
         self._metrics_table.horizontalHeader().setStretchLastSection(True)
@@ -1577,7 +1592,13 @@ class ToolConfigPanel(QWidget):
         else:
             self._btn_test.setEnabled(bool(self._current_tool) and not self._updating)
 
-    def show_test_result(self, result: ToolRunResult, elapsed_ms: float) -> None:
+    def show_test_result(
+        self,
+        result: ToolRunResult,
+        elapsed_ms: float,
+        perf_breakdown: Optional[list[dict[str, Any]]] = None,
+        status_message: Optional[str] = None,
+    ) -> None:
         metrics = dict(result.metrics or {})
         preview = None
         if getattr(result, "debug_artifacts", None):
@@ -1587,7 +1608,33 @@ class ToolConfigPanel(QWidget):
             "latency_ms",
             elapsed_ms if elapsed_ms is not None else getattr(result, "latency_ms", None),
         )
-        self._update_diagnostics(result.status, metrics, preview, elapsed_ms=elapsed_ms)
+        diagnostics_breakdown = perf_breakdown
+        if diagnostics_breakdown is None:
+            derived: dict[str, Any] = {}
+            if isinstance(getattr(result, "debug_artifacts", None), dict):
+                derived = result.debug_artifacts.get("diagnostics", {}) or {}
+                tool_identifier = result.debug_artifacts.get("tool_id")
+            else:
+                tool_identifier = None
+            timings = (
+                derived.get("timings_ms") if isinstance(derived, dict) else None
+            )
+            diagnostics_breakdown = [
+                {
+                    "tool": tool_identifier or "tool",
+                    "latency_ms": float(getattr(result, "latency_ms", elapsed_ms or 0.0) or 0.0),
+                    "timings": timings if isinstance(timings, dict) else None,
+                }
+            ]
+
+        self._update_diagnostics(
+            result.status,
+            metrics,
+            preview,
+            elapsed_ms=elapsed_ms,
+            message=status_message,
+        )
+        self._set_perf_overlay(diagnostics_breakdown)
 
         status_text = result.status.upper() if result.status else "—"
         latency_text = self._format_latency_text(latency_value)
@@ -1598,6 +1645,7 @@ class ToolConfigPanel(QWidget):
     def show_test_error(self, message: str) -> None:
         self._update_diagnostics("nok", {}, None)
         self._set_test_message(message, "#b03030")
+        self._set_perf_overlay(None)
 
     def _set_test_message(self, message: str, color: str) -> None:
         self._test_result_label.setText(message)
@@ -1608,12 +1656,62 @@ class ToolConfigPanel(QWidget):
         )
         self._test_result_label.setVisible(True)
 
+    def _set_perf_overlay(self, breakdown: Optional[list[dict[str, Any]]]) -> None:
+        if not breakdown:
+            self._perf_overlay_label.clear()
+            self._perf_overlay_label.setToolTip("")
+            self._perf_overlay_label.setVisible(False)
+            return
+
+        total = 0.0
+        parts: list[str] = []
+        tooltip_parts: list[str] = []
+        for entry in breakdown:
+            if not isinstance(entry, dict):
+                continue
+            raw_latency = entry.get("latency_ms") or entry.get("latency") or 0.0
+            try:
+                latency = float(raw_latency)
+            except (TypeError, ValueError):
+                latency = 0.0
+            tool_label = entry.get("tool") or entry.get("tool_id") or entry.get("type") or "tool"
+            tool_text = str(tool_label)
+            total += max(latency, 0.0)
+            parts.append(f"{tool_text}: {latency:.1f} ms")
+            timings = entry.get("timings")
+            if isinstance(timings, dict) and timings:
+                timing_parts = []
+                for name, value in timings.items():
+                    try:
+                        timing_parts.append(f"{name}={float(value):.1f} ms")
+                    except (TypeError, ValueError):
+                        continue
+                if timing_parts:
+                    tooltip_parts.append(f"{tool_text}: " + ", ".join(timing_parts))
+
+        if not parts:
+            self._perf_overlay_label.clear()
+            self._perf_overlay_label.setToolTip("")
+            self._perf_overlay_label.setVisible(False)
+            return
+
+        overlay_text = f"Perf: {total:.1f} ms · {' | '.join(parts)}"
+        self._perf_overlay_label.setText(overlay_text)
+        self._perf_overlay_label.setVisible(True)
+        if tooltip_parts:
+            self._perf_overlay_label.setToolTip("\n".join(tooltip_parts))
+        else:
+            self._perf_overlay_label.setToolTip("")
+
     def _reset_diagnostics(self) -> None:
         self._set_status_indicator_color("#555")
         self._status_value_label.setText("—")
         self._status_message_label.clear()
         self._status_message_label.setVisible(False)
         self._latency_label.setText("Čas: —")
+        self._perf_overlay_label.clear()
+        self._perf_overlay_label.setVisible(False)
+        self._perf_overlay_label.setToolTip("")
         self._metrics_table.setRowCount(0)
         self._metrics_table.setVisible(False)
         self._preview_cache.clear()
@@ -2772,6 +2870,43 @@ class GoldenWizard(QDialog):
                 self._tool_panel.show_test_error("Nie je dostupný GOLDEN obrázok.")
                 return
 
+            def _format_px(value: int) -> str:
+                return f"{int(value):,}".replace(",", " ")
+
+            status_messages: list[str] = []
+
+            roi_rect = target_tool.roi.rect()
+            if roi_rect is not None:
+                _, _, roi_w, roi_h = roi_rect
+                roi_area = max(0, int(roi_w) * int(roi_h))
+                if roi_area > MAX_ROI_PIXELS:
+                    limit_text = _format_px(MAX_ROI_PIXELS)
+                    area_text = _format_px(roi_area)
+                    self._tool_panel.show_test_error(
+                        f"ROI je príliš veľká pre test ({area_text} px > {limit_text} px). Zmenši výber."
+                    )
+                    return
+                if roi_area > ROI_WARN_PIXELS:
+                    status_messages.append(
+                        f"ROI {_format_px(roi_area)} px je veľká – test môže chvíľu trvať."
+                    )
+
+            mask_value = getattr(target_tool.ignore_mask, "value", None)
+            if mask_value is not None:
+                mask_array = np.asarray(mask_value)
+                mask_pixels = int(np.count_nonzero(mask_array))
+                if mask_pixels > MAX_MASK_PIXELS:
+                    limit_text = _format_px(MAX_MASK_PIXELS)
+                    count_text = _format_px(mask_pixels)
+                    self._tool_panel.show_test_error(
+                        f"Maska je príliš veľká pre test ({count_text} px > {limit_text} px). Zmenši masku."
+                    )
+                    return
+                if mask_pixels > MASK_WARN_PIXELS:
+                    status_messages.append(
+                        f"Maska má {_format_px(mask_pixels)} px – výkon bude nižší."
+                    )
+
             frame: Optional[np.ndarray] = None
             capture_errors: list[str] = []
             if self._live_on:
@@ -2801,6 +2936,28 @@ class GoldenWizard(QDialog):
             preceding = [tool.copy() for tool in tools if tool.order < target_tool.order]
             preceding.sort(key=lambda tool: tool.order)
 
+            perf_breakdown: list[dict[str, Any]] = []
+
+            def _append_perf(tool_obj: Tool, run_result: ToolRunResult) -> None:
+                diagnostics = {}
+                if isinstance(getattr(run_result, "debug_artifacts", None), dict):
+                    diagnostics = run_result.debug_artifacts.get("diagnostics", {}) or {}
+                timings = diagnostics.get("timings_ms") if isinstance(diagnostics, dict) else None
+                tool_id = None
+                if isinstance(run_result.debug_artifacts, dict):
+                    tool_id = run_result.debug_artifacts.get("tool_id")
+                perf_breakdown.append(
+                    {
+                        "tool": tool_obj.name or tool_obj.type,
+                        "tool_id": tool_id or (tool_obj.name or tool_obj.type),
+                        "type": tool_obj.type,
+                        "latency_ms": float(getattr(run_result, "latency_ms", 0.0) or 0.0),
+                        "timings": timings if isinstance(timings, dict) else None,
+                    }
+                )
+
+            test_start = time.perf_counter()
+
             for tool in preceding:
                 if not tool.enabled:
                     continue
@@ -2808,7 +2965,7 @@ class GoldenWizard(QDialog):
                 payload_thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
                 payload_params["__roi__"] = tool.roi.copy()
                 try:
-                    run_tool_isolated(
+                    result_pre = run_tool_isolated(
                         tool.type,
                         payload_params,
                         payload_thresholds,
@@ -2816,6 +2973,7 @@ class GoldenWizard(QDialog):
                         golden,
                         frame_array,
                     )
+                    _append_perf(tool, result_pre)
                 except Exception as exc:
                     self._tool_panel.show_test_error(
                         f"Mini-runner zlyhal pri '{tool.name}': {exc}"
@@ -2826,7 +2984,6 @@ class GoldenWizard(QDialog):
             thresholds_payload = dict(thresholds or {})
             params_payload["__roi__"] = target_tool.roi.copy()
 
-            start = time.perf_counter()
             try:
                 result = run_tool_isolated(
                     target_tool.type,
@@ -2839,8 +2996,15 @@ class GoldenWizard(QDialog):
             except Exception as exc:
                 self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
                 return
-            elapsed_ms = (time.perf_counter() - start) * 1000.0
-            self._tool_panel.show_test_result(result, elapsed_ms)
+            _append_perf(target_tool, result)
+            elapsed_ms = (time.perf_counter() - test_start) * 1000.0
+            status_message = "\n".join(status_messages) if status_messages else None
+            self._tool_panel.show_test_result(
+                result,
+                elapsed_ms,
+                perf_breakdown=perf_breakdown,
+                status_message=status_message,
+            )
         except Exception as exc:
             self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
         finally:
