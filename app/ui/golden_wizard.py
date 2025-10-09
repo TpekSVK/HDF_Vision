@@ -45,15 +45,15 @@ from app.services.live_preview_service import LivePreviewService
 from app.models.schema import (
     RecipeData,
     Tool,
+    ToolDefinition,
     ToolMask,
     ToolParams,
     ToolRoi,
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
+from app.services.tool_registry import ToolRegistry
 from app.services.tool_service import (
-    ToolMeta,
-    ToolRegistry,
     ToolRunResult,
     ToolRunnerContext,
     run_locator_template_match,
@@ -260,8 +260,8 @@ class ToolCatalogDialog(QDialog):
         for tool_type in self._tool_service.list_tool_types():
             try:
                 meta = self._tool_service.get_tool_meta(tool_type)
-                display = f"{meta.display_name} ({tool_type})"
-                tooltip = meta.description
+                display = f"{getattr(meta, 'name', tool_type)} ({tool_type})"
+                tooltip = getattr(meta, "description", tool_type)
             except KeyError:
                 display = tool_type
                 tooltip = tool_type
@@ -355,6 +355,7 @@ class ToolEditDialog(QDialog):
         self.setWindowTitle(f"Edit Tool – {tool.name}")
         self._tool = tool.copy()
         self._meta = meta
+        self._meta_caps = getattr(meta, "meta", meta)
         self._camera_service = camera_service
         self._live_preview = live_preview
         self._golden_image: Optional[np.ndarray] = None if golden_image is None else np.asarray(golden_image).copy()
@@ -372,8 +373,8 @@ class ToolEditDialog(QDialog):
         self._locator_preview_after: Optional[QLabel] = None
         self._btn_locator_evaluate: Optional[QPushButton] = None
 
-        self._supports_roi = bool(getattr(meta, "supports_roi", True))
-        self._supports_mask = bool(getattr(meta, "supports_ignore_mask", True))
+        self._supports_roi = bool(getattr(self._meta_caps, "supports_roi", True))
+        self._supports_mask = bool(getattr(self._meta_caps, "supports_ignore_mask", True))
 
         self._roi_editor: Optional[ROIEditor] = ROIEditor(self) if self._supports_roi else None
         self._mask_editor: Optional[MaskEditor] = MaskEditor(self) if self._supports_mask else None
@@ -857,8 +858,8 @@ class ToolEditDialog(QDialog):
     def accept(self) -> None:
         if not self._apply_config_changes():
             return
-        supports_roi = bool(getattr(self._meta, "supports_roi", True))
-        supports_mask = bool(getattr(self._meta, "supports_ignore_mask", False))
+        supports_roi = bool(getattr(self._meta_caps, "supports_roi", True))
+        supports_mask = bool(getattr(self._meta_caps, "supports_ignore_mask", False))
 
         params_values = dict(self._tool.params.values)
 
@@ -938,7 +939,12 @@ class ToolEditDialog(QDialog):
                 current_value = param_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._param_fields[name] = widget
-                label_widget = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label_widget = QLabel(label_text, self)
                 container, error_label = self._create_field_container(widget)
                 self._param_wrappers[name] = container
                 self._param_error_labels[name] = error_label
@@ -964,7 +970,12 @@ class ToolEditDialog(QDialog):
                 current_value = threshold_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._threshold_fields[name] = widget
-                label_widget = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label_widget = QLabel(label_text, self)
                 container, error_label = self._create_field_container(widget)
                 self._threshold_wrappers[name] = container
                 self._threshold_error_labels[name] = error_label
@@ -1403,7 +1414,7 @@ class ToolConfigPanel(QWidget):
     def set_tool(
         self,
         tool: Tool,
-        meta: ToolMeta,
+        meta: ToolDefinition,
         schema: dict[str, dict[str, dict[str, Any]]],
     ) -> None:
         self._current_tool = tool
@@ -1467,7 +1478,12 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, params.get(name))
@@ -1494,7 +1510,12 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, thresholds.get(name))
@@ -1552,7 +1573,10 @@ class ToolConfigPanel(QWidget):
 
     def show_test_result(self, result: ToolRunResult, elapsed_ms: float) -> None:
         metrics = dict(result.metrics or {})
-        self._update_diagnostics(result.status, metrics, result.preview, elapsed_ms=elapsed_ms)
+        preview = None
+        if getattr(result, "debug_artifacts", None):
+            preview = result.debug_artifacts.get("preview")
+        self._update_diagnostics(result.status, metrics, preview, elapsed_ms=elapsed_ms)
         self._test_result_label.clear()
         self._test_result_label.setVisible(False)
 
