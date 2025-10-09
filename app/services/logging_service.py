@@ -1,0 +1,308 @@
+"""Services for JSONL logging of pipeline executions and artifact export."""
+
+from __future__ import annotations
+
+import json
+import re
+import threading
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+
+import imageio.v3 as iio
+import numpy as np
+
+from app.models.schema import RecipeV2, Tool
+
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    from app.services.tool_service import PipelineResult, PipelineToolReport
+
+
+_DEFAULT_LOG_PATH = Path("/data/logs/pipeline_runs.jsonl")
+_DEFAULT_ARTIFACT_DIR = Path("/data/logs/artifacts")
+
+
+def _utc_now_iso() -> str:
+    return datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
+
+
+def _ensure_parent(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (str, int, bool)):
+        return value
+    if isinstance(value, float):
+        if np.isnan(value) or np.isinf(value):
+            return None
+        return float(value)
+    if hasattr(value, "item"):
+        try:
+            scalar = value.item()
+            if isinstance(scalar, (str, int, float, bool)):
+                return _json_safe(scalar)
+        except Exception:
+            pass
+    if isinstance(value, Mapping):
+        return {str(k): _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set, Sequence)):
+        return [_json_safe(v) for v in value]
+    return str(value)
+
+
+class JsonlRunLogger:
+    """Append-only JSONL logger with simple size-based rotation."""
+
+    def __init__(
+        self,
+        path: Path = _DEFAULT_LOG_PATH,
+        *,
+        flush_every: int = 1,
+        max_bytes: int = 10 * 1024 * 1024,
+    ) -> None:
+        self.path = path
+        self.flush_every = max(1, int(flush_every))
+        self.max_bytes = max_bytes
+        self._buffer: List[str] = []
+        self._lock = threading.Lock()
+
+    def log(self, entry: Mapping[str, Any]) -> None:
+        line = json.dumps(_json_safe(dict(entry)), ensure_ascii=False)
+        with self._lock:
+            self._buffer.append(line)
+            if len(self._buffer) >= self.flush_every:
+                self._flush_locked()
+
+    def flush(self) -> None:
+        with self._lock:
+            self._flush_locked()
+
+    def _flush_locked(self) -> None:
+        if not self._buffer:
+            return
+        _ensure_parent(self.path)
+        with open(self.path, "a", encoding="utf-8") as f:
+            for line in self._buffer:
+                f.write(line + "\n")
+        self._buffer.clear()
+        self._rotate_if_needed()
+
+    def _rotate_if_needed(self) -> None:
+        if self.max_bytes <= 0:
+            return
+        if not self.path.exists():
+            return
+        try:
+            size = self.path.stat().st_size
+        except OSError:
+            return
+        if size <= self.max_bytes:
+            return
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        rotated = self.path.with_name(f"{self.path.stem}.{timestamp}{self.path.suffix}")
+        try:
+            self.path.rename(rotated)
+        except OSError:
+            pass
+
+
+_RUN_LOGGER = JsonlRunLogger(flush_every=1)
+
+
+def _is_locator(tool: Tool) -> bool:
+    return tool.type.startswith("locator.") or tool.type == "template_match"
+
+
+def _to_u8(arr: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    if arr is None:
+        return None
+    data = np.asarray(arr)
+    if data.dtype == np.uint16:
+        if data.size == 0:
+            return np.zeros_like(data, dtype=np.uint8)
+        maxi = int(data.max())
+        if maxi <= 0:
+            return np.zeros_like(data, dtype=np.uint8)
+        if maxi <= 4095:
+            return (data >> 4).astype(np.uint8)
+        return (data.astype(np.float32) * (255.0 / 65535.0)).astype(np.uint8)
+    if data.ndim == 3 and data.shape[2] == 3:
+        data = data[:, :, 0]
+    return data.astype(np.uint8, copy=False)
+
+
+def _sanitize_recipe_name(name: Optional[str]) -> str:
+    if not name:
+        return "unknown"
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", name.strip())
+    return safe or "unknown"
+
+
+def _build_overlay(
+    frame_shape: Tuple[int, int],
+    tools: Iterable[Tool],
+) -> Optional[np.ndarray]:
+    import cv2  # lazy import to avoid heavy dependency at module import time
+
+    height, width = frame_shape
+    if height <= 0 or width <= 0:
+        return None
+
+    overlay_rgb = np.zeros((height, width, 3), dtype=np.uint8)
+    overlay_alpha = np.zeros((height, width), dtype=np.uint8)
+    palette = [
+        (255, 99, 71),
+        (65, 105, 225),
+        (50, 205, 50),
+        (255, 215, 0),
+        (138, 43, 226),
+        (0, 206, 209),
+        (255, 105, 180),
+    ]
+
+    for idx, tool in enumerate(tools):
+        if not tool.enabled:
+            continue
+        color = palette[idx % len(palette)]
+        roi_rect = tool.roi.rect()
+        if roi_rect is not None:
+            x, y, w, h = roi_rect
+            p1 = (int(x), int(y))
+            p2 = (int(x + w - 1), int(y + h - 1))
+            cv2.rectangle(overlay_rgb, p1, p2, color, 2)
+            cv2.rectangle(overlay_alpha, p1, p2, 200, 2)
+        mask = tool.ignore_mask.value
+        if mask is not None and mask.shape[:2] == (height, width):
+            mask_bool = mask.astype(bool)
+            overlay_rgb[mask_bool] = color
+            overlay_alpha[mask_bool] = np.maximum(overlay_alpha[mask_bool], 80)
+
+    if not overlay_alpha.any() and not overlay_rgb.any():
+        return None
+
+    return np.dstack([overlay_rgb, overlay_alpha])
+
+
+def _export_artifacts(
+    *,
+    recipe_name: Optional[str],
+    result: "PipelineResult",
+    recipe: RecipeV2,
+) -> Dict[str, str]:
+    context = result.context
+    frame = getattr(context, "frame_aligned", None)
+    if frame is None:
+        frame = getattr(context, "frame", None)
+    frame_u8 = _to_u8(frame)
+    if frame_u8 is None:
+        return {}
+
+    safe_name = _sanitize_recipe_name(recipe_name)
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    run_id = uuid.uuid4().hex[:8]
+    base_dir = _DEFAULT_ARTIFACT_DIR / datetime.utcnow().strftime("%Y%m%d")
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    aligned_path = base_dir / f"{safe_name}_{ts}_{run_id}_aligned.png"
+    iio.imwrite(aligned_path, frame_u8)
+
+    artifacts: Dict[str, str] = {"aligned_png": str(aligned_path)}
+
+    overlay = _build_overlay(frame_u8.shape[:2], recipe.tools)
+    if overlay is not None:
+        overlay_path = base_dir / f"{safe_name}_{ts}_{run_id}_overlay.png"
+        iio.imwrite(overlay_path, overlay)
+        artifacts["overlay_png"] = str(overlay_path)
+
+    return artifacts
+
+
+def _collect_locator_payload(
+    result: "PipelineResult",
+    locator_reports: Iterable["PipelineToolReport"],
+) -> Dict[str, Any]:
+    locator_info: Dict[str, Any] = {
+        "corr": None,
+        "dx": None,
+        "dy": None,
+        "T_total": None,
+    }
+
+    first_locator = None
+    for report in locator_reports:
+        first_locator = report
+        break
+
+    if first_locator is not None:
+        metrics = first_locator.metrics or {}
+        locator_info["corr"] = metrics.get("corr")
+        locator_info["dx"] = metrics.get("dx")
+        locator_info["dy"] = metrics.get("dy")
+
+    context = result.context
+    T_total = getattr(context, "T_total", None)
+    if T_total is not None:
+        locator_info["T_total"] = _json_safe(np.asarray(T_total).tolist())
+
+    return locator_info
+
+
+def record_pipeline_run(
+    *,
+    recipe: RecipeV2,
+    result: "PipelineResult",
+    recipe_name: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> None:
+    timestamp = _utc_now_iso()
+    run_entry: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "recipe_id": recipe_name or "unknown",
+        "recipe_name": recipe_name or "unknown",
+        "ok": bool(result.status == "ok"),
+        "status": result.status,
+        "cycle_time_ms": float(result.cycle_time_ms),
+    }
+
+    locator_reports = [report for report in result.per_tool if _is_locator(report.tool)]
+    run_entry["locator"] = _collect_locator_payload(result, locator_reports)
+
+    tools_payload: List[Dict[str, Any]] = []
+    for report in result.per_tool:
+        tool_payload = {
+            "name": report.tool.name or report.tool_id,
+            "type": report.tool.type,
+            "ok": bool(report.status == "ok"),
+            "status": report.status,
+            "latency_ms": float(report.latency_ms),
+            "metrics": _json_safe(report.metrics),
+        }
+        tools_payload.append(tool_payload)
+    run_entry["tools"] = tools_payload
+
+    if notes:
+        run_entry["notes"] = str(notes)
+
+    artifacts: Dict[str, str] = {}
+    if bool(getattr(recipe, "export_artifacts", False)):
+        try:
+            artifacts = _export_artifacts(
+                recipe_name=recipe_name,
+                result=result,
+                recipe=recipe,
+            )
+        except Exception as exc:
+            run_entry.setdefault("notes", "")
+            existing = run_entry["notes"].strip()
+            extra = f"artifact export failed: {exc}"
+            run_entry["notes"] = (existing + "; " + extra).strip("; ")
+    if artifacts:
+        run_entry["artifacts"] = artifacts
+
+    _RUN_LOGGER.log(run_entry)
+
+*** End of File
