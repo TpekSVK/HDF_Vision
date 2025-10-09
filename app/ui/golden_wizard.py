@@ -84,15 +84,28 @@ class ToolsTableWidget(QTableWidget):
             super().dropEvent(event)
             return
 
-        before = [self.item(row, 0).data(Qt.UserRole) for row in range(self.rowCount())]
+        before = self._collect_row_ids()
         super().dropEvent(event)
-        after = [self.item(row, 0).data(Qt.UserRole) for row in range(self.rowCount())]
-        if not after or any(value is None for value in after):
+        after = self._collect_row_ids()
+        if not before or not after:
             return
-        normalized_after = [int(value) for value in after]
-        normalized_before = [int(value) for value in before if value is not None]
-        if normalized_after != normalized_before:
-            self.rowsReordered.emit(normalized_after)
+        if after != before:
+            self.rowsReordered.emit(after)
+
+    def _collect_row_ids(self) -> list[int]:
+        ids: list[int] = []
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            data = item.data(Qt.UserRole)
+            if data is None:
+                continue
+            try:
+                ids.append(int(data))
+            except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+                continue
+        return ids
 
 
 def _format_number(value: Any) -> str:
