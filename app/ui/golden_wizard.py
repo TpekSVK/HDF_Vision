@@ -84,13 +84,40 @@ class ToolsTableWidget(QTableWidget):
             super().dropEvent(event)
             return
 
-        before = self._collect_row_ids()
-        super().dropEvent(event)
-        after = self._collect_row_ids()
-        if not before or not after:
+        current_order = self._collect_row_ids()
+        if not current_order:
+            event.ignore()
             return
-        if after != before:
-            self.rowsReordered.emit(after)
+
+        selection = self.selectionModel()
+        if selection is None:
+            event.ignore()
+            return
+
+        selected_rows = sorted({index.row() for index in selection.selectedRows()})
+        if not selected_rows:
+            event.ignore()
+            return
+
+        drop_row = self.rowAt(int(event.position().y())) if hasattr(event, "position") else self.rowAt(event.pos().y())
+        if drop_row < 0:
+            drop_row = self.rowCount()
+
+        # Removing rows shifts the target; account for rows dragged from above.
+        insert_at = drop_row
+        for row in selected_rows:
+            if row < drop_row:
+                insert_at -= 1
+        insert_at = max(0, min(insert_at, len(current_order)))
+
+        moving_ids = [current_order[row] for row in selected_rows]
+        remaining_ids = [tool_id for idx, tool_id in enumerate(current_order) if idx not in selected_rows]
+        for offset, tool_id in enumerate(moving_ids):
+            remaining_ids.insert(insert_at + offset, tool_id)
+
+        if remaining_ids != current_order:
+            self.rowsReordered.emit(remaining_ids)
+        event.acceptProposedAction()
 
     def _collect_row_ids(self) -> list[int]:
         ids: list[int] = []
