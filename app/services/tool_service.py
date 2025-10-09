@@ -540,6 +540,29 @@ class ToolRunnerContext:
     frame_is_aligned: bool = False
 
 
+@dataclass(slots=True)
+class PipelineToolReport:
+    """Aggregated result for a single tool within the pipeline."""
+
+    tool: Tool
+    tool_id: str
+    status: Literal["ok", "nok", "warn"]
+    metrics: Dict[str, float]
+    latency_ms: float
+    diagnostics: Dict[str, Any]
+
+
+@dataclass(slots=True)
+class PipelineResult:
+    """Result of executing the entire tool pipeline."""
+
+    context: ToolRunnerContext
+    per_tool: List[PipelineToolReport]
+    diagnostics: List[Dict[str, Any]]
+    cycle_time_ms: float
+    status: Literal["ok", "nok", "warn"]
+
+
 def compose_affine(
     T_total: np.ndarray | None, T_new: np.ndarray | None
 ) -> np.ndarray:
@@ -568,6 +591,10 @@ def compose_affine(
     M_new = _to_homogeneous(T_new)
     composed = M_new @ M_total
     return composed[:2, :3]
+
+
+def _identity_affine() -> np.ndarray:
+    return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
 
 
 def _validate_roi(tool: Tool, definition: ToolDefinition) -> None:
@@ -603,111 +630,195 @@ def _validate_params(tool: Tool) -> None:
         raise ValueError(f"Params for tool '{tool.name}' must be a dictionary")
 
 
-def _ensure_locator_first(tools: Sequence[Tool]) -> List[Tool]:
-    """Ensure locator tools are positioned before other tools."""
+class PipelineOrchestrator:
+    """Central orchestrator ensuring ordered tool execution with shared context."""
 
-    locators = [tool for tool in tools if tool.type.startswith("locator.")]
-    analyzers = [tool for tool in tools if not tool.type.startswith("locator.")]
-    return list(locators + analyzers)
+    _LOCATOR_PREFIX = "locator."
+
+    def run_pipeline(
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        recipe: RecipeV2,
+    ) -> PipelineResult:
+        """Execute the configured pipeline and return aggregated results."""
+
+        import numpy as np
+        from app.services.tool_registry import ToolRegistry
+
+        start_time = time.perf_counter()
+
+        golden_array = np.asarray(golden)
+        frame_array = np.asarray(frame)
+
+        context = ToolRunnerContext(
+            frame=frame_array,
+            frame_aligned=frame_array,
+            T_total=_identity_affine(),
+            frame_is_aligned=False,
+        )
+
+        diagnostics: List[Dict[str, Any]] = []
+        per_tool: List[PipelineToolReport] = []
+
+        failure_policy = self._normalize_failure_policy(
+            getattr(recipe, "on_locator_failure", "continue_without_alignment")
+        )
+        tools = self._order_tools(recipe.tools)
+
+        for tool in tools:
+            definition = ToolRegistry.get_tool_definition(tool.type)
+            if definition is None:
+                raise ValueError(f"Tool type '{tool.type}' is not registered")
+
+            _validate_roi(tool, definition)
+            _validate_ignore_mask(tool, definition)
+            _validate_params(tool)
+
+            tool_id = tool.name or f"tool_{tool.order}"
+            diag_entry: Dict[str, Any] = {
+                "tool_id": tool_id,
+                "type": tool.type,
+                "status": "disabled" if not tool.enabled else "skipped",
+            }
+
+            if not tool.enabled:
+                diagnostics.append(diag_entry)
+                continue
+
+            runner = ToolRegistry.create_tool(tool.type)
+            runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
+
+            frame_for_tool = (
+                context.frame_aligned if context.frame_aligned is not None else context.frame
+            )
+            if frame_for_tool is None:
+                raise ValueError("Frame data not available for tool execution")
+
+            result = runner.run(
+                golden_array,
+                frame_for_tool,
+                tool.params,
+                tool.thresholds,
+                {"roi": tool.roi},
+            )
+            diagnostics_payload = getattr(runner, "last_diagnostics", {})
+            runner.teardown()
+
+            if isinstance(diagnostics_payload, dict):
+                diag_entry.update(diagnostics_payload)
+            if result.debug_artifacts and isinstance(
+                result.debug_artifacts.get("diagnostics"), dict
+            ):
+                diag_entry.update(result.debug_artifacts["diagnostics"])
+
+            diag_entry["status"] = result.status
+            diag_entry.setdefault("latency_ms", float(result.latency_ms))
+
+            metrics = dict(result.metrics or {})
+            metrics.setdefault("latency_ms", float(result.latency_ms))
+
+            diagnostics.append(diag_entry)
+            record_tool_latency(str(tool_id), float(result.latency_ms))
+
+            per_tool.append(
+                PipelineToolReport(
+                    tool=tool.copy(),
+                    tool_id=str(tool_id),
+                    status=result.status,
+                    metrics=metrics,
+                    latency_ms=float(result.latency_ms),
+                    diagnostics=dict(diag_entry),
+                )
+            )
+
+            if self._is_locator(tool):
+                if result.status == "nok":
+                    self._reset_alignment(context)
+                    if failure_policy == "fail":
+                        break
+                else:
+                    self._apply_locator_alignment(tool, context, diag_entry)
+
+        cycle_time_ms = (time.perf_counter() - start_time) * 1000.0
+        pipeline_status = self._aggregate_status(per_tool)
+
+        return PipelineResult(
+            context=context,
+            per_tool=per_tool,
+            diagnostics=diagnostics,
+            cycle_time_ms=float(cycle_time_ms),
+            status=pipeline_status,
+        )
+
+    def _order_tools(self, tools: Sequence[Tool]) -> List[Tool]:
+        sorted_tools = sorted(tools, key=lambda t: t.order)
+        locators = [tool for tool in sorted_tools if self._is_locator(tool)]
+        analyzers = [tool for tool in sorted_tools if not self._is_locator(tool)]
+        return locators + analyzers
+
+    def _is_locator(self, tool: Tool) -> bool:
+        return tool.type.startswith(self._LOCATOR_PREFIX) or tool.type == "template_match"
+
+    def _apply_locator_alignment(
+        self, tool: Tool, context: ToolRunnerContext, diagnostics: Dict[str, Any]
+    ) -> None:
+        from app.utils import imaging
+
+        T_new = diagnostics.get("T")
+        context.T_total = compose_affine(context.T_total, T_new)
+
+        params_dict = dict(tool.params.values or {})
+        apply_alignment = bool(params_dict.get("apply_alignment", True))
+        if apply_alignment:
+            source = (
+                context.frame_aligned if context.frame_aligned is not None else context.frame
+            )
+            if source is None:
+                raise ValueError("Source frame missing for locator alignment")
+            dx = float(diagnostics.get("dx", 0.0))
+            dy = float(diagnostics.get("dy", 0.0))
+            context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
+            context.frame_is_aligned = True
+        else:
+            context.frame_aligned = context.frame
+            context.frame_is_aligned = False
+
+    def _reset_alignment(self, context: ToolRunnerContext) -> None:
+        context.T_total = _identity_affine()
+        context.frame_aligned = context.frame
+        context.frame_is_aligned = False
+
+    @staticmethod
+    def _normalize_failure_policy(
+        policy: str | None,
+    ) -> Literal["fail", "continue_without_alignment"]:
+        if not isinstance(policy, str):
+            return "continue_without_alignment"
+        normalized = policy.lower().strip()
+        if normalized == "fail":
+            return "fail"
+        return "continue_without_alignment"
+
+    @staticmethod
+    def _aggregate_status(
+        per_tool: Sequence[PipelineToolReport],
+    ) -> Literal["ok", "nok", "warn"]:
+        priority: Dict[str, int] = {"ok": 0, "warn": 1, "nok": 2}
+        current: Literal["ok", "nok", "warn"] = "ok"
+        for entry in per_tool:
+            if priority[entry.status] > priority[current]:
+                current = entry.status
+        return current
 
 
 def run_pipeline(
-    recipe: RecipeV2, golden: np.ndarray, frame: np.ndarray
-) -> Tuple[ToolRunnerContext, List[Dict[str, Any]], List[ToolRunResult]]:
-    """Iterate through tool pipeline and update shared context.
+    golden: np.ndarray, frame: np.ndarray, recipe: RecipeV2
+) -> PipelineResult:
+    """Execute the configured pipeline using the shared orchestrator."""
 
-    Returns the updated context, diagnostic payloads and normalized
-    :class:`ToolRunResult` entries in execution order.
-    """
-
-    import numpy as np
-    from app.services.tool_registry import ToolRegistry
-    from app.utils import imaging
-
-    diagnostics: List[Dict[str, Any]] = []
-    results: List[ToolRunResult] = []
-    context = ToolRunnerContext(
-        frame=frame,
-        frame_aligned=frame,
-        T_total=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
-        frame_is_aligned=False,
-    )
-
-    tools: Sequence[Tool] = sorted(recipe.tools, key=lambda t: t.order)
-    tools = _ensure_locator_first(tools)
-
-    for tool in tools:
-        definition = ToolRegistry.get_tool_definition(tool.type)
-        if definition is None:
-            raise ValueError(f"Tool type '{tool.type}' is not registered")
-
-        _validate_roi(tool, definition)
-        _validate_ignore_mask(tool, definition)
-        _validate_params(tool)
-
-        tool_id = tool.name or f"tool_{tool.order}"
-        diag_entry: Dict[str, Any] = {
-            "tool_id": tool_id,
-            "type": tool.type,
-            "status": "disabled" if not tool.enabled else "skipped",
-        }
-
-        if not tool.enabled:
-            diagnostics.append(diag_entry)
-            continue
-
-        runner = ToolRegistry.create_tool(tool.type)
-        runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
-
-        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
-        if frame_for_tool is None:
-            raise ValueError("Frame data not available for tool execution")
-
-        result = runner.run(
-            golden,
-            frame_for_tool,
-            tool.params,
-            tool.thresholds,
-            {"roi": tool.roi},
-        )
-        diagnostics_payload = getattr(runner, "last_diagnostics", {})
-        runner.teardown()
-
-        if isinstance(diagnostics_payload, dict):
-            diag_entry.update(diagnostics_payload)
-        if result.debug_artifacts and isinstance(result.debug_artifacts.get("diagnostics"), dict):
-            diag_entry.update(result.debug_artifacts["diagnostics"])
-
-        diag_entry["status"] = result.status
-        results.append(result)
-        record_tool_latency(str(tool_id), float(result.latency_ms))
-
-        if tool.type == "locator.template_match":
-            locator_diag = diag_entry
-            T_new = locator_diag.get("T")
-            context.T_total = compose_affine(context.T_total, T_new)
-
-            params_dict = dict(tool.params.values or {})
-            apply_alignment = bool(params_dict.get("apply_alignment", True))
-            if apply_alignment:
-                source = (
-                    context.frame_aligned
-                    if context.frame_aligned is not None
-                    else context.frame
-                )
-                if source is None:
-                    raise ValueError("Source frame missing for locator alignment")
-                dx = float(locator_diag.get("dx", 0.0))
-                dy = float(locator_diag.get("dy", 0.0))
-                context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
-                context.frame_is_aligned = True
-            else:
-                context.frame_aligned = context.frame
-                context.frame_is_aligned = False
-
-        diagnostics.append(diag_entry)
-
-    return context, diagnostics, results
+    orchestrator = PipelineOrchestrator()
+    return orchestrator.run_pipeline(golden, frame, recipe)
 
 
 def run_tool_isolated(
