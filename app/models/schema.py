@@ -399,6 +399,7 @@ class RecipeV2:
     on_locator_failure: Literal["fail", "continue_without_alignment"] = (
         "continue_without_alignment"
     )
+    export_artifacts: bool = False
 
     def __post_init__(self) -> None:
         self.pose_enabled = bool(self.pose_enabled)
@@ -425,6 +426,7 @@ class RecipeV2:
             "regions": [dict(r) for r in self.regions],
             "tools": [t.to_dict() for t in self.tools],
             "on_locator_failure": self.on_locator_failure,
+            "export_artifacts": bool(self.export_artifacts),
         }
 
     @classmethod
@@ -438,6 +440,7 @@ class RecipeV2:
             on_locator_failure=data.get(
                 "on_locator_failure", "continue_without_alignment"
             ),
+            export_artifacts=bool(data.get("export_artifacts", False)),
         )
 
     @classmethod
@@ -447,6 +450,7 @@ class RecipeV2:
             regions=recipe.regions,
             tools=[],
             on_locator_failure="continue_without_alignment",
+            export_artifacts=False,
         )
 
     def copy(self) -> "RecipeV2":
@@ -455,6 +459,7 @@ class RecipeV2:
             regions=[deepcopy(r) for r in self.regions],
             tools=[tool.copy() for tool in self.tools],
             on_locator_failure=self.on_locator_failure,
+            export_artifacts=self.export_artifacts,
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":
@@ -464,6 +469,7 @@ class RecipeV2:
             regions=[deepcopy(r) for r in self.regions],
             tools=new_tools,
             on_locator_failure=self.on_locator_failure,
+            export_artifacts=self.export_artifacts,
         )
 
     def iter_tools(self) -> Iterable[Tool]:
