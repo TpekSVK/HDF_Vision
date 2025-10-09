@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -9,6 +9,7 @@ from app.models.schema import ToolParams, ToolThresholds
 from app.services.tool_service import ToolRunResult
 from app.services.tools.common import PairTool
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult, time_block
 
 
 class NCCTool(PairTool):
@@ -23,12 +24,14 @@ class NCCTool(PairTool):
         context: Dict[str, Any],
     ) -> ToolRunResult:
         start = time.perf_counter()
+        timings: List[TimeBlockResult] = []
 
         params_dict = self._coerce_params_dict(params)
         thresholds_dict = self._coerce_thresholds_dict(thresholds)
 
-        self._ensure_pair_cache(frame, params_dict, thresholds_dict)
-        prepared = self._prepare_pair(golden, frame, context)
+        with time_block("prepare_pair", timings):
+            self._ensure_pair_cache(frame, params_dict, thresholds_dict)
+            prepared = self._prepare_pair(golden, frame, context)
         sigma = float(params_dict.get("preblur_sigma", 0.0))
         sigma = max(0.0, float(sigma))
 
@@ -36,19 +39,23 @@ class NCCTool(PairTool):
         frame_roi = prepared.frame_roi
 
         if sigma > 1e-6:
-            golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
-            frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
+            with time_block("blur", timings):
+                golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
+                frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        gold_f = golden_roi.astype(np.float32)
-        frame_f = frame_roi.astype(np.float32)
+        with time_block("astype", timings):
+            gold_f = golden_roi.astype(np.float32)
+            frame_f = frame_roi.astype(np.float32)
 
         if prepared.valid_mask is not None:
             valid = prepared.valid_mask
-            gold_vec = gold_f[valid]
-            frame_vec = frame_f[valid]
+            with time_block("mask_select", timings):
+                gold_vec = gold_f[valid]
+                frame_vec = frame_f[valid]
         else:
-            gold_vec = gold_f.reshape(-1)
-            frame_vec = frame_f.reshape(-1)
+            with time_block("flatten", timings):
+                gold_vec = gold_f.reshape(-1)
+                frame_vec = frame_f.reshape(-1)
 
         effective_pixels = int(gold_vec.size)
         latency_ms = (time.perf_counter() - start) * 1000.0
@@ -74,16 +81,21 @@ class NCCTool(PairTool):
                 latency_ms=latency_ms,
                 tool_id=self._prepared_context.get("tool_id", "ncc"),
                 debug_type="ncc",
+                timings=timings,
             )
 
-        gold_centered = gold_vec - float(np.mean(gold_vec, dtype=np.float32))
-        frame_centered = frame_vec - float(np.mean(frame_vec, dtype=np.float32))
+        with time_block("center", timings):
+            gold_centered = gold_vec - float(np.mean(gold_vec, dtype=np.float32))
+            frame_centered = frame_vec - float(np.mean(frame_vec, dtype=np.float32))
 
-        denom = float(np.linalg.norm(gold_centered) * np.linalg.norm(frame_centered))
+        with time_block("norm", timings):
+            denom = float(np.linalg.norm(gold_centered) * np.linalg.norm(frame_centered))
         if denom <= 1e-6:
-            ncc_value = 1.0 if np.allclose(gold_vec, frame_vec) else 0.0
+            with time_block("allclose", timings):
+                ncc_value = 1.0 if np.allclose(gold_vec, frame_vec) else 0.0
         else:
-            ncc_value = float(np.dot(gold_centered, frame_centered) / denom)
+            with time_block("dot", timings):
+                ncc_value = float(np.dot(gold_centered, frame_centered) / denom)
 
         ncc_min = float(thresholds_dict.get("ncc_min", 0.9))
         status = "ok" if ncc_value >= ncc_min else "nok"
@@ -112,4 +124,5 @@ class NCCTool(PairTool):
             latency_ms=latency_ms,
             tool_id=self._prepared_context.get("tool_id", "ncc"),
             debug_type="ncc",
+            timings=timings,
         )

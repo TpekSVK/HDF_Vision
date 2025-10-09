@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -9,6 +9,7 @@ from app.models.schema import ToolParams, ToolThresholds
 from app.services.tool_service import ToolRunResult
 from app.services.tools.common import PairTool
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult, time_block
 
 
 class SSDTool(PairTool):
@@ -23,12 +24,14 @@ class SSDTool(PairTool):
         context: Dict[str, Any],
     ) -> ToolRunResult:
         start = time.perf_counter()
+        timings: List[TimeBlockResult] = []
 
         params_dict = self._coerce_params_dict(params)
         thresholds_dict = self._coerce_thresholds_dict(thresholds)
 
-        self._ensure_pair_cache(frame, params_dict, thresholds_dict)
-        prepared = self._prepare_pair(golden, frame, context)
+        with time_block("prepare_pair", timings):
+            self._ensure_pair_cache(frame, params_dict, thresholds_dict)
+            prepared = self._prepare_pair(golden, frame, context)
         sigma = float(params_dict.get("preblur_sigma", 0.0))
         sigma = max(0.0, float(sigma))
 
@@ -36,14 +39,18 @@ class SSDTool(PairTool):
         frame_roi = prepared.frame_roi
 
         if sigma > 1e-6:
-            golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
-            frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
+            with time_block("blur", timings):
+                golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
+                frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        diff_abs = imaging.absdiff_u8(golden_roi, frame_roi).astype(np.float32)
+        with time_block("absdiff", timings):
+            diff_abs = imaging.absdiff_u8(golden_roi, frame_roi).astype(np.float32)
         if prepared.valid_mask is not None:
-            valid_values = diff_abs[prepared.valid_mask]
+            with time_block("mask_select", timings):
+                valid_values = diff_abs[prepared.valid_mask]
         else:
-            valid_values = diff_abs.reshape(-1)
+            with time_block("flatten", timings):
+                valid_values = diff_abs.reshape(-1)
 
         effective_pixels = int(valid_values.size)
         if effective_pixels == 0:
@@ -68,10 +75,13 @@ class SSDTool(PairTool):
                 latency_ms=latency_ms,
                 tool_id=self._prepared_context.get("tool_id", "ssd"),
                 debug_type="ssd",
+                timings=timings,
             )
 
-        ssd_value = float(np.sum(valid_values * valid_values, dtype=np.float32))
-        mean_abs = float(np.mean(valid_values, dtype=np.float32))
+        with time_block("ssd", timings):
+            ssd_value = float(np.sum(valid_values * valid_values, dtype=np.float32))
+        with time_block("mean", timings):
+            mean_abs = float(np.mean(valid_values, dtype=np.float32))
 
         ssd_max = float(thresholds_dict.get("ssd_max", 1.0e7))
         status = "ok" if ssd_value <= ssd_max else "nok"
@@ -105,4 +115,5 @@ class SSDTool(PairTool):
             latency_ms=latency_ms,
             tool_id=self._prepared_context.get("tool_id", "ssd"),
             debug_type="ssd",
+            timings=timings,
         )

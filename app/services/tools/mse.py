@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import numpy as np
 
@@ -10,6 +10,7 @@ from app.models.schema import ToolParams, ToolThresholds
 from app.services.tool_service import ToolRunResult
 from app.services.tools.common import PairTool
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult, time_block
 
 
 class MSETool(PairTool):
@@ -24,12 +25,14 @@ class MSETool(PairTool):
         context: Dict[str, Any],
     ) -> ToolRunResult:
         start = time.perf_counter()
+        timings: List[TimeBlockResult] = []
 
         params_dict = self._coerce_params_dict(params)
         thresholds_dict = self._coerce_thresholds_dict(thresholds)
 
-        self._ensure_pair_cache(frame, params_dict, thresholds_dict)
-        prepared = self._prepare_pair(golden, frame, context)
+        with time_block("prepare_pair", timings):
+            self._ensure_pair_cache(frame, params_dict, thresholds_dict)
+            prepared = self._prepare_pair(golden, frame, context)
         sigma = float(params_dict.get("preblur_sigma", 0.0))
         sigma = max(0.0, float(sigma))
 
@@ -37,10 +40,12 @@ class MSETool(PairTool):
         frame_roi = prepared.frame_roi
 
         if sigma > 1e-6:
-            golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
-            frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
+            with time_block("blur", timings):
+                golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
+                frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        diff_abs = imaging.absdiff_u8(golden_roi, frame_roi).astype(np.float32)
+        with time_block("absdiff", timings):
+            diff_abs = imaging.absdiff_u8(golden_roi, frame_roi).astype(np.float32)
         if prepared.valid_mask is not None:
             valid_values = diff_abs[prepared.valid_mask]
         else:
@@ -65,12 +70,13 @@ class MSETool(PairTool):
             }
             return self._finalize_result(
                 status="warn",
-                metrics={"mse": 0.0, "rmse": 0.0},
-                diagnostics=diagnostics,
-                latency_ms=latency_ms,
-                tool_id=self._prepared_context.get("tool_id", "mse"),
-                debug_type="mse",
-            )
+            metrics={"mse": 0.0, "rmse": 0.0},
+            diagnostics=diagnostics,
+            latency_ms=latency_ms,
+            tool_id=self._prepared_context.get("tool_id", "mse"),
+            debug_type="mse",
+            timings=timings,
+        )
 
         squared = valid_values * valid_values
         mse_value = float(np.mean(squared, dtype=np.float32))
@@ -106,4 +112,5 @@ class MSETool(PairTool):
             latency_ms=latency_ms,
             tool_id=self._prepared_context.get("tool_id", "mse"),
             debug_type="mse",
+            timings=timings,
         )

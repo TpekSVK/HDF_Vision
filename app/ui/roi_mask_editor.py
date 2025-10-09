@@ -41,6 +41,18 @@ _MASK_COLOR = QColor(255, 0, 200, 160)
 _OVERLAY_COLOR = QColor(0, 0, 0, 120)
 
 
+ROI_WARN_PIXELS = 900_000
+MAX_ROI_PIXELS = 1_600_000
+MASK_WARN_PIXELS = 900_000
+MAX_MASK_PIXELS = 1_600_000
+
+
+def _format_pixels(count: int) -> str:
+    """Format pixel counts using thin spaces for readability."""
+
+    return f"{int(count):,}".replace(",", "\u202f")
+
+
 def _clamp_point_to_rect(point: QPointF, rect: QRectF) -> QPointF:
     if rect.isNull():
         return point
@@ -670,7 +682,10 @@ class ROIEditor(QWidget):
         self._btn_reset.clicked.connect(self._view.reset_roi)
 
         self._info_label = QLabel("ROI: —", self)
-        self._info_label.setStyleSheet("color: #666;")
+        self._info_label.setStyleSheet("color: #bbb;")
+        self._hint_label = QLabel("", self)
+        self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
+        self._hint_label.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -684,7 +699,12 @@ class ROIEditor(QWidget):
         toolbar.addWidget(self._btn_redo)
         toolbar.addWidget(self._btn_reset)
         toolbar.addStretch(1)
-        toolbar.addWidget(self._info_label)
+        info_box = QVBoxLayout()
+        info_box.setContentsMargins(0, 0, 0, 0)
+        info_box.setSpacing(2)
+        info_box.addWidget(self._info_label)
+        info_box.addWidget(self._hint_label)
+        toolbar.addLayout(info_box)
         layout.addLayout(toolbar)
 
         if not show_toolbar:
@@ -732,9 +752,26 @@ class ROIEditor(QWidget):
         rect = self._view.roi()
         if rect is None:
             self._info_label.setText("ROI: —")
+            self._hint_label.setVisible(False)
         else:
             x, y, w, h = rect
-            self._info_label.setText(f"ROI: {w}×{h} px @ ({x}, {y})")
+            area = max(0, int(w) * int(h))
+            self._info_label.setText(
+                f"ROI: {w}×{h} px · {_format_pixels(area)} px @ ({x}, {y})"
+            )
+            if area > MAX_ROI_PIXELS:
+                limit = _format_pixels(MAX_ROI_PIXELS)
+                self._hint_label.setText(
+                    f"⚠ ROI presahuje limit testu ({limit} px). Zmenši výber."
+                )
+                self._hint_label.setStyleSheet("color: #b03030; font-size: 11px;")
+                self._hint_label.setVisible(True)
+            elif area > ROI_WARN_PIXELS:
+                self._hint_label.setText("⚠ Veľká ROI – test môže chvíľu trvať.")
+                self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
+                self._hint_label.setVisible(True)
+            else:
+                self._hint_label.setVisible(False)
 
 
 @dataclass
@@ -793,7 +830,10 @@ class MaskEditor(QWidget):
         self._btn_clear.clicked.connect(self._view.clear_mask)
 
         self._info_label = QLabel("Ignore pixels: 0", self)
-        self._info_label.setStyleSheet("color: #666;")
+        self._info_label.setStyleSheet("color: #bbb;")
+        self._hint_label = QLabel("", self)
+        self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
+        self._hint_label.setVisible(False)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -818,7 +858,12 @@ class MaskEditor(QWidget):
         toolbar_bottom.addWidget(self._btn_redo)
         toolbar_bottom.addWidget(self._btn_clear)
         toolbar_bottom.addStretch(1)
-        toolbar_bottom.addWidget(self._info_label)
+        info_box = QVBoxLayout()
+        info_box.setContentsMargins(0, 0, 0, 0)
+        info_box.setSpacing(2)
+        info_box.addWidget(self._info_label)
+        info_box.addWidget(self._hint_label)
+        toolbar_bottom.addLayout(info_box)
         layout.addLayout(toolbar_bottom)
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -895,7 +940,28 @@ class MaskEditor(QWidget):
     def _update_info_label(self) -> None:
         mask = self._view.mask()
         count = int(np.count_nonzero(mask)) if mask is not None else 0
-        self._info_label.setText(f"Ignore pixels: {count}")
+        self._info_label.setText(f"Ignore pixels: {_format_pixels(count)}")
+        if count > MAX_MASK_PIXELS:
+            limit = _format_pixels(MAX_MASK_PIXELS)
+            self._hint_label.setText(
+                f"⚠ Maska presahuje limit testu ({limit} px). Zmenši ju."
+            )
+            self._hint_label.setStyleSheet("color: #b03030; font-size: 11px;")
+            self._hint_label.setVisible(True)
+        elif count > MASK_WARN_PIXELS:
+            self._hint_label.setText("⚠ Veľká maska – výpočet môže byť pomalší.")
+            self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
+            self._hint_label.setVisible(True)
+        else:
+            self._hint_label.setVisible(False)
 
 
-__all__ = ["ROIEditor", "MaskEditor", "MaskEditorState"]
+__all__ = [
+    "ROIEditor",
+    "MaskEditor",
+    "MaskEditorState",
+    "ROI_WARN_PIXELS",
+    "MAX_ROI_PIXELS",
+    "MASK_WARN_PIXELS",
+    "MAX_MASK_PIXELS",
+]

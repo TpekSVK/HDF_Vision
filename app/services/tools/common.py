@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
@@ -16,6 +16,7 @@ from app.services.tool_service import (
 )
 from app.services.tool_service import ToolRunnerContext  # type: ignore  # circular typing
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult
 
 
 @dataclass(slots=True)
@@ -208,12 +209,20 @@ class PairTool(BaseTool):
         latency_ms: float,
         tool_id: str,
         debug_type: str,
+        timings: Sequence[TimeBlockResult] | None = None,
     ) -> ToolRunResult:
         payload = {
             "tool_id": tool_id,
             "type": debug_type,
             "diagnostics": {**diagnostics, "latency_ms": latency_ms},
         }
+        if timings:
+            payload["diagnostics"]["timings_ms"] = {
+                entry.name: float(entry.elapsed_ms) for entry in timings
+            }
         return ToolRunResult(
-            status=status, metrics={**metrics, "latency_ms": float(latency_ms)}, latency_ms=float(latency_ms), debug_artifacts=payload
+            status=status,
+            metrics={**metrics, "latency_ms": float(latency_ms)},
+            latency_ms=float(latency_ms),
+            debug_artifacts=payload,
         )

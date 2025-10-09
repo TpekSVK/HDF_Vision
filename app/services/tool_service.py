@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Protocol, runtime_checkable, TYPE_CHECKING
@@ -36,6 +37,44 @@ class ToolRunResult:
     metrics: Dict[str, float]
     latency_ms: float
     debug_artifacts: Optional[Dict[str, Any]] = None
+
+
+class LatencyTracker:
+    """In-memory circular buffer storing per-tool latencies."""
+
+    def __init__(self, capacity: int = 64) -> None:
+        self.capacity = max(1, int(capacity))
+        self._history: Dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=self.capacity))
+
+    def record(self, tool_id: str, latency_ms: float) -> None:
+        if not tool_id:
+            return
+        self._history[tool_id].append(float(latency_ms))
+
+    def summary(self) -> Dict[str, Dict[str, float]]:
+        stats: Dict[str, Dict[str, float]] = {}
+        for tool_id, values in self._history.items():
+            if not values:
+                continue
+            samples = list(values)
+            stats[tool_id] = {
+                "count": int(len(samples)),
+                "avg_ms": float(sum(samples) / len(samples)),
+                "min_ms": float(min(samples)),
+                "max_ms": float(max(samples)),
+                "last_ms": float(samples[-1]),
+            }
+        return stats
+
+    def history(self) -> Dict[str, List[float]]:
+        return {tool_id: list(values) for tool_id, values in self._history.items()}
+
+
+_LATENCY_TRACKER = LatencyTracker()
+
+
+def record_tool_latency(tool_id: str, latency_ms: float) -> None:
+    _LATENCY_TRACKER.record(tool_id, latency_ms)
 
 
 @runtime_checkable
@@ -398,6 +437,16 @@ class ToolService:
         self.thresholds = DEFAULT_THRESHOLDS.copy()
         self.pose_enabled = True
 
+    def latency_summary(self) -> Dict[str, Dict[str, float]]:
+        """Return aggregate latency stats for the most recent tool runs."""
+
+        return _LATENCY_TRACKER.summary()
+
+    def latency_history(self) -> Dict[str, List[float]]:
+        """Return raw latency history per tool."""
+
+        return _LATENCY_TRACKER.history()
+
     # ------------------------------------------------------------------
     # Tool registry API
     # ------------------------------------------------------------------
@@ -631,6 +680,7 @@ def run_pipeline(
 
         diag_entry["status"] = result.status
         results.append(result)
+        record_tool_latency(str(tool_id), float(result.latency_ms))
 
         if tool.type == "locator.template_match":
             locator_diag = diag_entry
@@ -757,6 +807,7 @@ def run_tool_isolated(
             context.frame_aligned = context.frame
             context.frame_is_aligned = False
 
+    record_tool_latency(tool_stub.name or tool_type, float(result.latency_ms))
     return result
 
 
@@ -1033,6 +1084,7 @@ def run_locator_template_match(
     template_rect = _clamp_rect(template_source, golden_w, golden_h)
 
     coarse_cap = _safe_int(params_dict.get("coarse_cap", 600), 600)
+    timings: list[imaging.TimeBlockResult] = []
     dx = 0.0
     dy = 0.0
     corr = 0.0
@@ -1046,14 +1098,15 @@ def run_locator_template_match(
             sx, sy, sw, sh = search_rect
 
             if sw >= tw and sh >= th:
-                dx_rel, dy_rel, corr, used = imaging.match_template_u8(
-                    frame_u8,
-                    templ,
-                    roi=(sx, sy, sw, sh),
-                    search_margin=0,
-                    coarse_cap=int(max(1, coarse_cap)),
-                    cache=cache,
-                )
+                with imaging.time_block("match_template", timings):
+                    dx_rel, dy_rel, corr, used = imaging.match_template_u8(
+                        frame_u8,
+                        templ,
+                        roi=(sx, sy, sw, sh),
+                        search_margin=0,
+                        coarse_cap=int(max(1, coarse_cap)),
+                        cache=cache,
+                    )
 
                 dx = float((sx + dx_rel) - tx)
                 dy = float((sy + dy_rel) - ty)
@@ -1074,6 +1127,10 @@ def run_locator_template_match(
         "status": status,
         "threshold_corr": _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),
     }
+    if timings:
+        diagnostics["timings_ms"] = {
+            entry.name: float(entry.elapsed_ms) for entry in timings
+        }
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
     diagnostics["latency_ms"] = latency_ms
@@ -1118,6 +1175,7 @@ def run_ssim_tool(
         else dict(thresholds or {})
     )
     ssim_min = float(thresholds_dict.get("ssim_min", DEFAULT_THRESHOLDS.get("ssim_min", 0.92)))
+    timings: list[imaging.TimeBlockResult] = []
 
     roi_rect = _rect_from_any(roi)
     gh, gw = golden_u8.shape[:2]
@@ -1128,14 +1186,16 @@ def run_ssim_tool(
     dx_total, dy_total = _extract_translation_from_affine(T_total)
     virtual_alignment = False
     if not frame_is_aligned and (abs(dx_total) > 1e-3 or abs(dy_total) > 1e-3):
-        frame_u8 = imaging.warp_by_translation_u8(frame_orig_u8, -dx_total, -dy_total)
+        with imaging.time_block("warp_alignment", timings):
+            frame_u8 = imaging.warp_by_translation_u8(frame_orig_u8, -dx_total, -dy_total)
         virtual_alignment = True
 
     x, y, w, h = roi_rect
     golden_crop = golden_u8[y : y + h, x : x + w]
     frame_crop = frame_u8[y : y + h, x : x + w]
 
-    ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
+    with imaging.time_block("ssim", timings):
+        ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
     metrics = {"ssim": float(ssim_val)}
     status = status_from_metrics("ssim", metrics, thresholds_dict)
     diagnostics = {
@@ -1146,6 +1206,10 @@ def run_ssim_tool(
         "dx_total": dx_total,
         "dy_total": dy_total,
     }
+    if timings:
+        diagnostics["timings_ms"] = {
+            entry.name: float(entry.elapsed_ms) for entry in timings
+        }
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
     diagnostics["latency_ms"] = latency_ms
