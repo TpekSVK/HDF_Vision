@@ -32,7 +32,8 @@ import os
 import time
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
+from functools import partial
 
 import numpy as np
 import cv2
@@ -71,6 +72,40 @@ from app.services.tool_service import (
 
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
+
+
+class ToolsTableWidget(QTableWidget):
+    """Table with internal drag & drop row reordering support."""
+
+    rowsReordered = Signal(list)
+
+    def dropEvent(self, event):  # type: ignore[override]
+        if event.source() is not self or self.dragDropMode() != QAbstractItemView.InternalMove:
+            super().dropEvent(event)
+            return
+
+        before = self._collect_row_ids()
+        super().dropEvent(event)
+        after = self._collect_row_ids()
+        if not before or not after:
+            return
+        if after != before:
+            self.rowsReordered.emit(after)
+
+    def _collect_row_ids(self) -> list[int]:
+        ids: list[int] = []
+        for row in range(self.rowCount()):
+            item = self.item(row, 0)
+            if item is None:
+                continue
+            data = item.data(Qt.UserRole)
+            if data is None:
+                continue
+            try:
+                ids.append(int(data))
+            except (TypeError, ValueError):  # pragma: no cover - defensive fallback
+                continue
+        return ids
 
 
 def _format_number(value: Any) -> str:
@@ -2287,7 +2322,7 @@ class GoldenWizard(QDialog):
         self._tool_panel.setMinimumWidth(280)
         self._tool_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
-        self.tools_table = QTableWidget(0, 5, self)
+        self.tools_table = ToolsTableWidget(0, 5, self)
         self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
         header = self.tools_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
@@ -2297,6 +2332,12 @@ class GoldenWizard(QDialog):
         self.tools_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tools_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tools_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tools_table.setDragEnabled(True)
+        self.tools_table.setAcceptDrops(True)
+        self.tools_table.setDropIndicatorShown(True)
+        self.tools_table.setDragDropMode(QAbstractItemView.InternalMove)
+        self.tools_table.setDragDropOverwriteMode(False)
+        self.tools_table.setDefaultDropAction(Qt.MoveAction)
         tools_label = QLabel("Tools in recipe:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
@@ -2345,6 +2386,7 @@ class GoldenWizard(QDialog):
         btn_val_nok.clicked.connect(lambda: self._save_validation(False))
         self.recipe_name.editingFinished.connect(self._on_recipe_changed)
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
+        self.tools_table.rowsReordered.connect(self._on_tools_reordered)
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
         self._tool_panel.testRequested.connect(self._on_tool_test_requested)
@@ -2667,6 +2709,9 @@ class GoldenWizard(QDialog):
     def _info(self, msg):
         QMessageBox.information(self, "Info", msg)
 
+    def _warn(self, msg):
+        QMessageBox.warning(self, "Upozornenie", msg)
+
     def _err(self, msg):
         QMessageBox.critical(self, "Chyba", msg)
 
@@ -2709,16 +2754,19 @@ class GoldenWizard(QDialog):
         self.tools_table.setRowCount(len(tools))
         for row, tool in enumerate(tools):
             order_item = QTableWidgetItem(str(tool.order + 1))
+            order_item.setData(Qt.UserRole, row)
+            order_flags = order_item.flags()
+            order_flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
+            order_item.setFlags(order_flags)
             name_item = QTableWidgetItem(tool.name)
             type_item = QTableWidgetItem(tool.type)
-            enabled_item = QTableWidgetItem("Yes" if tool.enabled else "No")
-            enabled_item.setTextAlignment(Qt.AlignCenter)
             order_item.setTextAlignment(Qt.AlignCenter)
             is_locator = tool.type.startswith("locator.")
             if is_locator:
                 highlight = QColor("#fff2cc")
                 type_item.setBackground(highlight)
                 order_item.setBackground(highlight)
+                name_item.setBackground(highlight)
                 type_item.setText(f"{tool.type}  (Locator)")
                 type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
             else:
@@ -2726,25 +2774,44 @@ class GoldenWizard(QDialog):
             self.tools_table.setItem(row, 0, order_item)
             self.tools_table.setItem(row, 1, name_item)
             self.tools_table.setItem(row, 2, type_item)
-            self.tools_table.setItem(row, 3, enabled_item)
+
+            enabled_checkbox = QCheckBox(self.tools_table)
+            enabled_checkbox.setTristate(False)
+            enabled_checkbox.setToolTip("Rýchle zapnutie alebo vypnutie nástroja v pipeline.")
+            enabled_checkbox.blockSignals(True)
+            enabled_checkbox.setChecked(bool(tool.enabled))
+            enabled_checkbox.blockSignals(False)
+            enabled_checkbox.toggled.connect(partial(self._on_tool_enabled_toggled, row))
+            enabled_container = QWidget(self.tools_table)
+            enabled_layout = QHBoxLayout(enabled_container)
+            enabled_layout.setContentsMargins(0, 0, 0, 0)
+            enabled_layout.setSpacing(0)
+            enabled_layout.addStretch(1)
+            enabled_layout.addWidget(enabled_checkbox)
+            enabled_layout.addStretch(1)
+            self.tools_table.setCellWidget(row, 3, enabled_container)
+
+            if not tool.enabled:
+                disabled_color = QColor("#999999")
+                for col in range(0, 3):
+                    item = self.tools_table.item(row, col)
+                    if item is not None:
+                        item.setForeground(disabled_color)
 
             actions_widget = QWidget(self.tools_table)
             actions_layout = QHBoxLayout(actions_widget)
             actions_layout.setContentsMargins(0, 0, 0, 0)
             actions_layout.setSpacing(4)
 
-            btn_up = QPushButton("Up", actions_widget)
-            btn_up.clicked.connect(lambda _, idx=row: self._move_tool(idx, -1))
-            btn_down = QPushButton("Down", actions_widget)
-            btn_down.clicked.connect(lambda _, idx=row: self._move_tool(idx, 1))
             btn_edit = QPushButton("Edit", actions_widget)
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
+            btn_duplicate = QPushButton("Duplicate", actions_widget)
+            btn_duplicate.clicked.connect(lambda _, idx=row: self._duplicate_tool(idx))
             btn_del = QPushButton("Delete", actions_widget)
             btn_del.clicked.connect(lambda _, idx=row: self._delete_tool(idx))
 
-            actions_layout.addWidget(btn_up)
-            actions_layout.addWidget(btn_down)
             actions_layout.addWidget(btn_edit)
+            actions_layout.addWidget(btn_duplicate)
             actions_layout.addWidget(btn_del)
             actions_layout.addStretch(1)
 
@@ -2769,25 +2836,123 @@ class GoldenWizard(QDialog):
 
         self._update_dirty_state(recipe)
 
-    def _move_tool(self, index: int, delta: int):
-        recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
-        target = index + delta
-        if target < 0 or target >= len(tools):
-            return
-        order = list(range(len(tools)))
-        order[index], order[target] = order[target], order[index]
-        try:
-            self.recipes.reorder_tools(recipe, order)
-        except Exception as exc:
-            self._err(f"Zmena poradia zlyhala: {exc}")
-            return
-        self._refresh_tools_table()
-
     def _delete_tool(self, index: int):
         recipe = self._current_recipe_name()
         self.recipes.remove_tool(recipe, index)
         self._refresh_tools_table()
+
+    def _duplicate_tool(self, index: int) -> None:
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if not (0 <= index < len(tools)):
+            return
+
+        original = tools[index]
+        duplicate = original.copy()
+        existing_names = {tool.name for tool in tools if tool.name}
+        duplicate.name = self._generate_duplicate_name(
+            original.name or original.type,
+            existing_names,
+        )
+
+        try:
+            self.recipes.add_tool(recipe, duplicate)
+        except Exception as exc:
+            self._err(f"Klonovanie nástroja zlyhalo: {exc}")
+            return
+
+        try:
+            updated = self.recipes.get_draft_tools(recipe)
+            new_index = len(updated) - 1
+            order = list(range(len(updated)))
+            moved = order.pop(new_index)
+            insert_at = min(index + 1, len(order))
+            order.insert(insert_at, moved)
+            self.recipes.reorder_tools(recipe, order)
+            self._selected_tool_row = insert_at
+        except Exception as exc:
+            self._err(f"Zmena poradia po duplikovaní zlyhala: {exc}")
+        finally:
+            self._refresh_tools_table()
+
+    def _generate_duplicate_name(self, original: str, existing: set[str]) -> str:
+        base = (original or "Tool").strip() or "Tool"
+        candidate = f"{base} copy"
+        if candidate not in existing:
+            return candidate
+        counter = 2
+        while True:
+            candidate = f"{base} copy {counter}"
+            if candidate not in existing:
+                return candidate
+            counter += 1
+
+    def _on_tool_enabled_toggled(self, index: int, enabled: bool) -> None:
+        self._toggle_tool_enabled(index, enabled)
+
+    def _toggle_tool_enabled(self, index: int, enabled: bool) -> None:
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if not (0 <= index < len(tools)):
+            return
+
+        tool = tools[index]
+        if bool(tool.enabled) == bool(enabled):
+            return
+
+        tool.enabled = bool(enabled)
+        try:
+            self.recipes.update_tool(recipe, index, tool)
+        except Exception as exc:
+            self._err(f"Prepnutie nástroja zlyhalo: {exc}")
+            self._refresh_tools_table()
+            return
+
+        self._selected_tool_row = index
+        self._refresh_tools_table()
+
+    def _on_tools_reordered(self, new_order: list[int]) -> None:
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if len(new_order) != len(tools):
+            self._refresh_tools_table()
+            return
+
+        if new_order == list(range(len(tools))):
+            self._refresh_tools_table()
+            return
+
+        reordered = [tools[idx] for idx in new_order]
+        if not self._is_locator_order_valid(reordered):
+            self._warn("Locator nástroje musia zostať pred analyzátormi. Zmena nebola aplikovaná.")
+            self._refresh_tools_table()
+            return
+
+        previous_selection = getattr(self, "_selected_tool_row", -1)
+        try:
+            self.recipes.reorder_tools(recipe, new_order)
+        except Exception as exc:
+            self._err(f"Zmena poradia zlyhala: {exc}")
+            self._refresh_tools_table()
+            return
+
+        if 0 <= previous_selection < len(new_order):
+            try:
+                self._selected_tool_row = new_order.index(previous_selection)
+            except ValueError:
+                self._selected_tool_row = -1
+
+        self._refresh_tools_table()
+
+    def _is_locator_order_valid(self, tools: Sequence[Tool]) -> bool:
+        analyzer_seen = False
+        for tool in tools:
+            if tool.type.startswith("locator."):
+                if analyzer_seen:
+                    return False
+            else:
+                analyzer_seen = True
+        return True
 
     def _on_tool_selection_changed(self) -> None:
         recipe = self._current_recipe_name()
