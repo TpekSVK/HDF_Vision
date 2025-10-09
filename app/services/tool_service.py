@@ -14,6 +14,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.services.compare_service import analyze
+from app.services import logging_service
 from app.models.schema import (
     RecipeData,
     RecipeV2,
@@ -640,6 +641,8 @@ class PipelineOrchestrator:
         golden: "np.ndarray",
         frame: "np.ndarray",
         recipe: RecipeV2,
+        recipe_name: str | None = None,
+        notes: str | None = None,
     ) -> PipelineResult:
         """Execute the configured pipeline and return aggregated results."""
 
@@ -743,13 +746,25 @@ class PipelineOrchestrator:
         cycle_time_ms = (time.perf_counter() - start_time) * 1000.0
         pipeline_status = self._aggregate_status(per_tool)
 
-        return PipelineResult(
+        result = PipelineResult(
             context=context,
             per_tool=per_tool,
             diagnostics=diagnostics,
             cycle_time_ms=float(cycle_time_ms),
             status=pipeline_status,
         )
+
+        try:
+            logging_service.record_pipeline_run(
+                recipe=recipe,
+                recipe_name=recipe_name,
+                result=result,
+                notes=notes,
+            )
+        except Exception as exc:  # pragma: no cover - logging must not break pipeline
+            print("[pipeline][log][err]", exc)
+
+        return result
 
     def _order_tools(self, tools: Sequence[Tool]) -> List[Tool]:
         sorted_tools = sorted(tools, key=lambda t: t.order)
@@ -813,12 +828,23 @@ class PipelineOrchestrator:
 
 
 def run_pipeline(
-    golden: np.ndarray, frame: np.ndarray, recipe: RecipeV2
+    golden: np.ndarray,
+    frame: np.ndarray,
+    recipe: RecipeV2,
+    *,
+    recipe_name: str | None = None,
+    notes: str | None = None,
 ) -> PipelineResult:
     """Execute the configured pipeline using the shared orchestrator."""
 
     orchestrator = PipelineOrchestrator()
-    return orchestrator.run_pipeline(golden, frame, recipe)
+    return orchestrator.run_pipeline(
+        golden,
+        frame,
+        recipe,
+        recipe_name=recipe_name,
+        notes=notes,
+    )
 
 
 def run_tool_isolated(
