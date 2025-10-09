@@ -844,6 +844,81 @@ def _safe_float(value: Any, default: float) -> float:
         return float(default)
 
 
+def _coerce_thresholds_dict(
+    thresholds: Dict[str, Any] | ToolThresholds | None,
+) -> Dict[str, Any]:
+    if isinstance(thresholds, ToolThresholds):
+        return dict(thresholds.values or {})
+    return dict(thresholds or {})
+
+
+def status_from_metrics(
+    tool_type: str,
+    metrics: Dict[str, Any] | None,
+    thresholds: Dict[str, Any] | ToolThresholds | None,
+) -> Literal["ok", "warn", "nok"]:
+    """Map raw metric values to a normalized status for diagnostics."""
+
+    tool_key = (tool_type or "").lower()
+    metric_values = dict(metrics or {})
+    threshold_values = _coerce_thresholds_dict(thresholds)
+
+    if tool_key in {"locator.template_match", "template_match"}:
+        corr = _safe_float(metric_values.get("corr"), 0.0)
+        attempts = _safe_int(metric_values.get("match_attempts"), -1)
+        corr_threshold = _safe_float(threshold_values.get("threshold_corr"), 0.55)
+        if attempts == 0 and abs(corr) < 1e-6:
+            return "warn"
+        return "ok" if corr >= corr_threshold else "nok"
+
+    if tool_key == "ssim":
+        ssim_min = _safe_float(
+            threshold_values.get("ssim_min"), DEFAULT_THRESHOLDS.get("ssim_min", 0.92)
+        )
+        ssim_val = _safe_float(metric_values.get("ssim"), 0.0)
+        return "ok" if ssim_val >= ssim_min else "nok"
+
+    if tool_key == "ssd":
+        ssd_max = _safe_float(threshold_values.get("ssd_max"), 1.0e7)
+        ssd_val = _safe_float(metric_values.get("ssd"), float("inf"))
+        return "ok" if ssd_val <= ssd_max else "nok"
+
+    if tool_key == "mse":
+        mse_max = _safe_float(threshold_values.get("mse_max"), 25.0)
+        mse_val = _safe_float(metric_values.get("mse"), float("inf"))
+        return "ok" if mse_val <= mse_max else "nok"
+
+    if tool_key == "ncc":
+        ncc_min = _safe_float(threshold_values.get("ncc_min"), 0.9)
+        ncc_val = _safe_float(metric_values.get("ncc"), -1.0)
+        return "ok" if ncc_val >= ncc_min else "nok"
+
+    if tool_key == "edge_change":
+        edge_ratio_max = _safe_float(threshold_values.get("edge_ratio_max"), 0.05)
+        edge_ratio = _safe_float(metric_values.get("edge_ratio"), 0.0)
+        effective_pixels = metric_values.get("effective_pixels")
+        if effective_pixels is not None and _safe_int(effective_pixels, 0) <= 0:
+            return "warn"
+        return "ok" if edge_ratio <= edge_ratio_max else "nok"
+
+    if tool_key == "absdiff":
+        blob_count = _safe_int(metric_values.get("blob_count"), 0)
+        max_blob_count = _safe_int(
+            threshold_values.get("max_blob_count"),
+            DEFAULT_THRESHOLDS.get("max_blob_count", 10),
+        )
+        total_area = _safe_float(metric_values.get("total_area"), 0.0)
+        max_total_area = _safe_float(
+            threshold_values.get("max_total_area"),
+            DEFAULT_THRESHOLDS.get("max_total_area", 2000.0),
+        )
+        if blob_count > max_blob_count or total_area > max_total_area:
+            return "nok"
+        return "ok"
+
+    return "ok" if metric_values else "warn"
+
+
 def _freeze_value(value: Any) -> Any:
     if isinstance(value, ToolRoi):
         rect = value.rect()
@@ -958,12 +1033,9 @@ def run_locator_template_match(
     template_rect = _clamp_rect(template_source, golden_w, golden_h)
 
     coarse_cap = _safe_int(params_dict.get("coarse_cap", 600), 600)
-    threshold_corr = _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55)
-
     dx = 0.0
     dy = 0.0
     corr = 0.0
-    status: Literal["ok", "warn", "nok"] = "warn"
     used = 0
 
     if template_rect is not None and search_rect is not None:
@@ -986,17 +1058,22 @@ def run_locator_template_match(
                 dx = float((sx + dx_rel) - tx)
                 dy = float((sy + dy_rel) - ty)
 
-    if used == 0 and corr == 0.0:
-        status = "warn"
-    elif corr >= threshold_corr:
-        status = "ok"
-    else:
-        status = "nok"
-
     T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
 
-    metrics = {"dx": float(dx), "dy": float(dy), "corr": float(corr)}
-    diagnostics = {**metrics, "T": T, "status": status}
+    metrics = {
+        "dx": float(dx),
+        "dy": float(dy),
+        "corr": float(corr),
+        "match_attempts": float(used),
+    }
+    status = status_from_metrics("locator.template_match", metrics, thresholds_dict)
+
+    diagnostics = {
+        **metrics,
+        "T": T,
+        "status": status,
+        "threshold_corr": _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),
+    }
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
     diagnostics["latency_ms"] = latency_ms
@@ -1059,9 +1136,8 @@ def run_ssim_tool(
     frame_crop = frame_u8[y : y + h, x : x + w]
 
     ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
-    status: Literal["ok", "warn", "nok"] = "ok" if ssim_val >= ssim_min else "nok"
-
-    metrics = {"ssim": float(round(ssim_val, 5))}
+    metrics = {"ssim": float(ssim_val)}
+    status = status_from_metrics("ssim", metrics, thresholds_dict)
     diagnostics = {
         "ssim": ssim_val,
         "roi": {"x": x, "y": y, "w": w, "h": h},
