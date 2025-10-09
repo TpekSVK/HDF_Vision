@@ -27,6 +27,7 @@ class NCCTool(PairTool):
         params_dict = self._coerce_params_dict(params)
         thresholds_dict = self._coerce_thresholds_dict(thresholds)
 
+        self._ensure_pair_cache(frame, params_dict, thresholds_dict)
         prepared = self._prepare_pair(golden, frame, context)
         sigma = float(params_dict.get("preblur_sigma", 0.0))
         sigma = max(0.0, float(sigma))

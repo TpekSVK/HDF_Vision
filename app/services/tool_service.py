@@ -10,6 +10,7 @@ import math
 import time
 
 import imageio.v3 as iio
+import numpy as np
 
 from app.services.compare_service import analyze
 from app.models.schema import (
@@ -86,6 +87,21 @@ class BaseTool:
 class LocatorTemplateMatchTool(BaseTool):
     """ITool implementation wrapping template matching locator."""
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._cache_signature: Any | None = None
+        self._match_cache: dict[str, Any] = {}
+
+    def prepare(self, context: dict[str, Any]) -> None:  # type: ignore[override]
+        super().prepare(context)
+        self._cache_signature = None
+        self._match_cache.clear()
+
+    def teardown(self) -> None:  # type: ignore[override]
+        super().teardown()
+        self._cache_signature = None
+        self._match_cache.clear()
+
     def run(  # type: ignore[override]
         self,
         golden: "np.ndarray",
@@ -103,6 +119,22 @@ class LocatorTemplateMatchTool(BaseTool):
             thresholds if isinstance(thresholds, ToolThresholds) else ToolThresholds.from_obj(thresholds)
         )
 
+        params_dict = params_obj.values or {}
+        thresholds_dict = thresholds_obj.values or {}
+
+        template_signature = (
+            tuple(np.asarray(frame).shape[:2]),
+            (
+                bool(params_dict.get("use_golden_crop", True)),
+                _freeze_value(params_dict.get("template_roi")),
+                _safe_int(params_dict.get("coarse_cap", 600), 600),
+            ),
+            (_safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),),
+        )
+        if template_signature != self._cache_signature:
+            self._cache_signature = template_signature
+            self._match_cache.clear()
+
         result, diagnostics = run_locator_template_match(
             golden,
             frame,
@@ -110,6 +142,7 @@ class LocatorTemplateMatchTool(BaseTool):
             thresholds_obj,
             roi,
             tool_id=str(tool_id),
+            cache=self._match_cache,
         )
         self.last_diagnostics = diagnostics
         return result
@@ -811,6 +844,38 @@ def _safe_float(value: Any, default: float) -> float:
         return float(default)
 
 
+def _freeze_value(value: Any) -> Any:
+    if isinstance(value, ToolRoi):
+        rect = value.rect()
+        return tuple(rect) if rect is not None else None
+    if isinstance(value, ToolMask):
+        mask = value.value
+        if mask is None:
+            return None
+        return (
+            mask.shape,
+            mask.dtype.str,
+            int(mask.__array_interface__["data"][0]),
+        )
+    if isinstance(value, dict):
+        return tuple(sorted((str(k), _freeze_value(v)) for k, v in value.items()))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(v) for v in value)
+    if isinstance(value, np.ndarray):
+        return (
+            value.shape,
+            value.dtype.str,
+            int(value.__array_interface__["data"][0]),
+        )
+    return value
+
+
+def _freeze_dict(mapping: Dict[str, Any] | None) -> tuple[tuple[str, Any], ...]:
+    if not mapping:
+        return tuple()
+    return tuple(sorted((str(k), _freeze_value(v)) for k, v in mapping.items()))
+
+
 def _extract_translation_from_affine(T: np.ndarray | None) -> tuple[float, float]:
     """Return translation components from a 2×3 affine transform."""
 
@@ -834,6 +899,7 @@ def run_locator_template_match(
     roi: Optional[ToolRoi | Dict[str, Any] | Sequence[int]],
     *,
     tool_id: str = "locator",
+    cache: Optional[Dict[str, Any]] = None,
 ) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Run template matching locator core logic.
 
@@ -914,6 +980,7 @@ def run_locator_template_match(
                     roi=(sx, sy, sw, sh),
                     search_margin=0,
                     coarse_cap=int(max(1, coarse_cap)),
+                    cache=cache,
                 )
 
                 dx = float((sx + dx_rel) - tx)

@@ -11,6 +11,7 @@ from app.services.tool_service import BaseTool, ToolRunResult
 from app.services.tool_service import (
     _clamp_rect,
     _extract_translation_from_affine,
+    _freeze_dict,
     _rect_from_any,
 )
 from app.services.tool_service import ToolRunnerContext  # type: ignore  # circular typing
@@ -41,6 +42,21 @@ class PairTool(BaseTool):
 
     _EPS = 1e-3
 
+    def __init__(self) -> None:
+        super().__init__()
+        self._pair_cache_signature: tuple[Any, ...] | None = None
+        self._roi_mask_cache_entry: Dict[str, Any] | None = None
+
+    def prepare(self, context: Dict[str, Any]) -> None:  # type: ignore[override]
+        super().prepare(context)
+        self._pair_cache_signature = None
+        self._roi_mask_cache_entry = None
+
+    def teardown(self) -> None:  # type: ignore[override]
+        super().teardown()
+        self._pair_cache_signature = None
+        self._roi_mask_cache_entry = None
+
     def _coerce_params_dict(self, params: ToolParams | Dict[str, Any] | None) -> Dict[str, Any]:
         if isinstance(params, ToolParams):
             return dict(params.values or {})
@@ -62,6 +78,48 @@ class PairTool(BaseTool):
         if runner_context is None:
             raise ValueError("Runner context missing for tool execution")
         return runner_context
+
+    def _ensure_pair_cache(
+        self,
+        frame: np.ndarray,
+        params_dict: Dict[str, Any],
+        thresholds_dict: Dict[str, Any],
+    ) -> None:
+        frame_shape = tuple(np.asarray(frame).shape[:2])
+        signature = (frame_shape, _freeze_dict(params_dict), _freeze_dict(thresholds_dict))
+        if signature != self._pair_cache_signature:
+            self._pair_cache_signature = signature
+            self._roi_mask_cache_entry = None
+
+    def _resolve_cached_mask(
+        self,
+        mask_full: np.ndarray,
+        roi_rect: Tuple[int, int, int, int],
+        roi_shape: Tuple[int, int],
+        dx_total: float,
+        dy_total: float,
+    ) -> Optional[np.ndarray]:
+        key = (
+            int(mask_full.__array_interface__["data"][0]),
+            mask_full.shape,
+            mask_full.dtype.str,
+            roi_rect,
+            round(dx_total, 4),
+            round(dy_total, 4),
+        )
+        cached = self._roi_mask_cache_entry
+        if cached and cached.get("key") == key:
+            return cached.get("mask")
+
+        x, y, w, h = roi_rect
+        mask_roi = mask_full[y : y + h, x : x + w]
+        if mask_roi.shape != roi_shape:
+            mask = None
+        else:
+            mask = mask_roi == 0
+
+        self._roi_mask_cache_entry = {"key": key, "mask": mask}
+        return mask
 
     def _prepare_pair(
         self,
@@ -124,11 +182,13 @@ class PairTool(BaseTool):
             mask_full = np.asarray(tool.ignore_mask.value, dtype=np.uint8)
             if mask_full.shape[:2] != (gh, gw):
                 mask_full = mask_full[:gh, :gw]
-            mask_roi = mask_full[y : y + h, x : x + w]
-            if mask_roi.size == golden_roi.size:
-                mask = mask_roi == 0  # True means pixel is considered
-            else:
-                mask = None
+            mask = self._resolve_cached_mask(
+                mask_full,
+                roi_rect,
+                (h, w),
+                dx_total,
+                dy_total,
+            )
 
         return PreparedPair(
             golden_roi=golden_roi,

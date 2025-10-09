@@ -10,8 +10,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 pytest.importorskip("cv2")
+import cv2
 
-from app.services.tool_service import run_locator_template_match
+from app.models.schema import ToolParams, ToolThresholds
+from app.services.tool_service import LocatorTemplateMatchTool, run_locator_template_match
 
 
 def test_run_locator_template_match_returns_expected_translation():
@@ -101,4 +103,41 @@ def test_locator_status_respects_threshold(threshold: float, expected_status: st
     assert diagnostics["status"] == expected_status
     assert "latency_ms" in run_result.metrics
     assert diagnostics["latency_ms"] >= 0.0
+
+
+def test_locator_template_cache_reuses_downsample(monkeypatch) -> None:
+    tool = LocatorTemplateMatchTool()
+    tool.prepare({"tool_id": "locator.cache"})
+
+    golden = np.zeros((64, 64), dtype=np.uint8)
+    golden[10:26, 14:30] = 180
+    frame = np.zeros_like(golden)
+    frame[13:29, 17:33] = 180
+
+    params = ToolParams(
+        {
+            "use_golden_crop": False,
+            "template_roi": {"x": 14, "y": 10, "w": 16, "h": 16},
+            "coarse_cap": 12,
+        }
+    )
+    thresholds = ToolThresholds({"threshold_corr": 0.05})
+    roi = {"x": 12, "y": 8, "w": 24, "h": 24}
+
+    resize_calls = {"count": 0}
+    original_resize = cv2.resize
+
+    def counting_resize(*args, **kwargs):
+        resize_calls["count"] += 1
+        return original_resize(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "resize", counting_resize)
+
+    tool.run(golden, frame, params, thresholds, {"roi": roi})
+    first_pass = resize_calls["count"]
+    assert first_pass >= 2
+
+    tool.run(golden, frame, params, thresholds, {"roi": roi})
+    second_pass = resize_calls["count"] - first_pass
+    assert second_pass == 1
 
