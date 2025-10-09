@@ -201,6 +201,7 @@ def match_template_u8(
     roi: Optional[Tuple[int, int, int, int]] = None,  # (x, y, w, h) na frame
     search_margin: int = 20,
     coarse_cap: int = 600,
+    cache: Optional[Dict[str, Any]] = None,
 ) -> Tuple[float, float, float, int]:
     """
     Coarse→Fine matchTemplate v ROI. Vracia (dx, dy, corr, used),
@@ -237,12 +238,32 @@ def match_template_u8(
         _, maxVal, _, maxLoc = cv2.minMaxLoc(res)
         return float(maxVal), (int(maxLoc[0]), int(maxLoc[1]))
 
+    template_cache: Optional[Dict[Any, np.ndarray]] = None
+    if cache is not None:
+        template_cache = cache.setdefault("template_pyramid", {})
+
     # Coarse stage
     if scale < 1.0:
         dsize_s = (max(1, int(sw * scale)), max(1, int(sh * scale)))
         dsize_t = (max(1, int(templ_u8.shape[1] * scale)), max(1, int(templ_u8.shape[0] * scale)))
         search_s = cv2.resize(search, dsize_s, interpolation=cv2.INTER_AREA)
-        templ_s  = cv2.resize(templ_u8, dsize_t, interpolation=cv2.INTER_AREA)
+
+        templ_s: np.ndarray
+        if template_cache is not None:
+            templ_key = (
+                int(templ_u8.__array_interface__["data"][0]),
+                templ_u8.shape,
+                templ_u8.dtype.str,
+                round(scale, 6),
+            )
+            cached = template_cache.get(templ_key)
+            if cached is not None:
+                templ_s = cached
+            else:
+                templ_s = cv2.resize(templ_u8, dsize_t, interpolation=cv2.INTER_AREA)
+                template_cache[templ_key] = templ_s
+        else:
+            templ_s = cv2.resize(templ_u8, dsize_t, interpolation=cv2.INTER_AREA)
 
         try_gpu = USE_CUDA
         try:
