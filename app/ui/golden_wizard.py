@@ -417,7 +417,14 @@ def _get_form_widget_value(widget: QWidget, spec: dict[str, Any]) -> Any:
 
 
 class ToolCatalogDialog(QDialog):
-    def __init__(self, tool_service, parent=None):
+    def __init__(
+        self,
+        tool_service,
+        parent=None,
+        *,
+        current_shape: str = "rect",
+        current_region_type: str = "pose",
+    ):
         super().__init__(parent)
         self.setWindowTitle("Tool catalog")
         self._tool_service = tool_service
@@ -426,6 +433,16 @@ class ToolCatalogDialog(QDialog):
         self._filter = QLineEdit(self)
         self._filter.setPlaceholderText("Filter tools…")
         self._filter.textChanged.connect(self._apply_filter)
+
+        self._shape_combo = QComboBox(self)
+        self._shape_combo.addItem("Obdĺžnik", "rect")
+        self._shape_combo.addItem("Kružnica", "circle")
+        self._shape_combo.addItem("Polygón", "poly")
+
+        self._type_combo = QComboBox(self)
+        self._type_combo.addItem("Pose", "pose")
+        self._type_combo.addItem("ROI", "roi")
+        self._type_combo.addItem("Ignore", "ignore")
 
         self._list = QListWidget(self)
         self._list.itemDoubleClicked.connect(self._on_double_clicked)
@@ -436,12 +453,34 @@ class ToolCatalogDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._filter)
+        selectors = QHBoxLayout()
+        selectors.setContentsMargins(0, 0, 0, 0)
+        selectors.setSpacing(6)
+        selectors.addWidget(QLabel("Tvar:", self))
+        selectors.addWidget(self._shape_combo, 1)
+        selectors.addSpacing(12)
+        selectors.addWidget(QLabel("Typ:", self))
+        selectors.addWidget(self._type_combo, 1)
+        layout.addLayout(selectors)
         layout.addWidget(self._list)
         layout.addWidget(buttons)
+
+        self._set_combo_current(self._shape_combo, current_shape, fallback="rect")
+        self._set_combo_current(self._type_combo, current_region_type, fallback="pose")
 
         self._entries: list[tuple[str, str, str]] = []
         self._populate_entries()
         self._apply_filter("")
+
+    @staticmethod
+    def _set_combo_current(combo: QComboBox, value: str, *, fallback: str) -> None:
+        index = combo.findData(value)
+        if index < 0:
+            index = combo.findData(fallback)
+        if index < 0 and combo.count():
+            index = 0
+        if index >= 0:
+            combo.setCurrentIndex(index)
 
     def _populate_entries(self) -> None:
         self._entries.clear()
@@ -483,6 +522,14 @@ class ToolCatalogDialog(QDialog):
 
     def selected_type(self) -> str | None:
         return self._selected_type
+
+    def selected_shape(self) -> str:
+        data = self._shape_combo.currentData()
+        return str(data) if data is not None else "rect"
+
+    def selected_region_type(self) -> str:
+        data = self._type_combo.currentData()
+        return str(data) if data is not None else "pose"
 
 
 class TemplateRoiEditor(QWidget):
@@ -2520,8 +2567,6 @@ class GoldenWizard(QDialog):
         # ---- Horná lišta ----
         current_recipe = getattr(self.recipes.tool, "recipe", "default")
         self.recipe_name = QLineEdit(current_recipe, self)
-        self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
-        self.type_sel    = QComboBox(self); self.type_sel.addItems(["pose","roi","ignore"])
         self.chk_pose    = QCheckBox("Použiť globálne zarovnanie (pose alignment)")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", True))
 
@@ -2552,8 +2597,6 @@ class GoldenWizard(QDialog):
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
-        top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
-        top.addWidget(QLabel("Typ:"));    top.addWidget(self.type_sel)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
         top.addWidget(QLabel("Zlyhanie locatora:", self))
@@ -2571,8 +2614,6 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live OFF
         self.view = DrawView(self)
-        self.view.set_shape_type(self.shape_sel.currentText())
-        self.view.set_region_type(self.type_sel.currentText())
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -2668,8 +2709,6 @@ class GoldenWizard(QDialog):
         self._tool_panel.clear()
 
         # signály
-        self.shape_sel.currentTextChanged.connect(self.view.set_shape_type)
-        self.type_sel.currentTextChanged.connect(self.view.set_region_type)
         btn_cap_golden.clicked.connect(self._capture_golden)
         btn_load_golden.clicked.connect(self._load_golden)
         self.btn_save_tool.clicked.connect(self._save_tool_draft)
@@ -2730,9 +2769,6 @@ class GoldenWizard(QDialog):
                 self._live_timer.start()
                 self._live_on = True
                 self.btn_live.setText("Live ON")
-                # Deaktivuj meniče tvar/typ počas live (čisto vizuálne)
-                self.shape_sel.setEnabled(False)
-                self.type_sel.setEnabled(False)
             except Exception as e:
                 self._err(f"Live feed sa nepodarilo spustiť: {e}")
                 self.btn_live.setChecked(False)
@@ -2749,8 +2785,6 @@ class GoldenWizard(QDialog):
             self.btn_live.setText("Live OFF")
             self.live_lbl.hide()
             self.view.show()
-            self.shape_sel.setEnabled(True)
-            self.type_sel.setEnabled(True)
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()
@@ -3105,8 +3139,19 @@ class GoldenWizard(QDialog):
         self._refresh_publish_state()
 
     def _open_tool_catalog(self):
-        dialog = ToolCatalogDialog(self.recipes.tool, self)
-        if dialog.exec() != QDialog.Accepted:
+        current_shape = getattr(self.view, "current_shape", "rect")
+        current_type = getattr(self.view, "current_type", "pose")
+        dialog = ToolCatalogDialog(
+            self.recipes.tool,
+            self,
+            current_shape=current_shape,
+            current_region_type=current_type,
+        )
+        result = dialog.exec()
+        # Always sync drawing mode with the selection from the catalog.
+        self.view.set_shape_type(dialog.selected_shape())
+        self.view.set_region_type(dialog.selected_region_type())
+        if result != QDialog.Accepted:
             return
         tool_type = dialog.selected_type()
         if not tool_type:
