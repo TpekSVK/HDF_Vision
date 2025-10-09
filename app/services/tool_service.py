@@ -682,10 +682,11 @@ class PipelineOrchestrator:
             diag_entry: Dict[str, Any] = {
                 "tool_id": tool_id,
                 "type": tool.type,
-                "status": "disabled" if not tool.enabled else "skipped",
+                "status": "skipped",
             }
 
             if not tool.enabled:
+                diag_entry["disabled"] = True
                 diagnostics.append(diag_entry)
                 continue
 
