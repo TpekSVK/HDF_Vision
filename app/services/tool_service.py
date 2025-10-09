@@ -14,7 +14,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.services.compare_service import analyze
-from app.services import logging_service
+from app.services import logging_service, settings_service
 from app.models.schema import (
     RecipeData,
     RecipeV2,
@@ -668,7 +668,14 @@ class PipelineOrchestrator:
         diagnostics: List[Dict[str, Any]] = []
         per_tool: List[PipelineToolReport] = []
         policy_applied: Optional[str] = None
-        overlay_palette = overlay_utils.default_palette()
+        session_settings = settings_service.get_session_settings()
+        collect_overlay = (
+            session_settings.logging_enabled
+            and session_settings.export_artifacts
+            and session_settings.export_overlay
+        )
+
+        overlay_palette = overlay_utils.default_palette() if collect_overlay else []
         overlay_index = 0
         pipeline_overlay_items: List[overlay_utils.OverlayItem] = []
 
@@ -697,12 +704,6 @@ class PipelineOrchestrator:
                 diag_entry["disabled"] = True
                 diagnostics.append(diag_entry)
                 continue
-
-            if overlay_palette:
-                tool_color = overlay_palette[overlay_index % len(overlay_palette)]
-                overlay_index += 1
-            else:  # pragma: no cover - defensive fallback
-                tool_color = (255, 0, 0)
 
             runner = ToolRegistry.create_tool(tool.type)
             runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
@@ -737,25 +738,33 @@ class PipelineOrchestrator:
             metrics = dict(result.metrics or {})
             metrics.setdefault("latency_ms", float(result.latency_ms))
 
-            display_sources: List[Any] = []
-            display_sources.extend(
-                overlay_utils.extract_display_items_from_artifacts(
-                    result.debug_artifacts
-                )
-            )
-            if isinstance(diagnostics_payload, dict):
+            tool_overlay_items: List[overlay_utils.OverlayItem] = []
+            if collect_overlay:
+                if overlay_palette:
+                    tool_color = overlay_palette[overlay_index % len(overlay_palette)]
+                    overlay_index += 1
+                else:  # pragma: no cover - defensive fallback
+                    tool_color = (255, 0, 0)
+
+                display_sources: List[Any] = []
                 display_sources.extend(
                     overlay_utils.extract_display_items_from_artifacts(
-                        diagnostics_payload
+                        result.debug_artifacts
                     )
                 )
-            tool_overlay_items = overlay_utils.tool_overlay_items(
-                tool,
-                color=tool_color,
-                display_items=display_sources,
-                label=str(tool_id),
-            )
-            pipeline_overlay_items.extend(tool_overlay_items)
+                if isinstance(diagnostics_payload, dict):
+                    display_sources.extend(
+                        overlay_utils.extract_display_items_from_artifacts(
+                            diagnostics_payload
+                        )
+                    )
+                tool_overlay_items = overlay_utils.tool_overlay_items(
+                    tool,
+                    color=tool_color,
+                    display_items=display_sources,
+                    label=str(tool_id),
+                )
+                pipeline_overlay_items.extend(tool_overlay_items)
 
             diagnostics.append(diag_entry)
             record_tool_latency(str(tool_id), float(result.latency_ms))
@@ -817,7 +826,7 @@ class PipelineOrchestrator:
             cycle_time_ms=float(cycle_time_ms),
             status=pipeline_status,
             policy_applied=policy_applied,
-            overlay_items=pipeline_overlay_items,
+            overlay_items=pipeline_overlay_items if collect_overlay else [],
         )
 
         try:
