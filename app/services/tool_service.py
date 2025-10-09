@@ -2,355 +2,179 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
-from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Protocol, runtime_checkable, TYPE_CHECKING
 
 import math
 import time
 
 import imageio.v3 as iio
-import numpy as np
 
 from app.services.compare_service import analyze
-from app.utils import imaging
 from app.models.schema import (
     RecipeData,
     RecipeV2,
     Tool,
+    ToolDefinition,
     ToolMask,
     ToolParams,
     ToolRoi,
     ToolThresholds,
 )
 
-
-@dataclass(frozen=True)
-class ToolMeta:
-    """Metadata describing capabilities and defaults for a tool type."""
-
-    display_name: str
-    description: str
-    supports_roi: bool
-    supports_ignore_mask: bool
-    default_params: Dict[str, Any] = field(default_factory=dict)
-    default_thresholds: Dict[str, Any] = field(default_factory=dict)
-    category: str = "General"
-
-    def copy_defaults(self) -> tuple[Dict[str, Any], Dict[str, Any]]:
-        """Return deep copies of the default params and thresholds."""
-
-        params = self._extract_defaults(self.default_params)
-        thresholds = self._extract_defaults(self.default_thresholds)
-        return params, thresholds
-
-    @staticmethod
-    def _extract_defaults(definitions: Dict[str, Any]) -> Dict[str, Any]:
-        """Extract plain default values from a definition dictionary."""
-
-        defaults: Dict[str, Any] = {}
-        for key, spec in definitions.items():
-            if isinstance(spec, dict):
-                value = deepcopy(spec.get("default"))
-            else:
-                value = deepcopy(spec)
-            defaults[key] = value
-        return defaults
+if TYPE_CHECKING:  # pragma: no cover - typing helpers
+    import numpy as np
 
 
-@dataclass(frozen=True)
+@dataclass(slots=True)
 class ToolRunResult:
-    """Normalized result information returned by tool runners."""
+    """Normalized result returned by tool runners."""
 
-    tool_id: str
-    type: str
-    status: Literal["ok", "warn", "nok"]
-    metrics: Dict[str, Any] = field(default_factory=dict)
-    preview: Optional[Any] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = {
-            "tool_id": self.tool_id,
-            "type": self.type,
-            "status": self.status,
-            "metrics": dict(self.metrics),
-        }
-        if self.preview is not None:
-            data["preview"] = self.preview
-        return data
+    status: Literal["ok", "nok", "warn"]
+    metrics: Dict[str, float]
+    latency_ms: float
+    debug_artifacts: Optional[Dict[str, Any]] = None
 
 
-class ToolRegistry:
-    """Central registry of available tool types and their metadata."""
+@runtime_checkable
+class ITool(Protocol):
+    """Common interface that all tool implementations must follow."""
 
-    _TOOLS: Dict[str, ToolMeta] = {
-        "ssim": ToolMeta(
-            display_name="SSIM",
-            description="Porovnanie štrukturálnej podobnosti v ROI.",
-            supports_roi=True,
-            supports_ignore_mask=True,
-            default_params={},
-            default_thresholds={
-                "ssim_min": {
-                    "type": "float",
-                    "label": "ssim_min",
-                    "default": 0.92,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.01,
-                    "required": True,
-                    "precision": 3,
-                    "description": "Minimálna povolená hodnota štrukturálnej podobnosti (SSIM).",
-                },
-            },
-            category="Similarity",
-        ),
-        "template_match": ToolMeta(
-            display_name="Template Match",
-            description="Lokalizácia objektu pomocou template matching.",
-            supports_roi=True,
-            supports_ignore_mask=False,
-            default_params={
-                "coarse_cap": {
-                    "type": "int",
-                    "label": "coarse_cap",
-                    "default": 600,
-                    "min": 64,
-                    "max": 4096,
-                    "step": 16,
-                    "description": "Maximálna veľkosť hrubého search okna (px).",
-                    "required": True,
-                },
-            },
-            default_thresholds={
-                "tm_enable": {
-                    "type": "bool",
-                    "label": "enable_template_match",
-                    "default": True,
-                    "description": "Povoliť template matching pred jemným zarovnaním.",
-                },
-                "tm_margin": {
-                    "type": "int",
-                    "label": "search_margin",
-                    "default": 200,
-                    "min": 0,
-                    "max": 2000,
-                    "step": 10,
-                    "description": "Veľkosť search oblasti okolo očakávanej pozície (px).",
-                },
-                "tm_min_corr": {
-                    "type": "float",
-                    "label": "threshold_corr",
-                    "default": 0.55,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.01,
-                    "precision": 3,
-                    "description": "Minimálna korelácia potrebná na úspešné nájdenie šablóny.",
-                    "required": True,
-                },
-            },
-            category="Locator",
-        ),
-        "locator.template_match": ToolMeta(
-            display_name="Locator (Template Match)",
-            description="Vyhľadávanie šablóny s podporou search a template ROI.",
-            supports_roi=True,
-            supports_ignore_mask=False,
-            default_params={
-                "use_golden_crop": {
-                    "type": "bool",
-                    "label": "use_golden_crop",
-                    "default": True,
-                    "description": "Použiť golden snapshot ako šablónu bez manuálneho výrezu.",
-                },
-                "coarse_to_fine": {
-                    "type": "bool",
-                    "label": "coarse_to_fine",
-                    "default": True,
-                    "description": "Povoliť dvojfázové hľadanie od hrubého po jemné zarovnanie.",
-                },
-                "coarse_cap": {
-                    "type": "int",
-                    "label": "coarse_cap",
-                    "default": 600,
-                    "min": 64,
-                    "max": 4096,
-                    "step": 16,
-                    "description": "Maximálna veľkosť hrubého search okna (px).",
-                },
-                "apply_alignment": {
-                    "type": "bool",
-                    "label": "apply_alignment",
-                    "default": True,
-                    "description": "Aplikovať výsledné posunutie na nasledujúce nástroje.",
-                },
-                "template_roi": {
-                    "type": "roi",
-                    "label": "template_roi",
-                    "default": None,
-                    "description": "Manuálne definovaný template výrez na golden obrázku.",
-                },
-            },
-            default_thresholds={
-                "threshold_corr": {
-                    "type": "float",
-                    "label": "threshold_corr",
-                    "default": 0.55,
-                    "min": 0.0,
-                    "max": 1.0,
-                    "step": 0.01,
-                    "precision": 3,
-                    "description": "Minimálna korelácia potrebná na úspešné zarovnanie.",
-                },
-            },
-            category="Locator",
-        ),
-        "absdiff": ToolMeta(
-            display_name="Abs Diff",
-            description="Porovnanie absolútnych rozdielov s blob analýzou.",
-            supports_roi=True,
-            supports_ignore_mask=True,
-            default_params={},
-            default_thresholds={
-                "diff_thresh": {
-                    "type": "int",
-                    "label": "diff_thresh",
-                    "default": 15,
-                    "min": 0,
-                    "max": 255,
-                    "step": 1,
-                    "description": "Minimálna intenzita rozdielu pre detekciu pixelu (0–255).",
-                },
-                "min_blob_area": {
-                    "type": "int",
-                    "label": "min_blob_area",
-                    "default": 20,
-                    "min": 0,
-                    "max": 1_000_000,
-                    "step": 1,
-                    "description": "Minimálna plocha jedného blobu (px²).",
-                },
-                "max_total_area": {
-                    "type": "int",
-                    "label": "max_total_area",
-                    "default": 2000,
-                    "min": 0,
-                    "max": 10_000_000,
-                    "step": 1,
-                    "description": "Maximálna kumulovaná plocha všetkých blobov (px²).",
-                },
-                "max_blob_count": {
-                    "type": "int",
-                    "label": "max_blob_count",
-                    "default": 10,
-                    "min": 0,
-                    "max": 10_000,
-                    "step": 1,
-                    "description": "Maximálny počet blobov povolený v ROI.",
-                },
-            },
-            category="Inspection",
-        ),
-    }
+    def prepare(self, context: dict[str, Any]) -> None:
+        ...
 
-    _SUPPORTED_FIELD_TYPES = {"int", "float", "bool", "enum", "roi"}
+    def run(
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: dict[str, Any],
+    ) -> ToolRunResult:
+        ...
 
-    @classmethod
-    def list_tool_types(cls) -> List[str]:
-        """Return available tool type identifiers."""
+    def teardown(self) -> None:
+        ...
 
-        return sorted(cls._TOOLS.keys())
 
-    @classmethod
-    def get_tool_meta(cls, tool_type: str) -> Optional[ToolMeta]:
-        """Return metadata for a tool type if registered."""
+class BaseTool:
+    """Base helper implementing shared lifecycle for tools."""
 
-        return cls._TOOLS.get(tool_type)
+    def __init__(self) -> None:
+        self._prepared_context: dict[str, Any] = {}
+        self.last_diagnostics: dict[str, Any] = {}
 
-    @classmethod
-    def get_tool_schema(cls, tool_type: str) -> Dict[str, Dict[str, Any]]:
-        """Return normalized parameter/threshold definitions for the tool."""
+    def prepare(self, context: dict[str, Any]) -> None:  # type: ignore[override]
+        self._prepared_context = dict(context or {})
+        self.last_diagnostics = {}
 
-        meta = cls.get_tool_meta(tool_type)
-        if meta is None:
-            raise KeyError(f"Tool type '{tool_type}' is not registered")
-        params = cls._normalize_field_definitions(meta.default_params)
-        thresholds = cls._normalize_field_definitions(meta.default_thresholds)
-        return {"params": params, "thresholds": thresholds}
+    def teardown(self) -> None:  # type: ignore[override]
+        self._prepared_context.clear()
 
-    @classmethod
-    def _normalize_field_definitions(cls, definitions: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        normalized: Dict[str, Dict[str, Any]] = {}
-        for name, raw in (definitions or {}).items():
-            if isinstance(raw, dict):
-                spec = dict(raw)
-            else:
-                spec = {"default": raw}
-            spec.setdefault("label", name)
-            type_name = spec.get("type")
-            if type_name is None:
-                type_name = cls._infer_field_type(spec.get("default"))
-            else:
-                type_name = str(type_name).lower()
-            if type_name == "enum" and "choices" not in spec and "options" in spec:
-                spec["choices"] = spec.get("options")
-            if type_name not in cls._SUPPORTED_FIELD_TYPES:
-                continue
-            if type_name == "enum":
-                normalized_choices: list[tuple[Any, str]] = []
-                for choice in spec.get("choices", []) or []:
-                    if isinstance(choice, dict):
-                        value = choice.get("value")
-                        label = choice.get("label", str(value))
-                    elif isinstance(choice, (list, tuple)) and choice:
-                        value = choice[0]
-                        label = choice[1] if len(choice) > 1 else str(choice[0])
-                    else:
-                        value = choice
-                        label = str(choice)
-                    normalized_choices.append((value, label))
-                spec["choices"] = normalized_choices
-            spec["type"] = type_name
-            normalized[name] = spec
-        return normalized
+    def run(  # type: ignore[override]
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: dict[str, Any],
+    ) -> ToolRunResult:
+        raise NotImplementedError
 
-    @staticmethod
-    def _infer_field_type(value: Any) -> str | None:
-        if isinstance(value, bool):
-            return "bool"
-        if isinstance(value, int) and not isinstance(value, bool):
-            return "int"
-        if isinstance(value, float):
-            return "float"
-        return None
 
-    @classmethod
-    def make_default_tool(cls, tool_type: str, name: Optional[str] = None) -> Tool:
-        """Instantiate a Tool with default metadata for the given type."""
+class LocatorTemplateMatchTool(BaseTool):
+    """ITool implementation wrapping template matching locator."""
 
-        meta = cls.get_tool_meta(tool_type)
-        if meta is None:
-            raise KeyError(f"Tool type '{tool_type}' is not registered")
+    def run(  # type: ignore[override]
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: dict[str, Any],
+    ) -> ToolRunResult:
+        tool: Optional[Tool] = self._prepared_context.get("tool")
+        roi = tool.roi if isinstance(tool, Tool) else context.get("roi", ToolRoi())
+        tool_id = self._prepared_context.get("tool_id") or (tool.name if isinstance(tool, Tool) else "locator")
 
-        params, thresholds = meta.copy_defaults()
-        tool_name = name if name is not None else meta.display_name
-
-        ignore_mask = ToolMask() if meta.supports_ignore_mask else ToolMask(None)
-
-        return Tool(
-            type=tool_type,
-            name=tool_name,
-            enabled=True,
-            order=0,
-            roi=ToolRoi(),
-            ignore_mask=ignore_mask,
-            params=ToolParams(params),
-            thresholds=ToolThresholds(thresholds),
+        params_obj = params if isinstance(params, ToolParams) else ToolParams.from_obj(params)
+        thresholds_obj = (
+            thresholds if isinstance(thresholds, ToolThresholds) else ToolThresholds.from_obj(thresholds)
         )
 
+        result, diagnostics = run_locator_template_match(
+            golden,
+            frame,
+            params_obj,
+            thresholds_obj,
+            roi,
+            tool_id=str(tool_id),
+        )
+        self.last_diagnostics = diagnostics
+        return result
 
+
+class SSIMTool(BaseTool):
+    """ITool implementation for SSIM measurement."""
+
+    def run(  # type: ignore[override]
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: dict[str, Any],
+    ) -> ToolRunResult:
+        tool: Optional[Tool] = self._prepared_context.get("tool")
+        roi = tool.roi if isinstance(tool, Tool) else context.get("roi", ToolRoi())
+        tool_id = self._prepared_context.get("tool_id") or (tool.name if isinstance(tool, Tool) else "ssim")
+
+        thresholds_obj = (
+            thresholds if isinstance(thresholds, ToolThresholds) else ToolThresholds.from_obj(thresholds)
+        )
+
+        runner_context: ToolRunnerContext | None = self._prepared_context.get("runner_context")
+        if runner_context is None:
+            raise ValueError("Runner context missing for SSIM tool execution")
+
+        frame_original = runner_context.frame
+        T_total = runner_context.T_total
+        frame_is_aligned = runner_context.frame_is_aligned
+
+        result, diagnostics = run_ssim_tool(
+            golden,
+            frame,
+            thresholds_obj,
+            roi,
+            frame_original=frame_original,
+            T_total=T_total,
+            frame_is_aligned=frame_is_aligned,
+            tool_id=str(tool_id),
+        )
+        self.last_diagnostics = diagnostics
+        return result
+
+
+class AbsDiffTool(BaseTool):
+    """Placeholder implementation for absolute difference inspection tool."""
+
+    def run(  # type: ignore[override]
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: dict[str, Any],
+    ) -> ToolRunResult:
+        start = time.perf_counter()
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        return ToolRunResult(
+            status="warn",
+            metrics={"latency_ms": latency_ms},
+            latency_ms=latency_ms,
+            debug_artifacts={"message": "AbsDiff tool is not yet implemented"},
+        )
 def _coerce_bool(value: Any) -> tuple[Optional[bool], Optional[str]]:
     if isinstance(value, bool):
         return value, None
@@ -484,6 +308,8 @@ def validate_tool_params(
         Mapping of normalized values respecting types, precision and ranges.
     """
 
+    from app.services.tool_registry import ToolRegistry
+
     schema = ToolRegistry.get_tool_schema(type_id)
     param_specs = schema.get("params", {}) or {}
     threshold_specs = schema.get("thresholds", {}) or {}
@@ -545,27 +371,37 @@ class ToolService:
     def list_tool_types(self) -> List[str]:
         """Return registered tool types."""
 
+        from app.services.tool_registry import ToolRegistry
+
         return ToolRegistry.list_tool_types()
 
-    def get_tool_meta(self, tool_type: str) -> ToolMeta:
+    def get_tool_meta(self, tool_type: str) -> ToolDefinition:
         """Retrieve metadata for a given tool type."""
 
-        meta = ToolRegistry.get_tool_meta(tool_type)
-        if meta is None:
+        from app.services.tool_registry import ToolRegistry
+
+        definition = ToolRegistry.get_tool_definition(tool_type)
+        if definition is None:
             raise KeyError(f"Tool type '{tool_type}' is not registered")
-        return meta
+        return definition
 
     def get_tool_schema(self, tool_type: str) -> Dict[str, Dict[str, Any]]:
         """Expose registry schema information for UI consumption."""
+
+        from app.services.tool_registry import ToolRegistry
 
         return ToolRegistry.get_tool_schema(tool_type)
 
     def make_default_tool(self, tool_type: str, name: Optional[str] = None) -> Tool:
         """Create a ``Tool`` instance with registry defaults."""
 
+        from app.services.tool_registry import ToolRegistry
+
         return ToolRegistry.make_default_tool(tool_type, name=name)
 
     def load_recipe(self, name: str):
+        import numpy as np
+
         self.recipe = name
         rdir = self.base / "recipes" / name
         gfp = rdir / "golden.png"
@@ -632,6 +468,8 @@ def compose_affine(
     transforms.
     """
 
+    import numpy as np
+
     def _to_homogeneous(mat: np.ndarray | None) -> np.ndarray:
         if mat is None:
             return np.eye(3, dtype=np.float32)
@@ -650,11 +488,11 @@ def compose_affine(
     return composed[:2, :3]
 
 
-def _validate_roi(tool: Tool, meta: ToolMeta) -> None:
+def _validate_roi(tool: Tool, definition: ToolDefinition) -> None:
     roi_rect = tool.roi.rect()
     if roi_rect is None:
         return
-    if not meta.supports_roi:
+    if not definition.meta.supports_roi:
         raise ValueError(
             f"Tool '{tool.name}' of type '{tool.type}' does not support ROI but one was provided"
         )
@@ -663,11 +501,11 @@ def _validate_roi(tool: Tool, meta: ToolMeta) -> None:
         raise ValueError(f"Invalid ROI dimensions for tool '{tool.name}'")
 
 
-def _validate_ignore_mask(tool: Tool, meta: ToolMeta) -> None:
+def _validate_ignore_mask(tool: Tool, definition: ToolDefinition) -> None:
     mask = tool.ignore_mask.value
     if mask is None:
         return
-    if not meta.supports_ignore_mask:
+    if not definition.meta.supports_ignore_mask:
         raise ValueError(
             f"Tool '{tool.name}' of type '{tool.type}' does not support ignore mask"
         )
@@ -700,6 +538,10 @@ def run_pipeline(
     :class:`ToolRunResult` entries in execution order.
     """
 
+    import numpy as np
+    from app.services.tool_registry import ToolRegistry
+    from app.utils import imaging
+
     diagnostics: List[Dict[str, Any]] = []
     results: List[ToolRunResult] = []
     context = ToolRunnerContext(
@@ -713,12 +555,12 @@ def run_pipeline(
     tools = _ensure_locator_first(tools)
 
     for tool in tools:
-        meta = ToolRegistry.get_tool_meta(tool.type)
-        if meta is None:
+        definition = ToolRegistry.get_tool_definition(tool.type)
+        if definition is None:
             raise ValueError(f"Tool type '{tool.type}' is not registered")
 
-        _validate_roi(tool, meta)
-        _validate_ignore_mask(tool, meta)
+        _validate_roi(tool, definition)
+        _validate_ignore_mask(tool, definition)
         _validate_params(tool)
 
         tool_id = tool.name or f"tool_{tool.order}"
@@ -732,30 +574,37 @@ def run_pipeline(
             diagnostics.append(diag_entry)
             continue
 
+        runner = ToolRegistry.create_tool(tool.type)
+        runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
+
+        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
+        if frame_for_tool is None:
+            raise ValueError("Frame data not available for tool execution")
+
+        result = runner.run(
+            golden,
+            frame_for_tool,
+            tool.params,
+            tool.thresholds,
+            {"roi": tool.roi},
+        )
+        diagnostics_payload = getattr(runner, "last_diagnostics", {})
+        runner.teardown()
+
+        if isinstance(diagnostics_payload, dict):
+            diag_entry.update(diagnostics_payload)
+        if result.debug_artifacts and isinstance(result.debug_artifacts.get("diagnostics"), dict):
+            diag_entry.update(result.debug_artifacts["diagnostics"])
+
+        diag_entry["status"] = result.status
+        results.append(result)
+
         if tool.type == "locator.template_match":
-            params_dict = dict(tool.params.values or {})
-
-            frame_for_locator = (
-                context.frame_aligned if context.frame_aligned is not None else context.frame
-            )
-
-            tool_result, locator_diag = run_locator_template_match(
-                golden,
-                frame_for_locator,
-                tool.params,
-                tool.thresholds,
-                tool.roi,
-                tool_id=tool_id,
-            )
-
-            diag_entry.update(locator_diag)
-            diag_entry["status"] = locator_diag.get("status", tool_result.status)
-
-            results.append(tool_result)
-
+            locator_diag = diag_entry
             T_new = locator_diag.get("T")
             context.T_total = compose_affine(context.T_total, T_new)
 
+            params_dict = dict(tool.params.values or {})
             apply_alignment = bool(params_dict.get("apply_alignment", True))
             if apply_alignment:
                 source = (
@@ -763,6 +612,8 @@ def run_pipeline(
                     if context.frame_aligned is not None
                     else context.frame
                 )
+                if source is None:
+                    raise ValueError("Source frame missing for locator alignment")
                 dx = float(locator_diag.get("dx", 0.0))
                 dy = float(locator_diag.get("dy", 0.0))
                 context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
@@ -770,29 +621,6 @@ def run_pipeline(
             else:
                 context.frame_aligned = context.frame
                 context.frame_is_aligned = False
-
-        elif tool.type == "ssim":
-            frame_for_ssim = (
-                context.frame_aligned if context.frame_aligned is not None else context.frame
-            )
-
-            tool_result, ssim_diag = run_ssim_tool(
-                golden,
-                frame_for_ssim,
-                tool.thresholds,
-                tool.roi,
-                frame_original=context.frame,
-                T_total=context.T_total,
-                frame_is_aligned=context.frame_is_aligned,
-                tool_id=tool_id,
-            )
-
-            diag_entry.update(ssim_diag)
-            diag_entry["status"] = tool_result.status
-            results.append(tool_result)
-
-        else:
-            diag_entry["status"] = "skipped"
 
         diagnostics.append(diag_entry)
 
@@ -808,6 +636,10 @@ def run_tool_isolated(
     frame: np.ndarray | None,
 ) -> ToolRunResult:
     """Execute a single tool using an existing runner context."""
+
+    import numpy as np
+    from app.services.tool_registry import ToolRegistry
+    from app.utils import imaging
 
     if context is None:
         raise ValueError("Context is required for isolated tool run")
@@ -840,23 +672,43 @@ def run_tool_isolated(
         roi_value = thresholds_dict.pop("__roi__", None)
     roi = ToolRoi.from_obj(roi_value) if roi_value is not None else ToolRoi()
 
+    definition = ToolRegistry.get_tool_definition(tool_type)
+    if definition is None:
+        raise KeyError(f"Tool type '{tool_type}' is not registered")
+
+    runner = ToolRegistry.create_tool(tool_type)
+
+    params_obj = params if isinstance(params, ToolParams) else ToolParams(params_dict)
+    thresholds_obj = (
+        thresholds if isinstance(thresholds, ToolThresholds) else ToolThresholds(thresholds_dict)
+    )
+
+    tool_stub = Tool(
+        type=tool_type,
+        name=tool_type,
+        params=params_obj,
+        thresholds=thresholds_obj,
+        roi=roi,
+    )
+
+    runner.prepare({"tool": tool_stub, "tool_id": tool_type, "runner_context": context})
+
+    frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
+    if frame_for_tool is None:
+        raise ValueError("Frame not available for tool execution")
+
+    result = runner.run(
+        golden,
+        frame_for_tool,
+        params_obj,
+        thresholds_obj,
+        {"roi": roi},
+    )
+    diagnostics = getattr(runner, "last_diagnostics", {})
+    runner.teardown()
+
     if tool_type == "locator.template_match":
-        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
-        if frame_for_tool is None:
-            raise ValueError("Frame not available for locator tool")
-
-        params_obj = ToolParams(params_dict)
-        thresholds_obj = ToolThresholds(thresholds_dict)
-        result, diagnostics = run_locator_template_match(
-            golden,
-            frame_for_tool,
-            params_obj,
-            thresholds_obj,
-            roi,
-            tool_id=tool_type,
-        )
-
-        T_new = diagnostics.get("T")
+        T_new = diagnostics.get("T") if isinstance(diagnostics, dict) else None
         context.T_total = compose_affine(context.T_total, T_new)
 
         apply_alignment = bool(params_dict.get("apply_alignment", True))
@@ -864,35 +716,15 @@ def run_tool_isolated(
             source = context.frame_aligned if context.frame_aligned is not None else context.frame
             if source is None:
                 raise ValueError("Aligned frame source not available")
-            dx = float(diagnostics.get("dx", 0.0))
-            dy = float(diagnostics.get("dy", 0.0))
+            dx = float(diagnostics.get("dx", 0.0)) if isinstance(diagnostics, dict) else 0.0
+            dy = float(diagnostics.get("dy", 0.0)) if isinstance(diagnostics, dict) else 0.0
             context.frame_aligned = imaging.warp_by_translation_u8(source, -dx, -dy)
             context.frame_is_aligned = True
         else:
             context.frame_aligned = context.frame
             context.frame_is_aligned = False
 
-        return result
-
-    if tool_type == "ssim":
-        frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
-        if frame_for_tool is None:
-            raise ValueError("Frame not available for SSIM tool")
-
-        thresholds_obj = ToolThresholds(thresholds_dict)
-        result, _ = run_ssim_tool(
-            golden,
-            frame_for_tool,
-            thresholds_obj,
-            roi,
-            frame_original=context.frame if context.frame is not None else frame_for_tool,
-            T_total=context.T_total,
-            frame_is_aligned=context.frame_is_aligned,
-            tool_id=tool_type,
-        )
-        return result
-
-    raise ValueError(f"Unsupported tool type '{tool_type}' for isolated run")
+    return result
 
 
 def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
@@ -955,6 +787,8 @@ def _clamp_rect(
 def _ensure_gray_u8(image: np.ndarray) -> np.ndarray:
     """Convert an image to a 2D ``uint8`` array without copying when possible."""
 
+    import numpy as np
+
     arr = np.asarray(image)
     if arr.ndim == 3:
         arr = arr[:, :, 0]
@@ -979,6 +813,8 @@ def _safe_float(value: Any, default: float) -> float:
 
 def _extract_translation_from_affine(T: np.ndarray | None) -> tuple[float, float]:
     """Return translation components from a 2×3 affine transform."""
+
+    import numpy as np
 
     if T is None:
         return 0.0, 0.0
@@ -1022,6 +858,9 @@ def run_locator_template_match(
         ``(ToolRunResult, diagnostics)`` pair. Diagnostics include
         ``dx``, ``dy``, ``corr`` and affine transform ``T``.
     """
+
+    import numpy as np
+    from app.utils import imaging
 
     start_time = time.perf_counter()
 
@@ -1089,17 +928,20 @@ def run_locator_template_match(
 
     T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
 
-    metrics = {"dx": dx, "dy": dy, "corr": corr}
+    metrics = {"dx": float(dx), "dy": float(dy), "corr": float(corr)}
     diagnostics = {**metrics, "T": T, "status": status}
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
-    metrics["latency_ms"] = latency_ms
     diagnostics["latency_ms"] = latency_ms
     result = ToolRunResult(
-        tool_id=tool_id,
-        type="locator.template_match",
         status=status,
-        metrics=metrics,
+        metrics={**metrics, "latency_ms": float(latency_ms)},
+        latency_ms=float(latency_ms),
+        debug_artifacts={
+            "tool_id": tool_id,
+            "type": "locator.template_match",
+            "diagnostics": diagnostics,
+        },
     )
     return result, diagnostics
 
@@ -1116,6 +958,9 @@ def run_ssim_tool(
     tool_id: str = "ssim",
 ) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Compute SSIM within ROI, honoring optional locator alignment."""
+
+    import numpy as np
+    from app.utils import imaging
 
     start_time = time.perf_counter()
 
@@ -1149,7 +994,7 @@ def run_ssim_tool(
     ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
     status: Literal["ok", "warn", "nok"] = "ok" if ssim_val >= ssim_min else "nok"
 
-    metrics = {"ssim": round(ssim_val, 5)}
+    metrics = {"ssim": float(round(ssim_val, 5))}
     diagnostics = {
         "ssim": ssim_val,
         "roi": {"x": x, "y": y, "w": w, "h": h},
@@ -1160,14 +1005,17 @@ def run_ssim_tool(
     }
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
-    metrics["latency_ms"] = latency_ms
     diagnostics["latency_ms"] = latency_ms
 
     result = ToolRunResult(
-        tool_id=tool_id,
-        type="ssim",
         status=status,
-        metrics=metrics,
+        metrics={**metrics, "latency_ms": float(latency_ms)},
+        latency_ms=float(latency_ms),
+        debug_artifacts={
+            "tool_id": tool_id,
+            "type": "ssim",
+            "diagnostics": diagnostics,
+        },
     )
     return result, diagnostics
 

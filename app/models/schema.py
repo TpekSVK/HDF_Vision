@@ -6,6 +6,62 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+
+@dataclass(slots=True)
+class ToolSchemaField:
+    """Specification describing a single configurable field."""
+
+    name: str
+    type: str
+    default: Any | None = None
+    label: Optional[str] = None
+    description: str = ""
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    required: bool = False
+
+
+@dataclass(slots=True)
+class ToolSchema:
+    """Schema definition describing parameters and thresholds."""
+
+    params: Tuple[ToolSchemaField, ...] = ()
+    thresholds: Tuple[ToolSchemaField, ...] = ()
+
+
+@dataclass(slots=True)
+class ToolMetricSpec:
+    """Descriptor for metric emitted by a tool."""
+
+    key: str
+    unit: Optional[str] = None
+    priority: int = 0
+    description: str = ""
+
+
+@dataclass(slots=True)
+class ToolMetaDefinition:
+    """Meta information attached to tool definitions."""
+
+    supports_roi: bool = False
+    supports_ignore_mask: bool = False
+    schema: ToolSchema = field(default_factory=ToolSchema)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class ToolDefinition:
+    """High level descriptor for a tool available in the system."""
+
+    type_id: str
+    name: str
+    description: str
+    category: str = "General"
+    deprecated: bool = False
+    meta: ToolMetaDefinition = field(default_factory=ToolMetaDefinition)
+    metrics_spec: Tuple[ToolMetricSpec, ...] = ()
+
 import numpy as np
 
 from app.utils import imaging
