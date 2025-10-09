@@ -38,6 +38,8 @@ from functools import partial
 import numpy as np
 import cv2
 
+from app.utils import overlay as overlay_utils
+
 from app.ui.draw_view import DrawView
 from app.ui.roi_mask_editor import (
     MASK_WARN_PIXELS,
@@ -1271,14 +1273,31 @@ class ToolEditDialog(QDialog):
         arr = np.asarray(img)
         if arr.size == 0:
             return None
+        if arr.ndim == 2:
+            arr_u8 = np.ascontiguousarray(arr.astype(np.uint8))
+            height, width = arr_u8.shape
+            bytes_per_line = arr_u8.strides[0]
+            qimg = QImage(arr_u8.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+            return QPixmap.fromImage(qimg.copy())
         if arr.ndim == 3:
-            arr = arr[:, :, 0]
-        if arr.ndim != 2:
-            arr = np.mean(arr, axis=-1)
-        arr_u8 = np.ascontiguousarray(arr.astype(np.uint8))
-        height, width = arr_u8.shape
-        bytes_per_line = arr_u8.strides[0]
-        qimg = QImage(arr_u8.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
+            if arr.shape[2] == 1:
+                single = np.ascontiguousarray(arr[:, :, 0].astype(np.uint8))
+                height, width = single.shape
+                qimg = QImage(single.data, width, height, single.strides[0], QImage.Format_Grayscale8)
+                return QPixmap.fromImage(qimg.copy())
+            if arr.shape[2] >= 4:
+                rgba = cv2.cvtColor(arr[:, :, :4].astype(np.uint8), cv2.COLOR_BGRA2RGBA)
+                height, width, _ = rgba.shape
+                qimg = QImage(rgba.data, width, height, rgba.strides[0], QImage.Format_RGBA8888)
+                return QPixmap.fromImage(qimg.copy())
+            bgr = np.ascontiguousarray(arr[:, :, :3].astype(np.uint8))
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            height, width, _ = rgb.shape
+            qimg = QImage(rgb.data, width, height, rgb.strides[0], QImage.Format_RGB888)
+            return QPixmap.fromImage(qimg.copy())
+        reshaped = np.ascontiguousarray(arr.astype(np.uint8).reshape(arr.shape[0], arr.shape[1]))
+        height, width = reshaped.shape
+        qimg = QImage(reshaped.data, width, height, reshaped.strides[0], QImage.Format_Grayscale8)
         return QPixmap.fromImage(qimg.copy())
 
 
@@ -1313,6 +1332,7 @@ class ToolConfigPanel(QWidget):
         self._preview_before_key: Optional[str] = None
         self._preview_aligned_key: Optional[str] = None
         self._preview_binarized_key: Optional[str] = None
+        self._preview_overlay_key: Optional[str] = None
         self._active_preview_key: Optional[str] = None
         self._locator_failure_policy: str = "continue_without_alignment"
 
@@ -1435,12 +1455,18 @@ class ToolConfigPanel(QWidget):
             lambda checked: self._on_preview_toggle_changed("binarization", checked)
         )
         toggle_layout.addWidget(self._preview_toggle_binarized)
+        self._preview_toggle_overlay = QCheckBox("Preview overlay", self._preview_toggle_container)
+        self._preview_toggle_overlay.toggled.connect(
+            lambda checked: self._on_preview_toggle_changed("overlay", checked)
+        )
+        toggle_layout.addWidget(self._preview_toggle_overlay)
         toggle_layout.addStretch(1)
 
         self._preview_button_group = QButtonGroup(self)
         self._preview_button_group.setExclusive(True)
         self._preview_button_group.addButton(self._preview_toggle_aligned)
         self._preview_button_group.addButton(self._preview_toggle_binarized)
+        self._preview_button_group.addButton(self._preview_toggle_overlay)
 
         diag_layout.addWidget(self._preview_toggle_container)
 
@@ -1797,9 +1823,14 @@ class ToolConfigPanel(QWidget):
         self._preview_before_key = None
         self._preview_aligned_key = None
         self._preview_binarized_key = None
+        self._preview_overlay_key = None
         self._active_preview_key = None
         self._preview_toggle_container.setVisible(False)
-        for toggle in (self._preview_toggle_aligned, self._preview_toggle_binarized):
+        for toggle in (
+            self._preview_toggle_aligned,
+            self._preview_toggle_binarized,
+            self._preview_toggle_overlay,
+        ):
             toggle.blockSignals(True)
             toggle.setChecked(False)
             toggle.setVisible(False)
@@ -1967,6 +1998,7 @@ class ToolConfigPanel(QWidget):
         self._preview_before_key = None
         self._preview_aligned_key = None
         self._preview_binarized_key = None
+        self._preview_overlay_key = None
         self._active_preview_key = None
 
         if isinstance(preview, dict):
@@ -1991,6 +2023,11 @@ class ToolConfigPanel(QWidget):
                 self._preview_binarized_key = name
                 break
 
+        for name in ("overlay", "overlay_preview", "overlay_result"):
+            if name in self._preview_cache:
+                self._preview_overlay_key = name
+                break
+
         if self._preview_aligned_key is not None:
             self._active_preview_key = self._preview_aligned_key
         elif self._preview_binarized_key is not None:
@@ -2005,8 +2042,9 @@ class ToolConfigPanel(QWidget):
     def _update_preview_controls(self) -> None:
         has_aligned = self._preview_aligned_key is not None
         has_binarized = self._preview_binarized_key is not None
+        has_overlay = self._preview_overlay_key is not None
 
-        self._preview_toggle_container.setVisible(has_aligned or has_binarized)
+        self._preview_toggle_container.setVisible(has_aligned or has_binarized or has_overlay)
 
         self._preview_toggle_aligned.blockSignals(True)
         self._preview_toggle_aligned.setVisible(has_aligned)
@@ -2020,6 +2058,13 @@ class ToolConfigPanel(QWidget):
         )
         self._preview_toggle_binarized.blockSignals(False)
 
+        self._preview_toggle_overlay.blockSignals(True)
+        self._preview_toggle_overlay.setVisible(has_overlay)
+        self._preview_toggle_overlay.setChecked(
+            has_overlay and self._active_preview_key == self._preview_overlay_key
+        )
+        self._preview_toggle_overlay.blockSignals(False)
+
     def _refresh_preview_images(self) -> None:
         before_pixmap = None
         if self._preview_before_key and self._preview_before_key in self._preview_cache:
@@ -2028,6 +2073,8 @@ class ToolConfigPanel(QWidget):
         after_pixmap = None
         if self._active_preview_key and self._active_preview_key in self._preview_cache:
             after_pixmap = self._preview_cache[self._active_preview_key]
+        elif self._preview_overlay_key and self._preview_overlay_key in self._preview_cache:
+            after_pixmap = self._preview_cache[self._preview_overlay_key]
         elif self._preview_aligned_key and self._preview_aligned_key in self._preview_cache:
             after_pixmap = self._preview_cache[self._preview_aligned_key]
         elif self._preview_binarized_key and self._preview_binarized_key in self._preview_cache:
@@ -2045,11 +2092,17 @@ class ToolConfigPanel(QWidget):
                 self._active_preview_key = self._preview_binarized_key or self._preview_aligned_key
             elif mode == "binarization" and self._active_preview_key == self._preview_binarized_key:
                 self._active_preview_key = self._preview_aligned_key or self._preview_binarized_key
+            elif mode == "overlay" and self._active_preview_key == self._preview_overlay_key:
+                self._active_preview_key = (
+                    self._preview_aligned_key or self._preview_binarized_key
+                )
         else:
             if mode == "aligned" and self._preview_aligned_key is not None:
                 self._active_preview_key = self._preview_aligned_key
             elif mode == "binarization" and self._preview_binarized_key is not None:
                 self._active_preview_key = self._preview_binarized_key
+            elif mode == "overlay" and self._preview_overlay_key is not None:
+                self._active_preview_key = self._preview_overlay_key
         self._refresh_preview_images()
 
     def _apply_preview_pixmap(
@@ -3298,6 +3351,7 @@ class GoldenWizard(QDialog):
             preceding.sort(key=lambda tool: tool.order)
 
             perf_breakdown: list[dict[str, Any]] = []
+            executed_runs: list[tuple[Tool, ToolRunResult]] = []
 
             def _append_perf(tool_obj: Tool, run_result: ToolRunResult) -> None:
                 diagnostics = {}
@@ -3335,6 +3389,7 @@ class GoldenWizard(QDialog):
                         frame_array,
                     )
                     _append_perf(tool, result_pre)
+                    executed_runs.append((tool.copy(), result_pre))
                 except Exception as exc:
                     self._tool_panel.show_test_error(
                         f"Mini-runner zlyhal pri '{tool.name}': {exc}"
@@ -3358,6 +3413,61 @@ class GoldenWizard(QDialog):
                 self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
                 return
             _append_perf(target_tool, result)
+            executed_runs.append((target_tool.copy(), result))
+
+            overlay_preview_img: Optional[np.ndarray] = None
+            overlay_items_preview: list[overlay_utils.OverlayItem] = []
+            frame_for_overlay = (
+                context.frame_aligned
+                if getattr(context, "frame_aligned", None) is not None
+                else frame_array
+            )
+            if isinstance(frame_for_overlay, np.ndarray):
+                palette = overlay_utils.default_palette()
+                for idx, (tool_obj, run_result) in enumerate(executed_runs):
+                    color = palette[idx % len(palette)]
+                    extra_sources: list[Any] = []
+                    artifacts = getattr(run_result, "debug_artifacts", None)
+                    extra_sources.extend(
+                        overlay_utils.extract_display_items_from_artifacts(artifacts)
+                    )
+                    if isinstance(artifacts, dict):
+                        extra_sources.extend(
+                            overlay_utils.extract_display_items_from_artifacts(
+                                artifacts.get("diagnostics")
+                            )
+                        )
+                    overlay_items_preview.extend(
+                        overlay_utils.tool_overlay_items(
+                            tool_obj,
+                            color=color,
+                            display_items=extra_sources,
+                            label=tool_obj.name or tool_obj.type,
+                        )
+                    )
+                if overlay_items_preview:
+                    overlay_image = overlay_utils.render_overlay(
+                        frame_for_overlay.shape[:2], overlay_items_preview
+                    )
+                    if overlay_image is not None:
+                        overlay_preview_img = overlay_utils.apply_overlay(
+                            frame_for_overlay, overlay_image
+                        )
+
+            if overlay_preview_img is not None:
+                artifacts = result.debug_artifacts
+                if not isinstance(artifacts, dict):
+                    artifacts = {}
+                    result.debug_artifacts = artifacts
+                preview_payload: dict[str, Any] = {}
+                existing_preview = artifacts.get("preview") if artifacts else None
+                if isinstance(existing_preview, dict):
+                    preview_payload.update(existing_preview)
+                preview_payload.setdefault("before", frame_array)
+                preview_payload.setdefault("aligned", frame_for_overlay)
+                preview_payload["overlay"] = overlay_preview_img
+                artifacts["preview"] = preview_payload
+
             elapsed_ms = (time.perf_counter() - test_start) * 1000.0
             status_message = "\n".join(status_messages) if status_messages else None
             self._tool_panel.show_test_result(

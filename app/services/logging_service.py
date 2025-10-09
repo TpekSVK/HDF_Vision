@@ -15,6 +15,7 @@ import imageio.v3 as iio
 import numpy as np
 
 from app.models.schema import RecipeV2, Tool
+from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     from app.services.tool_service import PipelineResult, PipelineToolReport
@@ -145,51 +146,6 @@ def _sanitize_recipe_name(name: Optional[str]) -> str:
     return safe or "unknown"
 
 
-def _build_overlay(
-    frame_shape: Tuple[int, int],
-    tools: Iterable[Tool],
-) -> Optional[np.ndarray]:
-    import cv2  # lazy import to avoid heavy dependency at module import time
-
-    height, width = frame_shape
-    if height <= 0 or width <= 0:
-        return None
-
-    overlay_rgb = np.zeros((height, width, 3), dtype=np.uint8)
-    overlay_alpha = np.zeros((height, width), dtype=np.uint8)
-    palette = [
-        (255, 99, 71),
-        (65, 105, 225),
-        (50, 205, 50),
-        (255, 215, 0),
-        (138, 43, 226),
-        (0, 206, 209),
-        (255, 105, 180),
-    ]
-
-    for idx, tool in enumerate(tools):
-        if not tool.enabled:
-            continue
-        color = palette[idx % len(palette)]
-        roi_rect = tool.roi.rect()
-        if roi_rect is not None:
-            x, y, w, h = roi_rect
-            p1 = (int(x), int(y))
-            p2 = (int(x + w - 1), int(y + h - 1))
-            cv2.rectangle(overlay_rgb, p1, p2, color, 2)
-            cv2.rectangle(overlay_alpha, p1, p2, 200, 2)
-        mask = tool.ignore_mask.value
-        if mask is not None and mask.shape[:2] == (height, width):
-            mask_bool = mask.astype(bool)
-            overlay_rgb[mask_bool] = color
-            overlay_alpha[mask_bool] = np.maximum(overlay_alpha[mask_bool], 80)
-
-    if not overlay_alpha.any() and not overlay_rgb.any():
-        return None
-
-    return np.dstack([overlay_rgb, overlay_alpha])
-
-
 def _export_artifacts(
     *,
     recipe_name: Optional[str],
@@ -215,7 +171,10 @@ def _export_artifacts(
 
     artifacts: Dict[str, str] = {"aligned_png": str(aligned_path)}
 
-    overlay = _build_overlay(frame_u8.shape[:2], recipe.tools)
+    overlay_items = getattr(result, "overlay_items", None)
+    overlay = None
+    if overlay_items:
+        overlay = overlay_utils.render_overlay(frame_u8.shape[:2], overlay_items)
     if overlay is not None:
         overlay_path = base_dir / f"{safe_name}_{ts}_{run_id}_overlay.png"
         iio.imwrite(overlay_path, overlay)

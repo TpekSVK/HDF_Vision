@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import defaultdict, deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Sequence, Tuple, Protocol, runtime_checkable, TYPE_CHECKING
 
@@ -25,6 +25,7 @@ from app.models.schema import (
     ToolRoi,
     ToolThresholds,
 )
+from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     import numpy as np
@@ -551,6 +552,7 @@ class PipelineToolReport:
     metrics: Dict[str, Any]
     latency_ms: float
     diagnostics: Dict[str, Any]
+    overlay_items: list[overlay_utils.OverlayItem] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -563,6 +565,7 @@ class PipelineResult:
     cycle_time_ms: float
     status: Literal["ok", "nok", "warn"]
     policy_applied: Optional[str] = None
+    overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
 
 
 def compose_affine(
@@ -665,6 +668,9 @@ class PipelineOrchestrator:
         diagnostics: List[Dict[str, Any]] = []
         per_tool: List[PipelineToolReport] = []
         policy_applied: Optional[str] = None
+        overlay_palette = overlay_utils.default_palette()
+        overlay_index = 0
+        pipeline_overlay_items: List[overlay_utils.OverlayItem] = []
 
         failure_policy = self._normalize_failure_policy(
             getattr(recipe, "on_locator_failure", "continue_without_alignment")
@@ -691,6 +697,12 @@ class PipelineOrchestrator:
                 diag_entry["disabled"] = True
                 diagnostics.append(diag_entry)
                 continue
+
+            if overlay_palette:
+                tool_color = overlay_palette[overlay_index % len(overlay_palette)]
+                overlay_index += 1
+            else:  # pragma: no cover - defensive fallback
+                tool_color = (255, 0, 0)
 
             runner = ToolRegistry.create_tool(tool.type)
             runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
@@ -725,6 +737,26 @@ class PipelineOrchestrator:
             metrics = dict(result.metrics or {})
             metrics.setdefault("latency_ms", float(result.latency_ms))
 
+            display_sources: List[Any] = []
+            display_sources.extend(
+                overlay_utils.extract_display_items_from_artifacts(
+                    result.debug_artifacts
+                )
+            )
+            if isinstance(diagnostics_payload, dict):
+                display_sources.extend(
+                    overlay_utils.extract_display_items_from_artifacts(
+                        diagnostics_payload
+                    )
+                )
+            tool_overlay_items = overlay_utils.tool_overlay_items(
+                tool,
+                color=tool_color,
+                display_items=display_sources,
+                label=str(tool_id),
+            )
+            pipeline_overlay_items.extend(tool_overlay_items)
+
             diagnostics.append(diag_entry)
             record_tool_latency(str(tool_id), float(result.latency_ms))
 
@@ -736,6 +768,7 @@ class PipelineOrchestrator:
                     metrics=metrics,
                     latency_ms=float(result.latency_ms),
                     diagnostics=dict(diag_entry),
+                    overlay_items=tool_overlay_items,
                 )
             )
 
@@ -784,6 +817,7 @@ class PipelineOrchestrator:
             cycle_time_ms=float(cycle_time_ms),
             status=pipeline_status,
             policy_applied=policy_applied,
+            overlay_items=pipeline_overlay_items,
         )
 
         try:

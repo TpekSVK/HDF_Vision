@@ -88,6 +88,9 @@ def test_locator_updates_context_with_alignment() -> None:
     assert context.frame_aligned is not None
     assert np.allclose(context.frame_aligned, expected_aligned)
 
+    assert pipeline.overlay_items
+    assert all(report.overlay_items for report in pipeline.per_tool)
+
 
 def test_locator_keeps_frame_when_alignment_disabled() -> None:
     golden, frame = _make_test_images()
