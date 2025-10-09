@@ -141,6 +141,9 @@ def test_pipeline_alignment_modes_produce_consistent_ssim() -> None:
     diagnostics_b = pipeline_b.diagnostics
     results_b = pipeline_b.per_tool
 
+    assert pipeline_a.policy_applied is None
+    assert pipeline_b.policy_applied is None
+
     assert context_a.frame_is_aligned is True
     assert context_b.frame_is_aligned is False
     assert context_b.frame_aligned is frame
@@ -185,8 +188,12 @@ def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     assert locator_result.status == "nok"
     assert diagnostics[0]["status"] == "nok"
     assert locator_result.metrics["corr"] == pytest.approx(0.0)
+    assert locator_result.metrics.get("found") is False
     assert "latency_ms" in locator_result.metrics
     assert diagnostics[0]["latency_ms"] >= 0.0
+    assert pipeline.policy_applied == "continue_without_alignment"
+    assert diagnostics[0].get("policy_applied") == "continue_without_alignment"
+    assert diagnostics[0].get("locator_failure") is True
 
     assert len(results) == 2
     ssim_result = results[1]
@@ -235,9 +242,11 @@ def test_pipeline_locator_failure_policy_fail_stops_execution() -> None:
     pipeline = run_pipeline(golden, frame, recipe)
 
     assert pipeline.status == "nok"
+    assert pipeline.policy_applied == "fail"
     assert len(pipeline.per_tool) == 1
     assert pipeline.per_tool[0].tool.type.startswith("locator")
     assert pipeline.diagnostics[0]["status"] == "nok"
+    assert pipeline.diagnostics[0].get("policy_applied") == "fail"
     assert np.allclose(
         pipeline.context.T_total,
         np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),

@@ -35,7 +35,7 @@ class ToolRunResult:
     """Normalized result returned by tool runners."""
 
     status: Literal["ok", "nok", "warn"]
-    metrics: Dict[str, float]
+    metrics: Dict[str, Any]
     latency_ms: float
     debug_artifacts: Optional[Dict[str, Any]] = None
 
@@ -548,7 +548,7 @@ class PipelineToolReport:
     tool: Tool
     tool_id: str
     status: Literal["ok", "nok", "warn"]
-    metrics: Dict[str, float]
+    metrics: Dict[str, Any]
     latency_ms: float
     diagnostics: Dict[str, Any]
 
@@ -562,6 +562,7 @@ class PipelineResult:
     diagnostics: List[Dict[str, Any]]
     cycle_time_ms: float
     status: Literal["ok", "nok", "warn"]
+    policy_applied: Optional[str] = None
 
 
 def compose_affine(
@@ -663,6 +664,7 @@ class PipelineOrchestrator:
 
         diagnostics: List[Dict[str, Any]] = []
         per_tool: List[PipelineToolReport] = []
+        policy_applied: Optional[str] = None
 
         failure_policy = self._normalize_failure_policy(
             getattr(recipe, "on_locator_failure", "continue_without_alignment")
@@ -707,6 +709,7 @@ class PipelineOrchestrator:
                 {"roi": tool.roi},
             )
             diagnostics_payload = getattr(runner, "last_diagnostics", {})
+            diag_data = diagnostics_payload if isinstance(diagnostics_payload, dict) else {}
             runner.teardown()
 
             if isinstance(diagnostics_payload, dict):
@@ -737,7 +740,34 @@ class PipelineOrchestrator:
             )
 
             if self._is_locator(tool):
-                if result.status == "nok":
+                locator_found = bool(metrics.get("found", diag_data.get("found", True)))
+                corr_value = _safe_float(metrics.get("corr", diag_data.get("corr")), 0.0)
+                thresholds_map = dict(getattr(tool.thresholds, "values", {}) or {})
+                threshold_raw = diag_data.get("threshold_corr", thresholds_map.get("threshold_corr"))
+                threshold_corr = _safe_float(threshold_raw, 0.55)
+
+                diag_entry["found"] = locator_found
+                diag_entry["corr"] = corr_value
+                diag_entry["threshold_corr"] = threshold_corr
+
+                locator_failure = False
+                failure_reason = None
+                if not locator_found:
+                    locator_failure = True
+                    failure_reason = "not_found"
+                elif corr_value < threshold_corr:
+                    locator_failure = True
+                    failure_reason = "low_corr"
+                elif result.status == "nok":
+                    locator_failure = True
+                    failure_reason = "status_nok"
+
+                if locator_failure:
+                    diag_entry["locator_failure"] = True
+                    if failure_reason:
+                        diag_entry["locator_failure_reason"] = failure_reason
+                    diag_entry["policy_applied"] = failure_policy
+                    policy_applied = policy_applied or failure_policy
                     self._reset_alignment(context)
                     if failure_policy == "fail":
                         break
@@ -753,6 +783,7 @@ class PipelineOrchestrator:
             diagnostics=diagnostics,
             cycle_time_ms=float(cycle_time_ms),
             status=pipeline_status,
+            policy_applied=policy_applied,
         )
 
         try:
@@ -1251,11 +1282,14 @@ def run_locator_template_match(
 
     T = np.array([[1.0, 0.0, dx], [0.0, 1.0, dy]], dtype=np.float32)
 
+    found = bool(used > 0 and abs(float(corr)) > 1e-6)
+
     metrics = {
         "dx": float(dx),
         "dy": float(dy),
         "corr": float(corr),
         "match_attempts": float(used),
+        "found": found,
     }
     status = status_from_metrics("locator.template_match", metrics, thresholds_dict)
 
