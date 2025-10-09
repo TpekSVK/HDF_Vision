@@ -79,6 +79,18 @@ class RecipeService:
         self._save_recipe_config(name, recipe_v2)
         self.db.mark_recipe_draft_updated(name)
 
+    def get_locator_failure_policy(self, name: str) -> str:
+        recipe = self._load_recipe_config(name)
+        return getattr(recipe, "on_locator_failure", "continue_without_alignment")
+
+    def set_locator_failure_policy(self, name: str, policy: str) -> str:
+        normalized = "fail" if str(policy or "").strip().lower() == "fail" else "continue_without_alignment"
+        recipe = self._load_recipe_config(name)
+        recipe.on_locator_failure = normalized
+        self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return normalized
+
     # --- tools ---
     def load_tools(self, name: str, *, use_draft: bool = True) -> List[Tool]:
         if use_draft:

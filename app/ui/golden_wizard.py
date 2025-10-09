@@ -1288,6 +1288,7 @@ class ToolConfigPanel(QWidget):
     paramChanged = Signal(str, object)
     thresholdChanged = Signal(str, object)
     testRequested = Signal(dict, dict)
+    locatorPolicyWarningChanged = Signal(str)
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -1313,6 +1314,7 @@ class ToolConfigPanel(QWidget):
         self._preview_aligned_key: Optional[str] = None
         self._preview_binarized_key: Optional[str] = None
         self._active_preview_key: Optional[str] = None
+        self._locator_failure_policy: str = "continue_without_alignment"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1492,6 +1494,7 @@ class ToolConfigPanel(QWidget):
         self._description_label.clear()
         self._clear_test_result()
         self._update_visibility()
+        self.locatorPolicyWarningChanged.emit("")
 
     def set_tool(
         self,
@@ -1514,6 +1517,13 @@ class ToolConfigPanel(QWidget):
         self._rebuild_form()
         self._clear_test_result()
         self._update_visibility()
+        self.locatorPolicyWarningChanged.emit("")
+
+    def set_locator_failure_policy(self, policy: str) -> None:
+        normalized = "fail" if str(policy or "").strip().lower() == "fail" else "continue_without_alignment"
+        self._locator_failure_policy = normalized
+        if normalized != "continue_without_alignment":
+            self.locatorPolicyWarningChanged.emit("")
 
     def refresh_values(self, tool: Tool) -> None:
         if tool is None:
@@ -1646,6 +1656,7 @@ class ToolConfigPanel(QWidget):
         self._test_result_label.clear()
         self._test_result_label.setVisible(False)
         self._reset_diagnostics()
+        self.locatorPolicyWarningChanged.emit("")
 
     def set_test_running(self, running: bool) -> None:
         if running:
@@ -1662,24 +1673,28 @@ class ToolConfigPanel(QWidget):
         status_message: Optional[str] = None,
     ) -> None:
         metrics = dict(result.metrics or {})
-        preview = None
-        if getattr(result, "debug_artifacts", None):
-            preview = result.debug_artifacts.get("preview")
+        debug_artifacts = (
+            result.debug_artifacts if isinstance(result.debug_artifacts, dict) else {}
+        )
+        preview = debug_artifacts.get("preview") if debug_artifacts else None
+        diagnostics_payload_raw = (
+            debug_artifacts.get("diagnostics") if debug_artifacts else {}
+        )
+        diagnostics_payload = (
+            diagnostics_payload_raw if isinstance(diagnostics_payload_raw, dict) else {}
+        )
         status_key = (result.status or "").lower()
         latency_value = metrics.get(
             "latency_ms",
             elapsed_ms if elapsed_ms is not None else getattr(result, "latency_ms", None),
         )
         diagnostics_breakdown = perf_breakdown
+        tool_identifier = debug_artifacts.get("tool_id") if debug_artifacts else None
         if diagnostics_breakdown is None:
-            derived: dict[str, Any] = {}
-            if isinstance(getattr(result, "debug_artifacts", None), dict):
-                derived = result.debug_artifacts.get("diagnostics", {}) or {}
-                tool_identifier = result.debug_artifacts.get("tool_id")
-            else:
-                tool_identifier = None
             timings = (
-                derived.get("timings_ms") if isinstance(derived, dict) else None
+                diagnostics_payload.get("timings_ms")
+                if isinstance(diagnostics_payload, dict)
+                else None
             )
             diagnostics_breakdown = [
                 {
@@ -1697,6 +1712,7 @@ class ToolConfigPanel(QWidget):
             message=status_message,
         )
         self._set_perf_overlay(diagnostics_breakdown)
+        self._maybe_emit_locator_warning(metrics, diagnostics_payload)
 
         status_text = result.status.upper() if result.status else "—"
         latency_text = self._format_latency_text(latency_value)
@@ -1708,6 +1724,7 @@ class ToolConfigPanel(QWidget):
         self._update_diagnostics("nok", {}, None)
         self._set_test_message(message, "#b03030")
         self._set_perf_overlay(None)
+        self.locatorPolicyWarningChanged.emit("")
 
     def _set_test_message(self, message: str, color: str) -> None:
         self._test_result_label.setText(message)
@@ -1881,6 +1898,8 @@ class ToolConfigPanel(QWidget):
 
     @staticmethod
     def _format_metric_value(value: Any) -> str:
+        if isinstance(value, bool):
+            return "True" if value else "False"
         if isinstance(value, (int, np.integer)):
             return str(int(value))
         if isinstance(value, (float, np.floating)):
@@ -1892,6 +1911,56 @@ class ToolConfigPanel(QWidget):
         if value is None:
             return "—"
         return str(value)
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _maybe_emit_locator_warning(
+        self, metrics: dict[str, Any], diagnostics: dict[str, Any]
+    ) -> None:
+        tool = self._current_tool
+        if tool is None:
+            self.locatorPolicyWarningChanged.emit("")
+            return
+
+        tool_type = (getattr(tool, "type", "") or "").lower()
+        if not (tool_type.startswith("locator.") or tool_type == "template_match"):
+            self.locatorPolicyWarningChanged.emit("")
+            return
+
+        if self._locator_failure_policy != "continue_without_alignment":
+            self.locatorPolicyWarningChanged.emit("")
+            return
+
+        thresholds_map = getattr(tool.thresholds, "values", {}) or {}
+        threshold_value = diagnostics.get("threshold_corr", thresholds_map.get("threshold_corr"))
+        threshold_corr = self._coerce_float(threshold_value, 0.55)
+        corr_value = self._coerce_float(metrics.get("corr", diagnostics.get("corr")), 0.0)
+        found_raw = metrics.get("found", diagnostics.get("found"))
+        found_flag = bool(found_raw) if found_raw is not None else True
+
+        message = ""
+        if not found_flag:
+            message = (
+                "Pozor: Locator nenašiel pozíciu (found = False). "
+                "Pri politike „Pokračovať bez zarovnania“ zostane frame nezarovnaný. "
+                "Skontroluj downstream nástroje a nastavenia locatora."
+            )
+        elif corr_value < threshold_corr:
+            message = (
+                f"Pozor: Locator corr {corr_value:.3f} je pod prahom {threshold_corr:.3f}. "
+                "Pri politike „Pokračovať bez zarovnania“ zostane frame nezarovnaný. "
+                "Skontroluj downstream nástroje a threshold_corr."
+            )
+
+        if message:
+            self.locatorPolicyWarningChanged.emit(message)
+        else:
+            self.locatorPolicyWarningChanged.emit("")
 
     def _prepare_preview_data(self, preview: Optional[Any]) -> None:
         self._preview_cache.clear()
@@ -2287,6 +2356,17 @@ class GoldenWizard(QDialog):
         self.chk_pose    = QCheckBox("Použiť globálne zarovnanie (pose alignment)")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", True))
 
+        self._updating_policy_combo = False
+        self._current_locator_failure_policy = "continue_without_alignment"
+        self.failure_policy_combo = QComboBox(self)
+        self.failure_policy_combo.addItem(
+            "Pokračovať bez zarovnania", "continue_without_alignment"
+        )
+        self.failure_policy_combo.addItem("Zlyhať pipeline", "fail")
+        self.failure_policy_combo.setToolTip(
+            "Ako má pipeline reagovať, keď locator nezarovná frame."
+        )
+
         self.btn_add_tool = QPushButton("Add tool")
         self.btn_add_tool.clicked.connect(self._open_tool_catalog)
 
@@ -2301,6 +2381,8 @@ class GoldenWizard(QDialog):
         top.addWidget(QLabel("Typ:"));    top.addWidget(self.type_sel)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
+        top.addWidget(QLabel("Zlyhanie locatora:", self))
+        top.addWidget(self.failure_policy_combo)
         top.addWidget(self.btn_add_tool)
         top.addWidget(self.btn_live)
 
@@ -2377,6 +2459,14 @@ class GoldenWizard(QDialog):
         self.locator_hint_label.setWordWrap(True)
         self.locator_hint_label.setStyleSheet("color: #555; font-style: italic;")
 
+        self.locator_policy_banner = QLabel("", self)
+        self.locator_policy_banner.setWordWrap(True)
+        self.locator_policy_banner.setStyleSheet(
+            "background-color: #fff4d6; border: 1px solid #f0c36d; "
+            "color: #8a6d1a; padding: 8px; border-radius: 4px; font-weight: 500;"
+        )
+        self.locator_policy_banner.setVisible(False)
+
         content_layout = QHBoxLayout()
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(12)
@@ -2389,6 +2479,7 @@ class GoldenWizard(QDialog):
         left_layout.addWidget(tools_label)
         left_layout.addWidget(self.tools_table)
         left_layout.addWidget(self.locator_hint_label)
+        left_layout.addWidget(self.locator_policy_banner)
         left_layout.addLayout(buttons)
 
         content_layout.addLayout(left_layout, 3)
@@ -2417,6 +2508,12 @@ class GoldenWizard(QDialog):
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
         self._tool_panel.testRequested.connect(self._on_tool_test_requested)
+        self._tool_panel.locatorPolicyWarningChanged.connect(
+            self._update_locator_policy_banner
+        )
+        self.failure_policy_combo.currentIndexChanged.connect(
+            self._on_failure_policy_changed
+        )
 
         self._selected_tool_row = -1
 
@@ -2435,6 +2532,7 @@ class GoldenWizard(QDialog):
         except Exception as exc:
             print(f"[GoldenWizard] load_tools failed for {self._last_recipe}: {exc}")
         self._record_saved_snapshot(self._last_recipe)
+        self._sync_locator_policy_ui(self._last_recipe)
         self._refresh_tools_table()
         self._on_tool_selection_changed()
         self._refresh_publish_state()
@@ -2742,6 +2840,73 @@ class GoldenWizard(QDialog):
     def _err(self, msg):
         QMessageBox.critical(self, "Chyba", msg)
 
+    def _sync_locator_policy_ui(self, recipe: Optional[str] = None) -> None:
+        if not hasattr(self, "failure_policy_combo"):
+            return
+
+        recipe = recipe or self._current_recipe_name()
+        try:
+            policy = self.recipes.get_locator_failure_policy(recipe)
+        except Exception as exc:
+            print(f"[GoldenWizard] get_locator_failure_policy failed for {recipe}: {exc}")
+            policy = "continue_without_alignment"
+
+        self._current_locator_failure_policy = policy
+        self._updating_policy_combo = True
+        try:
+            index = self.failure_policy_combo.findData(policy)
+            if index < 0:
+                index = self.failure_policy_combo.findData("continue_without_alignment")
+            if index < 0:
+                index = 0
+            self.failure_policy_combo.setCurrentIndex(max(0, index))
+        finally:
+            self._updating_policy_combo = False
+
+        self._tool_panel.set_locator_failure_policy(policy)
+        self._update_locator_policy_banner("")
+
+    def _on_failure_policy_changed(self) -> None:
+        if getattr(self, "_updating_policy_combo", False):
+            return
+
+        policy = self.failure_policy_combo.currentData() or "continue_without_alignment"
+        recipe = self._current_recipe_name()
+        try:
+            normalized = self.recipes.set_locator_failure_policy(recipe, policy)
+        except Exception as exc:
+            self._err(f"Zmena politiky locatora zlyhala: {exc}")
+            self._sync_locator_policy_ui(recipe)
+            return
+
+        self._current_locator_failure_policy = normalized
+        if normalized != policy:
+            self._updating_policy_combo = True
+            try:
+                index = self.failure_policy_combo.findData(normalized)
+                if index < 0:
+                    index = self.failure_policy_combo.findData("continue_without_alignment")
+                if index >= 0:
+                    self.failure_policy_combo.setCurrentIndex(index)
+            finally:
+                self._updating_policy_combo = False
+
+        self._tool_panel.set_locator_failure_policy(normalized)
+        self._update_locator_policy_banner("")
+        self._refresh_publish_state()
+
+    def _update_locator_policy_banner(self, message: str) -> None:
+        if not hasattr(self, "locator_policy_banner"):
+            return
+
+        text = (message or "").strip()
+        if not text:
+            self.locator_policy_banner.clear()
+            self.locator_policy_banner.setVisible(False)
+        else:
+            self.locator_policy_banner.setText(text)
+            self.locator_policy_banner.setVisible(True)
+
     # ---------- Tools management ----------
     def _current_recipe_name(self) -> str:
         return self.recipe_name.text().strip() or "default"
@@ -2756,6 +2921,7 @@ class GoldenWizard(QDialog):
             print(f"[GoldenWizard] load_tools failed for {recipe}: {exc}")
         self._last_recipe = recipe
         self._record_saved_snapshot(recipe)
+        self._sync_locator_policy_ui(recipe)
         self._refresh_tools_table()
         self._refresh_publish_state()
 
@@ -2996,6 +3162,9 @@ class GoldenWizard(QDialog):
                 self._selected_tool_row = -1
                 return
             self._tool_panel.set_tool(tool, meta, schema)
+            self._tool_panel.set_locator_failure_policy(
+                self._current_locator_failure_policy
+            )
             self._selected_tool_row = row
         else:
             self._tool_panel.clear()

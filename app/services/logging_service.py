@@ -233,6 +233,7 @@ def _collect_locator_payload(
         "dx": None,
         "dy": None,
         "T_total": None,
+        "found": None,
     }
 
     first_locator = None
@@ -245,6 +246,7 @@ def _collect_locator_payload(
         locator_info["corr"] = metrics.get("corr")
         locator_info["dx"] = metrics.get("dx")
         locator_info["dy"] = metrics.get("dy")
+        locator_info["found"] = metrics.get("found")
 
     context = result.context
     T_total = getattr(context, "T_total", None)
@@ -269,6 +271,7 @@ def record_pipeline_run(
         "ok": bool(result.status == "ok"),
         "status": result.status,
         "cycle_time_ms": float(result.cycle_time_ms),
+        "policy_applied": getattr(result, "policy_applied", None),
     }
 
     locator_reports = [report for report in result.per_tool if _is_locator(report.tool)]
