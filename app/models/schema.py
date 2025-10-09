@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Literal
 
 
 @dataclass(slots=True)
@@ -396,6 +396,9 @@ class RecipeV2:
     pose_enabled: bool = True
     regions: List[Dict[str, Any]] = field(default_factory=list)
     tools: List[Tool] = field(default_factory=list)
+    on_locator_failure: Literal["fail", "continue_without_alignment"] = (
+        "continue_without_alignment"
+    )
 
     def __post_init__(self) -> None:
         self.pose_enabled = bool(self.pose_enabled)
@@ -409,11 +412,19 @@ class RecipeV2:
         converted.sort(key=lambda t: t.order)
         self.tools = converted
 
+        policy = str(self.on_locator_failure or "").lower()
+        if policy not in {"fail", "continue_without_alignment"}:
+            policy = "continue_without_alignment"
+        self.on_locator_failure = (
+            "fail" if policy == "fail" else "continue_without_alignment"
+        )
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pose_enabled": bool(self.pose_enabled),
             "regions": [dict(r) for r in self.regions],
             "tools": [t.to_dict() for t in self.tools],
+            "on_locator_failure": self.on_locator_failure,
         }
 
     @classmethod
@@ -424,6 +435,9 @@ class RecipeV2:
             pose_enabled=data.get("pose_enabled", True),
             regions=data.get("regions", []),
             tools=data.get("tools", []),
+            on_locator_failure=data.get(
+                "on_locator_failure", "continue_without_alignment"
+            ),
         )
 
     @classmethod
@@ -432,6 +446,7 @@ class RecipeV2:
             pose_enabled=recipe.pose_enabled,
             regions=recipe.regions,
             tools=[],
+            on_locator_failure="continue_without_alignment",
         )
 
     def copy(self) -> "RecipeV2":
@@ -439,6 +454,7 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=[tool.copy() for tool in self.tools],
+            on_locator_failure=self.on_locator_failure,
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":
@@ -447,6 +463,7 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=new_tools,
+            on_locator_failure=self.on_locator_failure,
         )
 
     def iter_tools(self) -> Iterable[Tool]:
