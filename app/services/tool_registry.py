@@ -185,6 +185,7 @@ def _log_registered_tools() -> None:
 
 def _register_default_tools() -> None:
     from app.services import tool_service
+    from app.services.tools import edge, mse, ncc, ssd
 
     ToolRegistry.register(
         "ssim",
@@ -272,6 +273,183 @@ def _register_default_tools() -> None:
                 {"key": "dx", "priority": 8, "description": "Posun na osi X", "unit": "px"},
                 {"key": "dy", "priority": 8, "description": "Posun na osi Y", "unit": "px"},
                 {"key": "latency_ms", "priority": 1, "description": "Čas behu", "unit": "ms"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "ssd",
+        factory=lambda: ssd.SSDTool(),
+        meta={
+            "name": "SSD",
+            "description": "Súčet štvorcov rozdielov v ROI s voliteľným rozmazaním.",
+            "category": "Similarity",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "preblur_sigma": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.1,
+                        "description": "Sigma pre Gaussian blur pred porovnaním.",
+                    }
+                },
+                "thresholds": {
+                    "ssd_max": {
+                        "type": "float",
+                        "default": 1.0e7,
+                        "min": 0.0,
+                        "description": "Maximálna povolená hodnota súčtu štvorcov rozdielov.",
+                    }
+                },
+            },
+            "metrics_spec": [
+                {"key": "ssd", "unit": None, "priority": 10, "description": "SSD hodnota"},
+                {"key": "mean_abs", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "mse",
+        factory=lambda: mse.MSETool(),
+        meta={
+            "name": "MSE",
+            "description": "Mean Squared Error medzi golden a snímkou v ROI.",
+            "category": "Similarity",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "preblur_sigma": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.1,
+                        "description": "Sigma pre Gaussian blur pred meraním.",
+                    }
+                },
+                "thresholds": {
+                    "mse_max": {
+                        "type": "float",
+                        "default": 25.0,
+                        "min": 0.0,
+                        "description": "Maximálna povolená MSE hodnota.",
+                    }
+                },
+            },
+            "metrics_spec": [
+                {"key": "mse", "unit": None, "priority": 10, "description": "MSE hodnota"},
+                {"key": "rmse", "unit": None, "priority": 5, "description": "Koreň strednej chyby"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "ncc",
+        factory=lambda: ncc.NCCTool(),
+        meta={
+            "name": "NCC",
+            "description": "Normalizovaná krížová korelácia v rámci ROI.",
+            "category": "Similarity",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "preblur_sigma": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.1,
+                        "description": "Sigma pre Gaussian blur pred koreláciou.",
+                    }
+                },
+                "thresholds": {
+                    "ncc_min": {
+                        "type": "float",
+                        "default": 0.9,
+                        "min": -1.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "description": "Minimálna povolená NCC hodnota.",
+                    }
+                },
+            },
+            "metrics_spec": [
+                {"key": "ncc", "unit": None, "priority": 10, "description": "NCC hodnota"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "edge_change",
+        factory=lambda: edge.EdgeChangeTool(),
+        meta={
+            "name": "Edge Change",
+            "description": "Vyhodnotenie hrán a rozdielov cez thresholdovaný absdiff.",
+            "category": "Change Detection",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "blur_sigma": {
+                        "type": "float",
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.1,
+                        "description": "Sigma pre Gaussian blur pred prahovaním.",
+                    },
+                    "diff_threshold": {
+                        "type": "int",
+                        "default": 25,
+                        "min": 0,
+                        "max": 255,
+                        "description": "Prah absolútneho rozdielu pre detekciu hrán.",
+                    },
+                    "use_morphology": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Povoliť open+dilate na očistenie masky hrán.",
+                    },
+                    "morph_open": {
+                        "type": "int",
+                        "default": 3,
+                        "min": 1,
+                        "max": 15,
+                        "description": "Veľkosť jadra pre operáciu open.",
+                    },
+                    "morph_dilate": {
+                        "type": "int",
+                        "default": 3,
+                        "min": 1,
+                        "max": 15,
+                        "description": "Veľkosť jadra pre dilatáciu.",
+                    },
+                },
+                "thresholds": {
+                    "edge_ratio_max": {
+                        "type": "float",
+                        "default": 0.05,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.005,
+                        "description": "Maximálny podiel hrán označených ako zmena.",
+                    }
+                },
+            },
+            "metrics_spec": [
+                {"key": "edge_ratio", "unit": None, "priority": 10, "description": "Podiel zmenených hrán"},
+                {"key": "mean_diff", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
     )
