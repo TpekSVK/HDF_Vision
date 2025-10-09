@@ -47,6 +47,7 @@ from app.models.schema import (
     Tool,
     ToolDefinition,
     ToolMask,
+    ToolMetricSpec,
     ToolParams,
     ToolRoi,
     ToolThresholds,
@@ -1219,12 +1220,15 @@ class ToolConfigPanel(QWidget):
     thresholdChanged = Signal(str, object)
     testRequested = Signal(dict, dict)
 
+    _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
+
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
 
         self._current_tool: Optional[Tool] = None
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
+        self._current_metrics_spec: list[ToolMetricSpec] = []
         self._param_widgets: dict[str, QWidget] = {}
         self._threshold_widgets: dict[str, QWidget] = {}
         self._updating = False
@@ -1405,6 +1409,7 @@ class ToolConfigPanel(QWidget):
         self._current_tool = None
         self._param_specs.clear()
         self._threshold_specs.clear()
+        self._current_metrics_spec = []
         self._clear_form()
         self._tool_label.setText("No tool selected")
         self._description_label.clear()
@@ -1422,6 +1427,7 @@ class ToolConfigPanel(QWidget):
         self._threshold_specs = {
             k: dict(v) for k, v in (schema.get("thresholds") or {}).items()
         }
+        self._current_metrics_spec = list(getattr(meta, "metrics_spec", []) or [])
 
         self._tool_label.setText(f"{tool.name} ({tool.type})")
         description = getattr(meta, "description", "") or ""
@@ -1576,9 +1582,18 @@ class ToolConfigPanel(QWidget):
         preview = None
         if getattr(result, "debug_artifacts", None):
             preview = result.debug_artifacts.get("preview")
+        status_key = (result.status or "").lower()
+        latency_value = metrics.get(
+            "latency_ms",
+            elapsed_ms if elapsed_ms is not None else getattr(result, "latency_ms", None),
+        )
         self._update_diagnostics(result.status, metrics, preview, elapsed_ms=elapsed_ms)
-        self._test_result_label.clear()
-        self._test_result_label.setVisible(False)
+
+        status_text = result.status.upper() if result.status else "—"
+        latency_text = self._format_latency_text(latency_value)
+        message = f"Test: {status_text} · {latency_text}"
+        color = self._STATUS_COLORS.get(status_key, "#444")
+        self._set_test_message(message, color)
 
     def show_test_error(self, message: str) -> None:
         self._update_diagnostics("nok", {}, None)
@@ -1628,8 +1643,7 @@ class ToolConfigPanel(QWidget):
         message: Optional[str] = None,
     ) -> None:
         status_key = (status or "").lower()
-        color_map = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
-        color = color_map.get(status_key, "#555")
+        color = self._STATUS_COLORS.get(status_key, "#555")
         self._set_status_indicator_color(color)
         self._status_value_label.setText(status.upper() if status else "—")
 
@@ -1640,20 +1654,24 @@ class ToolConfigPanel(QWidget):
             self._status_message_label.clear()
             self._status_message_label.setVisible(False)
 
-        latency_value = metrics.pop("latency_ms", None)
+        metrics_copy = dict(metrics or {})
+        latency_value = metrics_copy.pop("latency_ms", None)
         if latency_value is None:
             latency_value = elapsed_ms
-        if latency_value is not None:
-            try:
-                latency_text = f"{float(latency_value):.1f} ms"
-            except (TypeError, ValueError):
-                latency_text = str(latency_value)
-        else:
-            latency_text = "—"
+        latency_text = self._format_latency_text(latency_value)
         self._latency_label.setText(f"Čas: {latency_text}")
 
-        self._populate_metrics_table(metrics)
+        self._populate_metrics_table(metrics_copy)
         self._prepare_preview_data(preview)
+
+    @staticmethod
+    def _format_latency_text(value: Any | None) -> str:
+        if value is None:
+            return "—"
+        try:
+            return f"{float(value):.1f} ms"
+        except (TypeError, ValueError):
+            return str(value)
 
     def _set_status_indicator_color(self, color: str) -> None:
         self._status_indicator.setStyleSheet(
@@ -1661,21 +1679,41 @@ class ToolConfigPanel(QWidget):
         )
 
     def _populate_metrics_table(self, metrics: dict[str, Any]) -> None:
-        if not metrics:
+        rows: list[tuple[str, str, str]] = []
+        remaining = dict(metrics or {})
+
+        if self._current_metrics_spec:
+            spec_entries = sorted(
+                self._current_metrics_spec,
+                key=lambda spec: (-int(getattr(spec, "priority", 0) or 0), getattr(spec, "key", "")),
+            )
+            for spec in spec_entries:
+                key = getattr(spec, "key", "")
+                label = (getattr(spec, "description", "") or key or "Metric").strip()
+                unit = getattr(spec, "unit", None)
+                if unit:
+                    label = f"{label} [{unit}]"
+                raw_value = remaining.pop(key, None)
+                value_text = self._format_metric_value(raw_value)
+                rows.append((label, value_text, getattr(spec, "description", "")))
+
+        if not self._current_metrics_spec:
+            for key in sorted(remaining.keys()):
+                rows.append((str(key), self._format_metric_value(remaining[key]), ""))
+
+        if not rows:
             self._metrics_table.setRowCount(0)
             self._metrics_table.setVisible(False)
             return
 
-        rows = []
-        for key, value in sorted(metrics.items(), key=lambda item: item[0]):
-            rows.append((str(key), self._format_metric_value(value)))
-
         self._metrics_table.setRowCount(len(rows))
-        for row, (name, value) in enumerate(rows):
+        for row, (name, value, tooltip) in enumerate(rows):
             name_item = QTableWidgetItem(name)
             value_item = QTableWidgetItem(value)
             name_item.setFlags(Qt.ItemIsEnabled)
             value_item.setFlags(Qt.ItemIsEnabled)
+            if tooltip and tooltip.strip() and tooltip.strip() != name.strip():
+                name_item.setToolTip(tooltip.strip())
             self._metrics_table.setItem(row, 0, name_item)
             self._metrics_table.setItem(row, 1, value_item)
         self._metrics_table.resizeRowsToContents()
