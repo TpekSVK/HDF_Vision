@@ -939,7 +939,12 @@ class ToolEditDialog(QDialog):
                 current_value = param_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._param_fields[name] = widget
-                label_widget = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label_widget = QLabel(label_text, self)
                 container, error_label = self._create_field_container(widget)
                 self._param_wrappers[name] = container
                 self._param_error_labels[name] = error_label
@@ -965,7 +970,12 @@ class ToolEditDialog(QDialog):
                 current_value = threshold_values.get(name)
                 self._set_widget_value(widget, spec, current_value)
                 self._threshold_fields[name] = widget
-                label_widget = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label_widget = QLabel(label_text, self)
                 container, error_label = self._create_field_container(widget)
                 self._threshold_wrappers[name] = container
                 self._threshold_error_labels[name] = error_label
@@ -1468,7 +1478,12 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, params.get(name))
@@ -1495,7 +1510,12 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label = QLabel(spec.get("label", name), self)
+                label_text = spec.get("label")
+                if label_text is None:
+                    label_text = name
+                else:
+                    label_text = str(label_text)
+                label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, thresholds.get(name))
