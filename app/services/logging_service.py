@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import re
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import imageio.v3 as iio
 import numpy as np
@@ -111,6 +112,8 @@ class JsonlRunLogger:
 
 
 _RUN_LOGGER = JsonlRunLogger(flush_every=1)
+
+atexit.register(_RUN_LOGGER.flush)
 
 
 def _is_locator(tool: Tool) -> bool:
@@ -304,5 +307,3 @@ def record_pipeline_run(
         run_entry["artifacts"] = artifacts
 
     _RUN_LOGGER.log(run_entry)
-
-*** End of File
