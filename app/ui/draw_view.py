@@ -17,15 +17,10 @@ import numpy as np
 
 # Farby podľa špecifikácie
 COLOR_POSE   = QColor(0, 153, 255)   # Modrá
-COLOR_ROI    = QColor(0, 200, 0)     # Zelená
-COLOR_IGNORE = QColor(255, 0, 200)   # Magenta
 PEN_W = 2.0
 
 def _pen(color):   return QPen(color, PEN_W, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
 def _brush(color): return QBrush(Qt.transparent)
-
-def _color_for_type(reg_type: str) -> QColor:
-    return COLOR_POSE if reg_type == "pose" else (COLOR_ROI if reg_type == "roi" else COLOR_IGNORE)
 
 # --- Vykresľovacie itemy (po dokončení kreslenia budú movable/selectable) ---
 
@@ -119,7 +114,7 @@ class DrawView(QGraphicsView):
     """
     Režimy:
       - shape: "rect" | "circle" | "poly"
-      - reg_type: "pose" | "roi" | "ignore"
+      - reg_type: len globálny "pose"
     Ovládanie:
       - RECT: 1. klik = začiatok, ťah myšou = náhľad, uvoľnenie = fixácia
       - CIRCLE: 1. a 2. klik = body na obvode; po 2. kliku živý náhľad (3. bod = kurzor);
@@ -137,7 +132,6 @@ class DrawView(QGraphicsView):
         self.setScene(self._scene)
 
         self.current_shape = "rect"
-        self.current_type  = "pose"
 
         self._bg = None
 
@@ -161,30 +155,27 @@ class DrawView(QGraphicsView):
     def set_shape_type(self, shape: str):
         self.current_shape = shape
 
-    def set_region_type(self, reg_type: str):
-        self.current_type = reg_type
-
     # --- myš a klávesy ---
     def mousePressEvent(self, ev):
         pos = self.mapToScene(ev.pos())
 
         if ev.button() == Qt.LeftButton:
-            color = _color_for_type(self.current_type)
+            color = COLOR_POSE
 
             if self.current_shape == "rect":
-                if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1:
+                if self._pose_count() >= 1:
                     # už existuje – nič nové nevytváraj (užívateľ môže predošlý zmazať a nakresliť znova)
                     return
                 # začni kresliť rectangle – 1. klik fixuje začiatočný bod
                 self._drawing_rect = True
                 self._rect_start = pos
                 self._rect_item = RectItem(QRectF(pos.x(), pos.y(), 1, 1), color)
-                self._rect_item.reg_type = self.current_type
+                self._rect_item.reg_type = "pose"
                 self._scene.addItem(self._rect_item)
                 return
 
             elif self.current_shape == "circle":
-                if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1 and len(self._circle_pts) == 0:
+                if self._pose_count() >= 1 and len(self._circle_pts) == 0:
                     return
 
                 # 3-bodové: zbieraj body na obvode
@@ -199,7 +190,7 @@ class DrawView(QGraphicsView):
                     cx = (p1.x() + p2.x()) / 2.0
                     cy = (p1.y() + p2.y()) / 2.0
                     self._circle_item = CircleItem(cx, cy, 1.0, color)
-                    self._circle_item.reg_type = self.current_type
+                    self._circle_item.reg_type = "pose"
                     self._scene.addItem(self._circle_item)
                     return
                 elif len(self._circle_pts) == 3:
@@ -223,14 +214,14 @@ class DrawView(QGraphicsView):
 
             elif self.current_shape == "poly":
                 if self._poly_item is None:
-                    if self.current_type in ("pose", "roi") and self._count_type(self.current_type) >= 1:
+                    if self._pose_count() >= 1:
                         return
                     # založ nový polygon...
 
                 if self._poly_item is None:
                     # založ nový polygon s 1. bodom
                     self._poly_item = PolyItem([(pos.x(), pos.y())], color)
-                    self._poly_item.reg_type = self.current_type
+                    self._poly_item.reg_type = "pose"
                     self._scene.addItem(self._poly_item)
                     self._poly_preview_on = True
                 else:
@@ -318,34 +309,37 @@ class DrawView(QGraphicsView):
         for it in self._scene.items():
             if it is self._bg:
                 continue
+            if getattr(it, "reg_type", None) not in (None, "pose"):
+                # globálne ROI/ignore už nepodporujeme
+                continue
             if isinstance(it, RectItem):
                 r = it.rect().normalized()
                 regs.append({
-                    "reg_type": it.reg_type,
+                    "reg_type": "pose",
                     "shape": "rect",
                     "geom": [r.x(), r.y(), r.width(), r.height()],
                 })
             elif isinstance(it, CircleItem):
                 cx, cy, rad = it.center_radius()
                 regs.append({
-                    "reg_type": it.reg_type,
+                    "reg_type": "pose",
                     "shape": "circle",
                     "geom": [cx, cy, rad],
                 })
             elif isinstance(it, PolyItem):
                 regs.append({
-                    "reg_type": it.reg_type,
+                    "reg_type": "pose",
                     "shape": "poly",
                     "geom": it.points(),
                 })
         return regs
     
-    def _count_type(self, reg_type: str) -> int:
+    def _pose_count(self) -> int:
         n = 0
         for it in self._scene.items():
             if it is self._bg:
                 continue
-            if hasattr(it, "reg_type") and it.reg_type == reg_type:
+            if getattr(it, "reg_type", None) == "pose":
                 n += 1
         return n
 
