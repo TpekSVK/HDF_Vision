@@ -30,8 +30,8 @@ def validate_cardinality(regions: List["Region"], *, pose_required: bool = True)
         return False, "Musí byť presne 1× Modrá (pose)."
     if not pose_required and pose > 1:
         return False, "Modrá (pose) najviac 1×, alebo vypni globálne zarovnanie."
-    if roi != 1:
-        return False, "Musí byť presne 1× Zelená (ROI)."
-    if ign > 5:
-        return False, "Magenta (ignore) najviac 5×."
+    if roi > 0:
+        return False, "Globálna ROI bola zrušená. Nastav ROI priamo v editore nástroja."
+    if ign > 0:
+        return False, "Globálna ignore maska bola zrušená. Masku nastav v konkrétnom nástroji."
     return True, "OK"
