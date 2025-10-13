@@ -136,6 +136,8 @@ class DrawView(QGraphicsView):
 
         self.current_shape = "rect"
 
+        self._view_only = True
+
         self._bg = None
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
         self._overlay_sources: list[Any] = []
@@ -152,6 +154,8 @@ class DrawView(QGraphicsView):
         self._poly_item: PolyItem | None = None
         self._poly_preview_on = False
 
+        self._update_interaction_mode()
+
     # API z Golden WIZARD
     def set_background(self, qpixmap):
         self._scene.clear()
@@ -163,9 +167,20 @@ class DrawView(QGraphicsView):
         self._bg.setZValue(-1000)
         self._ensure_overlay_pixmap()
         self._update_overlay_pixmap()
+        self._update_interaction_mode()
 
     def set_shape_type(self, shape: str):
         self.current_shape = shape
+
+    def set_view_only(self, value: bool) -> None:
+        value = bool(value)
+        if self._view_only == value:
+            return
+        self._view_only = value
+        self._update_interaction_mode()
+
+    def is_view_only(self) -> bool:
+        return self._view_only
 
     def set_overlay_items(self, overlay_items: Sequence[Any] | None) -> None:
         if overlay_items is None:
@@ -199,6 +214,9 @@ class DrawView(QGraphicsView):
 
     # --- myš a klávesy ---
     def mousePressEvent(self, ev):
+        if self._view_only:
+            ev.ignore()
+            return
         pos = self.mapToScene(ev.pos())
 
         if ev.button() == Qt.LeftButton:
@@ -286,6 +304,9 @@ class DrawView(QGraphicsView):
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
+        if self._view_only:
+            ev.ignore()
+            return
         pos = self.mapToScene(ev.pos())
 
         # živý náhľad rect počas ťahu
@@ -313,6 +334,9 @@ class DrawView(QGraphicsView):
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev):
+        if self._view_only:
+            ev.ignore()
+            return
         if ev.button() == Qt.LeftButton:
             # dokončenie rect po pustení myši
             if self._drawing_rect and self._rect_item is not None:
@@ -329,6 +353,9 @@ class DrawView(QGraphicsView):
         super().mouseReleaseEvent(ev)
 
     def mouseDoubleClickEvent(self, ev):
+        if self._view_only:
+            ev.ignore()
+            return
         # dvojklik uzavrie polygon
         if self.current_shape == "poly" and self._poly_item is not None:
             if len(self._poly_item.points()) >= 3:
@@ -339,6 +366,9 @@ class DrawView(QGraphicsView):
         super().mouseDoubleClickEvent(ev)
 
     def keyPressEvent(self, ev):
+        if self._view_only:
+            ev.ignore()
+            return
         if ev.key() == Qt.Key_Delete:
             for it in self._scene.selectedItems():
                 self._scene.removeItem(it)
@@ -384,6 +414,41 @@ class DrawView(QGraphicsView):
             if getattr(it, "reg_type", None) == "pose":
                 n += 1
         return n
+
+
+    def _update_interaction_mode(self) -> None:
+        interactive = not self._view_only
+        self.setInteractive(interactive)
+        self.setDragMode(
+            QGraphicsView.NoDrag if self._view_only else QGraphicsView.RubberBandDrag
+        )
+        if self._view_only:
+            self._cancel_pending_drawing()
+            self._disable_item_flags()
+
+    def _cancel_pending_drawing(self) -> None:
+        if self._drawing_rect and self._rect_item is not None:
+            self._scene.removeItem(self._rect_item)
+        self._drawing_rect = False
+        self._rect_start = None
+        self._rect_item = None
+
+        if self._circle_item is not None:
+            self._scene.removeItem(self._circle_item)
+        self._circle_pts = []
+        self._circle_item = None
+
+        if self._poly_item is not None:
+            self._scene.removeItem(self._poly_item)
+        self._poly_item = None
+        self._poly_preview_on = False
+
+    def _disable_item_flags(self) -> None:
+        for item in self._scene.items():
+            if item is self._bg or item is self._overlay_pixmap:
+                continue
+            item.setFlag(QGraphicsItem.ItemIsMovable, False)
+            item.setFlag(QGraphicsItem.ItemIsSelectable, False)
 
 
     def set_background_image(self, img_u8):
