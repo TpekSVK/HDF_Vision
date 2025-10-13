@@ -1,6 +1,15 @@
 # app/ui/draw_view.py
-from PySide6.QtCore import Qt, QPointF, QRectF, Signal
-from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPainter, QImage, QPixmap
+from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, Signal
+from PySide6.QtGui import (
+    QPen,
+    QBrush,
+    QColor,
+    QPainterPath,
+    QPainter,
+    QImage,
+    QPixmap,
+    QCursor,
+)
 from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem, QGraphicsPixmapItem,
@@ -138,6 +147,13 @@ class DrawView(QGraphicsView):
 
         self._view_only = True
 
+        self._current_scale = 1.0
+        self._panning = False
+        self._pan_start = QPoint()
+        self._space_pressed = False
+        self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
+        self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+
         self._bg = None
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
         self._overlay_sources: list[Any] = []
@@ -165,8 +181,11 @@ class DrawView(QGraphicsView):
             return
         self._bg = self._scene.addPixmap(qpixmap)
         self._bg.setZValue(-1000)
+        rect = self._bg.boundingRect()
+        self._scene.setSceneRect(rect)
         self._ensure_overlay_pixmap()
         self._update_overlay_pixmap()
+        self._reset_view_transform()
         self._update_interaction_mode()
 
     def set_shape_type(self, shape: str):
@@ -213,7 +232,82 @@ class DrawView(QGraphicsView):
         self.set_overlay_items(items)
 
     # --- myš a klávesy ---
+    def _start_pan(self, ev) -> None:
+        self._panning = True
+        self._pan_start = ev.pos()
+        self.setCursor(QCursor(Qt.ClosedHandCursor))
+        ev.accept()
+
+    def _update_pan(self, ev) -> bool:
+        if not self._panning:
+            return False
+        delta = ev.pos() - self._pan_start
+        self._pan_start = ev.pos()
+        self.horizontalScrollBar().setValue(
+            self.horizontalScrollBar().value() - delta.x()
+        )
+        self.verticalScrollBar().setValue(
+            self.verticalScrollBar().value() - delta.y()
+        )
+        ev.accept()
+        return True
+
+    def _finish_pan(self, ev) -> bool:
+        if not self._panning:
+            return False
+        if ev.button() in (Qt.LeftButton, Qt.MiddleButton):
+            self._panning = False
+            if self._space_pressed:
+                self.setCursor(QCursor(Qt.OpenHandCursor))
+            else:
+                self.setCursor(QCursor(Qt.ArrowCursor))
+            ev.accept()
+            return True
+        return False
+
+    def _handle_pan_key_press(self, ev) -> bool:
+        if ev.key() == Qt.Key_Space and not self._space_pressed:
+            self._space_pressed = True
+            if not self._panning:
+                self.setCursor(QCursor(Qt.OpenHandCursor))
+            ev.accept()
+            return True
+        return False
+
+    def _handle_pan_key_release(self, ev) -> bool:
+        if ev.key() == Qt.Key_Space and self._space_pressed:
+            self._space_pressed = False
+            if not self._panning:
+                self.setCursor(QCursor(Qt.ArrowCursor))
+            ev.accept()
+            return True
+        return False
+
+    def wheelEvent(self, ev):
+        if self._bg is None or self._bg.pixmap().isNull():
+            super().wheelEvent(ev)
+            return
+        angle = ev.angleDelta().y()
+        if angle == 0:
+            super().wheelEvent(ev)
+            return
+        factor = 1.25 if angle > 0 else 0.8
+        new_scale = self._current_scale * factor
+        new_scale = max(0.1, min(16.0, new_scale))
+        factor = new_scale / self._current_scale
+        if factor == 1.0:
+            ev.accept()
+            return
+        self._current_scale = new_scale
+        self.scale(factor, factor)
+        ev.accept()
+
     def mousePressEvent(self, ev):
+        if ev.button() == Qt.MiddleButton or (
+            ev.button() == Qt.LeftButton and self._space_pressed
+        ):
+            self._start_pan(ev)
+            return
         if self._view_only:
             ev.ignore()
             return
@@ -304,6 +398,8 @@ class DrawView(QGraphicsView):
         super().mousePressEvent(ev)
 
     def mouseMoveEvent(self, ev):
+        if self._update_pan(ev):
+            return
         if self._view_only:
             ev.ignore()
             return
@@ -334,6 +430,8 @@ class DrawView(QGraphicsView):
         super().mouseMoveEvent(ev)
 
     def mouseReleaseEvent(self, ev):
+        if self._finish_pan(ev):
+            return
         if self._view_only:
             ev.ignore()
             return
@@ -366,6 +464,8 @@ class DrawView(QGraphicsView):
         super().mouseDoubleClickEvent(ev)
 
     def keyPressEvent(self, ev):
+        if self._handle_pan_key_press(ev):
+            return
         if self._view_only:
             ev.ignore()
             return
@@ -374,6 +474,11 @@ class DrawView(QGraphicsView):
                 self._scene.removeItem(it)
             return
         super().keyPressEvent(ev)
+
+    def keyReleaseEvent(self, ev):
+        if self._handle_pan_key_release(ev):
+            return
+        super().keyReleaseEvent(ev)
 
     # --- export do JSON-friendly štruktúr ---
     def export_regions(self):
@@ -425,6 +530,12 @@ class DrawView(QGraphicsView):
         if self._view_only:
             self._cancel_pending_drawing()
             self._disable_item_flags()
+        if self._panning:
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+        elif self._space_pressed:
+            self.setCursor(QCursor(Qt.OpenHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.ArrowCursor))
 
     def _cancel_pending_drawing(self) -> None:
         if self._drawing_rect and self._rect_item is not None:
@@ -501,6 +612,17 @@ class DrawView(QGraphicsView):
         pixmap_item.setVisible(False)
         pixmap_item.setAcceptedMouseButtons(Qt.NoButton)
         self._overlay_pixmap = pixmap_item
+
+    def _reset_view_transform(self) -> None:
+        self._panning = False
+        self._current_scale = 1.0
+        self.resetTransform()
+        if self._bg is not None and not self._bg.pixmap().isNull():
+            self.fitInView(self._bg, Qt.KeepAspectRatio)
+        if self._space_pressed:
+            self.setCursor(QCursor(Qt.OpenHandCursor))
+        else:
+            self.setCursor(QCursor(Qt.ArrowCursor))
 
     def _update_overlay_pixmap(self) -> None:
         if self._bg is None or self._bg.pixmap().isNull():
