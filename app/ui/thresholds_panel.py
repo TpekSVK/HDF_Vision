@@ -1,7 +1,8 @@
 # app/ui/thresholds_panel.py
 from __future__ import annotations
 
-from typing import List
+from dataclasses import asdict, is_dataclass
+from typing import Dict, List
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -14,8 +15,37 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.models.schema import Tool, ToolParams, ToolThresholds
+from app.models.schema import Tool, ToolDefinition, ToolParams, ToolThresholds
 from app.ui.golden_wizard import ToolConfigPanel
+
+
+def _schema_from_definition(
+    definition: ToolDefinition, raw_schema: Dict[str, Dict[str, dict]] | None
+) -> Dict[str, Dict[str, dict]]:
+    if isinstance(raw_schema, dict) and raw_schema:
+        return raw_schema
+
+    normalized: Dict[str, Dict[str, dict]] = {"params": {}, "thresholds": {}}
+    meta = getattr(definition, "meta", None)
+    tool_schema = getattr(meta, "schema", None)
+    if tool_schema is None:
+        return normalized
+
+    for section in ("params", "thresholds"):
+        fields = getattr(tool_schema, section, ()) or ()
+        section_map: Dict[str, dict] = {}
+        for field in fields:
+            if is_dataclass(field):
+                field_data = asdict(field)
+            else:
+                field_data = dict(getattr(field, "__dict__", {}))
+            name = field_data.pop("name", None)
+            if not name:
+                continue
+            section_map[name] = field_data
+        normalized[section] = section_map
+
+    return normalized
 
 
 class ThresholdsPanel(QWidget):
@@ -143,7 +173,8 @@ class ThresholdsPanel(QWidget):
         tool = self._tools[index]
         try:
             meta = self.mw.recipes.tool.get_tool_meta(tool.type)
-            schema = self.mw.recipes.tool.get_tool_schema(tool.type)
+            raw_schema = self.mw.recipes.tool.get_tool_schema(tool.type)
+            schema = _schema_from_definition(meta, raw_schema)
         except Exception as exc:
             self._current_index = -1
             self._tool_panel.clear()
