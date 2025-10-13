@@ -568,6 +568,20 @@ class PipelineResult:
     overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class ToolTestRun:
+    """Result of executing a partial pipeline for tool testing."""
+
+    result: ToolRunResult
+    report: PipelineToolReport
+    reports: List[PipelineToolReport]
+    diagnostics: List[Dict[str, Any]]
+    context: ToolRunnerContext
+    elapsed_ms: float
+    policy_applied: Optional[str] = None
+    overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
+
+
 def compose_affine(
     T_total: np.ndarray | None, T_new: np.ndarray | None
 ) -> np.ndarray:
@@ -841,6 +855,208 @@ class PipelineOrchestrator:
 
         return result
 
+    def run_tool_test(
+        self,
+        golden: "np.ndarray",
+        frame: "np.ndarray",
+        recipe: RecipeV2,
+    ) -> ToolTestRun:
+        """Execute tools up to the last entry in ``recipe`` for wizard tests."""
+
+        import numpy as np
+        from app.services.tool_registry import ToolRegistry
+
+        start_time = time.perf_counter()
+
+        golden_array = np.asarray(golden)
+        frame_array = np.asarray(frame)
+
+        context = ToolRunnerContext(
+            frame=frame_array,
+            frame_aligned=frame_array,
+            T_total=_identity_affine(),
+            frame_is_aligned=False,
+        )
+
+        diagnostics: List[Dict[str, Any]] = []
+        per_tool: List[PipelineToolReport] = []
+        policy_applied: Optional[str] = None
+
+        failure_policy = self._normalize_failure_policy(
+            getattr(recipe, "on_locator_failure", "continue_without_alignment")
+        )
+        tools = self._order_tools(recipe.tools)
+        if not tools:
+            raise ValueError("Recipe does not contain any tools")
+
+        collect_overlay = True
+        overlay_palette = overlay_utils.default_palette() if collect_overlay else []
+        overlay_index = 0
+        pipeline_overlay_items: List[overlay_utils.OverlayItem] = []
+
+        target_result: ToolRunResult | None = None
+        target_report: PipelineToolReport | None = None
+
+        for index, tool in enumerate(tools):
+            definition = ToolRegistry.get_tool_definition(tool.type)
+            if definition is None:
+                raise ValueError(f"Tool type '{tool.type}' is not registered")
+
+            _validate_roi(tool, definition)
+            _validate_ignore_mask(tool, definition)
+            _validate_params(tool)
+
+            tool_id = tool.name or f"tool_{tool.order}"
+            diag_entry: Dict[str, Any] = {
+                "tool_id": tool_id,
+                "type": tool.type,
+                "status": "skipped",
+            }
+
+            if not tool.enabled:
+                diag_entry["disabled"] = True
+                diagnostics.append(diag_entry)
+                continue
+
+            runner = ToolRegistry.create_tool(tool.type)
+            runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
+
+            frame_for_tool = (
+                context.frame_aligned if context.frame_aligned is not None else context.frame
+            )
+            if frame_for_tool is None:
+                raise ValueError("Frame data not available for tool execution")
+
+            result = runner.run(
+                golden_array,
+                frame_for_tool,
+                tool.params,
+                tool.thresholds,
+                {"roi": tool.roi},
+            )
+            diagnostics_payload = getattr(runner, "last_diagnostics", {})
+            runner.teardown()
+
+            if isinstance(diagnostics_payload, dict):
+                diag_entry.update(diagnostics_payload)
+            if result.debug_artifacts and isinstance(
+                result.debug_artifacts.get("diagnostics"), dict
+            ):
+                diag_entry.update(result.debug_artifacts["diagnostics"])
+
+            diag_entry["status"] = result.status
+            diag_entry.setdefault("latency_ms", float(result.latency_ms))
+
+            metrics = dict(result.metrics or {})
+            metrics.setdefault("latency_ms", float(result.latency_ms))
+            result.metrics = metrics
+
+            tool_overlay_items: List[overlay_utils.OverlayItem] = []
+            if collect_overlay:
+                if overlay_palette:
+                    tool_color = overlay_palette[overlay_index % len(overlay_palette)]
+                    overlay_index += 1
+                else:  # pragma: no cover - defensive fallback
+                    tool_color = (255, 0, 0)
+
+                display_sources: List[Any] = []
+                display_sources.extend(
+                    overlay_utils.extract_display_items_from_artifacts(result.debug_artifacts)
+                )
+                if isinstance(diagnostics_payload, dict):
+                    display_sources.extend(
+                        overlay_utils.extract_display_items_from_artifacts(
+                            diagnostics_payload
+                        )
+                    )
+                tool_overlay_items = overlay_utils.tool_overlay_items(
+                    tool,
+                    color=tool_color,
+                    display_items=display_sources,
+                    label=str(tool_id),
+                )
+                pipeline_overlay_items.extend(tool_overlay_items)
+
+            diagnostics.append(diag_entry)
+            record_tool_latency(str(tool_id), float(result.latency_ms))
+
+            report = PipelineToolReport(
+                tool=tool.copy(),
+                tool_id=str(tool_id),
+                status=result.status,
+                metrics=dict(metrics),
+                latency_ms=float(result.latency_ms),
+                diagnostics=dict(diag_entry),
+                overlay_items=tool_overlay_items,
+            )
+            per_tool.append(report)
+
+            if self._is_locator(tool):
+                diag_data = diagnostics_payload if isinstance(diagnostics_payload, dict) else {}
+                locator_found = bool(metrics.get("found", diag_data.get("found", True)))
+                corr_value = _safe_float(metrics.get("corr", diag_data.get("corr")), 0.0)
+                thresholds_map = dict(getattr(tool.thresholds, "values", {}) or {})
+                threshold_raw = diag_data.get("threshold_corr", thresholds_map.get("threshold_corr"))
+                threshold_corr = _safe_float(threshold_raw, 0.55)
+
+                diag_entry["found"] = locator_found
+                diag_entry["corr"] = corr_value
+                diag_entry["threshold_corr"] = threshold_corr
+
+                locator_failure = False
+                failure_reason: Optional[str] = None
+                if not locator_found:
+                    locator_failure = True
+                    failure_reason = "not_found"
+                elif corr_value < threshold_corr:
+                    locator_failure = True
+                    failure_reason = "low_corr"
+                elif result.status == "nok":
+                    locator_failure = True
+                    failure_reason = "status_nok"
+
+                if locator_failure:
+                    diag_entry["locator_failure"] = True
+                    if failure_reason:
+                        diag_entry["locator_failure_reason"] = failure_reason
+                    diag_entry["policy_applied"] = failure_policy
+                    policy_applied = policy_applied or failure_policy
+                    self._reset_alignment(context)
+                    if failure_policy == "fail":
+                        break
+                else:
+                    self._apply_locator_alignment(tool, context, diag_entry)
+
+            if index == len(tools) - 1:
+                target_result = result
+                target_report = report
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+
+        if target_result is None or target_report is None:
+            failure_entry = next(
+                (entry for entry in reversed(diagnostics) if entry.get("locator_failure")),
+                None,
+            )
+            if failure_entry:
+                tool_name = failure_entry.get("tool_id") or failure_entry.get("type") or "locator"
+                reason = failure_entry.get("locator_failure_reason") or "locator failure"
+                raise RuntimeError(
+                    f"Pipeline stopped after locator '{tool_name}': {reason}."
+                )
+            raise RuntimeError("Target tool was not executed")
+
+        return ToolTestRun(
+            result=target_result,
+            report=target_report,
+            reports=per_tool,
+            diagnostics=diagnostics,
+            context=context,
+            elapsed_ms=float(elapsed_ms),
+            policy_applied=policy_applied,
+            overlay_items=pipeline_overlay_items,
+        )
+
     def _order_tools(self, tools: Sequence[Tool]) -> List[Tool]:
         sorted_tools = sorted(tools, key=lambda t: t.order)
         locators = [tool for tool in sorted_tools if self._is_locator(tool)]
@@ -920,6 +1136,17 @@ def run_pipeline(
         recipe_name=recipe_name,
         notes=notes,
     )
+
+
+def run_tool_test(
+    golden: np.ndarray,
+    frame: np.ndarray,
+    recipe: RecipeV2,
+) -> ToolTestRun:
+    """Execute a partial pipeline for wizard tool tests."""
+
+    orchestrator = PipelineOrchestrator()
+    return orchestrator.run_tool_test(golden, frame, recipe)
 
 
 def run_tool_isolated(

@@ -122,11 +122,26 @@ class ResultsStrip(QWidget):
                 meta = json.load(fh)
         except Exception:
             return None
-        tool_results = meta.get("tool_results") if isinstance(meta, dict) else None
-        if not tool_results:
+        entries: list[dict] | None = None
+        if isinstance(meta, dict):
+            raw_tool_results = meta.get("tool_results")
+            if isinstance(raw_tool_results, list):
+                entries = [entry for entry in raw_tool_results if isinstance(entry, dict)]
+            if entries is None:
+                raw_tools = meta.get("tools")
+                if isinstance(raw_tools, list):
+                    entries = [entry for entry in raw_tools if isinstance(entry, dict)]
+            if entries is None:
+                raw_per_tool = meta.get("per_tool")
+                if isinstance(raw_per_tool, list):
+                    entries = [entry for entry in raw_per_tool if isinstance(entry, dict)]
+        if not entries:
             return None
-        for entry in tool_results:
-            if entry.get("type") == "locator.template_match":
+        for entry in entries:
+            entry_type = entry.get("type") if isinstance(entry, dict) else None
+            if not entry_type:
+                continue
+            if str(entry_type).startswith("locator.") or entry_type == "template_match":
                 return entry
         return None
 
