@@ -158,6 +158,7 @@ class DrawView(QGraphicsView):
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
         self._overlay_sources: list[Any] = []
         self._overlay_items: list[overlay_utils.OverlayItem] = []
+        self._tool_overlay_items: list[overlay_utils.OverlayItem] = []
 
         # stavové premenné pre kreslenie
         self._drawing_rect = False
@@ -218,7 +219,8 @@ class DrawView(QGraphicsView):
         display_items: Sequence[Any] | None = None,
     ) -> None:
         if tool is None:
-            self.set_overlay_items(None)
+            self._tool_overlay_items = []
+            self._update_overlay_pixmap()
             return
         try:
             items = overlay_utils.tool_overlay_items(
@@ -229,7 +231,8 @@ class DrawView(QGraphicsView):
             )
         except Exception:
             items = []
-        self.set_overlay_items(items)
+        self._tool_overlay_items = list(items)
+        self._update_overlay_pixmap()
 
     # --- myš a klávesy ---
     def _start_pan(self, ev) -> None:
@@ -629,7 +632,12 @@ class DrawView(QGraphicsView):
             if self._overlay_pixmap is not None:
                 self._overlay_pixmap.setVisible(False)
             return
-        if not self._overlay_items:
+        combined_items: list[overlay_utils.OverlayItem] = []
+        if self._overlay_items:
+            combined_items.extend(self._overlay_items)
+        if self._tool_overlay_items:
+            combined_items.extend(self._tool_overlay_items)
+        if not combined_items:
             if self._overlay_pixmap is not None:
                 self._overlay_pixmap.setVisible(False)
             return
@@ -644,7 +652,7 @@ class DrawView(QGraphicsView):
             return
         try:
             overlay_image = overlay_utils.render_overlay(
-                (height, width), self._overlay_items
+                (height, width), combined_items
             )
         except Exception:
             overlay_image = None
