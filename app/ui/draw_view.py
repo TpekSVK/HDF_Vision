@@ -3,19 +3,20 @@ from PySide6.QtCore import Qt, QPointF, QRectF, Signal
 from PySide6.QtGui import QPen, QBrush, QColor, QPainterPath, QPainter, QImage, QPixmap
 from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
-    QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem,
+    QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsPathItem, QGraphicsPixmapItem,
     QWidget, QVBoxLayout, QHBoxLayout, QRadioButton, QButtonGroup,
     QSlider, QLabel, QPushButton
 )
 
 from collections import deque
 import math
-from typing import Optional, Tuple
+from typing import Any, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
 
 from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi
+from app.utils import overlay as overlay_utils
 
 # Farby podľa špecifikácie
 COLOR_POSE   = QColor(0, 153, 255)   # Modrá
@@ -136,6 +137,9 @@ class DrawView(QGraphicsView):
         self.current_shape = "rect"
 
         self._bg = None
+        self._overlay_pixmap: QGraphicsPixmapItem | None = None
+        self._overlay_sources: list[Any] = []
+        self._overlay_items: list[overlay_utils.OverlayItem] = []
 
         # stavové premenné pre kreslenie
         self._drawing_rect = False
@@ -151,11 +155,47 @@ class DrawView(QGraphicsView):
     # API z Golden WIZARD
     def set_background(self, qpixmap):
         self._scene.clear()
+        self._bg = None
+        self._overlay_pixmap = None
+        if qpixmap is None or qpixmap.isNull():
+            return
         self._bg = self._scene.addPixmap(qpixmap)
         self._bg.setZValue(-1000)
+        self._ensure_overlay_pixmap()
+        self._update_overlay_pixmap()
 
     def set_shape_type(self, shape: str):
         self.current_shape = shape
+
+    def set_overlay_items(self, overlay_items: Sequence[Any] | None) -> None:
+        if overlay_items is None:
+            self._overlay_sources = []
+            self._overlay_items = []
+        else:
+            self._overlay_sources = list(overlay_items)
+            self._overlay_items = self._coerce_overlay_items(self._overlay_sources)
+        self._update_overlay_pixmap()
+
+    def set_tool_overlay(
+        self,
+        tool: Optional[Tool],
+        *,
+        color: tuple[int, int, int] = (0, 255, 0),
+        display_items: Sequence[Any] | None = None,
+    ) -> None:
+        if tool is None:
+            self.set_overlay_items(None)
+            return
+        try:
+            items = overlay_utils.tool_overlay_items(
+                tool,
+                color=color,
+                display_items=display_items,
+                label=tool.name or tool.type,
+            )
+        except Exception:
+            items = []
+        self.set_overlay_items(items)
 
     # --- myš a klávesy ---
     def mousePressEvent(self, ev):
@@ -361,6 +401,78 @@ class DrawView(QGraphicsView):
             if hasattr(self, "_scene"):
                 self._scene.setSceneRect(0, 0, w, h)
             self.update()
+            self._update_overlay_pixmap()
+
+
+    def _coerce_overlay_items(
+        self, overlay_entries: Sequence[Any]
+    ) -> list[overlay_utils.OverlayItem]:
+        if not overlay_entries:
+            return []
+        normalized: list[overlay_utils.OverlayItem] = []
+        raw_entries: list[Any] = []
+        for entry in overlay_entries:
+            if isinstance(entry, overlay_utils.OverlayItem):
+                normalized.append(entry)
+            elif entry is not None:
+                raw_entries.append(entry)
+        if raw_entries:
+            try:
+                normalized.extend(
+                    overlay_utils.parse_display_items(
+                        raw_entries,
+                        default_color=(0, 255, 0),
+                    )
+                )
+            except Exception:
+                pass
+        return normalized
+
+    def _ensure_overlay_pixmap(self) -> None:
+        if self._overlay_pixmap is not None:
+            return
+        pixmap_item = self._scene.addPixmap(QPixmap())
+        pixmap_item.setZValue(-500)
+        pixmap_item.setVisible(False)
+        pixmap_item.setAcceptedMouseButtons(Qt.NoButton)
+        self._overlay_pixmap = pixmap_item
+
+    def _update_overlay_pixmap(self) -> None:
+        if self._bg is None or self._bg.pixmap().isNull():
+            if self._overlay_pixmap is not None:
+                self._overlay_pixmap.setVisible(False)
+            return
+        if not self._overlay_items:
+            if self._overlay_pixmap is not None:
+                self._overlay_pixmap.setVisible(False)
+            return
+        self._ensure_overlay_pixmap()
+        if self._overlay_pixmap is None:
+            return
+        pixmap = self._bg.pixmap()
+        width = pixmap.width()
+        height = pixmap.height()
+        if width <= 0 or height <= 0:
+            self._overlay_pixmap.setVisible(False)
+            return
+        try:
+            overlay_image = overlay_utils.render_overlay(
+                (height, width), self._overlay_items
+            )
+        except Exception:
+            overlay_image = None
+        if overlay_image is None:
+            self._overlay_pixmap.setVisible(False)
+            return
+        qimage = QImage(
+            overlay_image.data,
+            width,
+            height,
+            width * 4,
+            QImage.Format_RGBA8888,
+        )
+        self._overlay_pixmap.setPixmap(QPixmap.fromImage(qimage.copy()))
+        self._overlay_pixmap.setVisible(True)
 
 
 class RoiMaskGraphicsView(QGraphicsView):

@@ -1,20 +1,34 @@
 # app/ui/results_strip.py
 import json
+import math
 import os
+from numbers import Real
 from pathlib import Path
+from typing import Any, Dict, List
 
 from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QVBoxLayout, QScrollArea, QPushButton
 from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtCore import Qt
 import imageio.v3 as iio
 
+from app.services.tool_registry import ToolRegistry
+from app.utils import overlay as overlay_utils
+
 class ThumbLabel(QLabel):
-    def __init__(self, path: str, ok: bool, info: str = "", status: str | None = None):
+    def __init__(
+        self,
+        path: str,
+        ok: bool,
+        info: str = "",
+        status: str | None = None,
+        tool_entries: list[dict[str, Any]] | None = None,
+    ):
         super().__init__()
         self.path = path
         self.ok = ok
         self.info = info
         self.status = status
+        self.tool_entries = tool_entries or []
         self.setToolTip(info)
         self.setFixedSize(120, 90)
         self.setAlignment(Qt.AlignCenter)
@@ -77,33 +91,54 @@ class ResultsStrip(QWidget):
         if rid is None: return
         rows = self.mw.db.recent_results(rid, self.limit)
         for r in rows:
-            info = f"SSIM={r['ssim']}  blobs={r['blob_count']}  area={r['total_area']}"
-            locator_status = None
-            locator_info = self._load_locator_info(r)
-            if locator_info:
-                metrics = locator_info.get("metrics", {})
-                corr = metrics.get("corr")
-                dx = metrics.get("dx")
-                dy = metrics.get("dy")
-                locator_status = locator_info.get("status")
-                parts = []
-                if corr is not None:
-                    parts.append(f"corr={corr:.3f}")
-                if dx is not None:
-                    parts.append(f"dx={dx:.2f}")
-                if dy is not None:
-                    parts.append(f"dy={dy:.2f}")
-                if parts:
-                    info += "  locator:" + "  ".join(parts)
-                if locator_status:
-                    info += f"  status={locator_status}"
-
-            t = ThumbLabel(r["thumb"], r["ok"], info, locator_status)
+            tool_entries = self._load_tool_entries(r)
+            info = self._format_tooltip(tool_entries)
+            status = self._aggregate_status(tool_entries)
+            if not info:
+                info = self._format_fallback_info(r)
+            t = ThumbLabel(
+                r["thumb"],
+                r["ok"],
+                info,
+                status,
+                tool_entries=tool_entries,
+            )
             t.mousePressEvent = lambda e, rr=r: self._on_click(rr)
             self.h.addWidget(t)
         self.h.addStretch(1)
 
-    def _load_locator_info(self, row: dict) -> dict | None:
+    def _format_fallback_info(self, row: dict[str, Any]) -> str:
+        parts: list[str] = []
+        ssim = row.get("ssim")
+        if ssim is not None:
+            parts.append(f"ssim={self._format_metric_value(ssim)}")
+        blob_count = row.get("blob_count")
+        if blob_count is not None:
+            parts.append(f"blob_count={blob_count}")
+        total_area = row.get("total_area")
+        if total_area is not None:
+            parts.append(f"area={total_area}")
+        return "  ".join(parts) if parts else "—"
+
+    def _load_tool_entries(self, row: dict[str, Any]) -> list[dict[str, Any]]:
+        meta = self._load_meta_payload(row)
+        if not isinstance(meta, dict):
+            return []
+
+        entries: list[dict[str, Any]] = []
+        for candidate in ("per_tool", "tool_results", "tools"):
+            raw = meta.get(candidate)
+            if isinstance(raw, list):
+                entries.extend([e for e in raw if isinstance(e, dict)])
+
+        result_entries: list[dict[str, Any]] = []
+        for entry in entries:
+            normalized = self._normalize_tool_entry(entry, row)
+            if normalized is not None:
+                result_entries.append(normalized)
+        return result_entries
+
+    def _load_meta_payload(self, row: dict[str, Any]) -> dict[str, Any] | None:
         thumb_path = row.get("thumb")
         if not thumb_path:
             return None
@@ -119,31 +154,152 @@ class ResultsStrip(QWidget):
             return None
         try:
             with open(meta_path, "r", encoding="utf-8") as fh:
-                meta = json.load(fh)
+                return json.load(fh)
         except Exception:
             return None
-        entries: list[dict] | None = None
-        if isinstance(meta, dict):
-            raw_tool_results = meta.get("tool_results")
-            if isinstance(raw_tool_results, list):
-                entries = [entry for entry in raw_tool_results if isinstance(entry, dict)]
-            if entries is None:
-                raw_tools = meta.get("tools")
-                if isinstance(raw_tools, list):
-                    entries = [entry for entry in raw_tools if isinstance(entry, dict)]
-            if entries is None:
-                raw_per_tool = meta.get("per_tool")
-                if isinstance(raw_per_tool, list):
-                    entries = [entry for entry in raw_per_tool if isinstance(entry, dict)]
-        if not entries:
-            return None
-        for entry in entries:
-            entry_type = entry.get("type") if isinstance(entry, dict) else None
-            if not entry_type:
-                continue
-            if str(entry_type).startswith("locator.") or entry_type == "template_match":
-                return entry
         return None
+
+    def _normalize_tool_entry(
+        self, entry: dict[str, Any], row: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        tool_type = str(entry.get("type") or entry.get("tool_type") or "").strip()
+        definition = ToolRegistry.get_tool_definition(tool_type) if tool_type else None
+
+        name = entry.get("name") or entry.get("tool_id")
+        if not name and definition is not None:
+            name = definition.name
+        if not name:
+            name = tool_type or "Tool"
+
+        status_value = entry.get("status")
+        if status_value is None and "ok" in entry:
+            status_value = "ok" if entry.get("ok") else "nok"
+        status = str(status_value).lower() if isinstance(status_value, str) else status_value
+        if isinstance(status, bool):
+            status = "ok" if status else "nok"
+
+        metrics: dict[str, Any] = {}
+        raw_metrics = entry.get("metrics")
+        if isinstance(raw_metrics, dict):
+            metrics.update(raw_metrics)
+
+        diagnostics = entry.get("diagnostics")
+        if isinstance(diagnostics, dict):
+            for key in ("corr", "dx", "dy", "blob_count", "total_area", "ssim"):
+                if key in diagnostics and key not in metrics:
+                    metrics[key] = diagnostics[key]
+
+        for key in ("ssim", "blob_count", "total_area", "corr", "dx", "dy"):
+            if key in entry and key not in metrics:
+                metrics[key] = entry[key]
+
+        if not metrics:
+            for fallback_key in ("ssim", "blob_count", "total_area"):
+                if fallback_key in row and row[fallback_key] is not None:
+                    metrics[fallback_key] = row[fallback_key]
+
+        metrics_lines = self._format_metrics(definition, metrics)
+
+        overlay_sources: list[Any] = []
+        overlay_value = entry.get("overlay_items")
+        if overlay_value is not None and not isinstance(overlay_value, (str, bytes)):
+            overlay_sources.append(overlay_value)
+        display_value = entry.get("display_items")
+        if display_value is not None and not isinstance(display_value, (str, bytes)):
+            overlay_sources.append(display_value)
+        overlay_items: list[overlay_utils.OverlayItem] = []
+        if overlay_sources:
+            overlay_items = overlay_utils.parse_display_items(
+                overlay_sources,
+                default_color=(0, 255, 0),
+                default_label=str(name),
+            )
+
+        return {
+            "tool_type": tool_type,
+            "tool_id": str(entry.get("tool_id") or name),
+            "name": str(name),
+            "status": status,
+            "metrics": metrics,
+            "metrics_lines": metrics_lines,
+            "overlay_items": overlay_items,
+        }
+
+    def _format_metrics(
+        self,
+        definition,
+        metrics: Dict[str, Any],
+    ) -> List[str]:
+        ordered: list[str] = []
+        values = dict(metrics or {})
+        if definition is not None:
+            spec = getattr(definition, "metrics_spec", ()) or ()
+            sorted_spec = sorted(
+                spec,
+                key=lambda s: (
+                    -int(getattr(s, "priority", 0) or 0),
+                    str(getattr(s, "key", "")),
+                ),
+            )
+            for entry in sorted_spec:
+                key = getattr(entry, "key", "")
+                if not key or key not in values:
+                    continue
+                ordered.append(f"{key}={self._format_metric_value(values.pop(key))}")
+
+        for key in sorted(values.keys()):
+            ordered.append(f"{key}={self._format_metric_value(values[key])}")
+
+        return ordered
+
+    @staticmethod
+    def _format_metric_value(value: Any) -> str:
+        if value is None:
+            return "—"
+        if isinstance(value, bool):
+            return "yes" if value else "no"
+        if isinstance(value, Real) and not isinstance(value, bool):
+            val = float(value)
+            if math.isfinite(val):
+                if abs(val) >= 1000 or 0 < abs(val) < 0.001:
+                    return f"{val:.3g}"
+                text = f"{val:.4f}".rstrip("0").rstrip(".")
+                return text or "0"
+            return str(val)
+        return str(value)
+
+    def _format_tooltip(self, tool_entries: list[dict[str, Any]]) -> str:
+        if not tool_entries:
+            return ""
+        lines: list[str] = []
+        for entry in tool_entries:
+            header = entry.get("name", "Tool")
+            status = entry.get("status")
+            if status:
+                header = f"{header} [{status}]"
+            lines.append(header)
+            for metric_line in entry.get("metrics_lines", []):
+                lines.append(f"  {metric_line}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _aggregate_status(tool_entries: list[dict[str, Any]]) -> str | None:
+        if not tool_entries:
+            return None
+        priority = {"nok": 2, "warn": 1, "ok": 0}
+        current = None
+        current_priority = -1
+        for entry in tool_entries:
+            status = str(entry.get("status") or "").lower()
+            if status not in priority:
+                continue
+            value = priority[status]
+            if value > current_priority:
+                current_priority = value
+                current = status
+        if current is None and any(entry.get("status") for entry in tool_entries):
+            return str(tool_entries[0].get("status"))
+        return current
 
     def _on_click(self, row):
         # otvoríme full (ak je), inak thumb – v externom prehliadači (inside kontajnera to býva ťažké),
