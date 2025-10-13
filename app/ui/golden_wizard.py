@@ -2488,10 +2488,9 @@ class GoldenWizard(QDialog):
     """
     Jediné miesto na nastavenie nástroja:
       1) Získať/načítať GOLDEN (1 ks)
-      2) Definovať pose oblasť pre zarovnanie (Blue pose×1)
-      3) Zbierať validáciu (OK/NOK)
-      4) Uložiť recept (golden.png + regions.json)
-      5) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
+      2) Zbierať validáciu (OK/NOK)
+      3) Uložiť recept (golden.png + regions.json)
+      4) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
     """
     def __init__(self, camera, recipes: RecipeService, parent=None):
         super().__init__(parent)
@@ -2522,7 +2521,7 @@ class GoldenWizard(QDialog):
         self.recipe_name = QLineEdit(current_recipe, self)
         self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
         self.chk_pose    = QCheckBox("Použiť globálne zarovnanie (pose alignment)")
-        self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", True))
+        self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
 
         self._updating_policy_combo = False
         self._current_locator_failure_policy = "continue_without_alignment"
@@ -2832,10 +2831,22 @@ class GoldenWizard(QDialog):
             self._err("Najprv zachyť alebo načítaj GOLDEN.")
             return
         regs = self.view.export_regions()
-        pose_enabled = self.chk_pose.isChecked()
-        ok, msg = validate_cardinality([Region(**r) for r in regs], pose_required=pose_enabled)
+        region_models = [Region(**r) for r in regs]
+        pose_requested = self.chk_pose.isChecked()
+        pose_enabled = pose_requested and any(r.reg_type == "pose" for r in region_models)
+        ok, msg = validate_cardinality(region_models, pose_required=pose_enabled)
         if not ok:
             self._err(msg); return
+
+        if pose_requested and not pose_enabled:
+            self._info(
+                "Globálne zarovnanie bolo vypnuté, pretože nie je definovaný žiadny pose región."
+            )
+            self.chk_pose.setChecked(False)
+        else:
+            self.chk_pose.setChecked(pose_enabled)
+
+        pose_enabled = self.chk_pose.isChecked()
 
         name = self.recipe_name.text().strip() or "default"
         # ulož golden
