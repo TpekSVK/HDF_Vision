@@ -2850,6 +2850,7 @@ class GoldenWizard(QDialog):
         self._record_saved_snapshot(self._last_recipe)
         self._sync_locator_policy_ui(self._last_recipe)
         self._refresh_tools_table()
+        self._refresh_golden_background(self._last_recipe)
         self._on_tool_selection_changed()
         self._refresh_publish_state()
 
@@ -2905,6 +2906,56 @@ class GoldenWizard(QDialog):
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
 
+    def _load_saved_golden_image(self, recipe: Optional[str] = None) -> Optional[np.ndarray]:
+        recipe = recipe or self._current_recipe_name()
+        path = Path("/data") / "recipes" / recipe / "golden.png"
+        if not path.exists():
+            return None
+
+        try:
+            import imageio.v3 as iio
+
+            image = iio.imread(path)
+        except Exception:
+            return None
+
+        if image.ndim == 3:
+            image = image[:, :, 0]
+        if image.dtype != np.uint8:
+            image = np.clip(image, 0, 255).astype(np.uint8)
+        return image
+
+    def _refresh_golden_background(self, recipe: Optional[str] = None) -> None:
+        recipe = recipe or self._current_recipe_name()
+        saved_golden: Optional[np.ndarray] = None
+        if recipe == getattr(self.recipes.tool, "recipe", None):
+            cached = getattr(self.recipes.tool, "golden", None)
+            if isinstance(cached, np.ndarray):
+                saved_golden = np.asarray(cached)
+        if saved_golden is None:
+            saved_golden = self._load_saved_golden_image(recipe)
+        if saved_golden is None:
+            if recipe == self._current_recipe_name():
+                self.current_img = None
+            self.view.set_background(None)
+            self.view.set_tool_overlay(None)
+            return
+
+        self.current_img = np.asarray(saved_golden).copy()
+        self._set_pixmap(self.current_img)
+        self._set_selected_tool_overlay()
+
+    def _set_selected_tool_overlay(self, tools: Optional[Sequence[Tool]] = None) -> None:
+        if tools is None:
+            recipe = self._current_recipe_name()
+            tools = self.recipes.get_draft_tools(recipe)
+
+        row = getattr(self, "_selected_tool_row", -1)
+        if tools is not None and 0 <= row < len(tools):
+            self.view.set_tool_overlay(tools[row])
+        else:
+            self.view.set_tool_overlay(None)
+
     def _current_golden_image(self) -> Optional[np.ndarray]:
         if self.current_img is not None:
             return self.current_img
@@ -2913,23 +2964,7 @@ class GoldenWizard(QDialog):
         if isinstance(golden, np.ndarray):
             return golden
 
-        recipe = self._current_recipe_name()
-        path = Path("/data") / "recipes" / recipe / "golden.png"
-        if not path.exists():
-            return None
-
-        try:
-            import imageio.v3 as iio
-
-            img = iio.imread(path)
-        except Exception:
-            return None
-
-        if img.ndim == 3:
-            img = img[:, :, 0]
-        if img.dtype != np.uint8:
-            img = np.clip(img, 0, 255).astype(np.uint8)
-        return img
+        return self._load_saved_golden_image()
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -2940,6 +2975,7 @@ class GoldenWizard(QDialog):
                 frame = self.cam.one_shot()
             self.current_img = frame
             self._set_pixmap(frame)
+            self._set_selected_tool_overlay()
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
@@ -2966,6 +3002,7 @@ class GoldenWizard(QDialog):
             img = cv2.convertScaleAbs(img)
         self.current_img = img
         self._set_pixmap(img)
+        self._set_selected_tool_overlay()
         self._info("Golden načítaný z disku.")
 
     def _persist_recipe_assets(self) -> tuple[bool, str]:
@@ -3220,6 +3257,8 @@ class GoldenWizard(QDialog):
         self._record_saved_snapshot(recipe)
         self._sync_locator_policy_ui(recipe)
         self._refresh_tools_table()
+        self._refresh_golden_background(recipe)
+        self._on_tool_selection_changed()
         self._refresh_publish_state()
 
     def _open_tool_catalog(self):
@@ -3321,10 +3360,7 @@ class GoldenWizard(QDialog):
             self._selected_tool_row = -1
             self._on_tool_selection_changed()
 
-        if tools and 0 <= getattr(self, "_selected_tool_row", -1) < len(tools):
-            self.view.set_tool_overlay(tools[self._selected_tool_row])
-        else:
-            self.view.set_tool_overlay(None)
+        self._set_selected_tool_overlay(tools)
 
         self._update_dirty_state(recipe)
 
