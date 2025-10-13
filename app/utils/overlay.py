@@ -150,7 +150,7 @@ class OverlayItem:
         )
 
     @classmethod
-    def mask(
+    def from_mask(
         cls,
         mask: np.ndarray,
         *,
@@ -269,7 +269,7 @@ def parse_display_items(
                 except Exception:
                     array = None
                 mask = array
-            overlay_mask = OverlayItem.mask(
+            overlay_mask = OverlayItem.from_mask(
                 mask,
                 color=color,
                 alpha=_clamp_alpha(alpha, 80),
@@ -328,7 +328,7 @@ def tool_overlay_items(
 
     mask_value = getattr(tool.ignore_mask, "value", None)
     if mask_value is not None:
-        mask_item = OverlayItem.mask(
+        mask_item = OverlayItem.from_mask(
             mask_value,
             color=color,
             alpha=80,
