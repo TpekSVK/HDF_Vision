@@ -15,6 +15,8 @@ from typing import Optional, Tuple
 import cv2
 import numpy as np
 
+from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi
+
 # Farby podľa špecifikácie
 COLOR_POSE   = QColor(0, 153, 255)   # Modrá
 PEN_W = 2.0
@@ -698,16 +700,21 @@ class RoiMaskEditor(QWidget):
 
     roiChanged = Signal(object)
     maskChanged = Signal(object)
+    toolRoiChanged = Signal(str, object)
+    toolMaskChanged = Signal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
 
         self._roi_enabled = True
         self._mask_enabled = True
+        self._current_tool_id: Optional[str] = None
+        self._current_tool: Optional[Tool] = None
+        self._updating_view = False
 
         self.view = RoiMaskGraphicsView(self)
-        self.view.roiChanged.connect(self.roiChanged)
-        self.view.maskChanged.connect(self.maskChanged)
+        self.view.roiChanged.connect(self._on_view_roi_changed)
+        self.view.maskChanged.connect(self._on_view_mask_changed)
 
         self._mode_roi = QRadioButton("ROI", self)
         self._mode_mask = QRadioButton("Mask", self)
@@ -781,6 +788,40 @@ class RoiMaskEditor(QWidget):
     def mask(self) -> Optional[np.ndarray]:
         return self.view.mask()
 
+    def set_active_tool(
+        self,
+        tool_id: Optional[str],
+        tool: Optional[Tool],
+        *,
+        supports_roi: bool = True,
+        supports_mask: bool = True,
+    ) -> None:
+        """Bind the editor to a tool and refresh ROI/mask from its state."""
+
+        self._current_tool_id = tool_id or None
+        self._current_tool = tool
+
+        roi_enabled = bool(tool is not None and supports_roi)
+        mask_enabled = bool(tool is not None and supports_mask)
+
+        self.set_roi_enabled(roi_enabled)
+        self.set_mask_enabled(mask_enabled)
+
+        roi_rect: Optional[Tuple[int, int, int, int]] = None
+        mask_value: Optional[np.ndarray] = None
+
+        if roi_enabled:
+            roi_rect = self._extract_tool_roi(tool)
+        if mask_enabled:
+            mask_value = self._extract_tool_mask(tool)
+
+        self._updating_view = True
+        try:
+            self.view.set_roi(roi_rect if roi_enabled else None)
+            self.view.set_mask(mask_value if mask_enabled else None)
+        finally:
+            self._updating_view = False
+
     def set_roi_enabled(self, enabled: bool) -> None:
         self._roi_enabled = bool(enabled)
         if not self._roi_enabled and self._mode_roi.isChecked():
@@ -799,8 +840,98 @@ class RoiMaskEditor(QWidget):
         self._update_mask_controls()
 
     # ------------------------------------------------------------------
+    # Internals
+    # ------------------------------------------------------------------
+    def _extract_tool_roi(
+        self, tool: Optional[Tool]
+    ) -> Optional[Tuple[int, int, int, int]]:
+        if tool is None:
+            return None
+        roi_rect = tool.roi.rect()
+        if roi_rect is not None:
+            return tuple(int(v) for v in roi_rect)
+        params_values = dict(getattr(tool.params, "values", {}) or {})
+        if "roi" not in params_values:
+            return None
+        try:
+            roi_obj = ToolRoi.from_obj(params_values.get("roi"))
+        except Exception:
+            return None
+        rect = roi_obj.rect()
+        if rect is None:
+            return None
+        return tuple(int(v) for v in rect)
+
+    def _extract_tool_mask(self, tool: Optional[Tool]) -> Optional[np.ndarray]:
+        if tool is None:
+            return None
+        mask_value = getattr(tool.ignore_mask, "value", None)
+        if mask_value is not None:
+            return np.asarray(mask_value, dtype=np.uint8).copy()
+        params_values = dict(getattr(tool.params, "values", {}) or {})
+        if "ignore_mask" not in params_values:
+            return None
+        try:
+            mask_obj = ToolMask.from_obj(params_values.get("ignore_mask"))
+        except Exception:
+            return None
+        if mask_obj.value is None:
+            return None
+        return mask_obj.value.copy()
+
+    def _sync_tool_param(self, key: str, value) -> None:
+        if self._current_tool is None:
+            return
+        params_obj = getattr(self._current_tool, "params", ToolParams())
+        if not isinstance(params_obj, ToolParams):
+            params_obj = ToolParams.from_obj(getattr(params_obj, "values", {}))
+        params_values = dict(getattr(params_obj, "values", {}) or {})
+        if value is None:
+            params_values.pop(key, None)
+        else:
+            params_values[key] = value
+        params_obj.values = params_values
+        self._current_tool.params = params_obj
+
+    # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
+    def _on_view_roi_changed(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        if self._updating_view:
+            return
+
+        normalized = tuple(int(v) for v in rect) if rect is not None else None
+
+        if self._current_tool is not None and self._roi_enabled:
+            roi_obj = ToolRoi()
+            roi_obj.set_rect(normalized)
+            self._current_tool.roi = roi_obj
+            self._sync_tool_param("roi", roi_obj.to_dict() if normalized is not None else None)
+
+        self.roiChanged.emit(normalized)
+        if self._current_tool_id is not None:
+            self.toolRoiChanged.emit(self._current_tool_id, normalized)
+
+    def _on_view_mask_changed(self, mask: Optional[np.ndarray]) -> None:
+        if self._updating_view:
+            return
+
+        mask_copy = mask.copy() if mask is not None else None
+
+        if self._current_tool is not None and self._mask_enabled:
+            if mask_copy is None or not np.any(mask_copy):
+                self._current_tool.ignore_mask = ToolMask(None)
+                mask_payload = None
+            else:
+                mask_obj = ToolMask(mask_copy)
+                self._current_tool.ignore_mask = mask_obj
+                mask_payload = mask_obj.to_dict()
+            self._sync_tool_param("ignore_mask", mask_payload)
+
+        self.maskChanged.emit(mask_copy)
+        if self._current_tool_id is not None:
+            self.toolMaskChanged.emit(self._current_tool_id, mask_copy)
+
     def _on_mode_changed(self) -> None:
         mode = RoiMaskGraphicsView.MODE_MASK if self._mode_mask.isChecked() else RoiMaskGraphicsView.MODE_ROI
         self.view.set_mode(mode)

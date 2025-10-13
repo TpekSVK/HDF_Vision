@@ -649,6 +649,24 @@ def _validate_params(tool: Tool) -> None:
         raise ValueError(f"Params for tool '{tool.name}' must be a dictionary")
 
 
+def _apply_regions_from_params(tool: Tool) -> None:
+    """Synchronize ``tool.roi`` and ``tool.ignore_mask`` from stored params."""
+
+    params_values = dict(getattr(tool.params, "values", {}) or {})
+
+    if "roi" in params_values:
+        try:
+            tool.roi = ToolRoi.from_obj(params_values.get("roi"))
+        except Exception:
+            tool.roi = ToolRoi()
+
+    if "ignore_mask" in params_values:
+        try:
+            tool.ignore_mask = ToolMask.from_obj(params_values.get("ignore_mask"))
+        except Exception:
+            tool.ignore_mask = ToolMask(None)
+
+
 class PipelineOrchestrator:
     """Central orchestrator ensuring ordered tool execution with shared context."""
 
@@ -703,6 +721,7 @@ class PipelineOrchestrator:
             if definition is None:
                 raise ValueError(f"Tool type '{tool.type}' is not registered")
 
+            _apply_regions_from_params(tool)
             _validate_roi(tool, definition)
             _validate_ignore_mask(tool, definition)
             _validate_params(tool)
@@ -902,6 +921,7 @@ class PipelineOrchestrator:
             if definition is None:
                 raise ValueError(f"Tool type '{tool.type}' is not registered")
 
+            _apply_regions_from_params(tool)
             _validate_roi(tool, definition)
             _validate_ignore_mask(tool, definition)
             _validate_params(tool)
@@ -1213,6 +1233,7 @@ def run_tool_isolated(
         roi=roi,
     )
 
+    _apply_regions_from_params(tool_stub)
     runner.prepare({"tool": tool_stub, "tool_id": tool_type, "runner_context": context})
 
     frame_for_tool = context.frame_aligned if context.frame_aligned is not None else context.frame
