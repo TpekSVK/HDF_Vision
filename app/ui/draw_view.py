@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from collections import deque
+from collections.abc import Mapping
 import math
 from typing import Any, Optional, Sequence, Tuple
 
@@ -158,6 +159,7 @@ class DrawView(QGraphicsView):
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
         self._overlay_sources: list[Any] = []
         self._overlay_items: list[overlay_utils.OverlayItem] = []
+        self._roi_mask_items: list[overlay_utils.OverlayItem] = []
 
         # stavové premenné pre kreslenie
         self._drawing_rect = False
@@ -208,6 +210,76 @@ class DrawView(QGraphicsView):
         else:
             self._overlay_sources = list(overlay_items)
             self._overlay_items = self._coerce_overlay_items(self._overlay_sources)
+        self._update_overlay_pixmap()
+
+    def set_roi_mask_overlay(
+        self,
+        roi: ToolRoi | Mapping[str, Any] | Sequence[Any] | None,
+        mask: ToolMask | np.ndarray | Sequence[Any] | None,
+        *,
+        label: str | None = None,
+        roi_color: tuple[int, int, int] = (0, 255, 0),
+        mask_color: tuple[int, int, int] = (0, 0, 255),
+        mask_alpha: int = 90,
+    ) -> None:
+        roi_rect: tuple[float, float, float, float] | None = None
+        if isinstance(roi, ToolRoi):
+            roi_rect = roi.rect()
+        elif isinstance(roi, Mapping):
+            try:
+                rx = float(roi.get("x", 0))
+                ry = float(roi.get("y", 0))
+                rw = float(roi.get("w", roi.get("width", 0)))
+                rh = float(roi.get("h", roi.get("height", 0)))
+            except (TypeError, ValueError):
+                roi_rect = None
+            else:
+                if rw > 0 and rh > 0:
+                    roi_rect = (rx, ry, rw, rh)
+        elif isinstance(roi, Sequence) and len(roi) == 4:
+            try:
+                rx, ry, rw, rh = (float(value) for value in roi)
+            except (TypeError, ValueError):
+                roi_rect = None
+            else:
+                if rw > 0 and rh > 0:
+                    roi_rect = (rx, ry, rw, rh)
+
+        mask_array: np.ndarray | None = None
+        if isinstance(mask, ToolMask):
+            mask_array = mask.value
+        elif isinstance(mask, np.ndarray):
+            mask_array = mask
+        elif mask is not None:
+            try:
+                mask_array = np.asarray(mask)
+            except Exception:
+                mask_array = None
+
+        items: list[overlay_utils.OverlayItem] = []
+        if mask_array is not None:
+            mask_item = overlay_utils.OverlayItem.mask(
+                mask_array,
+                color=mask_color,
+                alpha=mask_alpha,
+                z_index=10,
+                label=f"{label} – ignore" if label else None,
+            )
+            if mask_item is not None:
+                items.append(mask_item)
+
+        if roi_rect is not None:
+            roi_item = overlay_utils.OverlayItem.rect(
+                roi_rect,
+                color=roi_color,
+                thickness=2,
+                alpha=240,
+                z_index=20,
+                label=label,
+            )
+            items.append(roi_item)
+
+        self._roi_mask_items = items
         self._update_overlay_pixmap()
 
     def set_tool_overlay(
@@ -629,7 +701,13 @@ class DrawView(QGraphicsView):
             if self._overlay_pixmap is not None:
                 self._overlay_pixmap.setVisible(False)
             return
-        if not self._overlay_items:
+        combined_items: list[overlay_utils.OverlayItem] = []
+        if self._overlay_items:
+            combined_items.extend(self._overlay_items)
+        if self._roi_mask_items:
+            combined_items.extend(self._roi_mask_items)
+
+        if not combined_items:
             if self._overlay_pixmap is not None:
                 self._overlay_pixmap.setVisible(False)
             return
@@ -644,7 +722,7 @@ class DrawView(QGraphicsView):
             return
         try:
             overlay_image = overlay_utils.render_overlay(
-                (height, width), self._overlay_items
+                (height, width), combined_items
             )
         except Exception:
             overlay_image = None
