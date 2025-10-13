@@ -2675,7 +2675,6 @@ class GoldenWizard(QDialog):
         # ---- Horná lišta ----
         current_recipe = getattr(self.recipes.tool, "recipe", "default")
         self.recipe_name = QLineEdit(current_recipe, self)
-        self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
         self.chk_pose    = QCheckBox("Enable pose alignment")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
 
@@ -2706,7 +2705,6 @@ class GoldenWizard(QDialog):
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
-        top.addWidget(QLabel("Tvar:"));   top.addWidget(self.shape_sel)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
         top.addWidget(QLabel("Zlyhanie locatora:", self))
@@ -2724,7 +2722,6 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live OFF
         self.view = DrawView(self)
-        self.view.set_shape_type(self.shape_sel.currentText())
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -2813,7 +2810,6 @@ class GoldenWizard(QDialog):
         self._tool_panel.clear()
 
         # signály
-        self.shape_sel.currentTextChanged.connect(self.view.set_shape_type)
         btn_cap_golden.clicked.connect(self._capture_golden)
         btn_load_golden.clicked.connect(self._load_golden)
         self.btn_save_tool.clicked.connect(self._save_tool_draft)
@@ -2874,8 +2870,6 @@ class GoldenWizard(QDialog):
                 self._live_timer.start()
                 self._live_on = True
                 self.btn_live.setText("Live ON")
-                # Deaktivuj meniče tvar/typ počas live (čisto vizuálne)
-                self.shape_sel.setEnabled(False)
             except Exception as e:
                 self._err(f"Live feed sa nepodarilo spustiť: {e}")
                 self.btn_live.setChecked(False)
@@ -2892,7 +2886,6 @@ class GoldenWizard(QDialog):
             self.btn_live.setText("Live OFF")
             self.live_lbl.hide()
             self.view.show()
-            self.shape_sel.setEnabled(True)
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()
