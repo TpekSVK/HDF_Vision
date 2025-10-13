@@ -5,7 +5,7 @@ from datetime import datetime
 import imageio.v3 as iio
 import numpy as np
 
-from app.models.schema import RecipeData, RecipeV2
+from app.models.schema import RecipeV2
 
 # --- Konfigurácia ---
 _CFG_PATH = Path("/data/config.json")
@@ -126,15 +126,6 @@ def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> Recipe
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
         return RecipeV2.from_dict(data)
-
-    # Fallback to legacy regions.json if present
-    legacy = Path(base_dir) / "recipes" / recipe / "regions.json"
-    if legacy.exists():
-        with open(legacy, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        recipe_v2 = RecipeV2.from_recipe_data(RecipeData.from_dict(data))
-        save_recipe_config(recipe, recipe_v2, base_dir=base_dir)
-        return recipe_v2
 
     return RecipeV2()
 
