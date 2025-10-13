@@ -31,7 +31,6 @@ from PySide6.QtWidgets import (
 )
 
 import os
-import time
 import math
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
@@ -56,6 +55,7 @@ from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
 from app.models.schema import (
     RecipeData,
+    RecipeV2,
     Tool,
     ToolDefinition,
     ToolMask,
@@ -69,9 +69,8 @@ from app.services.tool_registry import ToolRegistry
 from app.services import settings_service
 from app.services.tool_service import (
     ToolRunResult,
-    ToolRunnerContext,
     run_locator_template_match,
-    run_tool_isolated,
+    run_tool_test,
     validate_tool_params,
 )
 
@@ -3471,119 +3470,62 @@ class GoldenWizard(QDialog):
                 return
 
             frame_array = np.asarray(frame)
-            context = ToolRunnerContext(
-                frame=frame_array,
-                frame_aligned=frame_array,
-                T_total=np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32),
-                frame_is_aligned=False,
+
+            preceding_tools = [tool.copy() for tool in tools if tool.order < target_tool.order]
+            preceding_tools.sort(key=lambda tool: tool.order)
+
+            params_payload = dict(params or {})
+            thresholds_payload = dict(thresholds or {})
+
+            target_copy = target_tool.copy()
+            target_copy.params = ToolParams(params_payload)
+            target_copy.thresholds = ToolThresholds(thresholds_payload)
+            target_copy.enabled = True
+
+            pipeline_tools = preceding_tools + [target_copy]
+
+            test_recipe = RecipeV2(
+                pose_enabled=self.chk_pose.isChecked(),
+                regions=[],
+                tools=pipeline_tools,
+                on_locator_failure=(
+                    self._current_locator_failure_policy or "continue_without_alignment"
+                ),
+                export_artifacts=False,
             )
 
-            preceding = [tool.copy() for tool in tools if tool.order < target_tool.order]
-            preceding.sort(key=lambda tool: tool.order)
+            test_run = run_tool_test(golden, frame_array, test_recipe)
+            result = test_run.result
 
             perf_breakdown: list[dict[str, Any]] = []
-            executed_runs: list[tuple[Tool, ToolRunResult]] = []
-
-            def _append_perf(tool_obj: Tool, run_result: ToolRunResult) -> None:
-                diagnostics = {}
-                if isinstance(getattr(run_result, "debug_artifacts", None), dict):
-                    diagnostics = run_result.debug_artifacts.get("diagnostics", {}) or {}
+            for report in test_run.reports:
+                diagnostics = report.diagnostics if isinstance(report.diagnostics, dict) else {}
                 timings = diagnostics.get("timings_ms") if isinstance(diagnostics, dict) else None
-                tool_id = None
-                if isinstance(run_result.debug_artifacts, dict):
-                    tool_id = run_result.debug_artifacts.get("tool_id")
                 perf_breakdown.append(
                     {
-                        "tool": tool_obj.name or tool_obj.type,
-                        "tool_id": tool_id or (tool_obj.name or tool_obj.type),
-                        "type": tool_obj.type,
-                        "latency_ms": float(getattr(run_result, "latency_ms", 0.0) or 0.0),
+                        "tool": report.tool.name or report.tool.type,
+                        "tool_id": report.tool_id,
+                        "type": report.tool.type,
+                        "latency_ms": float(report.latency_ms),
                         "timings": timings if isinstance(timings, dict) else None,
                     }
                 )
 
-            test_start = time.perf_counter()
-
-            for tool in preceding:
-                if not tool.enabled:
-                    continue
-                payload_params = dict(getattr(tool.params, "values", {}) or {})
-                payload_thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
-                payload_params["__roi__"] = tool.roi.copy()
-                try:
-                    result_pre = run_tool_isolated(
-                        tool.type,
-                        payload_params,
-                        payload_thresholds,
-                        context,
-                        golden,
-                        frame_array,
-                    )
-                    _append_perf(tool, result_pre)
-                    executed_runs.append((tool.copy(), result_pre))
-                except Exception as exc:
-                    self._tool_panel.show_test_error(
-                        f"Mini-runner zlyhal pri '{tool.name}': {exc}"
-                    )
-                    return
-
-            params_payload = dict(params or {})
-            thresholds_payload = dict(thresholds or {})
-            params_payload["__roi__"] = target_tool.roi.copy()
-
-            try:
-                result = run_tool_isolated(
-                    target_tool.type,
-                    params_payload,
-                    thresholds_payload,
-                    context,
-                    golden,
-                    frame_array,
-                )
-            except Exception as exc:
-                self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
-                return
-            _append_perf(target_tool, result)
-            executed_runs.append((target_tool.copy(), result))
-
             overlay_preview_img: Optional[np.ndarray] = None
-            overlay_items_preview: list[overlay_utils.OverlayItem] = []
+            overlay_items_preview = list(test_run.overlay_items or [])
             frame_for_overlay = (
-                context.frame_aligned
-                if getattr(context, "frame_aligned", None) is not None
+                test_run.context.frame_aligned
+                if getattr(test_run.context, "frame_aligned", None) is not None
                 else frame_array
             )
-            if isinstance(frame_for_overlay, np.ndarray):
-                palette = overlay_utils.default_palette()
-                for idx, (tool_obj, run_result) in enumerate(executed_runs):
-                    color = palette[idx % len(palette)]
-                    extra_sources: list[Any] = []
-                    artifacts = getattr(run_result, "debug_artifacts", None)
-                    extra_sources.extend(
-                        overlay_utils.extract_display_items_from_artifacts(artifacts)
+            if overlay_items_preview and isinstance(frame_for_overlay, np.ndarray):
+                overlay_image = overlay_utils.render_overlay(
+                    frame_for_overlay.shape[:2], overlay_items_preview
+                )
+                if overlay_image is not None:
+                    overlay_preview_img = overlay_utils.apply_overlay(
+                        frame_for_overlay, overlay_image
                     )
-                    if isinstance(artifacts, dict):
-                        extra_sources.extend(
-                            overlay_utils.extract_display_items_from_artifacts(
-                                artifacts.get("diagnostics")
-                            )
-                        )
-                    overlay_items_preview.extend(
-                        overlay_utils.tool_overlay_items(
-                            tool_obj,
-                            color=color,
-                            display_items=extra_sources,
-                            label=tool_obj.name or tool_obj.type,
-                        )
-                    )
-                if overlay_items_preview:
-                    overlay_image = overlay_utils.render_overlay(
-                        frame_for_overlay.shape[:2], overlay_items_preview
-                    )
-                    if overlay_image is not None:
-                        overlay_preview_img = overlay_utils.apply_overlay(
-                            frame_for_overlay, overlay_image
-                        )
 
             if overlay_preview_img is not None:
                 artifacts = result.debug_artifacts
@@ -3599,11 +3541,33 @@ class GoldenWizard(QDialog):
                 preview_payload["overlay"] = overlay_preview_img
                 artifacts["preview"] = preview_payload
 
-            elapsed_ms = (time.perf_counter() - test_start) * 1000.0
+            failure_entry = next(
+                (entry for entry in test_run.diagnostics if entry.get("locator_failure")),
+                None,
+            )
+            if failure_entry:
+                reason_map = {
+                    "not_found": "nenašiel pozíciu",
+                    "low_corr": "nízka korelácia",
+                    "status_nok": "stav NOK",
+                }
+                reason_raw = failure_entry.get("locator_failure_reason")
+                reason_text = reason_map.get(str(reason_raw), str(reason_raw))
+                policy = failure_entry.get("policy_applied") or test_run.policy_applied
+                policy_text = (
+                    "pokračovanie bez zarovnania"
+                    if policy == "continue_without_alignment"
+                    else str(policy)
+                )
+                tool_label = failure_entry.get("tool_id") or failure_entry.get("type") or "locator"
+                status_messages.append(
+                    f"Locator '{tool_label}' zlyhal ({reason_text}). Politika: {policy_text}."
+                )
+
             status_message = "\n".join(status_messages) if status_messages else None
             self._tool_panel.show_test_result(
                 result,
-                elapsed_ms,
+                test_run.elapsed_ms,
                 perf_breakdown=perf_breakdown,
                 status_message=status_message,
             )
