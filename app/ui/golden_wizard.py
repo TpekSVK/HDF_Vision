@@ -3321,6 +3321,11 @@ class GoldenWizard(QDialog):
             self._selected_tool_row = -1
             self._on_tool_selection_changed()
 
+        if tools and 0 <= getattr(self, "_selected_tool_row", -1) < len(tools):
+            self.view.set_tool_overlay(tools[self._selected_tool_row])
+        else:
+            self.view.set_tool_overlay(None)
+
         self._update_dirty_state(recipe)
 
     def _delete_tool(self, index: int):
@@ -3408,15 +3413,18 @@ class GoldenWizard(QDialog):
                 print(f"[GoldenWizard] Missing tool metadata for {tool.type}: {exc}")
                 self._tool_panel.clear()
                 self._selected_tool_row = -1
+                self.view.set_tool_overlay(None)
                 return
             self._tool_panel.set_tool(tool, meta, schema)
             self._tool_panel.set_locator_failure_policy(
                 self._current_locator_failure_policy
             )
             self._selected_tool_row = row
+            self.view.set_tool_overlay(tool)
         else:
             self._tool_panel.clear()
             self._selected_tool_row = -1
+            self.view.set_tool_overlay(None)
 
     def _on_tool_param_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
