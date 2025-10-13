@@ -2722,6 +2722,7 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live OFF
         self.view = DrawView(self)
+        self.view.set_roi_mask_overlay(None, None)
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -2904,6 +2905,24 @@ class GoldenWizard(QDialog):
         qimg = QImage(img_u8.data, w, h, w, QImage.Format_Grayscale8)
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
+        self._update_tool_roi_mask_overlay(self._current_selected_tool())
+
+    def _current_selected_tool(self) -> Optional[Tool]:
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        row = self.tools_table.currentRow()
+        if 0 <= row < len(tools):
+            return tools[row]
+        return None
+
+    def _update_tool_roi_mask_overlay(self, tool: Optional[Tool]) -> None:
+        if tool is None:
+            self.view.set_roi_mask_overlay(None, None)
+            return
+
+        label = tool.name or tool.type or "tool"
+        mask_value = getattr(tool.ignore_mask, "value", None)
+        self.view.set_roi_mask_overlay(tool.roi, mask_value, label=label)
 
     def _current_golden_image(self) -> Optional[np.ndarray]:
         if self.current_img is not None:
@@ -3401,6 +3420,7 @@ class GoldenWizard(QDialog):
         row = self.tools_table.currentRow()
         if 0 <= row < len(tools):
             tool = tools[row]
+            self._update_tool_roi_mask_overlay(tool)
             try:
                 meta = self.recipes.tool.get_tool_meta(tool.type)
                 schema = self.recipes.tool.get_tool_schema(tool.type)
@@ -3408,6 +3428,7 @@ class GoldenWizard(QDialog):
                 print(f"[GoldenWizard] Missing tool metadata for {tool.type}: {exc}")
                 self._tool_panel.clear()
                 self._selected_tool_row = -1
+                self._update_tool_roi_mask_overlay(None)
                 return
             self._tool_panel.set_tool(tool, meta, schema)
             self._tool_panel.set_locator_failure_policy(
@@ -3417,6 +3438,7 @@ class GoldenWizard(QDialog):
         else:
             self._tool_panel.clear()
             self._selected_tool_row = -1
+            self._update_tool_roi_mask_overlay(None)
 
     def _on_tool_param_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
@@ -3438,6 +3460,7 @@ class GoldenWizard(QDialog):
             return
         self._tool_panel.refresh_values(tool)
         self._update_dirty_state(recipe)
+        self._update_tool_roi_mask_overlay(tool)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
