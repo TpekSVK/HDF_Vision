@@ -50,7 +50,7 @@ from app.ui.roi_mask_editor import (
     MaskEditor,
     ROIEditor,
 )
-from app.services.storage_service import save_golden, save_validation_image
+from app.services.storage_service import save_golden
 from app.models.regions import Region, validate_cardinality
 from app.services.live_preview_service import LivePreviewService
 from app.models.schema import (
@@ -1571,6 +1571,7 @@ class ToolConfigPanel(QWidget):
     thresholdChanged = Signal(str, object)
     testRequested = Signal(dict, dict)
     locatorPolicyWarningChanged = Signal(str)
+    testButtonEnabledChanged = Signal(bool)
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -1772,6 +1773,16 @@ class ToolConfigPanel(QWidget):
 
         self._update_visibility()
         self._reset_diagnostics()
+        self.testButtonEnabledChanged.emit(self._btn_test.isEnabled())
+
+    def is_test_enabled(self) -> bool:
+        return self._btn_test.isEnabled()
+
+    def _set_test_button_enabled(self, enabled: bool) -> None:
+        if self._btn_test.isEnabled() == enabled:
+            return
+        self._btn_test.setEnabled(enabled)
+        self.testButtonEnabledChanged.emit(enabled)
 
     def clear(self) -> None:
         self._current_tool = None
@@ -1949,10 +1960,10 @@ class ToolConfigPanel(QWidget):
 
     def set_test_running(self, running: bool) -> None:
         if running:
-            self._btn_test.setEnabled(False)
+            self._set_test_button_enabled(False)
             self._set_test_message("Test prebieha…", "#666")
         else:
-            self._btn_test.setEnabled(bool(self._current_tool) and not self._updating)
+            self._set_test_button_enabled(bool(self._current_tool) and not self._updating)
 
     def show_test_result(
         self,
@@ -2626,7 +2637,7 @@ class ToolConfigPanel(QWidget):
         self._placeholder_label.setVisible(not has_tool)
         enabled_controls = has_tool and bool(self._param_widgets or self._threshold_widgets)
         self._btn_defaults.setEnabled(enabled_controls)
-        self._btn_test.setEnabled(has_tool and not self._updating)
+        self._set_test_button_enabled(has_tool and not self._updating)
         self._diagnostics_group.setVisible(has_tool)
 
 class GoldenWizard(QDialog):
@@ -2665,7 +2676,7 @@ class GoldenWizard(QDialog):
         current_recipe = getattr(self.recipes.tool, "recipe", "default")
         self.recipe_name = QLineEdit(current_recipe, self)
         self.shape_sel   = QComboBox(self); self.shape_sel.addItems(["rect","circle","poly"])
-        self.chk_pose    = QCheckBox("Použiť globálne zarovnanie (pose alignment)")
+        self.chk_pose    = QCheckBox("Enable pose alignment")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
 
         self._updating_policy_combo = False
@@ -2719,29 +2730,22 @@ class GoldenWizard(QDialog):
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
         self.btn_save_tool = QPushButton("Save Tool")
-        self.btn_revert_tool = QPushButton("Revert")
-        self.btn_revert_tool.setEnabled(False)
-        self.btn_revert_tool.setToolTip("Restore the draft to the last saved state.")
-        self.btn_publish_recipe = QPushButton("Publish Recipe")
-        btn_save_recipe  = QPushButton("Uložiť RECEPT")
-        btn_val_ok       = QPushButton("Validačný zber: uložiť Ⓞ OK")
-        btn_val_nok      = QPushButton("Validačný zber: uložiť ✕ NOK")
+        self.btn_test_tool = QPushButton("Test")
+        self.btn_test_tool.setEnabled(False)
+        self.btn_publish_recipe = QPushButton("Publish/Update Recipe")
 
         buttons = QHBoxLayout()
         buttons.addWidget(btn_cap_golden)
         buttons.addWidget(btn_load_golden)
         buttons.addStretch(1)
         buttons.addWidget(self.btn_save_tool)
-        buttons.addWidget(self.btn_revert_tool)
+        buttons.addWidget(self.btn_test_tool)
         self._publish_state_label = QLabel("", self)
         self._publish_state_label.setStyleSheet("color: #999; font-style: italic;")
         self._publish_state_label.setMinimumWidth(160)
         self._publish_state_label.setAlignment(Qt.AlignCenter)
         buttons.addWidget(self._publish_state_label)
         buttons.addWidget(self.btn_publish_recipe)
-        buttons.addWidget(btn_val_ok)
-        buttons.addWidget(btn_val_nok)
-        buttons.addWidget(btn_save_recipe)
 
         # ---- Layout ----
         self._tool_panel = ToolConfigPanel(self)
@@ -2813,23 +2817,23 @@ class GoldenWizard(QDialog):
         btn_cap_golden.clicked.connect(self._capture_golden)
         btn_load_golden.clicked.connect(self._load_golden)
         self.btn_save_tool.clicked.connect(self._save_tool_draft)
+        self.btn_test_tool.clicked.connect(self._trigger_test_shortcut)
         self.btn_publish_recipe.clicked.connect(self._publish_recipe)
-        self.btn_revert_tool.clicked.connect(self._revert_tool_changes)
-        btn_save_recipe.clicked.connect(self._save_recipe)
-        btn_val_ok.clicked.connect(lambda: self._save_validation(True))
-        btn_val_nok.clicked.connect(lambda: self._save_validation(False))
         self.recipe_name.editingFinished.connect(self._on_recipe_changed)
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
         self.tools_table.rowsReordered.connect(self._on_tools_reordered)
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
         self._tool_panel.testRequested.connect(self._on_tool_test_requested)
+        self._tool_panel.testButtonEnabledChanged.connect(self.btn_test_tool.setEnabled)
         self._tool_panel.locatorPolicyWarningChanged.connect(
             self._update_locator_policy_banner
         )
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
+
+        self.btn_test_tool.setEnabled(self._tool_panel.is_test_enabled())
 
         self._selected_tool_row = -1
 
@@ -2971,22 +2975,22 @@ class GoldenWizard(QDialog):
         self._set_pixmap(img)
         self._info("Golden načítaný z disku.")
 
-    def _save_recipe(self):
+    def _persist_recipe_assets(self) -> tuple[bool, str]:
         if self.current_img is None:
             self._err("Najprv zachyť alebo načítaj GOLDEN.")
-            return
+            return False, ""
+
         regs = self.view.export_regions()
         region_models = [Region(**r) for r in regs]
         pose_requested = self.chk_pose.isChecked()
         pose_enabled = pose_requested and any(r.reg_type == "pose" for r in region_models)
         ok, msg = validate_cardinality(region_models, pose_required=pose_enabled)
         if not ok:
-            self._err(msg); return
+            self._err(msg)
+            return False, ""
 
         if pose_requested and not pose_enabled:
-            self._info(
-                "Globálne zarovnanie bolo vypnuté, pretože nie je definovaný žiadny pose región."
-            )
+            self._info("Pose alignment was disabled because no pose region is defined.")
             self.chk_pose.setChecked(False)
         else:
             self.chk_pose.setChecked(pose_enabled)
@@ -2994,44 +2998,23 @@ class GoldenWizard(QDialog):
         pose_enabled = self.chk_pose.isChecked()
 
         name = self.recipe_name.text().strip() or "default"
-        # ulož golden
         golden_path = save_golden(self.current_img, name)
-        # ulož regions.json
         recipe_dir = Path("/data") / "recipes" / name
         recipe_dir.mkdir(parents=True, exist_ok=True)
         recipe_data = RecipeData(pose_enabled=pose_enabled, regions=regs)
         self.recipes.save_regions(name, recipe_data)
 
-        ok, autosorted = self._persist_tools(name)
-        if not ok:
-            return
-        self._record_saved_snapshot(name)
-        self._refresh_tools_table()
-
-        message = f"Recept uložený:\n{golden_path}\n{recipe_dir/'regions.json'}"
-        if autosorted:
-            message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
-        self._info(message)
-        self._refresh_publish_state()
-
-    def _revert_tool_changes(self) -> None:
-        recipe = self._current_recipe_name()
-        if not self._dirty_recipes.get(recipe, False):
-            return
-        try:
-            self.recipes.load_tools(recipe, use_draft=True)
-        except Exception as exc:
-            self._err(f"Obnovenie draftu zlyhalo: {exc}")
-            return
-        self._record_saved_snapshot(recipe)
-        self._refresh_tools_table()
-        self._refresh_publish_state()
+        message = f"Recipe assets saved:\n{golden_path}\n{recipe_dir / 'regions.json'}"
+        return True, message
 
     def _open_session_settings(self) -> None:
         dialog = SessionSettingsDialog(self)
         dialog.exec()
 
     def _save_tool_draft(self):
+        assets_ok, assets_message = self._persist_recipe_assets()
+        if not assets_ok:
+            return
         recipe = self._current_recipe_name()
         ok, autosorted = self._persist_tools(recipe)
         if not ok:
@@ -3041,10 +3024,15 @@ class GoldenWizard(QDialog):
         message = "Nástroje uložené do draftu."
         if autosorted:
             message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
+        if assets_message:
+            message += f"\n{assets_message}"
         self._info(message)
         self._refresh_publish_state()
 
     def _publish_recipe(self):
+        assets_ok, assets_message = self._persist_recipe_assets()
+        if not assets_ok:
+            return
         recipe = self._current_recipe_name()
         ok, autosorted_draft = self._persist_tools(recipe)
         if not ok:
@@ -3060,6 +3048,8 @@ class GoldenWizard(QDialog):
         message = "Recept publikovaný."
         if autosorted_draft or autosorted_publish:
             message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
+        if assets_message:
+            message += f"\n{assets_message}"
         self._info(message)
         try:
             self.recipes.load(recipe)
@@ -3099,8 +3089,6 @@ class GoldenWizard(QDialog):
             tooltip_parts.append(f"Published: {published_at}")
         self._publish_state_label.setToolTip("\n".join(tooltip_parts) if tooltip_parts else "")
 
-        self.btn_publish_recipe.setText("Publish Recipe" if not published_at else "Update Recipe")
-
     # ---------- Draft state management ----------
     def _snapshot_tools(self, recipe: str) -> list[dict[str, Any]]:
         try:
@@ -3123,8 +3111,6 @@ class GoldenWizard(QDialog):
         saved = self._saved_snapshots.get(recipe)
         dirty = saved is None or current != saved
         self._dirty_recipes[recipe] = dirty
-        if hasattr(self, "btn_revert_tool") and self.btn_revert_tool is not None:
-            self.btn_revert_tool.setEnabled(dirty)
         self._update_window_title_dirty()
 
     def _update_window_title_dirty(self) -> None:
@@ -3147,17 +3133,6 @@ class GoldenWizard(QDialog):
         trigger = getattr(panel, "trigger_test", None)
         if callable(trigger):
             trigger()
-
-    def _save_validation(self, is_ok: bool):
-        if self.current_img is None:
-            try:
-                self.current_img = (self._lp.last_frame_u8() if self._live_on else None) or self.cam.one_shot()
-            except Exception as e:
-                self._err(f"Zachytenie zlyhalo: {e}")
-                return
-        name = self.recipe_name.text().strip() or "default"
-        out = save_validation_image(self.current_img, ok=is_ok, recipe_name=name)
-        self._info(f"Validačný snímok uložený:\n{out['thumb']}\n{out['full']}")
 
     # ---------- Info/Err ----------
     def _info(self, msg):
@@ -3327,13 +3302,10 @@ class GoldenWizard(QDialog):
 
             btn_edit = QPushButton("Edit", actions_widget)
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
-            btn_duplicate = QPushButton("Duplicate", actions_widget)
-            btn_duplicate.clicked.connect(lambda _, idx=row: self._duplicate_tool(idx))
             btn_del = QPushButton("Delete", actions_widget)
             btn_del.clicked.connect(lambda _, idx=row: self._delete_tool(idx))
 
             actions_layout.addWidget(btn_edit)
-            actions_layout.addWidget(btn_duplicate)
             actions_layout.addWidget(btn_del)
             actions_layout.addStretch(1)
 
@@ -3362,52 +3334,6 @@ class GoldenWizard(QDialog):
         recipe = self._current_recipe_name()
         self.recipes.remove_tool(recipe, index)
         self._refresh_tools_table()
-
-    def _duplicate_tool(self, index: int) -> None:
-        recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
-        if not (0 <= index < len(tools)):
-            return
-
-        original = tools[index]
-        duplicate = original.copy()
-        existing_names = {tool.name for tool in tools if tool.name}
-        duplicate.name = self._generate_duplicate_name(
-            original.name or original.type,
-            existing_names,
-        )
-
-        try:
-            self.recipes.add_tool(recipe, duplicate)
-        except Exception as exc:
-            self._err(f"Klonovanie nástroja zlyhalo: {exc}")
-            return
-
-        try:
-            updated = self.recipes.get_draft_tools(recipe)
-            new_index = len(updated) - 1
-            order = list(range(len(updated)))
-            moved = order.pop(new_index)
-            insert_at = min(index + 1, len(order))
-            order.insert(insert_at, moved)
-            self.recipes.reorder_tools(recipe, order)
-            self._selected_tool_row = insert_at
-        except Exception as exc:
-            self._err(f"Zmena poradia po duplikovaní zlyhala: {exc}")
-        finally:
-            self._refresh_tools_table()
-
-    def _generate_duplicate_name(self, original: str, existing: set[str]) -> str:
-        base = (original or "Tool").strip() or "Tool"
-        candidate = f"{base} copy"
-        if candidate not in existing:
-            return candidate
-        counter = 2
-        while True:
-            candidate = f"{base} copy {counter}"
-            if candidate not in existing:
-                return candidate
-            counter += 1
 
     def _on_tool_enabled_toggled(self, index: int, enabled: bool) -> None:
         self._toggle_tool_enabled(index, enabled)
