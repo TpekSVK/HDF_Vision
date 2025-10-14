@@ -872,6 +872,7 @@ class ToolEditDialog(QDialog):
                 self._mask_editor.set_background(self._golden_pixmap)
                 if initial_mask is not None:
                     self._mask_editor.set_mask(initial_mask)
+            QTimer.singleShot(0, self._refresh_roi_backgrounds)
             instructions = [
                 "Scroll to zoom, use the middle mouse button or space + drag to pan."
             ]
@@ -1025,6 +1026,28 @@ class ToolEditDialog(QDialog):
             self._template_container.setVisible(not checked)
         if self._template_editor is not None:
             self._template_editor.setEnabled(self._golden_pixmap is not None and not checked)
+
+    def _refresh_roi_backgrounds(self) -> None:
+        if self._golden_pixmap is None:
+            return
+
+        if self._roi_editor is not None:
+            current_roi = self._roi_editor.roi()
+            self._roi_editor.set_background(self._golden_pixmap)
+            if current_roi is not None:
+                self._roi_editor.set_roi(current_roi)
+
+        if self._mask_editor is not None:
+            current_mask = self._mask_editor.mask()
+            self._mask_editor.set_background(self._golden_pixmap)
+            if current_mask is not None:
+                self._mask_editor.set_mask(current_mask)
+
+        if self._template_editor is not None:
+            template_roi = self._template_editor.roi()
+            self._template_editor.set_background(self._golden_pixmap)
+            if template_roi is not None:
+                self._template_editor.set_roi(template_roi)
 
     def _gather_params_from_widgets(self) -> dict[str, Any]:
         params = dict(getattr(self._tool.params, "values", {}) or {})
