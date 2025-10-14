@@ -452,12 +452,20 @@ class ToolService:
     # ------------------------------------------------------------------
     # Tool registry API
     # ------------------------------------------------------------------
-    def list_tool_types(self) -> List[str]:
-        """Return registered tool types."""
+    def list_tool_types(self, include_aliases: bool = False) -> List[str]:
+        """Return registered tool types.
+
+        Parameters
+        ----------
+        include_aliases:
+            When ``True``, include deprecated alias identifiers in addition to
+            canonical tool types. The catalog UI defaults to ``False`` to avoid
+            duplicate entries for aliased tools.
+        """
 
         from app.services.tool_registry import ToolRegistry
 
-        return ToolRegistry.list_tool_types()
+        return ToolRegistry.list_tool_types(include_aliases=include_aliases)
 
     def get_tool_meta(self, tool_type: str) -> ToolDefinition:
         """Retrieve metadata for a given tool type."""

@@ -100,8 +100,20 @@ class ToolRegistry:
         cls._aliases[alias_id] = target_id
 
     @classmethod
-    def list_tool_types(cls) -> List[str]:
-        known = set(cls._definitions.keys()) | set(cls._aliases.keys())
+    def list_tool_types(cls, include_aliases: bool = True) -> List[str]:
+        """Return registered tool identifiers.
+
+        Parameters
+        ----------
+        include_aliases:
+            When ``True`` (default), include deprecated alias identifiers in
+            addition to canonical tool types. When ``False``, only the primary
+            tool type identifiers are returned.
+        """
+
+        known = set(cls._definitions.keys())
+        if include_aliases:
+            known.update(cls._aliases.keys())
         return sorted(known)
 
     @classmethod

@@ -592,7 +592,7 @@ class ToolCatalogDialog(QDialog):
 
     def _populate_entries(self) -> None:
         self._entries.clear()
-        for tool_type in self._tool_service.list_tool_types():
+        for tool_type in self._tool_service.list_tool_types(include_aliases=False):
             try:
                 meta = self._tool_service.get_tool_meta(tool_type)
                 display = f"{getattr(meta, 'name', tool_type)} ({tool_type})"
