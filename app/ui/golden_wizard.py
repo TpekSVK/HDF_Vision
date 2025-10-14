@@ -745,13 +745,19 @@ class ToolEditDialog(QDialog):
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
 
+        sections_layout = QHBoxLayout()
+        sections_layout.setContentsMargins(0, 0, 0, 0)
+        sections_layout.setSpacing(12)
+        has_sections = False
+
         if self._supports_roi and self._roi_editor is not None:
             roi_group = QGroupBox("Region of interest", roi_tab)
             roi_group_layout = QVBoxLayout(roi_group)
             roi_group_layout.setContentsMargins(6, 6, 6, 6)
             roi_group_layout.setSpacing(6)
             roi_group_layout.addWidget(self._roi_editor, 1)
-            roi_layout.addWidget(roi_group, 1)
+            sections_layout.addWidget(roi_group, 1)
+            has_sections = True
 
         if self._supports_mask and self._mask_editor is not None:
             mask_group = QGroupBox("Ignore mask", roi_tab)
@@ -759,7 +765,11 @@ class ToolEditDialog(QDialog):
             mask_group_layout.setContentsMargins(6, 6, 6, 6)
             mask_group_layout.setSpacing(6)
             mask_group_layout.addWidget(self._mask_editor, 1)
-            roi_layout.addWidget(mask_group, 1)
+            sections_layout.addWidget(mask_group, 1)
+            has_sections = True
+
+        if has_sections:
+            roi_layout.addLayout(sections_layout, 1)
 
         if not self._supports_roi and not self._supports_mask:
             info = QLabel("Selected tool does not support ROI or ignore mask editing.", roi_tab)
