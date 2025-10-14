@@ -1976,7 +1976,6 @@ class ToolConfigPanel(QWidget):
         debug_artifacts = (
             result.debug_artifacts if isinstance(result.debug_artifacts, dict) else {}
         )
-        preview = debug_artifacts.get("preview") if debug_artifacts else None
         diagnostics_payload_raw = (
             debug_artifacts.get("diagnostics") if debug_artifacts else {}
         )
@@ -2007,7 +2006,7 @@ class ToolConfigPanel(QWidget):
         self._update_diagnostics(
             result.status,
             metrics,
-            preview,
+            None,  # Diagnostics panel should not display preview images after tests
             elapsed_ms=elapsed_ms,
             message=status_message,
         )
