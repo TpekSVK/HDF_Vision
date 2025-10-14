@@ -129,7 +129,7 @@ class OverlayItem:
     label: Optional[str] = None
 
     @classmethod
-    def rect(
+    def from_rect(
         cls,
         rect: Tuple[float, float, float, float],
         *,
@@ -150,7 +150,7 @@ class OverlayItem:
         )
 
     @classmethod
-    def mask(
+    def from_mask(
         cls,
         mask: np.ndarray,
         *,
@@ -252,7 +252,7 @@ def parse_display_items(
             if rect is None:
                 continue
             items.append(
-                OverlayItem.rect(
+                OverlayItem.from_rect(
                     rect,
                     color=color,
                     thickness=int(entry.get("thickness", 2) or 2),
@@ -269,7 +269,7 @@ def parse_display_items(
                 except Exception:
                     array = None
                 mask = array
-            overlay_mask = OverlayItem.mask(
+            overlay_mask = OverlayItem.from_mask(
                 mask,
                 color=color,
                 alpha=_clamp_alpha(alpha, 80),
@@ -316,7 +316,7 @@ def tool_overlay_items(
         normalized = _normalize_rect(rect)
         if normalized is not None:
             items.append(
-                OverlayItem.rect(
+                OverlayItem.from_rect(
                     normalized,
                     color=color,
                     thickness=2,
@@ -328,7 +328,7 @@ def tool_overlay_items(
 
     mask_value = getattr(tool.ignore_mask, "value", None)
     if mask_value is not None:
-        mask_item = OverlayItem.mask(
+        mask_item = OverlayItem.from_mask(
             mask_value,
             color=color,
             alpha=80,
