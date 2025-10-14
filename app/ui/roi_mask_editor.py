@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSize, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -34,6 +34,55 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class _AspectRatioWidget(QWidget):
+    """Container enforcing a specific aspect ratio for its single child widget."""
+
+    def __init__(
+        self,
+        child: QWidget,
+        *,
+        ratio_width: int = 16,
+        ratio_height: int = 9,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._child = child
+        self._ratio_width = max(1, ratio_width)
+        self._ratio_height = max(1, ratio_height)
+        child.setParent(self)
+        child.show()
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+    def sizeHint(self) -> QSize:  # pragma: no cover - simple geometry helper
+        base = self._child.sizeHint()
+        width = base.width() if base.width() > 0 else 640
+        height = int(round(width * self._ratio_height / self._ratio_width))
+        return QSize(width, height)
+
+    def resizeEvent(self, event) -> None:  # pragma: no cover - GUI behaviour
+        super().resizeEvent(event)
+        self._update_child_geometry()
+
+    def showEvent(self, event) -> None:  # pragma: no cover - GUI behaviour
+        super().showEvent(event)
+        self._update_child_geometry()
+
+    def _update_child_geometry(self) -> None:
+        width = self.width()
+        height = self.height()
+        target_height = int(round(width * self._ratio_height / self._ratio_width))
+        if target_height > height and height > 0:
+            target_width = int(round(height * self._ratio_width / self._ratio_height))
+            target_height = height
+        else:
+            target_width = width
+        target_width = max(1, target_width)
+        target_height = max(1, target_height)
+        x = (width - target_width) // 2
+        y = (height - target_height) // 2
+        self._child.setGeometry(x, y, target_width, target_height)
 
 
 _ROI_COLOR = QColor(0, 200, 0, 200)
@@ -690,7 +739,10 @@ class ROIEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(self._view, 1)
+        layout.addWidget(
+            _AspectRatioWidget(self._view, ratio_width=16, ratio_height=9, parent=self),
+            1,
+        )
 
         toolbar = QHBoxLayout()
         toolbar.setContentsMargins(0, 0, 0, 0)
@@ -838,7 +890,10 @@ class MaskEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(self._view, 1)
+        layout.addWidget(
+            _AspectRatioWidget(self._view, ratio_width=16, ratio_height=9, parent=self),
+            1,
+        )
 
         toolbar_top = QHBoxLayout()
         toolbar_top.setContentsMargins(0, 0, 0, 0)
