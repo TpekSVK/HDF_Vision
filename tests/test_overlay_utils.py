@@ -17,7 +17,7 @@ from app.utils import overlay as overlay_utils  # noqa: E402
 def test_render_overlay_mask_preserves_holes() -> None:
     mask = np.ones((10, 10), dtype=np.uint8)
     mask[3:7, 3:7] = 0
-    item = overlay_utils.OverlayItem.mask(mask, color=(0, 255, 0), alpha=120)
+    item = overlay_utils.OverlayItem.from_mask(mask, color=(0, 255, 0), alpha=120)
     assert item is not None
 
     overlay = overlay_utils.render_overlay(mask.shape, [item])
@@ -55,8 +55,8 @@ def test_tool_overlay_items_include_roi_and_mask() -> None:
 
 def test_render_overlay_draws_roi_on_top_of_mask() -> None:
     mask = np.ones((8, 8), dtype=np.uint8)
-    mask_item = overlay_utils.OverlayItem.mask(mask, color=(0, 0, 255), alpha=80)
-    rect_item = overlay_utils.OverlayItem.rect((0, 0, 8, 8), color=(255, 0, 0), thickness=2, alpha=255)
+    mask_item = overlay_utils.OverlayItem.from_mask(mask, color=(0, 0, 255), alpha=80)
+    rect_item = overlay_utils.OverlayItem.from_rect((0, 0, 8, 8), color=(255, 0, 0), thickness=2, alpha=255)
     overlay = overlay_utils.render_overlay(mask.shape, [mask_item, rect_item])
     assert overlay is not None
 
