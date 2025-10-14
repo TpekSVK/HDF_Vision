@@ -28,11 +28,33 @@ from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi
 from app.utils import overlay as overlay_utils
 
 # Farby podľa špecifikácie
-COLOR_POSE   = QColor(0, 153, 255)   # Modrá
+COLOR_POSE = QColor(0, 153, 255)  # Modrá
+
+ROI_BORDER_COLOR = QColor(76, 201, 91)
+ROI_BORDER_ACTIVE_COLOR = QColor(56, 189, 248)
+ROI_FILL_ALPHA = 70
+ROI_FILL_ALPHA_ACTIVE = 95
+
+MASK_COLOR_PRIMARY = QColor(192, 132, 252)
+MASK_COLOR_SECONDARY = QColor(139, 92, 246)
+MASK_ALPHA_PRIMARY = 150
+MASK_ALPHA_SECONDARY = 90
+
 PEN_W = 2.0
 
-def _pen(color):   return QPen(color, PEN_W, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
-def _brush(color): return QBrush(Qt.transparent)
+
+def _pen(color):
+    return QPen(color, PEN_W, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin)
+
+
+def _brush(color):
+    return QBrush(Qt.transparent)
+
+
+def _color_with_alpha(color: QColor, alpha: int) -> QColor:
+    result = QColor(color)
+    result.setAlpha(max(0, min(255, int(alpha))))
+    return result
 
 # --- Vykresľovacie itemy (po dokončení kreslenia budú movable/selectable) ---
 
@@ -733,6 +755,7 @@ class RoiMaskGraphicsView(QGraphicsView):
 
     def set_mode(self, mode: str) -> None:
         self._mode = self.MODE_MASK if mode == self.MODE_MASK else self.MODE_ROI
+        self._update_roi_style()
 
     def set_brush_size(self, radius: int) -> None:
         radius = max(1, int(radius))
@@ -914,14 +937,27 @@ class RoiMaskGraphicsView(QGraphicsView):
             return
 
         if self._roi_item is None:
-            pen = QPen(COLOR_ROI)
-            pen.setWidthF(2.0)
-            pen.setCosmetic(True)
-            self._roi_item = self._scene.addRect(rect, pen, QBrush(Qt.transparent))
+            self._roi_item = self._scene.addRect(
+                rect, QPen(Qt.NoPen), QBrush(Qt.transparent)
+            )
             self._roi_item.setZValue(200)
         else:
             self._roi_item.setRect(rect)
+        self._update_roi_style()
         self._roi_item.setVisible(True)
+
+    def _update_roi_style(self) -> None:
+        if self._roi_item is None:
+            return
+        active = self._mode == self.MODE_ROI
+        border_color = ROI_BORDER_ACTIVE_COLOR if active else ROI_BORDER_COLOR
+        pen = QPen(border_color)
+        pen.setWidthF(3.0 if active else 2.0)
+        pen.setCosmetic(True)
+        self._roi_item.setPen(pen)
+        fill_alpha = ROI_FILL_ALPHA_ACTIVE if active else ROI_FILL_ALPHA
+        fill_color = _color_with_alpha(ROI_BORDER_COLOR, fill_alpha)
+        self._roi_item.setBrush(QBrush(fill_color))
 
     def _clamp_point(self, point: QPointF) -> Tuple[int, int]:
         rect = self._scene.sceneRect()
@@ -993,10 +1029,23 @@ class RoiMaskGraphicsView(QGraphicsView):
         height, width = self._mask.shape
         rgba = np.zeros((height, width, 4), dtype=np.uint8)
         mask_idx = self._mask > 0
-        rgba[mask_idx, 0] = 255
-        rgba[mask_idx, 1] = 0
-        rgba[mask_idx, 2] = 200
-        rgba[mask_idx, 3] = 110
+
+        rows, cols = np.indices((height, width))
+        checker = ((rows // 6 + cols // 6) % 2) == 0
+        strong_mask = mask_idx & checker
+        soft_mask = mask_idx & ~checker
+
+        if np.any(strong_mask):
+            rgba[strong_mask, 0] = MASK_COLOR_PRIMARY.red()
+            rgba[strong_mask, 1] = MASK_COLOR_PRIMARY.green()
+            rgba[strong_mask, 2] = MASK_COLOR_PRIMARY.blue()
+            rgba[strong_mask, 3] = MASK_ALPHA_PRIMARY
+
+        if np.any(soft_mask):
+            rgba[soft_mask, 0] = MASK_COLOR_SECONDARY.red()
+            rgba[soft_mask, 1] = MASK_COLOR_SECONDARY.green()
+            rgba[soft_mask, 2] = MASK_COLOR_SECONDARY.blue()
+            rgba[soft_mask, 3] = MASK_ALPHA_SECONDARY
         img = QImage(rgba.data, width, height, width * 4, QImage.Format_RGBA8888)
         self._mask_item.setPixmap(QPixmap.fromImage(img.copy()))
         self._mask_item.setVisible(True)

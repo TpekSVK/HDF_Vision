@@ -136,6 +136,7 @@ class OverlayItem:
         color: ColorBGR,
         thickness: int = 2,
         alpha: int = 220,
+        fill_alpha: Optional[int] = None,
         z_index: int = 20,
         label: Optional[str] = None,
     ) -> "OverlayItem":
@@ -144,6 +145,7 @@ class OverlayItem:
             color=color,
             thickness=max(1, int(thickness)),
             alpha=_clamp_alpha(alpha),
+            fill_alpha=_clamp_alpha(fill_alpha, 0) if fill_alpha is not None else None,
             z_index=int(z_index),
             rect=rect,
             label=label,
@@ -319,24 +321,25 @@ def tool_overlay_items(
                 OverlayItem.from_rect(
                     normalized,
                     color=color,
-                    thickness=2,
-                    alpha=220,
+                    thickness=3,
+                    alpha=255,
+                    fill_alpha=70,
                     z_index=20,
                     label=label_value,
                 )
             )
 
-    mask_value = getattr(tool.ignore_mask, "value", None)
-    if mask_value is not None:
-        mask_item = OverlayItem.from_mask(
-            mask_value,
-            color=color,
-            alpha=80,
-            z_index=0,
-            label=label_value,
-        )
-        if mask_item is not None:
-            items.append(mask_item)
+        mask_value = getattr(tool.ignore_mask, "value", None)
+        if mask_value is not None:
+            mask_item = OverlayItem.from_mask(
+                mask_value,
+                color=color,
+                alpha=100,
+                z_index=0,
+                label=label_value,
+            )
+            if mask_item is not None:
+                items.append(mask_item)
 
     items.extend(
         parse_display_items(
@@ -391,6 +394,14 @@ def render_overlay(
                 p1 = (int(round(x)), int(round(y)))
                 p2 = (int(round(x + w - 1)), int(round(y + h - 1)))
                 thickness = max(1, int(item.thickness))
+                if item.fill_alpha and item.fill_alpha > 0:
+                    fill_alpha = _clamp_alpha(item.fill_alpha, alpha_value)
+                    cv2.rectangle(
+                        tmp_rgb, p1, p2, item.color, cv2.FILLED, line_type
+                    )
+                    cv2.rectangle(
+                        tmp_alpha, p1, p2, fill_alpha, cv2.FILLED, line_type
+                    )
                 cv2.rectangle(tmp_rgb, p1, p2, item.color, thickness, line_type)
                 cv2.rectangle(tmp_alpha, p1, p2, alpha_value, thickness, line_type)
             elif item.points is not None and len(item.points) >= 2:
