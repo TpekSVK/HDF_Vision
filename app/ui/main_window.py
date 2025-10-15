@@ -110,7 +110,16 @@ class MainWindow(QMainWindow):
 
         # ---------- RUN panel ----------
         self.panel_run = QWidget(); self.stack.addWidget(self.panel_run)
-        run = QVBoxLayout(self.panel_run); run.setSpacing(8)
+        run_root = QVBoxLayout(self.panel_run); run_root.setSpacing(8)
+
+        run_container = QWidget()
+        run_container.setObjectName("runContainer")
+        run_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        run_container.setMaximumHeight(780)
+
+        run = QVBoxLayout(run_container); run.setSpacing(8)
+        run_root.addWidget(run_container, 0, Qt.AlignTop)
+        run_root.addStretch(1)
 
         # Status + metriky + štatistiky v jednom riadku
         status_container = QWidget()
