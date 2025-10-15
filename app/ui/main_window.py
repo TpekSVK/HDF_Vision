@@ -23,7 +23,6 @@ from app.ui.golden_wizard import GoldenWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
-from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
@@ -310,14 +309,6 @@ class MainWindow(QMainWindow):
         s.addWidget(line3)
         self.xu = XUPanel(self)
         s.addWidget(self.xu)
-
-        # Limity / Prahy (Thresholds)
-        line4 = QFrame(); line4.setFrameShape(QFrame.HLine); line4.setFrameShadow(QFrame.Sunken)
-        s.addWidget(line4)
-        th_title = QLabel("Limity / Prahy"); tf3 = QFont(); tf3.setPointSize(12); tf3.setBold(True); th_title.setFont(tf3)
-        s.addWidget(th_title)
-        self.th_panel = ThresholdsPanel(self)
-        s.addWidget(self.th_panel)
 
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
