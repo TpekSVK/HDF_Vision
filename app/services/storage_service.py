@@ -44,12 +44,15 @@ def _minimal_mode():
 def _ensure_dirs(recipe: str):
     base = Path("/data")
     (base / "recipes" / recipe).mkdir(parents=True, exist_ok=True)
-    # runtime dirs: runs/YYYYMMDD/{thumbs,full,meta}
+    # runtime dirs: runs/YYYYMMDD/<recipe>/{thumbs,full,meta}
     day = datetime.now().strftime("%Y%m%d")
-    run_dir = base / "runs" / day
+    run_dir = base / "runs" / day / recipe
     (run_dir / "thumbs").mkdir(parents=True, exist_ok=True)
     (run_dir / "full").mkdir(parents=True, exist_ok=True)
     (run_dir / "meta").mkdir(parents=True, exist_ok=True)
+    # placeholders for future artefacts
+    (run_dir / "aligned").mkdir(parents=True, exist_ok=True)
+    (run_dir / "overlay").mkdir(parents=True, exist_ok=True)
     # validation
     (base / "validation" / "ok").mkdir(parents=True, exist_ok=True)
     (base / "validation" / "nok").mkdir(parents=True, exist_ok=True)

@@ -2,7 +2,7 @@
 import json
 import sqlite3
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Sequence
 
 DB_PATH = Path("/data/HDF_Vision.db")
 
@@ -47,6 +47,7 @@ class DbService:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._init_schema()
+        self._table_columns_cache: dict[str, set[str]] = {}
 
     def _init_schema(self):
         cur = self._conn.cursor()
@@ -217,6 +218,140 @@ class DbService:
             }
             for r in rows
         ]
+
+    # -------- rich image helpers --------
+    def _table_columns(self, table: str) -> set[str]:
+        if table in self._table_columns_cache:
+            return self._table_columns_cache[table]
+        try:
+            cur = self._conn.cursor()
+            cur.execute(f"PRAGMA table_info({table})")
+            columns = {str(row[1]) for row in cur.fetchall()}
+        except sqlite3.Error:
+            columns = set()
+        self._table_columns_cache[table] = columns
+        return columns
+
+    def _table_exists(self, table: str) -> bool:
+        try:
+            cur = self._conn.cursor()
+            cur.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (table,),
+            )
+            return cur.fetchone() is not None
+        except sqlite3.Error:
+            return False
+
+    def _fetch_dicts(self, cur: sqlite3.Cursor) -> List[Dict[str, Any]]:
+        columns: Sequence[str] = [col[0] for col in cur.description] if cur.description else []
+        rows = cur.fetchall()
+        return [dict(zip(columns, row)) for row in rows]
+
+    def recent_image_records(
+        self,
+        recipe_id: int,
+        *,
+        limit: int = 12,
+        tool_key: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        records: list[dict[str, Any]] = []
+
+        if self._table_exists("tool_runs"):
+            columns = self._table_columns("tool_runs")
+            cur = self._conn.cursor()
+            query = "SELECT * FROM tool_runs WHERE recipe_id=?"
+            params: list[Any] = [int(recipe_id)]
+            key_column = None
+            for candidate in ("tool_key", "tool_id", "tool_name"):
+                if candidate in columns:
+                    key_column = candidate
+                    break
+            if tool_key and key_column:
+                query += f" AND {key_column}=?"
+                params.append(str(tool_key))
+            if "created_at" in columns:
+                query += " ORDER BY datetime(created_at) DESC, id DESC LIMIT ?"
+            else:
+                query += " ORDER BY id DESC LIMIT ?"
+            params.append(int(limit) * 3)
+            try:
+                cur.execute(query, params)
+                for row in self._fetch_dicts(cur):
+                    records.append(self._normalize_tool_run_row(row))
+            except sqlite3.Error:
+                records.clear()
+
+        if not records:
+            fallback = self.recent_results(recipe_id, limit)
+            for row in fallback:
+                records.append(
+                    {
+                        "ts_ms": row.get("ts_ms"),
+                        "ok": bool(row.get("ok", False)),
+                        "status": "ok" if row.get("ok") else "nok",
+                        "thumb_path": row.get("thumb"),
+                        "full_path": row.get("full"),
+                        "metrics": {
+                            key: row.get(key)
+                            for key in ("ssim", "blob_count", "total_area")
+                            if row.get(key) is not None
+                        },
+                    }
+                )
+
+        # ensure deterministic order (most recent first)
+        records.sort(key=lambda item: item.get("ts_ms") or 0, reverse=True)
+        return records[: int(limit)]
+
+    def _normalize_tool_run_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        normalized: dict[str, Any] = {}
+        normalized["id"] = row.get("id")
+        normalized["ts_ms"] = row.get("ts_ms") or row.get("timestamp_ms")
+        normalized["ok"] = bool(row.get("ok")) if "ok" in row else None
+        status_value = (
+            row.get("status")
+            or row.get("result_status")
+            or ("ok" if normalized.get("ok") else "nok" if normalized.get("ok") is not None else None)
+        )
+        normalized["status"] = status_value
+        normalized["tool_key"] = row.get("tool_key") or row.get("tool_id") or row.get("tool_name")
+        normalized["thumb_path"] = row.get("thumb_path") or row.get("thumbnail_path")
+        normalized["full_path"] = row.get("full_path") or row.get("image_path")
+        normalized["overlay_path"] = row.get("overlay_image_path") or row.get("overlay_path")
+        normalized["aligned_path"] = row.get("aligned_image_path") or row.get("aligned_path")
+        normalized["raw_path"] = row.get("image_path") or row.get("raw_image_path") or row.get("full_path")
+        normalized["meta_path"] = row.get("meta_path") or row.get("meta_json_path")
+
+        metrics: dict[str, Any] = {}
+        for key in ("ssim", "blob_count", "total_area"):
+            if row.get(key) is not None:
+                metrics[key] = row.get(key)
+
+        for key in ("metrics", "metrics_json", "metrics_payload"):
+            value = row.get(key)
+            if isinstance(value, str):
+                try:
+                    parsed = json.loads(value)
+                    if isinstance(parsed, dict):
+                        metrics.update(parsed)
+                except Exception:
+                    pass
+            elif isinstance(value, dict):
+                metrics.update(value)
+
+        normalized["metrics"] = metrics
+
+        meta_json = row.get("meta_json")
+        if isinstance(meta_json, str):
+            normalized["meta_json"] = meta_json
+        elif isinstance(meta_json, (bytes, bytearray)):
+            try:
+                normalized["meta_json"] = meta_json.decode("utf-8")
+            except Exception:
+                pass
+
+        return normalized
 
     def export_csv_today(self, recipe_id: int, out_path: str):
         import csv
