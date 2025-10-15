@@ -76,6 +76,9 @@ from app.services.tool_service import (
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
 
+_ROI_MASK_SECTION_MIN_WIDTH = 360
+_ROI_MASK_SECTION_MIN_HEIGHT = 280
+
 
 def _coerce_bool_value(value: Any) -> tuple[Optional[bool], Optional[str]]:
     if isinstance(value, bool):
@@ -714,6 +717,15 @@ class ToolEditDialog(QDialog):
         self._roi_editor: Optional[ROIEditor] = ROIEditor(self) if self._supports_roi else None
         self._mask_editor: Optional[MaskEditor] = MaskEditor(self) if self._supports_mask else None
 
+        if self._roi_editor is not None:
+            self._roi_editor.setMinimumSize(
+                _ROI_MASK_SECTION_MIN_WIDTH, _ROI_MASK_SECTION_MIN_HEIGHT
+            )
+        if self._mask_editor is not None:
+            self._mask_editor.setMinimumSize(
+                _ROI_MASK_SECTION_MIN_WIDTH, _ROI_MASK_SECTION_MIN_HEIGHT
+            )
+
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
         self._param_fields: dict[str, QWidget] = {}
@@ -745,13 +757,20 @@ class ToolEditDialog(QDialog):
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
 
+        sections_layout = QHBoxLayout()
+        sections_layout.setContentsMargins(0, 0, 0, 0)
+        sections_layout.setSpacing(12)
+
+        has_section = False
+
         if self._supports_roi and self._roi_editor is not None:
             roi_group = QGroupBox("Region of interest", roi_tab)
             roi_group_layout = QVBoxLayout(roi_group)
             roi_group_layout.setContentsMargins(6, 6, 6, 6)
             roi_group_layout.setSpacing(6)
             roi_group_layout.addWidget(self._roi_editor, 1)
-            roi_layout.addWidget(roi_group, 1)
+            sections_layout.addWidget(roi_group, 1)
+            has_section = True
 
         if self._supports_mask and self._mask_editor is not None:
             mask_group = QGroupBox("Ignore mask", roi_tab)
@@ -759,9 +778,12 @@ class ToolEditDialog(QDialog):
             mask_group_layout.setContentsMargins(6, 6, 6, 6)
             mask_group_layout.setSpacing(6)
             mask_group_layout.addWidget(self._mask_editor, 1)
-            roi_layout.addWidget(mask_group, 1)
+            sections_layout.addWidget(mask_group, 1)
+            has_section = True
 
-        if not self._supports_roi and not self._supports_mask:
+        if has_section:
+            roi_layout.addLayout(sections_layout, 1)
+        else:
             info = QLabel("Selected tool does not support ROI or ignore mask editing.", roi_tab)
             info.setStyleSheet("color: #666;")
             info.setWordWrap(True)
