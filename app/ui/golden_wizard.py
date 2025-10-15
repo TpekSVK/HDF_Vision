@@ -745,23 +745,33 @@ class ToolEditDialog(QDialog):
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
 
+        panes_container = QWidget(roi_tab)
+        panes_layout = QHBoxLayout(panes_container)
+        panes_layout.setContentsMargins(0, 0, 0, 0)
+        panes_layout.setSpacing(8)
+        has_panes = False
+
         if self._supports_roi and self._roi_editor is not None:
-            roi_group = QGroupBox("Region of interest", roi_tab)
+            roi_group = QGroupBox("Region of interest", panes_container)
             roi_group_layout = QVBoxLayout(roi_group)
             roi_group_layout.setContentsMargins(6, 6, 6, 6)
             roi_group_layout.setSpacing(6)
             roi_group_layout.addWidget(self._roi_editor, 1)
-            roi_layout.addWidget(roi_group, 1)
+            panes_layout.addWidget(roi_group, 1)
+            has_panes = True
 
         if self._supports_mask and self._mask_editor is not None:
-            mask_group = QGroupBox("Ignore mask", roi_tab)
+            mask_group = QGroupBox("Ignore mask", panes_container)
             mask_group_layout = QVBoxLayout(mask_group)
             mask_group_layout.setContentsMargins(6, 6, 6, 6)
             mask_group_layout.setSpacing(6)
             mask_group_layout.addWidget(self._mask_editor, 1)
-            roi_layout.addWidget(mask_group, 1)
+            panes_layout.addWidget(mask_group, 1)
+            has_panes = True
 
-        if not self._supports_roi and not self._supports_mask:
+        if has_panes:
+            roi_layout.addWidget(panes_container, 1)
+        else:
             info = QLabel("Selected tool does not support ROI or ignore mask editing.", roi_tab)
             info.setStyleSheet("color: #666;")
             info.setWordWrap(True)
