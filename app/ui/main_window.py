@@ -846,6 +846,10 @@ class MainWindow(QMainWindow):
 
     def _on_tool_selection_changed(self):
         self._update_metrics_panel()
+        try:
+            self.strip.reload()
+        except Exception:
+            pass
 
     def _maximize_and_lock(self):
         try:

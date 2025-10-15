@@ -1,18 +1,30 @@
 # app/ui/results_strip.py
 import json
+import logging
 import math
 import os
+from datetime import datetime
 from numbers import Real
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
-from PySide6.QtWidgets import QWidget, QLabel, QHBoxLayout, QVBoxLayout, QScrollArea, QPushButton
-from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtCore import Qt
-import imageio.v3 as iio
+from PySide6.QtGui import QDesktopServices, QPixmap, QImageReader
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtWidgets import (
+    QWidget,
+    QLabel,
+    QHBoxLayout,
+    QVBoxLayout,
+    QScrollArea,
+    QPushButton,
+    QComboBox,
+)
 
 from app.services.tool_registry import ToolRegistry
 from app.utils import overlay as overlay_utils
+
+logger = logging.getLogger(__name__)
+
 
 class ThumbLabel(QLabel):
     def __init__(
@@ -22,6 +34,8 @@ class ThumbLabel(QLabel):
         info: str = "",
         status: str | None = None,
         tool_entries: list[dict[str, Any]] | None = None,
+        *,
+        loader,
     ):
         super().__init__()
         self.path = path
@@ -29,6 +43,7 @@ class ThumbLabel(QLabel):
         self.info = info
         self.status = status
         self.tool_entries = tool_entries or []
+        self._loader = loader
         self.setToolTip(info)
         self.setFixedSize(120, 90)
         self.setAlignment(Qt.AlignCenter)
@@ -44,68 +59,326 @@ class ThumbLabel(QLabel):
         self.setStyleSheet(f"border: 3px solid {color};")
 
     def refresh(self):
-        if not self.path or not os.path.exists(self.path):
+        if not self.path:
             self.setText("—")
+            self.setPixmap(QPixmap())
             return
+        pixmap = None
         try:
-            img = iio.imread(self.path)
-            if img.ndim == 3:
-                img = img[:,:,0]
-            h, w = img.shape[:2]
-            q = QImage(img.data, w, h, w, QImage.Format_Grayscale8)
-            pm = QPixmap.fromImage(q.copy()).scaled(self.width()-6, self.height()-6, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            self.setPixmap(pm)
-        except Exception:
-            self.setText("X")
+            pixmap = self._loader(self.path, QSize(self.width() - 6, self.height() - 6))
+        except Exception as exc:
+            logger.debug("Thumbnail load failed for %s: %s", self.path, exc)
+        if pixmap is None:
+            self.setText("—")
+            self.setPixmap(QPixmap())
+            return
+        self.setPixmap(pixmap)
+
 
 class ResultsStrip(QWidget):
     """
     Horizontálny strip posledných N thumbov za dnešok pre aktuálny recept.
     Očakáva .db (DbService) a .current_recipe_name()
     """
+
     def __init__(self, mw, limit=12):
         super().__init__(mw)
         self.mw = mw
         self.limit = int(limit)
+        self._thumb_cache: dict[str, tuple[float, QSize, QPixmap]] = {}
+        self._last_folder_to_open: Optional[Path] = None
 
         self.area = QScrollArea(self)
         self.area.setWidgetResizable(True)
         self.wrap = QWidget()
         self.h = QHBoxLayout(self.wrap)
-        self.h.setContentsMargins(4,4,4,4)
+        self.h.setContentsMargins(4, 4, 4, 4)
         self.h.setSpacing(6)
         self.area.setWidget(self.wrap)
 
+        self.variant_selector = QComboBox(self)
+        self.variant_selector.addItem("Auto (Overlay→Aligned→Raw)", "auto")
+        self.variant_selector.addItem("Overlay", "overlay")
+        self.variant_selector.addItem("Aligned", "aligned")
+        self.variant_selector.addItem("Raw", "raw")
+        self.variant_selector.currentIndexChanged.connect(lambda _=0: self.reload())
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.addStretch(1)
+        controls.addWidget(QLabel("Variant:"))
+        controls.addWidget(self.variant_selector)
+
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0,0,0,0)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addLayout(controls)
         lay.addWidget(self.area)
 
     def reload(self):
-        # vyčisti
+        self._clear_layout()
+
+        recipe_name = self.mw.current_recipe_name()
+        rid = self.mw.db.recipe_id(recipe_name)
+        if rid is None:
+            self._show_placeholder(self._default_folder(recipe_name))
+            return
+
+        selection = getattr(self.mw.cmb_tool, "currentData", lambda: None)()
+        tool_key: Optional[str] = None
+        if isinstance(selection, Mapping):
+            tool_key = selection.get("id") or selection.get("name") or selection.get("tool_id")
+        elif selection:
+            tool_key = str(selection)
+
+        try:
+            records = self.mw.db.recent_image_records(rid, limit=self.limit * 2, tool_key=tool_key)
+        except Exception as exc:
+            logger.debug("Failed to fetch recent image records: %s", exc)
+            records = []
+
+        entries: list[dict[str, Any]] = []
+        for record in records:
+            prepared = self._prepare_entry(record)
+            if prepared is not None:
+                entries.append(prepared)
+
+        if not entries:
+            entries = self._load_filesystem_entries(recipe_name)
+
+        if not entries:
+            self._show_placeholder(self._default_folder(recipe_name))
+            return
+
+        entries = entries[: self.limit]
+        self._last_folder_to_open = None
+        for row in entries:
+            if not self._last_folder_to_open and row.get("display_path"):
+                try:
+                    self._last_folder_to_open = Path(row["display_path"]).parent
+                except Exception:
+                    self._last_folder_to_open = None
+
+            tool_entries = self._load_tool_entries(row)
+            tooltip = self._build_tooltip(row, tool_entries)
+            status = row.get("status") or self._aggregate_status(tool_entries)
+            ok_value = row.get("ok")
+            if ok_value is None:
+                ok_value = False if str(status).lower() == "nok" else True
+            thumb = ThumbLabel(
+                row.get("display_path"),
+                bool(ok_value),
+                tooltip,
+                str(status).lower() if isinstance(status, str) else status,
+                tool_entries=tool_entries,
+                loader=self._thumbnail_loader,
+            )
+            thumb.mousePressEvent = lambda event, r=row: self._on_click(r)
+            self.h.addWidget(thumb)
+
+        self.h.addStretch(1)
+
+    def _clear_layout(self) -> None:
         while self.h.count():
             item = self.h.takeAt(0)
-            w = item.widget()
-            if w: w.deleteLater()
-        # načítaj
-        rid = self.mw.db.recipe_id(self.mw.current_recipe_name())
-        if rid is None: return
-        rows = self.mw.db.recent_results(rid, self.limit)
-        for r in rows:
-            tool_entries = self._load_tool_entries(r)
-            info = self._format_tooltip(tool_entries)
-            status = self._aggregate_status(tool_entries)
-            if not info:
-                info = self._format_fallback_info(r)
-            t = ThumbLabel(
-                r["thumb"],
-                r["ok"],
-                info,
-                status,
-                tool_entries=tool_entries,
-            )
-            t.mousePressEvent = lambda e, rr=r: self._on_click(rr)
-            self.h.addWidget(t)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+    def _current_variant(self) -> str:
+        data = self.variant_selector.currentData()
+        if isinstance(data, str):
+            return data
+        return "auto"
+
+    def _prepare_entry(self, record: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+        data = dict(record)
+        display_path, source_key = self._select_display_path(data)
+        if not display_path:
+            return None
+
+        data.setdefault("display_path", display_path)
+        data.setdefault("thumb", data.get("thumb_path") or display_path)
+        data.setdefault("full", data.get("full_path"))
+        if data.get("status"):
+            data["status"] = str(data["status"]).lower()
+
+        meta_json = data.get("meta_json")
+        if isinstance(meta_json, str) and not data.get("meta"):
+            try:
+                parsed = json.loads(meta_json)
+                if isinstance(parsed, dict):
+                    data["meta"] = parsed
+            except Exception:
+                pass
+
+        metrics = data.get("metrics")
+        if not isinstance(metrics, Mapping):
+            data["metrics"] = {}
+
+        data["_display_source"] = source_key
+        return data
+
+    def _select_display_path(self, record: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
+        variant = self._current_variant()
+        auto_order = [
+            "overlay_path",
+            "aligned_path",
+            "thumb_path",
+            "full_path",
+            "raw_path",
+        ]
+        if variant == "overlay":
+            preference = ["overlay_path"] + [key for key in auto_order if key != "overlay_path"]
+        elif variant == "aligned":
+            preference = ["aligned_path"] + [key for key in auto_order if key != "aligned_path"]
+        elif variant == "raw":
+            preference = ["raw_path", "full_path"] + [key for key in auto_order if key not in {"raw_path", "full_path"}]
+        else:
+            preference = auto_order
+
+        for key in preference:
+            path = record.get(key)
+            if self._is_valid_image(path):
+                return path, key
+        return None, None
+
+    def _is_valid_image(self, path: Optional[str]) -> bool:
+        if not path:
+            return False
+        try:
+            if not os.path.exists(path):
+                logger.debug("Image path not found: %s", path)
+                return False
+            if os.path.getsize(path) <= 0:
+                logger.debug("Image path empty: %s", path)
+                return False
+        except OSError as exc:
+            logger.debug("Image check failed for %s: %s", path, exc)
+            return False
+        return True
+
+    def _default_folder(self, recipe_name: str) -> Path:
+        base = Path("/data/runs")
+        try:
+            recipe_name = recipe_name or "default"
+        except Exception:
+            recipe_name = "default"
+        candidate = base / datetime.now().strftime("%Y%m%d") / recipe_name
+        if candidate.exists():
+            return candidate
+        if base.exists():
+            return base
+        return Path("/data")
+
+    def _show_placeholder(self, folder: Path) -> None:
+        container = QWidget(self.wrap)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        label = QLabel("No images found", container)
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label)
+
+        button = QPushButton("Open folder", container)
+        button.setFixedWidth(140)
+        button.clicked.connect(self._open_folder)
+        layout.addWidget(button, alignment=Qt.AlignCenter)
+
+        self._last_folder_to_open = folder
+        self.h.addWidget(container)
         self.h.addStretch(1)
+
+    def _open_folder(self) -> None:
+        folder = self._last_folder_to_open or Path("/data/runs")
+        try:
+            folder = Path(folder)
+        except Exception:
+            folder = Path("/data/runs")
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+
+    def _thumbnail_loader(self, path: str, target_size: QSize) -> Optional[QPixmap]:
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            return None
+        cache_entry = self._thumb_cache.get(path)
+        if cache_entry and cache_entry[0] == mtime and cache_entry[1] == target_size:
+            return cache_entry[2]
+        reader = QImageReader(path)
+        if target_size.width() > 0 and target_size.height() > 0:
+            try:
+                original_size = reader.size()
+            except Exception:
+                original_size = QSize()
+            if original_size.isValid():
+                scaled_size = original_size.scaled(target_size, Qt.KeepAspectRatio)
+                reader.setScaledSize(scaled_size)
+        reader.setAutoTransform(True)
+        image = reader.read()
+        if image.isNull():
+            return None
+        pixmap = QPixmap.fromImage(image)
+        if target_size.width() > 0 and target_size.height() > 0:
+            pixmap = pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._thumb_cache[path] = (mtime, target_size, pixmap)
+        return pixmap
+
+    def _load_filesystem_entries(self, recipe_name: str) -> list[dict[str, Any]]:
+        base = Path("/data/runs")
+        if not base.exists():
+            return []
+
+        candidates: list[tuple[float, Path]] = []
+        try:
+            day_dirs = sorted(base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        except Exception:
+            day_dirs = []
+
+        for day_dir in day_dirs:
+            if not day_dir.is_dir():
+                continue
+            recipe_dir = day_dir / recipe_name
+            search_roots: Iterable[Path]
+            if recipe_dir.exists():
+                search_roots = [recipe_dir]
+            else:
+                search_roots = [day_dir]
+            for root in search_roots:
+                for subdir in ("overlay", "aligned", "thumbs", "full"):
+                    directory = root / subdir
+                    if not directory.exists():
+                        continue
+                    for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+                        for path in directory.glob(ext):
+                            try:
+                                candidates.append((path.stat().st_mtime, path))
+                            except OSError:
+                                continue
+                for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+                    for path in root.glob(ext):
+                        try:
+                            candidates.append((path.stat().st_mtime, path))
+                        except OSError:
+                            continue
+            if len(candidates) >= self.limit * 3:
+                break
+
+        entries: list[dict[str, Any]] = []
+        for _, path in sorted(candidates, key=lambda item: item[0], reverse=True):
+            if not self._is_valid_image(str(path)):
+                continue
+            entry = {
+                "display_path": str(path),
+                "thumb": str(path),
+                "full": str(path),
+                "ok": True,
+                "status": None,
+                "metrics": {},
+            }
+            entries.append(entry)
+            if len(entries) >= self.limit:
+                break
+        return entries
 
     def _format_fallback_info(self, row: dict[str, Any]) -> str:
         parts: list[str] = []
@@ -120,8 +393,10 @@ class ResultsStrip(QWidget):
             parts.append(f"area={total_area}")
         return "  ".join(parts) if parts else "—"
 
-    def _load_tool_entries(self, row: dict[str, Any]) -> list[dict[str, Any]]:
-        meta = self._load_meta_payload(row)
+    def _load_tool_entries(self, row: Mapping[str, Any]) -> list[dict[str, Any]]:
+        meta = row.get("meta")
+        if not meta:
+            meta = self._load_meta_payload(row)
         if not isinstance(meta, dict):
             return []
 
@@ -138,29 +413,42 @@ class ResultsStrip(QWidget):
                 result_entries.append(normalized)
         return result_entries
 
-    def _load_meta_payload(self, row: dict[str, Any]) -> dict[str, Any] | None:
-        thumb_path = row.get("thumb")
-        if not thumb_path:
-            return None
-        try:
-            thumb = Path(thumb_path)
-        except Exception:
-            return None
-        meta_path = thumb.with_suffix(".json")
-        # thumbs/<file> -> meta/<file>
-        if thumb.parent.name == "thumbs":
-            meta_path = thumb.parent.parent / "meta" / meta_path.name
-        if not meta_path.exists():
-            return None
-        try:
-            with open(meta_path, "r", encoding="utf-8") as fh:
-                return json.load(fh)
-        except Exception:
-            return None
+    def _load_meta_payload(self, row: Mapping[str, Any]) -> dict[str, Any] | None:
+        meta_json = row.get("meta_json")
+        if isinstance(meta_json, str):
+            try:
+                parsed = json.loads(meta_json)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                pass
+
+        meta_path = row.get("meta_path")
+        thumb_path = row.get("thumb") or row.get("thumb_path")
+        candidate_paths: list[Path] = []
+        if isinstance(meta_path, str):
+            candidate_paths.append(Path(meta_path))
+        if isinstance(thumb_path, str):
+            try:
+                thumb = Path(thumb_path)
+                candidate_paths.append(thumb.with_suffix(".json"))
+                if thumb.parent.name == "thumbs":
+                    candidate_paths.append(thumb.parent.parent / "meta" / thumb.with_suffix(".json").name)
+            except Exception:
+                pass
+
+        for path in candidate_paths:
+            if not path.exists():
+                continue
+            try:
+                with open(path, "r", encoding="utf-8") as fh:
+                    return json.load(fh)
+            except Exception:
+                continue
         return None
 
     def _normalize_tool_entry(
-        self, entry: dict[str, Any], row: dict[str, Any]
+        self, entry: dict[str, Any], row: Mapping[str, Any]
     ) -> dict[str, Any] | None:
         tool_type = str(entry.get("type") or entry.get("tool_type") or "").strip()
         definition = ToolRegistry.get_tool_definition(tool_type) if tool_type else None
@@ -282,6 +570,39 @@ class ResultsStrip(QWidget):
                 lines.append(f"  {metric_line}")
         return "\n".join(lines)
 
+    def _build_tooltip(self, row: Mapping[str, Any], tool_entries: list[dict[str, Any]]) -> str:
+        lines: list[str] = []
+        ts_ms = row.get("ts_ms")
+        if ts_ms:
+            try:
+                dt = datetime.fromtimestamp(int(ts_ms) / 1000)
+                lines.append(dt.strftime("%Y-%m-%d %H:%M:%S"))
+            except Exception:
+                lines.append(str(ts_ms))
+        status = row.get("status")
+        if status:
+            lines.append(f"Status: {status}")
+        tool_key = row.get("tool_key")
+        if tool_key:
+            lines.append(f"Tool: {tool_key}")
+
+        metrics = row.get("metrics")
+        if isinstance(metrics, Mapping):
+            metric_lines = []
+            for key, value in metrics.items():
+                metric_lines.append(f"{key}={self._format_metric_value(value)}")
+            if metric_lines:
+                lines.append(" | ".join(metric_lines))
+
+        details = self._format_tooltip(tool_entries)
+        if details:
+            if lines:
+                lines.append("")
+            lines.append(details)
+        if not lines:
+            return self._format_fallback_info(dict(row))
+        return "\n".join(lines)
+
     @staticmethod
     def _aggregate_status(tool_entries: list[dict[str, Any]]) -> str | None:
         if not tool_entries:
@@ -304,5 +625,5 @@ class ResultsStrip(QWidget):
     def _on_click(self, row):
         # otvoríme full (ak je), inak thumb – v externom prehliadači (inside kontajnera to býva ťažké),
         # tak aspoň nastavíme status text
-        full = row.get("full") or row.get("thumb")
+        full = row.get("full") or row.get("display_path") or row.get("thumb")
         self.mw.lbl_status.setText(f"Open: {full}")
