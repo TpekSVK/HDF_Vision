@@ -1,9 +1,16 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox,
-    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy
+    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap
+
+import math
+from collections.abc import Mapping, Sequence
+from numbers import Real
+from typing import Any
+
+import numpy as np
 
 from threading import Thread
 from app.services.retention_service import RetentionService
@@ -11,13 +18,15 @@ from app.services.retention_service import RetentionService
 from app.ui.xu_panel import XUPanel
 
 from app.services.camera_service import CameraService
-from app.services.storage_service import save_golden, save_production_result
+from app.services.storage_service import save_golden, save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.thresholds_panel import ThresholdsPanel
 from app.ui.results_strip import ResultsStrip
+from app.services.tool_service import run_pipeline
+from app.services.tool_registry import ToolRegistry
 
 
 class MainWindow(QMainWindow):
@@ -38,6 +47,11 @@ class MainWindow(QMainWindow):
         self.db = DbService()
         self.recipes = RecipeService(db=self.db)
         self.stats = StatsService(db=self.db)
+
+        self._last_tool_reports: list[dict[str, Any]] = []
+        self._last_cycle_time_ms: float | None = None
+        self._last_pipeline_status: str | None = None
+        self._tool_selector_items: list[dict[str, Any]] = []
 
         # Tool/Recipe
         try:
@@ -133,6 +147,14 @@ class MainWindow(QMainWindow):
         self.chk_heatmap = QCheckBox("Heatmap")
         self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
         actions.addWidget(self.chk_heatmap)
+
+        self.lbl_tool_selector = QLabel("Tool:")
+        actions.addWidget(self.lbl_tool_selector)
+        self.cmb_tool = QComboBox()
+        self.cmb_tool.setEnabled(False)
+        self.cmb_tool.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+        self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
+        actions.addWidget(self.cmb_tool)
         run.addLayout(actions)
 
         # Live view + pravý sidebar so štatistikami
@@ -172,11 +194,16 @@ class MainWindow(QMainWindow):
 
         # Posledné meranie (TRIGGER)
         side.addWidget(QLabel("— Posledné meranie —"))
-        self.sb_ssim  = QLabel("SSIM: –")
-        self.sb_blobs = QLabel("Bloby: –")
-        self.sb_area  = QLabel("Plocha: –")
-        for w in (self.sb_ssim, self.sb_blobs, self.sb_area):
-            side.addWidget(w)
+        self.metrics_container = QWidget()
+        self.metrics_layout = QGridLayout(self.metrics_container)
+        self.metrics_layout.setContentsMargins(0, 0, 0, 0)
+        self.metrics_layout.setSpacing(4)
+        self.metrics_layout.setColumnStretch(1, 1)
+        self._metrics_widgets: list[QLabel] = []
+        self._metrics_placeholder = QLabel("Žiadne dáta")
+        self._metrics_placeholder.setStyleSheet("color:#777;")
+        self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
+        side.addWidget(self.metrics_container)
 
         side.addStretch(1)
         preview_row.addWidget(self.side_panel, 1)
@@ -213,6 +240,7 @@ class MainWindow(QMainWindow):
 
         # inicializuj pravý panel hodnotami
         self._update_sidebar()
+        self._refresh_tool_selector()
 
         # maximalizovať a uzamknúť veľkosť okna po zobrazení
         QTimer.singleShot(0, self._maximize_and_lock)
@@ -293,46 +321,82 @@ class MainWindow(QMainWindow):
 
     def manual_trigger(self):
         try:
-            frame = self.cam.last_frame()  # posledný kontinuálny frame
-            self._last_trigger_frame = frame.copy() if frame is not None else None
-            meta = {"mode": "manual"}
+            frame = self.cam.last_frame()
+            if frame is None:
+                self.lbl_status.setText("Žiadny snímok z kamery.")
+                return
 
-            # D3: vyhodnotenie podľa receptu
-            nok = False
-            metrics = {}
+            frame_u8 = frame.copy()
+            recipe_name = self.current_recipe_name()
+            golden = getattr(self.tool, "golden", None)
+
             try:
-                res = self.tool.evaluate(frame)
-                nok = (not res["ok"])   # True ak je nezhoda
-                metrics = res["metrics"]
-            except Exception as e:
-                print("[Tool] evaluate failed:", e)
+                recipe_cfg = load_recipe_config(recipe_name)
+            except Exception as exc:
+                print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
+                recipe_cfg = None
 
-            # UI update
-            if nok:
-                self.lbl_status.setText("NOK")
-                self.lbl_status.setStyleSheet("color: #ff3366;")
-            else:
-                self.lbl_status.setText("OK")
-                self.lbl_status.setStyleSheet("color: #33dd66;")
+            if golden is None or recipe_cfg is None or not getattr(recipe_cfg, "tools", []):
+                self._run_legacy_trigger(frame_u8, recipe_name)
+                return
 
-            st = self.stats.daily_for_recipe(self.current_recipe_name())
+            if not getattr(recipe_cfg, "regions", None):
+                recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
+            recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
 
-            # aktualizuj side panel
-            self._update_sidebar(st, metrics)
-
-            # Uloženie (NOK flag pre retenciu)
-            save_production_result(
-                frame,
-                meta | {"metrics": metrics},
-                self.current_recipe_name(),
-                store_full_nok=True,
-                nok=nok
+            result = run_pipeline(
+                golden,
+                frame_u8,
+                recipe_cfg,
+                recipe_name=recipe_name,
+                notes="manual_trigger",
             )
 
-            # refresh stripu po uložení výsledku
+            status = (result.status or "ok").lower()
+            status_text = status.upper()
+            color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
+            self.lbl_status.setText(status_text)
+            self.lbl_status.setStyleSheet(f"color: {color_map.get(status, '#33dd66')};")
+
+            context_frame = getattr(result.context, "frame_aligned", None)
+            if context_frame is None:
+                context_frame = getattr(result.context, "frame", None)
+            if isinstance(context_frame, np.ndarray):
+                self._last_trigger_frame = context_frame.copy()
+            else:
+                self._last_trigger_frame = frame_u8.copy()
+
+            reports = [self._serialize_tool_report(report) for report in result.per_tool]
+            st = self.stats.daily_for_recipe(recipe_name)
+            self._update_sidebar(st, reports, status=status, cycle_time_ms=float(result.cycle_time_ms))
+
+            diagnostics_payload: list[Any] = []
+            for diag in getattr(result, "diagnostics", []) or []:
+                diagnostics_payload.append(self._simplify_value(diag))
+
+            combined_metrics = self._merge_pipeline_metrics(reports)
+
+            meta_payload = {
+                "mode": "manual",
+                "status": status,
+                "cycle_time_ms": float(result.cycle_time_ms),
+                "per_tool": reports,
+                "diagnostics": diagnostics_payload,
+                "metrics": combined_metrics,
+            }
+            if getattr(result, "policy_applied", None):
+                meta_payload["policy_applied"] = result.policy_applied
+
+            save_production_result(
+                frame_u8,
+                meta_payload,
+                recipe_name,
+                store_full_nok=True,
+                nok=status != "ok",
+            )
+
             self.strip.reload()
 
-            # ak nie je live režim, zobraz práve triggernutý frame
             if not self.live_enabled and self._last_trigger_frame is not None:
                 img = self._last_trigger_frame
                 if self.chk_heatmap.isChecked():
@@ -345,6 +409,63 @@ class MainWindow(QMainWindow):
         except Exception:
             import traceback; traceback.print_exc()
 
+    def _run_legacy_trigger(self, frame_u8, recipe_name: str):
+        try:
+            res = self.tool.evaluate(frame_u8)
+            ok = bool(res.get("ok", False))
+            metrics = dict(res.get("metrics", {}) or {})
+            status = "ok" if ok else "nok"
+        except Exception as exc:
+            print("[Tool] evaluate failed:", exc)
+            metrics = {}
+            status = "nok"
+
+        self._last_trigger_frame = frame_u8.copy() if isinstance(frame_u8, np.ndarray) else frame_u8
+
+        color = "#33dd66" if status == "ok" else "#ff3366"
+        self.lbl_status.setText(status.upper())
+        self.lbl_status.setStyleSheet(f"color: {color};")
+
+        legacy_report = [{
+            "id": "legacy",
+            "name": "Inspection",
+            "type": "legacy",
+            "status": status,
+            "latency_ms": None,
+            "metrics": metrics,
+            "diagnostics": {},
+        }]
+
+        self._last_cycle_time_ms = None
+        st = self.stats.daily_for_recipe(recipe_name)
+        self._update_sidebar(st, legacy_report, status=status)
+
+        meta_payload = {
+            "mode": "manual",
+            "status": status,
+            "metrics": metrics,
+            "per_tool": legacy_report,
+        }
+
+        save_production_result(
+            frame_u8,
+            meta_payload,
+            recipe_name,
+            store_full_nok=True,
+            nok=status != "ok",
+        )
+
+        self.strip.reload()
+
+        if not self.live_enabled and self._last_trigger_frame is not None:
+            img = self._last_trigger_frame
+            if self.chk_heatmap.isChecked():
+                try:
+                    img = self._make_heatmap_overlay(img)
+                except Exception:
+                    pass
+            self._show_gray_or_bgr(self.live_view, img)
+
     def save_golden_clicked(self):
         frame = self.cam.one_shot()
         path = save_golden(frame, self.current_recipe_name())
@@ -355,6 +476,7 @@ class MainWindow(QMainWindow):
         dlg.resize(1200, 800)
         dlg.exec()
         self._update_sidebar()
+        self._refresh_tool_selector()
 
     def _toggle_strip(self):
         # minimalizácia / rozbalenie výsledkového stripu
@@ -454,7 +576,14 @@ class MainWindow(QMainWindow):
         out = cv2.addWeighted(base, 0.55, heat, 0.45, 0.0)
         return out
 
-    def _update_sidebar(self, st: dict | None = None, metrics: dict | None = None):
+    def _update_sidebar(
+        self,
+        st: dict | None = None,
+        per_tool: Sequence[dict[str, Any]] | None = None,
+        *,
+        status: str | None = None,
+        cycle_time_ms: float | None = None,
+    ):
         """Naplní pravý panel dennými štatistikami a poslednými metrikami."""
         try:
             name = self.current_recipe_name()
@@ -467,17 +596,256 @@ class MainWindow(QMainWindow):
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
             self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
-            # metriky posledného merania
-            if metrics is None:
-                self.sb_ssim.setText("SSIM: –")
-                self.sb_blobs.setText("Bloby: –")
-                self.sb_area.setText("Plocha: –")
-            else:
-                self.sb_ssim.setText(f"SSIM: {metrics.get('ssim','-')}")
-                self.sb_blobs.setText(f"Bloby: {metrics.get('blob_count','-')}")
-                self.sb_area.setText(f"Plocha: {metrics.get('total_area','-')}")
+
+            if per_tool is not None:
+                self._last_tool_reports = [dict(entry) for entry in per_tool]
+            if status is not None:
+                self._last_pipeline_status = status
+            if cycle_time_ms is not None:
+                self._last_cycle_time_ms = cycle_time_ms
+
+            self._update_metrics_panel()
         except Exception:
             pass
+
+    def _set_metrics_rows(self, rows: Sequence[tuple[str, str]]):
+        try:
+            while self.metrics_layout.count():
+                item = self.metrics_layout.takeAt(0)
+                widget = item.widget()
+                if widget is None:
+                    continue
+                if widget is self._metrics_placeholder:
+                    widget.setParent(None)
+                else:
+                    widget.deleteLater()
+            self._metrics_widgets.clear()
+
+            if not rows:
+                self._metrics_placeholder.setParent(self.metrics_container)
+                self._metrics_placeholder.setText("Žiadne dáta")
+                self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
+                self._metrics_placeholder.show()
+                return
+
+            self._metrics_placeholder.hide()
+            for row_index, (label_text, value_text) in enumerate(rows):
+                name_label = QLabel(label_text)
+                value_label = QLabel(value_text)
+                value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.metrics_layout.addWidget(name_label, row_index, 0)
+                self.metrics_layout.addWidget(value_label, row_index, 1)
+                self._metrics_widgets.extend([name_label, value_label])
+        except Exception:
+            pass
+
+    def _update_metrics_panel(self):
+        try:
+            selection = self.cmb_tool.currentData()
+            if not self._last_tool_reports:
+                self._set_metrics_rows([])
+                return
+
+            if selection is None:
+                rows = self._build_summary_rows()
+            else:
+                rows = self._build_tool_metric_rows(selection)
+            self._set_metrics_rows(rows)
+        except Exception:
+            self._set_metrics_rows([])
+
+    def _build_summary_rows(self) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        if self._last_pipeline_status:
+            rows.append(("Celkový status", self._last_pipeline_status.upper()))
+        if self._last_cycle_time_ms is not None:
+            rows.append(("Cyklus [ms]", self._format_metric_value(self._last_cycle_time_ms)))
+        for report in self._last_tool_reports:
+            name = str(report.get("name") or report.get("id") or "Tool")
+            status = str(report.get("status") or "").upper() or "—"
+            rows.append((name, status))
+        return rows or [("Info", "Žiadne dáta")]
+
+    def _build_tool_metric_rows(self, selection: dict[str, Any]) -> list[tuple[str, str]]:
+        rows: list[tuple[str, str]] = []
+        tool_id = str(selection.get("id")) if isinstance(selection, Mapping) else str(selection or "")
+        report = next((r for r in self._last_tool_reports if str(r.get("id")) == tool_id), None)
+        if report is None:
+            return [("Info", "Žiadne dáta")]
+
+        name = str(report.get("name") or tool_id or "Tool")
+        status = str(report.get("status") or "").upper() or "—"
+        rows.append((f"{name} status", status))
+
+        latency_value = report.get("latency_ms")
+        if latency_value is None:
+            metrics_map = report.get("metrics")
+            if isinstance(metrics_map, Mapping):
+                latency_value = metrics_map.get("latency_ms")
+        if latency_value is not None:
+            rows.append(("Čas [ms]", self._format_metric_value(latency_value)))
+
+        metrics = {}
+        if isinstance(report.get("metrics"), Mapping):
+            metrics = dict(report["metrics"])
+        metrics.pop("latency_ms", None)
+
+        tool_type = str(report.get("type") or "")
+        definition = ToolRegistry.get_tool_definition(tool_type) if tool_type else None
+        if definition is not None:
+            spec_entries = sorted(
+                getattr(definition, "metrics_spec", ()) or (),
+                key=lambda entry: (
+                    -int(getattr(entry, "priority", 0) or 0),
+                    str(getattr(entry, "key", "")),
+                ),
+            )
+            for spec in spec_entries:
+                key = getattr(spec, "key", "")
+                if not key or key not in metrics:
+                    continue
+                label = (getattr(spec, "description", "") or key or "Metric").strip()
+                unit = getattr(spec, "unit", None)
+                if unit:
+                    label = f"{label} [{unit}]"
+                rows.append((label, self._format_metric_value(metrics.pop(key))))
+
+        for key in sorted(metrics.keys()):
+            rows.append((str(key), self._format_metric_value(metrics[key])))
+
+        return rows or [("Info", "Žiadne dáta")]
+
+    def _format_metric_value(self, value: Any) -> str:
+        if value is None:
+            return "—"
+        if isinstance(value, bool):
+            return "áno" if value else "nie"
+        if isinstance(value, Real) and not isinstance(value, bool):
+            val = float(value)
+            if not math.isfinite(val):
+                return "—"
+            if abs(val) >= 1000 or (0 < abs(val) < 0.001):
+                return f"{val:.3g}"
+            text = f"{val:.4f}".rstrip("0").rstrip(".")
+            return text or "0"
+        return str(value)
+
+    def _simplify_value(self, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, (str, int, bool)):
+            return value
+        if isinstance(value, float):
+            return float(value) if math.isfinite(value) else None
+        if hasattr(value, "item"):
+            try:
+                return self._simplify_value(value.item())
+            except Exception:
+                return None
+        if isinstance(value, Mapping):
+            return {str(k): self._simplify_value(v) for k, v in value.items()}
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            return [self._simplify_value(v) for v in value]
+        try:
+            return float(value)
+        except Exception:
+            return str(value)
+
+    def _serialize_tool_report(self, report) -> dict[str, Any]:
+        metrics = {}
+        raw_metrics = getattr(report, "metrics", None)
+        if isinstance(raw_metrics, Mapping):
+            metrics = {str(k): self._simplify_value(v) for k, v in raw_metrics.items()}
+        diagnostics = {}
+        raw_diag = getattr(report, "diagnostics", None)
+        if isinstance(raw_diag, Mapping):
+            diagnostics = {str(k): self._simplify_value(v) for k, v in raw_diag.items()}
+
+        latency_value = self._simplify_value(getattr(report, "latency_ms", None))
+        if latency_value is not None:
+            metrics.setdefault("latency_ms", latency_value)
+
+        tool = getattr(report, "tool", None)
+        tool_name = getattr(tool, "name", None) if tool is not None else None
+        tool_type = getattr(tool, "type", None) if tool is not None else None
+        tool_order = getattr(tool, "order", None) if tool is not None else None
+        tool_id = getattr(report, "tool_id", None) or tool_name or (f"tool_{tool_order}" if tool_order is not None else None)
+
+        return {
+            "id": tool_id,
+            "name": tool_name or tool_id or "Tool",
+            "type": tool_type or diagnostics.get("type"),
+            "status": getattr(report, "status", None),
+            "latency_ms": latency_value,
+            "metrics": metrics,
+            "diagnostics": diagnostics,
+        }
+
+    def _merge_pipeline_metrics(self, reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
+        combined: dict[str, Any] = {}
+        for entry in reports:
+            metrics = entry.get("metrics")
+            if not isinstance(metrics, Mapping):
+                continue
+            for key, value in metrics.items():
+                if key not in combined and value is not None:
+                    combined[key] = value
+        return combined
+
+    def _refresh_tool_selector(self):
+        try:
+            recipe_name = self.current_recipe_name()
+        except Exception:
+            recipe_name = "default"
+
+        try:
+            tools = self.recipes.get_published_tools(recipe_name)
+        except Exception:
+            tools = []
+
+        entries: list[dict[str, Any]] = []
+        for tool in tools:
+            tool_id = tool.name or f"tool_{tool.order}"
+            display_name = tool.name or tool.type or tool_id
+            tool_type = tool.type or ""
+            entries.append(
+                {
+                    "id": tool_id,
+                    "name": display_name,
+                    "type": tool_type,
+                    "order": getattr(tool, "order", 0),
+                }
+            )
+
+        entries.sort(key=lambda item: int(item.get("order", 0)))
+        self._tool_selector_items = entries
+
+        self.cmb_tool.blockSignals(True)
+        self.cmb_tool.clear()
+
+        if entries:
+            self.cmb_tool.addItem("Celý pipeline", None)
+            for entry in entries:
+                label = entry["name"]
+                tool_type = entry.get("type")
+                if tool_type and tool_type != label:
+                    label = f"{label} ({tool_type})"
+                self.cmb_tool.addItem(label, entry)
+            self.cmb_tool.setEnabled(True)
+            self.lbl_tool_selector.setEnabled(True)
+            default_index = 1 if self.cmb_tool.count() > 1 else 0
+            self.cmb_tool.setCurrentIndex(default_index)
+        else:
+            self.cmb_tool.addItem("—", None)
+            self.cmb_tool.setCurrentIndex(0)
+            self.cmb_tool.setEnabled(False)
+            self.lbl_tool_selector.setEnabled(False)
+
+        self.cmb_tool.blockSignals(False)
+        self._update_metrics_panel()
+
+    def _on_tool_selection_changed(self):
+        self._update_metrics_panel()
 
     def _maximize_and_lock(self):
         try:
@@ -514,7 +882,8 @@ class MainWindow(QMainWindow):
             st = self.stats.daily_for_recipe(name)
             self.strip.reload()
             # update sidebar (nový recept, reset posledných metrík)
-            self._update_sidebar(st, None)
+            self._update_sidebar(st, [])
+            self._refresh_tool_selector()
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -528,6 +897,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(name)
         self.tool = self.recipes.tool
+        self._refresh_tool_selector()
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -540,6 +910,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
+        self._refresh_tool_selector()
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -554,6 +925,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        self._refresh_tool_selector()
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
