@@ -110,20 +110,34 @@ class MainWindow(QMainWindow):
 
         # ---------- RUN panel ----------
         self.panel_run = QWidget(); self.stack.addWidget(self.panel_run)
-        run = QVBoxLayout(self.panel_run); run.setSpacing(8)
+        run_root = QVBoxLayout(self.panel_run); run_root.setSpacing(8)
+
+        run_container = QWidget()
+        run_container.setObjectName("runContainer")
+        run_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        run_container.setMaximumHeight(780)
+
+        run = QVBoxLayout(run_container); run.setSpacing(8)
+        run_root.addWidget(run_container, 0, Qt.AlignTop)
+        run_root.addStretch(1)
 
         # Status + metriky + štatistiky v jednom riadku
-        status_row = QHBoxLayout(); status_row.setSpacing(16)
+        status_container = QWidget()
+        status_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        status_row = QHBoxLayout(status_container); status_row.setSpacing(16)
         self.lbl_status = QLabel("–")
         sf = QFont(); sf.setPointSize(28); sf.setBold(True)
         self.lbl_status.setFont(sf)
         self.lbl_status.setAlignment(Qt.AlignLeft)
         status_row.addWidget(self.lbl_status, 0)
 
-        run.addLayout(status_row)
+        status_container.setMaximumHeight(status_container.sizeHint().height())
+        run.addWidget(status_container)
 
         # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
-        actions = QHBoxLayout(); actions.setSpacing(8)
+        actions_container = QWidget()
+        actions_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        actions = QHBoxLayout(actions_container); actions.setSpacing(8)
         self.btn_trigger = QPushButton("⏻ TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.clicked.connect(self.manual_trigger)
         actions.addWidget(self.btn_trigger)
@@ -155,23 +169,30 @@ class MainWindow(QMainWindow):
         self.cmb_tool.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
         actions.addWidget(self.cmb_tool)
-        run.addLayout(actions)
+
+        actions_container.setMaximumHeight(actions_container.sizeHint().height())
+        run.addWidget(actions_container)
 
         # Live view + pravý sidebar so štatistikami
-        preview_row = QHBoxLayout(); preview_row.setSpacing(12)
+        preview_container = QWidget()
+        preview_container.setMaximumHeight(540)
+        preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        preview_row = QHBoxLayout(preview_container); preview_row.setSpacing(12)
 
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
-        self.live_view.setMinimumSize(960, 540)
-        self.live_view.setFixedSize(960, 540)
-        self.live_view.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.live_view.setMinimumSize(640, 360)
+        self.live_view.setMaximumHeight(540)
+        self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
         self.live_view.setContentsMargins(0,0,0,0)
-        preview_row.addWidget(self.live_view, 0)
+        preview_row.addWidget(self.live_view, 1)
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
+        self.side_panel.setMaximumHeight(540)
+        self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
         self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
 
@@ -208,7 +229,7 @@ class MainWindow(QMainWindow):
         side.addStretch(1)
         preview_row.addWidget(self.side_panel, 1)
 
-        run.addLayout(preview_row)
+        run.addWidget(preview_container)
 
         # deliaca čiara
         line2 = QFrame(); line2.setFrameShape(QFrame.HLine); line2.setFrameShadow(QFrame.Sunken)
