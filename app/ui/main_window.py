@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import (
-    QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox, QSpinBox,
+    QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
@@ -18,7 +18,7 @@ from app.services.retention_service import RetentionService
 from app.ui.xu_panel import XUPanel
 
 from app.services.camera_service import CameraService
-from app.services.storage_service import save_golden, save_production_result, load_recipe_config
+from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
@@ -272,9 +272,7 @@ class MainWindow(QMainWindow):
         row1 = QHBoxLayout();
         self.btn_wizard = QPushButton("🔧 Golden Wizard", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
-        self.btn_save_golden = QPushButton("💾 Uložiť GOLDEN (one-shot)")
-        self.btn_save_golden.clicked.connect(self.save_golden_clicked)
-        row1.addWidget(self.btn_wizard); row1.addWidget(self.btn_save_golden); row1.addStretch(1)
+        row1.addWidget(self.btn_wizard); row1.addStretch(1)
         s.addLayout(row1)
 
         cam_title = QLabel("Nastavenia kamery"); tf2 = QFont(); tf2.setPointSize(12); tf2.setBold(True); cam_title.setFont(tf2)
@@ -296,29 +294,7 @@ class MainWindow(QMainWindow):
         res_line.addWidget(self.cmb_res)
         s.addLayout(res_line)
 
-        # Expo/Gain
-        eg_line = QHBoxLayout()
-        eg_line.addWidget(QLabel("Expo [µs] (XU stub):"))
-        self.spin_expo = QSpinBox(); self.spin_expo.setRange(1, 1_000_000); self.spin_expo.setValue(8000)
-        self.spin_expo.blockSignals(True)
-        self.spin_expo.setValue(getattr(self.cam, "exposure_us", 8000))
-        self.spin_expo.blockSignals(False)
-        eg_line.addWidget(self.spin_expo)
-        eg_line.addSpacing(12)
-        eg_line.addWidget(QLabel("Gain [dB] (XU stub):"))
-        self.spin_gain = QSpinBox(); self.spin_gain.setRange(0, 48); self.spin_gain.setValue(0)
-        self.spin_gain.blockSignals(True)
-        self.spin_gain.setValue(getattr(self.cam, "gain_db", 0))
-        self.spin_gain.blockSignals(False)
-        self.spin_expo.valueChanged.connect(self._on_exposure_changed)
-        self.spin_gain.valueChanged.connect(self._on_gain_changed)
-        eg_line.addWidget(self.spin_gain)
-        eg_line.addStretch(1)
-        s.addLayout(eg_line)
-
         # XU panel
-        line3 = QFrame(); line3.setFrameShape(QFrame.HLine); line3.setFrameShadow(QFrame.Sunken)
-        s.addWidget(line3)
         self.xu = XUPanel(self)
         s.addWidget(self.xu)
 
@@ -400,32 +376,6 @@ class MainWindow(QMainWindow):
                 self._run_timer.start()
         if success:
             self._update_live_view()
-
-    def _on_exposure_changed(self, value: int):
-        if int(getattr(self.cam, "exposure_us", -1)) == int(value):
-            return
-        try:
-            self.cam.set_manual_exposure_us(value)
-        except Exception as exc:
-            self.lbl_status.setText(f"Nastavenie expozície zlyhalo: {exc}")
-            self.spin_expo.blockSignals(True)
-            self.spin_expo.setValue(getattr(self.cam, "exposure_us", value))
-            self.spin_expo.blockSignals(False)
-            return
-        self.lbl_status.setText(f"Expozícia nastavená na {value} µs")
-
-    def _on_gain_changed(self, value: int):
-        if int(getattr(self.cam, "gain_db", -1)) == int(value):
-            return
-        try:
-            self.cam.set_gain_db(value)
-        except Exception as exc:
-            self.lbl_status.setText(f"Nastavenie gain zlyhalo: {exc}")
-            self.spin_gain.blockSignals(True)
-            self.spin_gain.setValue(getattr(self.cam, "gain_db", value))
-            self.spin_gain.blockSignals(False)
-            return
-        self.lbl_status.setText(f"Gain nastavený na {value} dB")
 
     def manual_trigger(self):
         try:
@@ -573,11 +523,6 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             self._show_gray_or_bgr(self.live_view, img)
-
-    def save_golden_clicked(self):
-        frame = self.cam.one_shot()
-        path = save_golden(frame, self.current_recipe_name())
-        self.lbl_status.setText(f"GOLDEN uložený: {path}")
 
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self.recipes, self)

@@ -21,35 +21,26 @@ class XUPanel(QWidget):
         self.exp_us = QSpinBox(); self.exp_us.setRange(10, 1_000_000); self.exp_us.setValue(8000)
         self.gain_db = QSpinBox(); self.gain_db.setRange(0, 48); self.gain_db.setValue(0)
 
-        row_v4l2 = QHBoxLayout()
-        btn_set_exp = QPushButton("Nastaviť")
-        btn_set_gain = QPushButton("Nastaviť")
-        row_v4l2.addWidget(btn_set_exp); row_v4l2.addWidget(btn_set_gain)
-
         f.addRow(QLabel("<b>V4L2 (UVC štandard)</b>"))
         f.addRow("Exposure [µs]", self.exp_us)
-        f.addRow("", row_v4l2)
         f.addRow("Gain [dB]", self.gain_db)
-
-        btn_set_exp.clicked.connect(self._apply_exposure)
-        btn_set_gain.clicked.connect(self._apply_gain)
 
         # --------- XU (vendor) ---------
         self.stream_mode = QComboBox(); self.stream_mode.addItems(["Master (0)", "Trigger (1)"])
         self.flash_mode  = QComboBox(); self.flash_mode.addItems(["OFF (0)", "STROBE (1)", "TORCH (2)"])
         self.pixfmt      = QComboBox(); self.pixfmt.addItems(["Y8 (GRAY8)", "Y12 (12-bit packed)"])
 
-        row_xu = QHBoxLayout()
-        btn_xu_apply = QPushButton("Apply XU")
-        row_xu.addWidget(btn_xu_apply)
+        action_row = QHBoxLayout()
+        btn_apply_all = QPushButton("Aplikovať")
+        action_row.addWidget(btn_apply_all)
 
         f.addRow(QLabel("<b>Vendor XU</b> (Stream/Flash/Pixel format)"))
         f.addRow("Stream Mode", self.stream_mode)
         f.addRow("Flash Mode", self.flash_mode)
         f.addRow("Pixel Format", self.pixfmt)
-        f.addRow("", row_xu)
+        f.addRow("", action_row)
 
-        btn_xu_apply.clicked.connect(self._apply_xu)
+        btn_apply_all.clicked.connect(self._apply_all)
 
         note = QLabel("Pozn.: StreamMode 0=Master, 1=Trigger; Flash 0=OFF,1=Strobe,2=Torch (podľa XU API).")
         note.setWordWrap(True)
@@ -88,3 +79,8 @@ class XUPanel(QWidget):
         pf = self.pixfmt.currentIndex()      # 0=Y8, 1=Y12
         print(f"[XU] (stub) SetStreamMode={sm}, SetFlash={fm}, PixelFormat={'Y12' if pf==1 else 'Y8'}")
         # TODO: doplniť po dodaní XU selector/ID pre Linux. Zatiaľ iba zalogujeme.
+
+    def _apply_all(self):
+        self._apply_exposure()
+        self._apply_gain()
+        self._apply_xu()
