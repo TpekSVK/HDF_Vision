@@ -7,6 +7,8 @@ import time
 import queue
 from collections import deque
 
+from app.services.xu_stub import XUControls
+
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
 try:
@@ -37,6 +39,9 @@ class CameraService:
         self.width = int(width)
         self.height = int(height)
         self.fps = int(fps)
+        self.pixel_format = "Y8"
+        self.exposure_us = 8000
+        self.gain_db = 0
 
         # runtime
         self._q = queue.Queue(maxsize=5)
@@ -59,7 +64,9 @@ class CameraService:
         self._stop_ring = threading.Event()
         self._paused_external = False
         self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
-                                "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY"}
+                                "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
+                                "pixel_format": self.pixel_format}
+        self._xu: XUControls | None = None
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -69,7 +76,7 @@ class CameraService:
         GRAY8 caps podľa gst-device-monitor (u teba potvrdené).
         Skúšame viac permutácií (s/bez videoconvert, s/bez framerate caps).
         """
-        caps = f"video/x-raw,format=GRAY8,width={self.width},height={self.height}"
+        caps = f"video/x-raw,format={self._gst_caps_format()},width={self.width},height={self.height}"
         if with_fps:
             caps += f",framerate={self.fps}/1"
 
@@ -86,6 +93,24 @@ class CameraService:
                 f"{caps} ! "
                 f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
             )
+
+    def _gst_caps_format(self) -> str:
+        fmt = (self.pixel_format or "Y8").upper()
+        if fmt in {"Y8", "GRAY8", "GREY"}:
+            return "GRAY8"
+        if fmt in {"Y12", "Y16", "GRAY16", "GRAY16_LE"}:
+            return "GRAY16_LE"
+        return "GRAY8"
+
+    def _v4l2_fourcc(self) -> str:
+        fmt = (self.pixel_format or "Y8").upper()
+        if fmt in {"Y12", "Y16"}:
+            return "Y12 "
+        return "GREY"
+
+    def _reset_buffers(self):
+        self._q = queue.Queue(maxsize=5)
+        self._ring = deque(maxlen=5)
 
     def _on_new_sample(self, sink):
         sample = sink.emit("pull-sample")
@@ -205,8 +230,8 @@ class CameraService:
 
         # preferuj GREY/Y800
         try:
-            fourcc_grey = cv2.VideoWriter_fourcc(*"GREY")
-            if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_grey):
+            fourcc_primary = cv2.VideoWriter_fourcc(*self._v4l2_fourcc())
+            if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_primary):
                 fourcc_y800 = cv2.VideoWriter_fourcc(*"Y800")
                 cap.set(cv2.CAP_PROP_FOURCC, fourcc_y800)
         except Exception:
@@ -221,7 +246,7 @@ class CameraService:
         self._stop.clear()
         self._t = threading.Thread(target=self._grab_loop, daemon=True)
         self._t.start()
-        print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps}")
+        print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps} {self.pixel_format}")
         return True
 
     def _grab_loop(self):
@@ -270,12 +295,14 @@ class CameraService:
             for dev in devs:
                 if self._start_gst(dev):
                     self.device = dev
+                    self._xu = None
                     self._last_open_args.update({
                         "device": dev,
                         "width": int(self.width),
                         "height": int(self.height),
                         "fps": int(self.fps),
                         "fourcc": "GREY",
+                        "pixel_format": self.pixel_format,
                     })
                     return
 
@@ -283,12 +310,14 @@ class CameraService:
         for dev in devs:
             if self._start_v4l2(dev):
                 self.device = dev
+                self._xu = None
                 self._last_open_args.update({
                     "device": dev,
                     "width": int(self.width),
                     "height": int(self.height),
                     "fps": int(self.fps),
                     "fourcc": "GREY",
+                    "pixel_format": self.pixel_format,
                 })
                 return
 
@@ -335,6 +364,7 @@ class CameraService:
             self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
+        self._reset_buffers()
         self.stop_continuous()
 
     def start_continuous(self):
@@ -391,6 +421,7 @@ class CameraService:
             "height": int(self.height),
             "fps": int(self.fps),
             "fourcc": "GREY",
+            "pixel_format": self.pixel_format,
         })
         # zastav všetko (cap aj GStreamer pipeline)
         self.stop()
@@ -406,6 +437,74 @@ class CameraService:
         self.width  = int(args.get("width", self.width))
         self.height = int(args.get("height", self.height))
         self.fps    = int(args.get("fps", self.fps))
+        self.pixel_format = args.get("pixel_format", self.pixel_format)
+        self._xu = None
         self.start()
         self._paused_external = False
         print("[CameraService] resumed after external access")
+
+    def apply_resolution(self, *, width: int, height: int, fps: int, pixel_format: str | None = None):
+        width = int(width)
+        height = int(height)
+        fps = int(fps)
+        pix_fmt = (pixel_format or self.pixel_format or "Y8").upper()
+        current = {
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "pixel_format": self.pixel_format,
+        }
+        was_running = any([self._cap is not None, self._pipeline is not None, self._mode])
+        if was_running:
+            self.stop()
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.pixel_format = pix_fmt
+        self._reset_buffers()
+        self._last_open_args.update({
+            "width": self.width,
+            "height": self.height,
+            "fps": self.fps,
+            "pixel_format": self.pixel_format,
+        })
+        if was_running:
+            try:
+                self.start()
+            except Exception as exc:
+                self.width = current["width"]
+                self.height = current["height"]
+                self.fps = current["fps"]
+                self.pixel_format = current["pixel_format"]
+                self._last_open_args.update({
+                    "width": self.width,
+                    "height": self.height,
+                    "fps": self.fps,
+                    "pixel_format": self.pixel_format,
+                })
+                try:
+                    self.start()
+                except Exception:
+                    pass
+                raise RuntimeError(f"Camera reopen failed: {exc}") from exc
+
+    def _ensure_xu(self) -> XUControls:
+        if self._xu is None or getattr(self._xu, "video_dev", None) != self.device:
+            self._xu = XUControls(self.device)
+        return self._xu
+
+    def set_manual_exposure_us(self, exposure_us: int):
+        val = int(exposure_us)
+        try:
+            self._ensure_xu().set_manual_exposure_us(val)
+        except Exception as exc:
+            raise RuntimeError(f"Set exposure failed: {exc}") from exc
+        self.exposure_us = val
+
+    def set_gain_db(self, gain_db: int):
+        val = int(gain_db)
+        try:
+            self._ensure_xu().set_gain_db(val)
+        except Exception as exc:
+            raise RuntimeError(f"Set gain failed: {exc}") from exc
+        self.gain_db = val
