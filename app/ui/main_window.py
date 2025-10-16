@@ -283,12 +283,16 @@ class MainWindow(QMainWindow):
         # Rozlíšenie
         res_line = QHBoxLayout()
         res_line.addWidget(QLabel("Rozlíšenie:"))
+        self._resolution_presets: list[tuple[str, dict[str, Any]]] = [
+            ("1920x1080@60 Y8", {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"}),
+            ("1280x720@60 Y8",  {"width": 1280, "height": 720,  "fps": 60, "pixel_format": "Y8"}),
+            ("2592x1944@30 Y8 (len setup/pomalé)", {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"}),
+        ]
         self.cmb_res = QComboBox()
-        self.cmb_res.addItems([
-            "1920x1080@60 Y8",
-            "1280x720@60 Y8",
-            "2592x1944@30 Y8 (len setup/pomalé)"
-        ])
+        for label, data in self._resolution_presets:
+            self.cmb_res.addItem(label, data)
+        self._sync_resolution_combo()
+        self.cmb_res.currentIndexChanged.connect(self._on_resolution_changed)
         res_line.addWidget(self.cmb_res)
         s.addLayout(res_line)
 
@@ -296,10 +300,18 @@ class MainWindow(QMainWindow):
         eg_line = QHBoxLayout()
         eg_line.addWidget(QLabel("Expo [µs] (XU stub):"))
         self.spin_expo = QSpinBox(); self.spin_expo.setRange(1, 1_000_000); self.spin_expo.setValue(8000)
+        self.spin_expo.blockSignals(True)
+        self.spin_expo.setValue(getattr(self.cam, "exposure_us", 8000))
+        self.spin_expo.blockSignals(False)
         eg_line.addWidget(self.spin_expo)
         eg_line.addSpacing(12)
         eg_line.addWidget(QLabel("Gain [dB] (XU stub):"))
         self.spin_gain = QSpinBox(); self.spin_gain.setRange(0, 48); self.spin_gain.setValue(0)
+        self.spin_gain.blockSignals(True)
+        self.spin_gain.setValue(getattr(self.cam, "gain_db", 0))
+        self.spin_gain.blockSignals(False)
+        self.spin_expo.valueChanged.connect(self._on_exposure_changed)
+        self.spin_gain.valueChanged.connect(self._on_gain_changed)
         eg_line.addWidget(self.spin_gain)
         eg_line.addStretch(1)
         s.addLayout(eg_line)
@@ -330,6 +342,90 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
+
+    def _match_resolution_index(self, width: int, height: int, fps: int, pixel_format: str | None) -> int | None:
+        pix_fmt = (pixel_format or "Y8").upper()
+        for idx, (_, data) in enumerate(self._resolution_presets):
+            if (
+                int(data.get("width", 0)) == int(width)
+                and int(data.get("height", 0)) == int(height)
+                and int(data.get("fps", 0)) == int(fps)
+                and (data.get("pixel_format", "Y8") or "Y8").upper() == pix_fmt
+            ):
+                return idx
+        return None
+
+    def _sync_resolution_combo(self):
+        pix_fmt = getattr(self.cam, "pixel_format", "Y8")
+        idx = self._match_resolution_index(self.cam.width, self.cam.height, self.cam.fps, pix_fmt)
+        if idx is None:
+            idx = 0
+        self.cmb_res.blockSignals(True)
+        self.cmb_res.setCurrentIndex(idx)
+        self.cmb_res.blockSignals(False)
+
+    def _on_resolution_changed(self, index: int):
+        data = self.cmb_res.itemData(index)
+        if not isinstance(data, dict):
+            return
+        target = (
+            int(data.get("width", 0)),
+            int(data.get("height", 0)),
+            int(data.get("fps", 0)),
+            (data.get("pixel_format", "Y8") or "Y8").upper(),
+        )
+        current = (
+            int(getattr(self.cam, "width", 0)),
+            int(getattr(self.cam, "height", 0)),
+            int(getattr(self.cam, "fps", 0)),
+            (getattr(self.cam, "pixel_format", "Y8") or "Y8").upper(),
+        )
+        if target == current:
+            return
+        was_live = self.live_enabled and self._run_timer.isActive()
+        if was_live:
+            self._run_timer.stop()
+        success = False
+        try:
+            self.cam.apply_resolution(**data)
+        except Exception as exc:
+            self.lbl_status.setText(f"Zmena rozlíšenia zlyhala: {exc}")
+            self._sync_resolution_combo()
+        else:
+            success = True
+            label = self.cmb_res.itemText(index)
+            self.lbl_status.setText(f"Rozlíšenie nastavené: {label}")
+        finally:
+            if was_live:
+                self._run_timer.start()
+        if success:
+            self._update_live_view()
+
+    def _on_exposure_changed(self, value: int):
+        if int(getattr(self.cam, "exposure_us", -1)) == int(value):
+            return
+        try:
+            self.cam.set_manual_exposure_us(value)
+        except Exception as exc:
+            self.lbl_status.setText(f"Nastavenie expozície zlyhalo: {exc}")
+            self.spin_expo.blockSignals(True)
+            self.spin_expo.setValue(getattr(self.cam, "exposure_us", value))
+            self.spin_expo.blockSignals(False)
+            return
+        self.lbl_status.setText(f"Expozícia nastavená na {value} µs")
+
+    def _on_gain_changed(self, value: int):
+        if int(getattr(self.cam, "gain_db", -1)) == int(value):
+            return
+        try:
+            self.cam.set_gain_db(value)
+        except Exception as exc:
+            self.lbl_status.setText(f"Nastavenie gain zlyhalo: {exc}")
+            self.spin_gain.blockSignals(True)
+            self.spin_gain.setValue(getattr(self.cam, "gain_db", value))
+            self.spin_gain.blockSignals(False)
+            return
+        self.lbl_status.setText(f"Gain nastavený na {value} dB")
 
     def manual_trigger(self):
         try:
