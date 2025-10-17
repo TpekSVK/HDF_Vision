@@ -172,7 +172,8 @@ class ResultsStrip(QWidget):
                 tool_entries=tool_entries,
                 loader=self._thumbnail_loader,
             )
-            thumb.mousePressEvent = lambda event, r=row: self._on_click(r)
+            thumb.mousePressEvent = lambda event, r=row: self._on_click(r, event)
+            thumb.mouseDoubleClickEvent = lambda event, r=row: self._on_double_click(r, event)
             self.h.addWidget(thumb)
 
         self.h.addStretch(1)
@@ -289,11 +290,11 @@ class ResultsStrip(QWidget):
         self.h.addStretch(1)
 
     def _open_folder(self) -> None:
-        folder = self._last_folder_to_open or Path("/data/runs")
-        try:
-            folder = Path(folder)
-        except Exception:
-            folder = Path("/data/runs")
+        candidate = self._last_folder_to_open or Path("/data/runs")
+        folder = self._determine_folder_to_open(candidate)
+        if folder is None:
+            fallback = self._existing_folder(Path("/data/runs")) or Path("/data")
+            folder = fallback
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _thumbnail_loader(self, path: str, target_size: QSize) -> Optional[QPixmap]:
@@ -622,8 +623,81 @@ class ResultsStrip(QWidget):
             return str(tool_entries[0].get("status"))
         return current
 
-    def _on_click(self, row):
+    def _on_click(self, row, event=None):
         # otvoríme full (ak je), inak thumb – v externom prehliadači (inside kontajnera to býva ťažké),
         # tak aspoň nastavíme status text
         full = row.get("full") or row.get("display_path") or row.get("thumb")
+        if event is not None:
+            event.accept()
         self.mw.lbl_status.setText(f"Open: {full}")
+
+    def _on_double_click(self, row, event=None):
+        path = row.get("full") or row.get("display_path") or row.get("thumb")
+        folder: Optional[Path] = None
+        if event is not None:
+            event.accept()
+        if path:
+            folder = self._determine_folder_to_open(path)
+        if folder:
+            self._last_folder_to_open = folder
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            self.mw.lbl_status.setText(f"Open folder: {folder}")
+        else:
+            logger.debug("Folder not found for thumbnail double click: %s", path)
+            self._open_folder()
+
+    def _determine_folder_to_open(self, path_value: Any) -> Optional[Path]:
+        path = self._coerce_to_path(path_value)
+        if path is None:
+            return None
+        folder = path if path.is_dir() else path.parent
+        if not folder:
+            return None
+        folder = self._existing_folder(folder)
+        if folder is None:
+            return None
+        try:
+            return folder.resolve(strict=False)
+        except Exception:
+            return folder
+
+    def _coerce_to_path(self, value: Any) -> Optional[Path]:
+        if value is None:
+            return None
+        if isinstance(value, Path):
+            candidate = value
+        else:
+            text = str(value)
+            if not text:
+                return None
+            url = QUrl(text)
+            candidate = None
+            if url.isValid() and url.isLocalFile():
+                local_file = url.toLocalFile()
+                if local_file:
+                    candidate = Path(local_file)
+            if candidate is None and text.startswith("file://"):
+                candidate = Path(text[7:])
+            if candidate is None:
+                try:
+                    candidate = Path(text)
+                except Exception as exc:
+                    logger.debug("Unable to interpret path %s: %s", text, exc)
+                    return None
+        try:
+            candidate = candidate.expanduser()
+        except Exception:
+            pass
+        try:
+            return candidate.resolve(strict=False)
+        except Exception:
+            return candidate
+
+    def _existing_folder(self, folder: Path) -> Optional[Path]:
+        current = folder
+        while current and not current.exists():
+            parent = current.parent
+            if not parent or parent == current:
+                return None
+            current = parent
+        return current if current and current.exists() else None
