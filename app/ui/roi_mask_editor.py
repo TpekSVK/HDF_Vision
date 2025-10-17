@@ -116,7 +116,7 @@ class _ImageView(QGraphicsView):
             return
         factor = 1.25 if angle > 0 else 0.8
         new_scale = self._current_scale * factor
-        new_scale = max(0.1, min(16.0, new_scale))
+        new_scale = max(0.1, min(48.0, new_scale))
         factor = new_scale / self._current_scale
         self._current_scale = new_scale
         self.scale(factor, factor)
