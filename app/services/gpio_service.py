@@ -15,9 +15,10 @@ __all__ = [
 
 
 _CONFIG_PATH = Path("/data/gpio_config.json")
+_DEFAULT_RECIPE = "default"
 _DEFAULT_CONFIG: dict[str, object] = {
     "board": "JETSON_ORIN_NANO",
-    "assignments": {},
+    "profiles": {},
 }
 
 _OUTPUT_ROLES = ("heartbeat", "ok", "nok", "flash1", "flash2")
@@ -25,7 +26,7 @@ _INPUT_ROLES = ("trigger",)
 _ALL_ROLES = _OUTPUT_ROLES + _INPUT_ROLES
 
 _ROLE_LABELS: Mapping[str, str] = {
-    "none": "Nepoužiť",
+    "none": "Voľné",
     "heartbeat": "Heartbeat (výstup)",
     "ok": "OK signál (výstup)",
     "nok": "NOK signál (výstup)",
@@ -293,7 +294,9 @@ class GPIOService:
         self._outputs: dict[str, list[int]] = {role: [] for role in _OUTPUT_ROLES}
         self._inputs: dict[str, list[int]] = {role: [] for role in _INPUT_ROLES}
         self._heartbeat_state = False
+        self._recipe = _DEFAULT_RECIPE
         self._config: dict[str, object] = self._load_config()
+        self._ensure_profile(self._recipe)
         self._apply_assignments()
 
     # ------------------------------------------------------------------
@@ -307,10 +310,14 @@ class GPIOService:
     def available_roles(self) -> Mapping[str, str]:
         return _ROLE_LABELS
 
+    def active_recipe(self) -> str:
+        return self._recipe
+
     # ------------------------------------------------------------------
     # Configuration persistence
     def get_assignments(self) -> Dict[int, str]:
-        raw = self._config.get("assignments", {})
+        profiles = self._profiles()
+        raw = profiles.get(self._recipe, {})
         if isinstance(raw, Mapping):
             result: Dict[int, str] = {}
             for key, value in raw.items():
@@ -328,12 +335,48 @@ class GPIOService:
         for pin, role in assignments.items():
             if role and role != "none":
                 normalized[str(int(pin))] = str(role)
-        self._config = {
-            "board": _DEFAULT_CONFIG["board"],
-            "assignments": normalized,
-        }
+        profiles = self._profiles()
+        profiles[self._recipe] = normalized
         self._save_config(self._config)
         self._apply_assignments()
+
+    def set_active_recipe(self, recipe: str) -> None:
+        name = self._normalize_recipe(recipe)
+        with self._lock:
+            if name == self._recipe and name in self._profiles():
+                return
+            self._recipe = name
+            self._ensure_profile(self._recipe)
+            self._save_config(self._config)
+            self._apply_assignments()
+
+    def rename_profile(self, old: str, new: str) -> None:
+        src = self._normalize_recipe(old)
+        dst = self._normalize_recipe(new)
+        if src == dst:
+            return
+        with self._lock:
+            profiles = self._profiles()
+            if src not in profiles:
+                return
+            profiles[dst] = profiles.pop(src)
+            if self._recipe == src:
+                self._recipe = dst
+            self._save_config(self._config)
+            self._apply_assignments()
+
+    def delete_profile(self, name: str) -> None:
+        target = self._normalize_recipe(name)
+        with self._lock:
+            profiles = self._profiles()
+            if target not in profiles:
+                return
+            profiles.pop(target, None)
+            if self._recipe == target:
+                self._recipe = _DEFAULT_RECIPE
+                self._ensure_profile(self._recipe)
+            self._save_config(self._config)
+            self._apply_assignments()
 
     # ------------------------------------------------------------------
     def register_trigger_callback(self, callback: Callable[[], None]) -> None:
@@ -403,10 +446,16 @@ class GPIOService:
                     if isinstance(data, MutableMapping):
                         cfg = dict(_DEFAULT_CONFIG)
                         cfg.update(data)
+                        cfg.pop("assignments", None)
+                        cfg["profiles"] = self._sanitize_profiles(cfg.get("profiles"))
+                        if not cfg["profiles"]:
+                            cfg["profiles"][_DEFAULT_RECIPE] = {}
                         return cfg
             except Exception:
                 pass
-        return dict(_DEFAULT_CONFIG)
+        cfg = dict(_DEFAULT_CONFIG)
+        cfg["profiles"] = {_DEFAULT_RECIPE: {}}
+        return cfg
 
     def _save_config(self, data: Mapping[str, object]) -> None:
         try:
@@ -415,6 +464,39 @@ class GPIOService:
                 json.dump(data, fh, ensure_ascii=False, indent=2)
         except Exception:
             pass
+
+    def _profiles(self) -> dict[str, dict[str, str]]:
+        profiles = self._config.setdefault("profiles", {})
+        if not isinstance(profiles, MutableMapping):
+            profiles = {}
+            self._config["profiles"] = profiles
+        # ensure sanitized mapping
+        sanitized = self._sanitize_profiles(profiles)
+        self._config["profiles"] = sanitized
+        return sanitized
+
+    def _ensure_profile(self, recipe: str) -> None:
+        profiles = self._profiles()
+        profiles.setdefault(recipe, {})
+
+    def _sanitize_profiles(self, profiles: object) -> dict[str, dict[str, str]]:
+        result: dict[str, dict[str, str]] = {}
+        if isinstance(profiles, Mapping):
+            for name, mapping in profiles.items():
+                if not isinstance(mapping, Mapping):
+                    continue
+                norm_name = self._normalize_recipe(str(name))
+                sanitized_mapping: dict[str, str] = {}
+                for pin, role in mapping.items():
+                    if not isinstance(role, str):
+                        continue
+                    sanitized_mapping[str(pin)] = role
+                result[norm_name] = sanitized_mapping
+        return result
+
+    def _normalize_recipe(self, recipe: str) -> str:
+        name = (recipe or "").strip()
+        return name or _DEFAULT_RECIPE
 
     def _apply_assignments(self) -> None:
         with self._lock:

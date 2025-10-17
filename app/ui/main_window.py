@@ -67,6 +67,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
+        self.gpio.set_active_recipe(self.current_recipe_name())
 
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
@@ -547,6 +548,7 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
 
     def open_gpio_wizard(self):
+        self.gpio.set_active_recipe(self.current_recipe_name())
         dlg = GPIOWizard(self.gpio, self)
         dlg.resize(720, 520)
         dlg.exec()
@@ -965,6 +967,7 @@ class MainWindow(QMainWindow):
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [])
             self._refresh_tool_selector()
+            self.gpio.set_active_recipe(name)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -979,6 +982,7 @@ class MainWindow(QMainWindow):
         self.recipes.load(name)
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -988,10 +992,12 @@ class MainWindow(QMainWindow):
             return
         new = new.strip()
         self.recipes.rename(old, new)
+        self.gpio.rename_profile(old, new)
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -1003,10 +1009,12 @@ class MainWindow(QMainWindow):
         if r != QMessageBox.Yes:
             return
         self.recipes.delete(name)
+        self.gpio.delete_profile(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())

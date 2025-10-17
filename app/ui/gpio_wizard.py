@@ -21,7 +21,7 @@ from app.services.gpio_service import GPIOService, PinDefinition
 @dataclass
 class _PinRow:
     definition: PinDefinition
-    combo: QComboBox
+    combo: QComboBox | None
 
 
 class GPIOWizard(QDialog):
@@ -45,12 +45,15 @@ class GPIOWizard(QDialog):
 
         status = QLabel()
         status.setWordWrap(True)
+        recipe = self._gpio.active_recipe()
         if self._gpio.is_hardware_ready():
-            status.setText("Jetson.GPIO driver je dostupný. Zmeny sa uložia do /data/gpio_config.json.")
+            status.setText(
+                f"Jetson.GPIO driver je dostupný. Konfigurácia pre recept '{recipe}' sa uloží do /data/gpio_config.json."
+            )
         else:
             status.setText(
                 "Jetson.GPIO knižnica nebola nájdená – používam simulovaný režim."
-                " Konfiguráciu je možné pripraviť a po prenesení na Jetson sa použije."
+                f" Mapovanie pre recept '{recipe}' je možné pripraviť a po prenesení na Jetson sa použije."
             )
         layout.addWidget(status)
 
@@ -88,12 +91,16 @@ class GPIOWizard(QDialog):
             lbl_desc.setWordWrap(True)
             grid.addWidget(lbl_desc, row, 2)
 
-            combo = QComboBox()
-            combo.setEnabled(definition.is_gpio)
-            self._populate_combo(combo)
-            grid.addWidget(combo, row, 3)
-
-            self._rows.append(_PinRow(definition, combo))
+            if definition.is_gpio:
+                combo = QComboBox()
+                self._populate_combo(combo)
+                grid.addWidget(combo, row, 3)
+                self._rows.append(_PinRow(definition, combo))
+            else:
+                label = QLabel("Vyhradené")
+                label.setAlignment(Qt.AlignCenter)
+                grid.addWidget(label, row, 3)
+                self._rows.append(_PinRow(definition, None))
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
@@ -108,6 +115,8 @@ class GPIOWizard(QDialog):
     def _load_assignments(self) -> None:
         assignments = self._gpio.get_assignments()
         for row in self._rows:
+            if row.combo is None:
+                continue
             current_role = assignments.get(row.definition.physical, "none")
             index = row.combo.findData(current_role)
             if index < 0:
@@ -119,9 +128,9 @@ class GPIOWizard(QDialog):
     def accept(self) -> None:
         assignments: Dict[int, str] = {}
         for row in self._rows:
+            if row.combo is None:
+                continue
             role = row.combo.currentData()
-            if not row.combo.isEnabled():
-                role = "none"
             if isinstance(role, str):
                 assignments[row.definition.physical] = role
         self._gpio.update_assignments(assignments)
