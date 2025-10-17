@@ -172,7 +172,8 @@ class ResultsStrip(QWidget):
                 tool_entries=tool_entries,
                 loader=self._thumbnail_loader,
             )
-            thumb.mousePressEvent = lambda event, r=row: self._on_click(r)
+            thumb.mousePressEvent = lambda event, r=row: self._on_click(r, event)
+            thumb.mouseDoubleClickEvent = lambda event, r=row: self._on_double_click(r, event)
             self.h.addWidget(thumb)
 
         self.h.addStretch(1)
@@ -622,8 +623,29 @@ class ResultsStrip(QWidget):
             return str(tool_entries[0].get("status"))
         return current
 
-    def _on_click(self, row):
+    def _on_click(self, row, event=None):
         # otvoríme full (ak je), inak thumb – v externom prehliadači (inside kontajnera to býva ťažké),
         # tak aspoň nastavíme status text
         full = row.get("full") or row.get("display_path") or row.get("thumb")
+        if event is not None:
+            event.accept()
         self.mw.lbl_status.setText(f"Open: {full}")
+
+    def _on_double_click(self, row, event=None):
+        path = row.get("full") or row.get("display_path") or row.get("thumb")
+        folder: Optional[Path] = None
+        if event is not None:
+            event.accept()
+        if path:
+            try:
+                folder = Path(path).expanduser().resolve().parent
+            except Exception as exc:
+                logger.debug("Failed to determine folder for %s: %s", path, exc)
+                folder = None
+        if folder and folder.exists():
+            self._last_folder_to_open = folder
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+            self.mw.lbl_status.setText(f"Open folder: {folder}")
+        else:
+            logger.debug("Folder not found for thumbnail double click: %s", path)
+            self._open_folder()
