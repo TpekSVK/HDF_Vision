@@ -100,8 +100,17 @@ class ToolRegistry:
         cls._aliases[alias_id] = target_id
 
     @classmethod
-    def list_tool_types(cls) -> List[str]:
-        known = set(cls._definitions.keys()) | set(cls._aliases.keys())
+    def list_tool_types(cls, include_aliases: bool = False) -> List[str]:
+        """Return registered tool identifiers.
+
+        By default aliases are excluded so the UI presents each tool only
+        once. Callers that need legacy alias identifiers can opt-in by
+        setting ``include_aliases`` to ``True``.
+        """
+
+        known = set(cls._definitions.keys())
+        if include_aliases:
+            known |= set(cls._aliases.keys())
         return sorted(known)
 
     @classmethod
