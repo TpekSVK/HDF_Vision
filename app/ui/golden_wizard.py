@@ -78,6 +78,7 @@ _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
 
 _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
+_LOCATOR_PREVIEW_MIN_HEIGHT = 280
 
 
 def _coerce_bool_value(value: Any) -> tuple[Optional[bool], Optional[str]]:
@@ -771,6 +772,8 @@ class ToolEditDialog(QDialog):
             roi_group_layout.addWidget(self._roi_editor, 1)
             sections_layout.addWidget(roi_group, 1)
             has_section = True
+        else:
+            roi_group = None
 
         if self._supports_mask and self._mask_editor is not None:
             mask_group = QGroupBox("Ignore mask", roi_tab)
@@ -790,6 +793,8 @@ class ToolEditDialog(QDialog):
             roi_layout.addWidget(info)
 
         self._roi_layout = roi_layout
+        self._roi_sections_layout = sections_layout if has_section else None
+        self._roi_group = roi_group
 
         self._info_label = QLabel("", self)
         self._info_label.setStyleSheet("color: #666;")
@@ -907,7 +912,7 @@ class ToolEditDialog(QDialog):
         self.resize(900, 640)
 
     def _init_locator_template_panel(self) -> None:
-        if getattr(self, "_roi_layout", None) is None:
+        if getattr(self, "_roi_sections_layout", None) is None:
             return
 
         panel = QGroupBox("Locator preview", self)
@@ -946,6 +951,7 @@ class ToolEditDialog(QDialog):
         template_container_layout.addWidget(template_hint)
 
         self._template_editor = TemplateRoiEditor(self._template_container)
+        self._template_editor.setMinimumHeight(_LOCATOR_PREVIEW_MIN_HEIGHT)
         template_container_layout.addWidget(self._template_editor, 1)
         if self._golden_pixmap is not None:
             self._template_editor.set_background(self._golden_pixmap)
@@ -982,7 +988,7 @@ class ToolEditDialog(QDialog):
         before_title.setAlignment(Qt.AlignCenter)
         before_label = QLabel("No preview", panel)
         before_label.setAlignment(Qt.AlignCenter)
-        before_label.setMinimumSize(200, 200)
+        before_label.setMinimumSize(200, _LOCATOR_PREVIEW_MIN_HEIGHT)
         before_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         before_label.setStyleSheet("background-color: #111; color: #777; border: 1px solid #444;")
 
@@ -990,7 +996,7 @@ class ToolEditDialog(QDialog):
         after_title.setAlignment(Qt.AlignCenter)
         after_label = QLabel("No preview", panel)
         after_label.setAlignment(Qt.AlignCenter)
-        after_label.setMinimumSize(200, 200)
+        after_label.setMinimumSize(200, _LOCATOR_PREVIEW_MIN_HEIGHT)
         after_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         after_label.setStyleSheet("background-color: #111; color: #777; border: 1px solid #444;")
 
@@ -1016,7 +1022,7 @@ class ToolEditDialog(QDialog):
         self._locator_preview_before = before_label
         self._locator_preview_after = after_label
 
-        self._roi_layout.insertWidget(1, panel)
+        self._roi_sections_layout.addWidget(panel, 1)
         self._on_locator_use_golden_changed(self._use_golden_checkbox.isChecked())
 
     def _set_locator_message(self, text: str, color: Optional[str] = None) -> None:
