@@ -20,12 +20,14 @@ from app.ui.xu_panel import XUPanel
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
+from app.ui.gpio_wizard import GPIOWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.results_strip import ResultsStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
+from app.services.gpio_service import GPIOService
 
 
 class MainWindow(QMainWindow):
@@ -47,6 +49,9 @@ class MainWindow(QMainWindow):
         self.recipes = RecipeService(db=self.db)
         self.stats = StatsService(db=self.db)
 
+        self.gpio = GPIOService()
+        self.gpio.register_trigger_callback(self._handle_gpio_trigger)
+
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
         self._last_pipeline_status: str | None = None
@@ -62,6 +67,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
+        self.gpio.set_active_recipe(self.current_recipe_name())
 
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
@@ -272,7 +278,13 @@ class MainWindow(QMainWindow):
         row1 = QHBoxLayout();
         self.btn_wizard = QPushButton("🔧 Golden Wizard", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
-        row1.addWidget(self.btn_wizard); row1.addStretch(1)
+        row1.addWidget(self.btn_wizard)
+
+        self.btn_gpio_wizard = QPushButton("🧰 GPIO Wizard", self)
+        self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
+        row1.addWidget(self.btn_gpio_wizard)
+
+        row1.addStretch(1)
         s.addLayout(row1)
 
         cam_title = QLabel("Nastavenia kamery"); tf2 = QFont(); tf2.setPointSize(12); tf2.setBold(True); cam_title.setFont(tf2)
@@ -385,6 +397,7 @@ class MainWindow(QMainWindow):
                 return
 
             frame_u8 = frame.copy()
+            self.gpio.emit_heartbeat()
             recipe_name = self.current_recipe_name()
             golden = getattr(self.tool, "golden", None)
 
@@ -415,6 +428,7 @@ class MainWindow(QMainWindow):
             color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
             self.lbl_status.setText(status_text)
             self.lbl_status.setStyleSheet(f"color: {color_map.get(status, '#33dd66')};")
+            self.gpio.signal_result(status)
 
             context_frame = getattr(result.context, "frame_aligned", None)
             if context_frame is None:
@@ -465,6 +479,7 @@ class MainWindow(QMainWindow):
                 self._show_gray_or_bgr(self.live_view, img)
 
         except Exception:
+            self.gpio.signal_result("nok")
             import traceback; traceback.print_exc()
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
@@ -483,6 +498,7 @@ class MainWindow(QMainWindow):
         color = "#33dd66" if status == "ok" else "#ff3366"
         self.lbl_status.setText(status.upper())
         self.lbl_status.setStyleSheet(f"color: {color};")
+        self.gpio.signal_result(status)
 
         legacy_report = [{
             "id": "legacy",
@@ -531,6 +547,12 @@ class MainWindow(QMainWindow):
         self._update_sidebar()
         self._refresh_tool_selector()
 
+    def open_gpio_wizard(self):
+        self.gpio.set_active_recipe(self.current_recipe_name())
+        dlg = GPIOWizard(self.gpio, self)
+        dlg.resize(720, 520)
+        dlg.exec()
+
     def _toggle_strip(self):
         # minimalizácia / rozbalenie výsledkového stripu
         is_visible = self.scroll.isVisible()
@@ -553,6 +575,9 @@ class MainWindow(QMainWindow):
                     except Exception:
                         pass
                 self._show_gray_or_bgr(self.live_view, img)
+
+    def _handle_gpio_trigger(self):
+        QTimer.singleShot(0, self.manual_trigger)
 
     def _update_live_view(self):
         try:
@@ -915,6 +940,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         try:
             self.cam.stop()
+            self.gpio.close()
         finally:
             e.accept()
 
@@ -941,6 +967,7 @@ class MainWindow(QMainWindow):
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [])
             self._refresh_tool_selector()
+            self.gpio.set_active_recipe(name)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -955,6 +982,7 @@ class MainWindow(QMainWindow):
         self.recipes.load(name)
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -964,10 +992,12 @@ class MainWindow(QMainWindow):
             return
         new = new.strip()
         self.recipes.rename(old, new)
+        self.gpio.rename_profile(old, new)
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -979,10 +1009,12 @@ class MainWindow(QMainWindow):
         if r != QMessageBox.Yes:
             return
         self.recipes.delete(name)
+        self.gpio.delete_profile(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
         self._refresh_tool_selector()
+        self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
