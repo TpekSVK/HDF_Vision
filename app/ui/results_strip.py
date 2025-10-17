@@ -3,6 +3,8 @@ import json
 import logging
 import math
 import os
+import shlex
+import shutil
 import subprocess
 import sys
 from datetime import datetime
@@ -314,12 +316,22 @@ class ResultsStrip(QWidget):
         if not self._open_with_desktop(folder):
             logger.debug("Desktop open failed for folder %s", folder)
 
-    def _open_with_desktop(self, path: Path) -> bool:
+    def _open_with_desktop(self, path: Path, *, prefer_image_viewer: bool | None = None) -> bool:
+        prefers_viewer = prefer_image_viewer
+        if prefers_viewer is None:
+            prefers_viewer = path.is_file()
+
+        if prefers_viewer and self._launch_image_viewer(path):
+            return True
+
         try:
             if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
                 return True
         except Exception as exc:
             logger.debug("QDesktopServices failed for %s: %s", path, exc)
+
+        if prefers_viewer and self._launch_image_viewer(path):
+            return True
 
         if sys.platform.startswith("linux"):
             for command in (("xdg-open", str(path)), ("gio", "open", str(path))):
@@ -344,6 +356,30 @@ class ResultsStrip(QWidget):
                 return True
             except Exception as exc:
                 logger.debug("open command failed for %s: %s", path, exc)
+        return False
+
+    def _launch_image_viewer(self, path: Path) -> bool:
+        commands: list[list[str]] = []
+        for env_var in ("HDF_IMAGE_VIEWER", "IMAGE_VIEWER"):
+            configured = os.environ.get(env_var)
+            if configured:
+                try:
+                    commands.append(shlex.split(configured) + [str(path)])
+                except ValueError as exc:
+                    logger.debug(
+                        "Ignoring invalid %s command %r: %s", env_var, configured, exc
+                    )
+        commands.append(["imageviewer", str(path)])
+
+        for command in commands:
+            executable = command[0]
+            if shutil.which(executable) is None:
+                continue
+            try:
+                subprocess.Popen(command)
+                return True
+            except Exception as exc:
+                logger.debug("Image viewer %s failed for %s: %s", executable, path, exc)
         return False
 
     def _thumbnail_loader(self, path: str, target_size: QSize) -> Optional[QPixmap]:
@@ -697,7 +733,7 @@ class ResultsStrip(QWidget):
 
         target_path = self._coerce_to_path(path)
         if target_path and target_path.is_file():
-            if self._open_with_desktop(target_path):
+            if self._open_with_desktop(target_path, prefer_image_viewer=True):
                 self._last_folder_to_open = target_path.parent
                 self.mw.lbl_status.setText(f"Open image: {target_path}")
                 return
@@ -705,7 +741,7 @@ class ResultsStrip(QWidget):
         folder: Optional[Path] = None
         if target_path:
             folder = self._determine_folder_to_open(target_path)
-        if folder and self._open_with_desktop(folder):
+        if folder and self._open_with_desktop(folder, prefer_image_viewer=False):
             self._last_folder_to_open = folder
             self.mw.lbl_status.setText(f"Open folder: {folder}")
             return
