@@ -3,6 +3,8 @@ import json
 import logging
 import math
 import os
+import subprocess
+import sys
 from datetime import datetime
 from numbers import Real
 from pathlib import Path
@@ -126,12 +128,16 @@ class ResultsStrip(QWidget):
         selection = getattr(self.mw.cmb_tool, "currentData", lambda: None)()
         tool_key: Optional[str] = None
         if isinstance(selection, Mapping):
-            tool_key = selection.get("id") or selection.get("name") or selection.get("tool_id")
+            tool_key = (
+                selection.get("id") or selection.get("name") or selection.get("tool_id")
+            )
         elif selection:
             tool_key = str(selection)
 
         try:
-            records = self.mw.db.recent_image_records(rid, limit=self.limit * 2, tool_key=tool_key)
+            records = self.mw.db.recent_image_records(
+                rid, limit=self.limit * 2, tool_key=tool_key
+            )
         except Exception as exc:
             logger.debug("Failed to fetch recent image records: %s", exc)
             records = []
@@ -173,7 +179,9 @@ class ResultsStrip(QWidget):
                 loader=self._thumbnail_loader,
             )
             thumb.mousePressEvent = lambda event, r=row: self._on_click(r, event)
-            thumb.mouseDoubleClickEvent = lambda event, r=row: self._on_double_click(r, event)
+            thumb.mouseDoubleClickEvent = lambda event, r=row: self._on_double_click(
+                r, event
+            )
             self.h.addWidget(thumb)
 
         self.h.addStretch(1)
@@ -219,7 +227,9 @@ class ResultsStrip(QWidget):
         data["_display_source"] = source_key
         return data
 
-    def _select_display_path(self, record: Mapping[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    def _select_display_path(
+        self, record: Mapping[str, Any]
+    ) -> tuple[Optional[str], Optional[str]]:
         variant = self._current_variant()
         auto_order = [
             "overlay_path",
@@ -229,11 +239,17 @@ class ResultsStrip(QWidget):
             "raw_path",
         ]
         if variant == "overlay":
-            preference = ["overlay_path"] + [key for key in auto_order if key != "overlay_path"]
+            preference = ["overlay_path"] + [
+                key for key in auto_order if key != "overlay_path"
+            ]
         elif variant == "aligned":
-            preference = ["aligned_path"] + [key for key in auto_order if key != "aligned_path"]
+            preference = ["aligned_path"] + [
+                key for key in auto_order if key != "aligned_path"
+            ]
         elif variant == "raw":
-            preference = ["raw_path", "full_path"] + [key for key in auto_order if key not in {"raw_path", "full_path"}]
+            preference = ["raw_path", "full_path"] + [
+                key for key in auto_order if key not in {"raw_path", "full_path"}
+            ]
         else:
             preference = auto_order
 
@@ -295,7 +311,40 @@ class ResultsStrip(QWidget):
         if folder is None:
             fallback = self._existing_folder(Path("/data/runs")) or Path("/data")
             folder = fallback
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        if not self._open_with_desktop(folder):
+            logger.debug("Desktop open failed for folder %s", folder)
+
+    def _open_with_desktop(self, path: Path) -> bool:
+        try:
+            if QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+                return True
+        except Exception as exc:
+            logger.debug("QDesktopServices failed for %s: %s", path, exc)
+
+        if sys.platform.startswith("linux"):
+            for command in (("xdg-open", str(path)), ("gio", "open", str(path))):
+                try:
+                    subprocess.Popen(command)
+                    return True
+                except FileNotFoundError:
+                    continue
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to launch %s for %s: %s", command[0], path, exc
+                    )
+        elif sys.platform.startswith("win"):
+            try:
+                os.startfile(path)  # type: ignore[attr-defined]
+                return True
+            except OSError as exc:
+                logger.debug("os.startfile failed for %s: %s", path, exc)
+        elif sys.platform == "darwin":
+            try:
+                subprocess.Popen(["open", str(path)])
+                return True
+            except Exception as exc:
+                logger.debug("open command failed for %s: %s", path, exc)
+        return False
 
     def _thumbnail_loader(self, path: str, target_size: QSize) -> Optional[QPixmap]:
         try:
@@ -320,7 +369,9 @@ class ResultsStrip(QWidget):
             return None
         pixmap = QPixmap.fromImage(image)
         if target_size.width() > 0 and target_size.height() > 0:
-            pixmap = pixmap.scaled(target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pixmap = pixmap.scaled(
+                target_size, Qt.KeepAspectRatio, Qt.SmoothTransformation
+            )
         self._thumb_cache[path] = (mtime, target_size, pixmap)
         return pixmap
 
@@ -331,7 +382,9 @@ class ResultsStrip(QWidget):
 
         candidates: list[tuple[float, Path]] = []
         try:
-            day_dirs = sorted(base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+            day_dirs = sorted(
+                base.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True
+            )
         except Exception:
             day_dirs = []
 
@@ -434,7 +487,9 @@ class ResultsStrip(QWidget):
                 thumb = Path(thumb_path)
                 candidate_paths.append(thumb.with_suffix(".json"))
                 if thumb.parent.name == "thumbs":
-                    candidate_paths.append(thumb.parent.parent / "meta" / thumb.with_suffix(".json").name)
+                    candidate_paths.append(
+                        thumb.parent.parent / "meta" / thumb.with_suffix(".json").name
+                    )
             except Exception:
                 pass
 
@@ -463,7 +518,9 @@ class ResultsStrip(QWidget):
         status_value = entry.get("status")
         if status_value is None and "ok" in entry:
             status_value = "ok" if entry.get("ok") else "nok"
-        status = str(status_value).lower() if isinstance(status_value, str) else status_value
+        status = (
+            str(status_value).lower() if isinstance(status_value, str) else status_value
+        )
         if isinstance(status, bool):
             status = "ok" if status else "nok"
 
@@ -571,7 +628,9 @@ class ResultsStrip(QWidget):
                 lines.append(f"  {metric_line}")
         return "\n".join(lines)
 
-    def _build_tooltip(self, row: Mapping[str, Any], tool_entries: list[dict[str, Any]]) -> str:
+    def _build_tooltip(
+        self, row: Mapping[str, Any], tool_entries: list[dict[str, Any]]
+    ) -> str:
         lines: list[str] = []
         ts_ms = row.get("ts_ms")
         if ts_ms:
@@ -633,18 +692,28 @@ class ResultsStrip(QWidget):
 
     def _on_double_click(self, row, event=None):
         path = row.get("full") or row.get("display_path") or row.get("thumb")
-        folder: Optional[Path] = None
         if event is not None:
             event.accept()
-        if path:
-            folder = self._determine_folder_to_open(path)
-        if folder:
+
+        target_path = self._coerce_to_path(path)
+        if target_path and target_path.is_file():
+            if self._open_with_desktop(target_path):
+                self._last_folder_to_open = target_path.parent
+                self.mw.lbl_status.setText(f"Open image: {target_path}")
+                return
+
+        folder: Optional[Path] = None
+        if target_path:
+            folder = self._determine_folder_to_open(target_path)
+        if folder and self._open_with_desktop(folder):
             self._last_folder_to_open = folder
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
             self.mw.lbl_status.setText(f"Open folder: {folder}")
-        else:
-            logger.debug("Folder not found for thumbnail double click: %s", path)
-            self._open_folder()
+            return
+
+        logger.debug(
+            "Unable to open image or folder for thumbnail double click: %s", path
+        )
+        self._open_folder()
 
     def _determine_folder_to_open(self, path_value: Any) -> Optional[Path]:
         path = self._coerce_to_path(path_value)
