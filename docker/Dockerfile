@@ -7,6 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1
 
 # ZÁKLAD: Python, GStreamer, Qt/X11, V4L2, atď. (bez python3-opencv)
+# Pozn.: Jetson.GPIO inštalujeme cez pip (balík python3-jetson-gpio už v repo nie je)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 python3-pip \
     python3-jetson-gpio \
