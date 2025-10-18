@@ -6,7 +6,7 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, List, Mapping, MutableMapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
 
 __all__ = [
     "GPIOService",
@@ -423,6 +423,39 @@ class GPIOService:
         role = f"flash{int(channel)}"
         for pin in self._outputs.get(role, []):
             self._pulse_pin(pin, seconds)
+
+    # ------------------------------------------------------------------
+    # Diagnostic helpers
+    def configured_output_pins(self) -> Dict[int, str]:
+        """Return mapping of configured output pins to their logical role."""
+
+        with self._lock:
+            result: Dict[int, str] = {}
+            for role, pins in self._outputs.items():
+                for pin in pins:
+                    result[pin] = role
+            return result
+
+    def pulse_outputs(self, pins: Iterable[int], *, pulse_seconds: float = 0.2) -> None:
+        """Trigger a short pulse on the provided output pins if they are configured."""
+
+        with self._lock:
+            configured = {pin for values in self._outputs.values() for pin in values}
+            for pin in pins:
+                if pin in configured:
+                    self._pulse_pin(int(pin), pulse_seconds)
+
+    def read_pin_states(self, pins: Iterable[int]) -> Dict[int, bool]:
+        """Read the current logic level for provided pins."""
+
+        states: Dict[int, bool] = {}
+        with self._lock:
+            for pin in pins:
+                try:
+                    states[int(pin)] = bool(self._driver.input(int(pin)))
+                except Exception:
+                    states[int(pin)] = False
+        return states
 
     # ------------------------------------------------------------------
     def close(self) -> None:
