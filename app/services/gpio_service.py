@@ -6,7 +6,7 @@ import json
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
 
 __all__ = [
     "GPIOService",
@@ -34,6 +34,28 @@ _ROLE_LABELS: Mapping[str, str] = {
     "flash2": "Flash #2 (výstup)",
     "trigger": "Trigger (vstup)",
 }
+
+
+_PIN_GROUPS: Mapping[str, Tuple[int, ...]] = {
+    "output": (7, 11, 12, 13, 15, 16, 18, 22),
+    "input": (29, 31, 33, 37),
+    "bidirectional": (19, 21),
+}
+
+_PIN_CAPABILITIES: Dict[int, Tuple[str, ...]] = {}
+for group, pins in _PIN_GROUPS.items():
+    capability = "output" if group == "output" else "input" if group == "input" else None
+    for pin in pins:
+        entry = list(_PIN_CAPABILITIES.get(pin, ()))
+        if capability:
+            if capability not in entry:
+                entry.append(capability)
+        else:
+            # bidirectional pins support both input and output
+            for cap in ("output", "input"):
+                if cap not in entry:
+                    entry.append(cap)
+        _PIN_CAPABILITIES[pin] = tuple(sorted(entry))
 
 
 @dataclass(frozen=True)
@@ -310,6 +332,18 @@ class GPIOService:
     def available_roles(self) -> Mapping[str, str]:
         return _ROLE_LABELS
 
+    def output_roles(self) -> Tuple[str, ...]:
+        return _OUTPUT_ROLES
+
+    def input_roles(self) -> Tuple[str, ...]:
+        return _INPUT_ROLES
+
+    def pin_groups(self) -> Mapping[str, Tuple[int, ...]]:
+        return _PIN_GROUPS
+
+    def pin_capabilities(self) -> Mapping[int, Tuple[str, ...]]:
+        return _PIN_CAPABILITIES
+
     def active_recipe(self) -> str:
         return self._recipe
 
@@ -558,6 +592,11 @@ class GPIOService:
                 try:
                     board_pin = int(pin)
                 except Exception:
+                    continue
+                capabilities = _PIN_CAPABILITIES.get(board_pin, ())
+                if role in _OUTPUT_ROLES and "output" not in capabilities:
+                    continue
+                if role in _INPUT_ROLES and "input" not in capabilities:
                     continue
                 if role in _OUTPUT_ROLES:
                     self._driver.setup(board_pin, self._driver.OUT, initial=self._driver.LOW)
