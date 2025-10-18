@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -215,6 +216,16 @@ class GPIOWizard(QDialog):
 
         controls = QHBoxLayout()
         controls.addStretch(1)
+        lbl_duration = QLabel("Dĺžka impulzu (ms):", widget)
+        controls.addWidget(lbl_duration)
+
+        self._duration_spin = QSpinBox(widget)
+        self._duration_spin.setRange(10, 5000)
+        self._duration_spin.setSingleStep(10)
+        self._duration_spin.setValue(200)
+        self._duration_spin.setSuffix(" ms")
+        controls.addWidget(self._duration_spin)
+
         self._btn_send_signal = QPushButton("Odoslať impulz", widget)
         self._btn_send_signal.clicked.connect(self._handle_send_signal)
         self._btn_send_signal.setEnabled(bool(self._test_rows))
@@ -244,8 +255,10 @@ class GPIOWizard(QDialog):
         pins = [row.definition.physical for row in self._test_rows if row.checkbox.isChecked()]
         if not pins:
             return
-        self._gpio.pulse_outputs(pins)
-        QTimer.singleShot(300, self._update_pin_statuses)
+        pulse_seconds = max(self._duration_spin.value(), 10) / 1000.0
+        self._gpio.pulse_outputs(pins, pulse_seconds=pulse_seconds)
+        delay_ms = max(300, int(self._duration_spin.value() * 1.5))
+        QTimer.singleShot(delay_ms, self._update_pin_statuses)
 
     def _update_pin_statuses(self) -> None:
         if not self._test_rows:
