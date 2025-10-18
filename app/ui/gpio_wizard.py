@@ -149,8 +149,8 @@ class GPIOWizard(QDialog):
         layout.setSpacing(12)
 
         info = QLabel(
-            "Vyberte piny nakonfigurované ako výstupné signály a odošlite krátky impulz."
-            " Stav pinov sa obnovuje automaticky."
+            "Vyberte piny nakonfigurované ako výstupné signály, odošlite krátky impulz alebo ich"
+            " nastavte na logickú úroveň. Stav pinov sa obnovuje automaticky."
         )
         info.setWordWrap(True)
         layout.addWidget(info)
@@ -230,6 +230,16 @@ class GPIOWizard(QDialog):
         self._btn_send_signal.clicked.connect(self._handle_send_signal)
         self._btn_send_signal.setEnabled(bool(self._test_rows))
         controls.addWidget(self._btn_send_signal)
+
+        self._btn_set_high = QPushButton("Nastaviť HIGH", widget)
+        self._btn_set_high.clicked.connect(self._handle_set_high)
+        self._btn_set_high.setEnabled(bool(self._test_rows))
+        controls.addWidget(self._btn_set_high)
+
+        self._btn_set_low = QPushButton("Nastaviť LOW", widget)
+        self._btn_set_low.clicked.connect(self._handle_set_low)
+        self._btn_set_low.setEnabled(bool(self._test_rows))
+        controls.addWidget(self._btn_set_low)
         layout.addLayout(controls)
 
         return widget
@@ -252,13 +262,26 @@ class GPIOWizard(QDialog):
                 row.combo.setCurrentIndex(index)
 
     def _handle_send_signal(self) -> None:
-        pins = [row.definition.physical for row in self._test_rows if row.checkbox.isChecked()]
+        pins = self._selected_test_pins()
         if not pins:
             return
         pulse_seconds = max(self._duration_spin.value(), 10) / 1000.0
         self._gpio.pulse_outputs(pins, pulse_seconds=pulse_seconds)
         delay_ms = max(300, int(self._duration_spin.value() * 1.5))
         QTimer.singleShot(delay_ms, self._update_pin_statuses)
+
+    def _handle_set_high(self) -> None:
+        self._handle_set_level(True)
+
+    def _handle_set_low(self) -> None:
+        self._handle_set_level(False)
+
+    def _handle_set_level(self, high: bool) -> None:
+        pins = self._selected_test_pins()
+        if not pins:
+            return
+        self._gpio.set_outputs_level(pins, level=high)
+        QTimer.singleShot(200, self._update_pin_statuses)
 
     def _update_pin_statuses(self) -> None:
         if not self._test_rows:
@@ -268,6 +291,9 @@ class GPIOWizard(QDialog):
         for row in self._test_rows:
             state = states.get(row.definition.physical, False)
             row.status_label.setText("HIGH" if state else "LOW")
+
+    def _selected_test_pins(self) -> list[int]:
+        return [row.definition.physical for row in self._test_rows if row.checkbox.isChecked()]
 
     # ------------------------------------------------------------------
     def accept(self) -> None:

@@ -445,6 +445,16 @@ class GPIOService:
                 if pin in configured:
                     self._pulse_pin(int(pin), pulse_seconds)
 
+    def set_outputs_level(self, pins: Iterable[int], *, level: bool) -> None:
+        """Drive configured output pins to a fixed logic level."""
+
+        with self._lock:
+            configured = {pin for values in self._outputs.values() for pin in values}
+            target = self._driver.HIGH if level else self._driver.LOW
+            for pin in pins:
+                if pin in configured:
+                    self._driver.output(int(pin), target)
+
     def read_pin_states(self, pins: Iterable[int]) -> Dict[int, bool]:
         """Read the current logic level for provided pins."""
 
