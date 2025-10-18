@@ -1,109 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GPIO_BASE_ADDR=${GPIO_BASE_ADDR:-0xFE200000}
 GPIO_OUTPUT_PINS=(7 11 12 13 15 16 18 22)
-GPIO_INPUT_PINS=(29 31 33 37)
+GPIO_INPUT_PINS=(29 31 37 40)
 GPIO_BIDIRECTIONAL_PINS=(19 21)
-declare -A GPIO_BOARD_TO_BCM=(
-  [7]=4
-  [8]=14
-  [10]=15
-  [11]=17
-  [12]=18
-  [13]=27
-  [15]=22
-  [16]=23
-  [18]=24
-  [19]=10
-  [21]=9
-  [22]=25
-  [23]=11
-  [24]=8
-  [26]=7
-  [29]=5
-  [31]=6
-  [32]=12
-  [33]=13
-  [35]=19
-  [36]=16
-  [37]=26
-  [38]=20
-  [40]=21
-)
-DEVMEM_CMD=()
 
-_configure_gpfsel() {
-  local bcm_pin=$1
-  local mode=$2
-  local label=$3
-
-  local base_dec=$((GPIO_BASE_ADDR))
-  local reg_index=$((bcm_pin / 10))
-  local shift=$(((bcm_pin % 10) * 3))
-  local reg_addr_dec=$((base_dec + reg_index * 4))
-  local reg_addr
-  printf -v reg_addr "0x%X" "${reg_addr_dec}"
-
-  local current_hex
-  current_hex=$("${DEVMEM_CMD[@]}" "${reg_addr}" 32)
-  local current_dec=$((current_hex))
-  local mask=$((7 << shift))
-  local value_bits=$((mode << shift))
-  local new_value=$(((current_dec & ~mask) | value_bits))
-  local new_hex
-  printf -v new_hex "0x%08X" "${new_value}"
-
-  echo "[cfg] ${label}: bcm${bcm_pin} -> mode ${mode} (reg ${reg_addr})"
-  "${DEVMEM_CMD[@]}" "${reg_addr}" 32 "${new_hex}"
-}
-
-configure_gpio_devmem() {
-  if command -v devmem >/dev/null 2>&1; then
-    DEVMEM_CMD=(devmem)
-  elif command -v busybox >/dev/null 2>&1; then
-    DEVMEM_CMD=(busybox devmem)
-  else
-    echo "[err] Nástroj devmem nebol nájdený." >&2
-    echo "[hint] Na Jetson zariadení nainštaluj balík busybox alebo util-linux." >&2
+configure_gpio_runtime() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[err] python3 nebol nájdený. Konfiguráciu pinov preskakujem." >&2
     return 1
   fi
 
-  echo "[cfg] GPIO_BASE_ADDR=${GPIO_BASE_ADDR}"
+  python3 - <<'PY'
+import sys
 
-  local pin
-  for pin in "${GPIO_OUTPUT_PINS[@]}"; do
-    local bcm=${GPIO_BOARD_TO_BCM[${pin}]}
-    if [[ -z "${bcm}" ]]; then
-      echo "[warn] Chýba mapovanie pre pin ${pin}, preskakujem." >&2
-      continue
-    fi
-    _configure_gpfsel "${bcm}" 1 "Pin ${pin} (výstup)"
-  done
+try:
+    import Jetson.GPIO as GPIO
+except ModuleNotFoundError:  # pragma: no cover - iba na Jetson zariadení
+    sys.stderr.write("[err] Modul Jetson.GPIO nie je dostupný.\n")
+    sys.stderr.write("[hint] Spusti konfiguráciu priamo na Jetson Orin Nano.\n")
+    sys.exit(1)
 
-  for pin in "${GPIO_INPUT_PINS[@]}"; do
-    local bcm=${GPIO_BOARD_TO_BCM[${pin}]}
-    if [[ -z "${bcm}" ]]; then
-      echo "[warn] Chýba mapovanie pre pin ${pin}, preskakujem." >&2
-      continue
-    fi
-    _configure_gpfsel "${bcm}" 0 "Pin ${pin} (vstup)"
-  done
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BOARD)
 
-  for pin in "${GPIO_BIDIRECTIONAL_PINS[@]}"; do
-    local bcm=${GPIO_BOARD_TO_BCM[${pin}]}
-    if [[ -z "${bcm}" ]]; then
-      echo "[warn] Chýba mapovanie pre pin ${pin}, preskakujem." >&2
-      continue
-    fi
-    _configure_gpfsel "${bcm}" 0 "Pin ${pin} (obojsmerný – predvolene vstup)"
-  done
+outputs = (7, 11, 12, 13, 15, 16, 18, 22)
+inputs = (29, 31, 37, 40)
+bidirectional = (19, 21)
 
-  echo "[cfg] Konfigurácia GPIO pomocou devmem dokončená."
+for pin in outputs:
+    GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+    print(f"[cfg] Pin {pin}: nastavený ako výstup (LOW)")
+
+for pin in inputs:
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    print(f"[cfg] Pin {pin}: nastavený ako vstup s pulldown")
+
+for pin in bidirectional:
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    print(f"[cfg] Pin {pin}: pripravený ako obojsmerný (štart ako vstup)")
+
+print("[cfg] GPIO konfigurácia dokončená prostredníctvom Jetson.GPIO.")
+PY
 }
 
 if [[ $# -gt 0 && $1 == "configure-gpio" ]]; then
-  configure_gpio_devmem
+  configure_gpio_runtime
   exit $?
 fi
 

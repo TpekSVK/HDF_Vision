@@ -37,8 +37,11 @@ _ROLE_LABELS: Mapping[str, str] = {
 
 
 _PIN_GROUPS: Mapping[str, Tuple[int, ...]] = {
+    # Na základe predvoleného pinmux nastavenia Jetson Orin Nano poskytujeme
+    # nasledujúce skupiny: pevne smerované výstupy, pevné vstupy a piny, ktoré
+    # zvládnu obidva smery. Hodnoty sú fyzické čísla hlavičky.
     "output": (7, 11, 12, 13, 15, 16, 18, 22),
-    "input": (29, 31, 33, 37),
+    "input": (29, 31, 37, 40),
     "bidirectional": (19, 21),
 }
 
