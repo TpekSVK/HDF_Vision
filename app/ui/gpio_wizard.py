@@ -37,6 +37,13 @@ class _TestPinRow:
     status_label: QLabel
 
 
+@dataclass
+class _TestPinRow:
+    definition: PinDefinition
+    checkbox: QCheckBox
+    status_label: QLabel
+
+
 class GPIOWizard(QDialog):
     """Modal dialog used to configure Jetson GPIO input/output roles."""
 
