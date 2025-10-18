@@ -1,6 +1,54 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+GPIO_OUTPUT_PINS=(7 11 12 13 15 16 18 22)
+GPIO_INPUT_PINS=(29 31 37 40)
+GPIO_BIDIRECTIONAL_PINS=(19 21)
+
+configure_gpio_runtime() {
+  if ! command -v python3 >/dev/null 2>&1; then
+    echo "[err] python3 nebol nájdený. Konfiguráciu pinov preskakujem." >&2
+    return 1
+  fi
+
+  python3 - <<'PY'
+import sys
+
+try:
+    import Jetson.GPIO as GPIO
+except ModuleNotFoundError:  # pragma: no cover - iba na Jetson zariadení
+    sys.stderr.write("[err] Modul Jetson.GPIO nie je dostupný.\n")
+    sys.stderr.write("[hint] Spusti konfiguráciu priamo na Jetson Orin Nano.\n")
+    sys.exit(1)
+
+GPIO.setwarnings(False)
+GPIO.setmode(GPIO.BOARD)
+
+outputs = (7, 11, 12, 13, 15, 16, 18, 22)
+inputs = (29, 31, 37, 40)
+bidirectional = (19, 21)
+
+for pin in outputs:
+    GPIO.setup(pin, GPIO.OUT, initial=GPIO.LOW)
+    print(f"[cfg] Pin {pin}: nastavený ako výstup (LOW)")
+
+for pin in inputs:
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    print(f"[cfg] Pin {pin}: nastavený ako vstup s pulldown")
+
+for pin in bidirectional:
+    GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+    print(f"[cfg] Pin {pin}: pripravený ako obojsmerný (štart ako vstup)")
+
+print("[cfg] GPIO konfigurácia dokončená prostredníctvom Jetson.GPIO.")
+PY
+}
+
+if [[ $# -gt 0 && $1 == "configure-gpio" ]]; then
+  configure_gpio_runtime
+  exit $?
+fi
+
 IMAGE_NAME="${IMAGE_NAME:-hdf_vision:dev}"
 echo "[diag] IMAGE_NAME=${IMAGE_NAME}"
 
