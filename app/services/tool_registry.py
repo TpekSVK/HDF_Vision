@@ -20,6 +20,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.tools.light_presence import LightPresenceCheckTool
+from app.tools.light_transmission import LightTransmissionCheckTool
 
 logger = logging.getLogger(__name__)
 
@@ -481,6 +482,91 @@ def _register_default_tools() -> None:
                     "priority": 1,
                     "description": "Čas behu",
                 },
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "light_transmission",
+        factory=lambda: LightTransmissionCheckTool(),
+        meta={
+            "name": "Meranie priepustnosti (odtiene šedej)",
+            "description": "Výpočet normalizovanej priepustnosti T v ROI voči kalibrácii dark/open.",
+            "category": "Backlight / Transmission",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "catalog_label": "Meranie priepustnosti (odtiene šedej)",
+            "catalog_short": "Normalizovaná priepustnosť T∈[0..1] v ROI voči I_dark/I_open.",
+            "catalog_tooltip": "Koľko svetla prejde cez tenkú stenu. Vyžaduje kalibráciu Dark/Open. Hodnotí T_mean, rovnomernosť (T_std) a percentily.",
+            "schema": {
+                "params": {
+                    "target_T_min": {
+                        "type": "float",
+                        "default": 0.35,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "label": "Min. priepustnosť T",
+                        "description": "Minimálna povolená hodnota priemernej priepustnosti.",
+                    },
+                    "target_T_max": {
+                        "type": "float",
+                        "default": 0.55,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "label": "Max. priepustnosť T",
+                        "description": "Maximálna povolená hodnota priemernej priepustnosti.",
+                    },
+                    "uniformity_max": {
+                        "type": "float",
+                        "default": 0.05,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.001,
+                        "label": "Max. neuniformita",
+                        "description": "Maximálne povolené smerodajná odchýlka T v ROI.",
+                    },
+                    "percentile_lo": {
+                        "type": "int",
+                        "default": 10,
+                        "min": 0,
+                        "max": 100,
+                        "label": "Percentil min",
+                        "description": "Dolná hranica percentilu pre kontrolu (p10).",
+                    },
+                    "percentile_hi": {
+                        "type": "int",
+                        "default": 90,
+                        "min": 0,
+                        "max": 100,
+                        "label": "Percentil max",
+                        "description": "Horná hranica percentilu pre kontrolu (p90).",
+                    },
+                    "gaussian_blur_kernel": {
+                        "type": "enum",
+                        "default": 0,
+                        "label": "Gaussian blur",
+                        "description": "Voliteľný Gaussian blur pred výpočtom priepustnosti.",
+                        "choices": [
+                            (0, "Vypnuté"),
+                            (3, "3×3"),
+                            (5, "5×5"),
+                        ],
+                    },
+                    "flat_field": {
+                        "type": "bool",
+                        "default": False,
+                        "label": "Flat-field korekcia",
+                        "description": "Použiť per-pixel flat-field korekciu z kalibrácie Open/Dark.",
+                    },
+                },
+            },
+            "metrics_spec": [
+                {"key": "T_mean", "unit": None, "priority": 20, "description": "Priemerná priepustnosť"},
+                {"key": "T_std", "unit": None, "priority": 10, "description": "Smerodajná odchýlka priepustnosti"},
+                {"key": "T_p_lo", "unit": None, "priority": 5, "description": "Dolný percentil priepustnosti"},
+                {"key": "T_p_hi", "unit": None, "priority": 5, "description": "Horný percentil priepustnosti"},
             ],
         },
     )
