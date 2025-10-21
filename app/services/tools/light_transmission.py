@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional, Protocol, Tuple
 
 import numpy as np
 
+from app.models.schema import ToolParams, ToolThresholds
+from app.services.tool_service import ToolRunResult
+from app.services.tools.common import PairTool
 from app.utils import imaging
+from app.utils.imaging import TimeBlockResult, time_block
 
 
 class StorageService(Protocol):
@@ -54,12 +59,13 @@ class ToolResult:
     reason: Optional[str] = None
 
 
-class LightTransmissionCheckTool:
+class LightTransmissionCheckTool(PairTool):
     """Compute normalized light transmission using calibration images."""
 
     _ALLOWED_KERNELS = (0, 3, 5)
 
     def __init__(self) -> None:
+        super().__init__()
         self._latest_params = LightTransmissionCheckParams()
 
     # ------------------------------------------------------------------
@@ -97,7 +103,38 @@ class LightTransmissionCheckTool:
     # ------------------------------------------------------------------
     # Lightweight execution
     # ------------------------------------------------------------------
-    def run(
+    def run(self, *args: Any, **kwargs: Any) -> ToolResult | ToolRunResult:  # type: ignore[override]
+        """Dispatch between lightweight helper API and pipeline execution."""
+
+        if len(args) == 3 and not kwargs:
+            image, roi_mask, context = args
+            if not isinstance(context, ToolContext):
+                raise TypeError("Expected ToolContext for lightweight execution")
+            return self._run_lightweight(
+                np.asarray(image),
+                np.asarray(roi_mask) if roi_mask is not None else None,
+                context,
+            )
+
+        if len(args) >= 4:
+            golden, frame, params, thresholds = args[:4]
+            context_payload = args[4] if len(args) > 4 else kwargs.get("context", {})
+            return self._run_pipeline(
+                np.asarray(golden),
+                np.asarray(frame),
+                params if isinstance(params, ToolParams) else ToolParams.from_obj(params),
+                thresholds
+                if isinstance(thresholds, ToolThresholds)
+                else ToolThresholds.from_obj(thresholds),
+                context_payload if isinstance(context_payload, dict) else {},
+            )
+
+        raise TypeError("Unsupported arguments for LightTransmissionCheckTool.run()")
+
+    # ------------------------------------------------------------------
+    # Lightweight execution
+    # ------------------------------------------------------------------
+    def _run_lightweight(
         self,
         image: np.ndarray,
         roi_mask: np.ndarray | None,
@@ -215,9 +252,98 @@ class LightTransmissionCheckTool:
         )
 
     # ------------------------------------------------------------------
+    # Pipeline integration
+    # ------------------------------------------------------------------
+    def _run_pipeline(
+        self,
+        golden: np.ndarray,
+        frame: np.ndarray,
+        params: ToolParams,
+        thresholds: ToolThresholds,
+        context: Dict[str, Any],
+    ) -> ToolRunResult:
+        start = time.perf_counter()
+        timings: list[TimeBlockResult] = []
+
+        params_dict = self._coerce_params_dict(params)
+        thresholds_dict = self._coerce_thresholds_dict(thresholds)
+
+        with time_block("prepare_pair", timings):
+            self._ensure_pair_cache(frame, params_dict, thresholds_dict)
+            prepared = self._prepare_pair(golden, frame, context)
+
+        roi_frame = prepared.frame_roi
+        roi_mask = self._mask_from_prepared(prepared)
+        params_obj = self._params_from_mapping(params_dict)
+
+        recipe_id = context.get("recipe_id") or self._prepared_context.get("recipe_id")
+        storage = self._prepared_context.get("storage")
+
+        lightweight_context = ToolContext(
+            params=params_obj,
+            storage=storage,
+            recipe_id=recipe_id,
+            extras={"recipe_id": recipe_id, "storage": storage},
+        )
+
+        result_light = self._run_lightweight(roi_frame, roi_mask, lightweight_context)
+
+        latency_ms = (time.perf_counter() - start) * 1000.0
+        status = "ok" if result_light.ok else "nok"
+
+        diagnostics = {
+            "roi": {
+                "x": int(prepared.roi_rect[0]),
+                "y": int(prepared.roi_rect[1]),
+                "w": int(prepared.roi_rect[2]),
+                "h": int(prepared.roi_rect[3]),
+            },
+            "dx_total": float(prepared.dx_total),
+            "dy_total": float(prepared.dy_total),
+            "virtual_alignment": bool(prepared.virtual_alignment),
+            "T_mean": float(result_light.metrics.get("T_mean", 0.0)),
+            "T_std": float(result_light.metrics.get("T_std", 0.0)),
+            "T_p_lo": float(result_light.metrics.get("T_p_lo", 0.0)),
+            "T_p_hi": float(result_light.metrics.get("T_p_hi", 0.0)),
+        }
+        if result_light.reason:
+            diagnostics["reason"] = result_light.reason
+
+        self.last_diagnostics = diagnostics
+
+        debug_artifacts: Dict[str, Any] = {
+            "preview": {
+                "frame": roi_frame,
+                "mask": roi_mask,
+                "heatmap": result_light.debug_images.get("T_heat"),
+            },
+            "diagnostics": diagnostics.copy(),
+            "timings": [
+                {"name": block.name, "elapsed_ms": float(block.elapsed_ms)}
+                for block in timings
+            ],
+        }
+
+        metrics = dict(result_light.metrics)
+        metrics["latency_ms"] = float(latency_ms)
+
+        return ToolRunResult(
+            status=status,
+            metrics=metrics,
+            latency_ms=float(latency_ms),
+            debug_artifacts=debug_artifacts,
+        )
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
     def _sanitize_params(self, params: LightTransmissionCheckParams | Any) -> LightTransmissionCheckParams:
+        return self._params_from_mapping(params)
+
+    @classmethod
+    def _params_from_mapping(
+        cls, params: LightTransmissionCheckParams | Dict[str, Any] | Any
+    ) -> LightTransmissionCheckParams:
         obj = LightTransmissionCheckParams()
         if isinstance(params, LightTransmissionCheckParams):
             values: Dict[str, Any] = dict(vars(params))
@@ -247,7 +373,7 @@ class LightTransmissionCheckTool:
             obj.percentile_bounds = (lo_val, hi_val)
 
         kernel = int(getattr(obj, "gaussian_blur_kernel", 0) or 0)
-        if kernel not in self._ALLOWED_KERNELS:
+        if kernel not in cls._ALLOWED_KERNELS:
             kernel = 0
         obj.gaussian_blur_kernel = kernel
 
@@ -287,6 +413,19 @@ class LightTransmissionCheckTool:
             resized[:h, :w] = mask_arr[:h, :w]
             return resized
         return mask_arr
+
+    @staticmethod
+    def _mask_from_prepared(prepared) -> np.ndarray:
+        roi_h, roi_w = prepared.frame_roi.shape[:2]
+        if prepared.valid_mask is None:
+            return np.ones((roi_h, roi_w), dtype=np.uint8) * 255
+
+        mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+        valid = np.asarray(prepared.valid_mask, dtype=bool)
+        if valid.shape != (roi_h, roi_w):
+            valid = valid[:roi_h, :roi_w]
+        mask[valid] = 255
+        return mask
 
     def _read_calibration_frame(
         self,

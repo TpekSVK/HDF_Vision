@@ -2816,6 +2816,17 @@ class ToolConfigPanel(QWidget):
         open_meta = state.get("open_info") or "—"
         self._lt_open_meta.setText(str(open_meta))
 
+    @staticmethod
+    def _ensure_gray_u8(image: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if image is None:
+            return None
+        arr = np.asarray(image)
+        if arr.ndim == 3 and arr.shape[2] > 0:
+            arr = arr[:, :, 0]
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr, 0, 255).astype(np.uint8)
+        return arr
+
     def _on_light_transmission_save_clicked(self, kind: str) -> None:
         tool_type = (getattr(self._current_tool, "type", "") or "").lower()
         if tool_type != "light_transmission":
