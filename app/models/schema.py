@@ -20,6 +20,7 @@ class ToolSchemaField:
     max: float | None = None
     step: float | None = None
     required: bool = False
+    choices: Tuple[Tuple[Any, Any], ...] = ()
 
 
 @dataclass(slots=True)

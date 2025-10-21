@@ -19,8 +19,21 @@ from app.models.schema import (
     ToolSchemaField,
     ToolThresholds,
 )
+from app.tools.light_presence import LightPresenceCheckTool
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_choices(raw_choices: Any) -> tuple[tuple[Any, Any], ...]:
+    if not raw_choices:
+        return ()
+    choices: list[tuple[Any, Any]] = []
+    for entry in raw_choices:
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            choices.append((entry[0], entry[1]))
+        else:
+            choices.append((entry, entry))
+    return tuple(choices)
 
 
 def _coerce_schema_fields(fields: Dict[str, Dict[str, Any]] | None) -> tuple[ToolSchemaField, ...]:
@@ -41,6 +54,7 @@ def _coerce_schema_fields(fields: Dict[str, Dict[str, Any]] | None) -> tuple[Too
                 max=spec.get("max"),
                 step=spec.get("step"),
                 required=bool(spec.get("required", False)),
+                choices=_normalize_choices(spec.get("choices")),
             )
         )
     return tuple(normalized)
@@ -394,6 +408,79 @@ def _register_default_tools() -> None:
             "metrics_spec": [
                 {"key": "ncc", "unit": None, "priority": 10, "description": "NCC hodnota"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "light_presence",
+        factory=lambda: LightPresenceCheckTool(),
+        meta={
+            "name": "Kontrola svetlej plochy (otvor)",
+            "description": "Backlight kontrola prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
+            "category": "Presence / Backlight",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "catalog_label": "Kontrola svetlej plochy (otvor)",
+            "catalog_short": "Binarizácia ROI a meranie plochy bielych pixelov.",
+            "catalog_tooltip": "Backlight kontrola prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
+            "schema": {
+                "params": {
+                    "binary_threshold": {
+                        "type": "int",
+                        "default": 200,
+                        "min": 0,
+                        "max": 255,
+                        "step": 1,
+                        "label": "Binary threshold",
+                        "description": "Prahová hodnota pre binarizáciu (0 – 255).",
+                    },
+                    "min_area_px": {
+                        "type": "int",
+                        "default": 100,
+                        "min": 0,
+                        "label": "Min. area [px]",
+                        "description": "Minimálny počet svetlých pixelov potrebný pre OK.",
+                    },
+                    "max_area_px": {
+                        "type": "int",
+                        "default": 10_000,
+                        "min": 0,
+                        "label": "Max. area [px]",
+                        "description": "Maximálny počet svetlých pixelov povolený pre OK.",
+                    },
+                    "gaussian_blur_kernel": {
+                        "type": "enum",
+                        "default": 0,
+                        "label": "Gaussian blur",
+                        "description": "Voliteľný Gaussian blur pred binarizáciou.",
+                        "choices": [
+                            (0, "Vypnuté"),
+                            (3, "3×3"),
+                            (5, "5×5"),
+                        ],
+                    },
+                },
+                "thresholds": {},
+            },
+            "metrics_spec": [
+                {
+                    "key": "area_px",
+                    "unit": "px",
+                    "priority": 10,
+                    "description": "Počet svetlých pixelov",
+                },
+                {
+                    "key": "threshold",
+                    "priority": 5,
+                    "description": "Použitý binárny prah",
+                },
+                {
+                    "key": "latency_ms",
+                    "unit": "ms",
+                    "priority": 1,
+                    "description": "Čas behu",
+                },
             ],
         },
     )
