@@ -7,7 +7,7 @@ from PySide6.QtGui import QFont, QImage, QPixmap
 
 import math
 from collections.abc import Mapping, Sequence
-from numbers import Real
+from numbers import Integral, Real
 from typing import Any
 
 import numpy as np
@@ -798,10 +798,14 @@ class MainWindow(QMainWindow):
             return "—"
         if isinstance(value, bool):
             return "áno" if value else "nie"
-        if isinstance(value, Real) and not isinstance(value, bool):
+        if isinstance(value, Integral):
+            return str(int(value))
+        if isinstance(value, Real):
             val = float(value)
             if not math.isfinite(val):
                 return "—"
+            if abs(val - round(val)) < 1e-6:
+                return str(int(round(val)))
             if abs(val) >= 1000 or (0 < abs(val) < 0.001):
                 return f"{val:.3g}"
             text = f"{val:.4f}".rstrip("0").rstrip(".")
