@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime
-from numbers import Real
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
@@ -640,14 +640,18 @@ class ResultsStrip(QWidget):
             return "—"
         if isinstance(value, bool):
             return "yes" if value else "no"
-        if isinstance(value, Real) and not isinstance(value, bool):
+        if isinstance(value, Integral):
+            return str(int(value))
+        if isinstance(value, Real):
             val = float(value)
-            if math.isfinite(val):
-                if abs(val) >= 1000 or 0 < abs(val) < 0.001:
-                    return f"{val:.3g}"
-                text = f"{val:.4f}".rstrip("0").rstrip(".")
-                return text or "0"
-            return str(val)
+            if not math.isfinite(val):
+                return str(val)
+            if abs(val - round(val)) < 1e-6:
+                return str(int(round(val)))
+            if abs(val) >= 1000 or 0 < abs(val) < 0.001:
+                return f"{val:.3g}"
+            text = f"{val:.4f}".rstrip("0").rstrip(".")
+            return text or "0"
         return str(value)
 
     def _format_tooltip(self, tool_entries: list[dict[str, Any]]) -> str:
