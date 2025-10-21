@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 
 import os
 import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 from functools import partial
@@ -1598,6 +1599,7 @@ class ToolConfigPanel(QWidget):
     paramChanged = Signal(str, object)
     thresholdChanged = Signal(str, object)
     testRequested = Signal(dict, dict)
+    lightTransmissionCalibrationRequested = Signal(str)
     locatorPolicyWarningChanged = Signal(str)
     testButtonEnabledChanged = Signal(bool)
 
@@ -1627,6 +1629,7 @@ class ToolConfigPanel(QWidget):
         self._preview_overlay_key: Optional[str] = None
         self._active_preview_key: Optional[str] = None
         self._locator_failure_policy: str = "continue_without_alignment"
+        self._light_transmission_state: dict[str, Any] | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -1657,6 +1660,77 @@ class ToolConfigPanel(QWidget):
         self._form_error_label.setWordWrap(True)
         self._form_error_label.setVisible(False)
         layout.addWidget(self._form_error_label)
+
+        self._lt_calibration_group = QGroupBox("Kalibrácia Dark/Open", self)
+        self._lt_calibration_group.setVisible(False)
+        lt_group_layout = QVBoxLayout(self._lt_calibration_group)
+        lt_group_layout.setContentsMargins(8, 8, 8, 8)
+        lt_group_layout.setSpacing(6)
+
+        lt_hint = QLabel(
+            "Zachyť aktuálny frame pre Dark (bez svetla) a Open (iba podsvit).",
+            self._lt_calibration_group,
+        )
+        lt_hint.setStyleSheet("color: #666; font-size: 11px;")
+        lt_hint.setWordWrap(True)
+        lt_group_layout.addWidget(lt_hint)
+
+        lt_rows = QHBoxLayout()
+        lt_rows.setContentsMargins(0, 0, 0, 0)
+        lt_rows.setSpacing(12)
+
+        self._lt_dark_preview = QLabel("No preview", self._lt_calibration_group)
+        self._lt_dark_preview.setAlignment(Qt.AlignCenter)
+        self._lt_dark_preview.setMinimumSize(120, 90)
+        self._lt_dark_preview.setStyleSheet("background-color: #111; color: #777; border: 1px solid #333;")
+        self._lt_dark_preview.setScaledContents(True)
+
+        dark_column = QVBoxLayout()
+        dark_column.setContentsMargins(0, 0, 0, 0)
+        dark_column.setSpacing(4)
+        dark_column.addWidget(QLabel("Dark", self._lt_calibration_group))
+        dark_column.addWidget(self._lt_dark_preview)
+        self._lt_dark_meta = QLabel("—", self._lt_calibration_group)
+        self._lt_dark_meta.setStyleSheet("color: #888; font-size: 11px;")
+        self._lt_dark_meta.setWordWrap(True)
+        dark_column.addWidget(self._lt_dark_meta)
+        lt_rows.addLayout(dark_column, 1)
+
+        self._lt_open_preview = QLabel("No preview", self._lt_calibration_group)
+        self._lt_open_preview.setAlignment(Qt.AlignCenter)
+        self._lt_open_preview.setMinimumSize(120, 90)
+        self._lt_open_preview.setStyleSheet("background-color: #111; color: #777; border: 1px solid #333;")
+        self._lt_open_preview.setScaledContents(True)
+
+        open_column = QVBoxLayout()
+        open_column.setContentsMargins(0, 0, 0, 0)
+        open_column.setSpacing(4)
+        open_column.addWidget(QLabel("Open", self._lt_calibration_group))
+        open_column.addWidget(self._lt_open_preview)
+        self._lt_open_meta = QLabel("—", self._lt_calibration_group)
+        self._lt_open_meta.setStyleSheet("color: #888; font-size: 11px;")
+        self._lt_open_meta.setWordWrap(True)
+        open_column.addWidget(self._lt_open_meta)
+        lt_rows.addLayout(open_column, 1)
+
+        lt_group_layout.addLayout(lt_rows)
+
+        lt_buttons = QHBoxLayout()
+        lt_buttons.setContentsMargins(0, 0, 0, 0)
+        lt_buttons.setSpacing(8)
+
+        self._btn_save_dark = QPushButton("Uložiť Dark", self._lt_calibration_group)
+        self._btn_save_dark.clicked.connect(lambda: self._on_light_transmission_save_clicked("dark"))
+        lt_buttons.addWidget(self._btn_save_dark)
+
+        self._btn_save_open = QPushButton("Uložiť Open", self._lt_calibration_group)
+        self._btn_save_open.clicked.connect(lambda: self._on_light_transmission_save_clicked("open"))
+        lt_buttons.addWidget(self._btn_save_open)
+        lt_buttons.addStretch(1)
+
+        lt_group_layout.addLayout(lt_buttons)
+
+        layout.addWidget(self._lt_calibration_group)
 
         self._placeholder_label = QLabel(
             "Vyber v tabuľke nástroj pre úpravu parametrov a prahov.",
@@ -1842,6 +1916,11 @@ class ToolConfigPanel(QWidget):
         self._description_label.setText(description)
         self._description_label.setVisible(bool(description))
 
+        if (tool.type or "").lower() == "light_transmission":
+            self._light_transmission_state = {}
+        else:
+            self._light_transmission_state = None
+
         self._rebuild_form()
         self._clear_test_result()
         self._update_visibility()
@@ -1882,6 +1961,7 @@ class ToolConfigPanel(QWidget):
         self._clear_form()
 
         if self._current_tool is None:
+            self._lt_calibration_group.setVisible(False)
             return
 
         added_fields = False
@@ -1949,6 +2029,15 @@ class ToolConfigPanel(QWidget):
                     container.setToolTip(tooltip)
                 self._form_layout.addRow(label, container)
                 added_fields = True
+
+        tool_type = (getattr(self._current_tool, "type", "") or "").lower()
+        if tool_type == "light_transmission":
+            self._lt_calibration_group.setVisible(True)
+            self._apply_light_transmission_state()
+            added_fields = True
+        else:
+            self._lt_calibration_group.setVisible(False)
+            self._light_transmission_state = None
 
         if not added_fields:
             placeholder = QLabel(
@@ -2203,12 +2292,12 @@ class ToolConfigPanel(QWidget):
                 if unit:
                     label = f"{label} [{unit}]"
                 raw_value = remaining.pop(key, None)
-                value_text = self._format_metric_value(raw_value)
+                value_text = self._format_metric_value_for_key(key, raw_value)
                 rows.append((label, value_text, getattr(spec, "description", "")))
 
         if not self._current_metrics_spec:
             for key in sorted(remaining.keys()):
-                rows.append((str(key), self._format_metric_value(remaining[key]), ""))
+                rows.append((str(key), self._format_metric_value_for_key(key, remaining[key]), ""))
 
         if not rows:
             self._metrics_table.setRowCount(0)
@@ -2227,6 +2316,15 @@ class ToolConfigPanel(QWidget):
             self._metrics_table.setItem(row, 1, value_item)
         self._metrics_table.resizeRowsToContents()
         self._metrics_table.setVisible(True)
+
+    def _format_metric_value_for_key(self, key: str, value: Any) -> str:
+        tool_type = (getattr(self._current_tool, "type", "") or "").lower()
+        if tool_type == "light_transmission" and key == "T_mean":
+            try:
+                return f"{float(value) * 100.0:.1f} %"
+            except (TypeError, ValueError):
+                return self._format_metric_value(value)
+        return self._format_metric_value(value)
 
     @staticmethod
     def _format_metric_value(value: Any) -> str:
@@ -2319,6 +2417,11 @@ class ToolConfigPanel(QWidget):
                 self._preview_aligned_key = name
                 break
 
+        if self._preview_aligned_key is None and "T_heat" in self._preview_cache:
+            self._preview_aligned_key = "T_heat"
+        if self._preview_before_key is None and "input" in self._preview_cache:
+            self._preview_before_key = "input"
+
         for name in ("binarization", "binarized", "mask"):
             if name in self._preview_cache:
                 self._preview_binarized_key = name
@@ -2336,6 +2439,9 @@ class ToolConfigPanel(QWidget):
         else:
             remaining = [key for key in self._preview_cache.keys() if key != self._preview_before_key]
             self._active_preview_key = remaining[0] if remaining else None
+
+        if self._active_preview_key is None and "T_heat" in self._preview_cache:
+            self._active_preview_key = "T_heat"
 
         self._update_preview_controls()
         self._refresh_preview_images()
@@ -2666,6 +2772,55 @@ class ToolConfigPanel(QWidget):
         self._btn_defaults.setEnabled(enabled_controls)
         self._set_test_button_enabled(has_tool and not self._updating)
         self._diagnostics_group.setVisible(has_tool)
+        tool_type = (getattr(self._current_tool, "type", "") or "").lower()
+        lt_should_show = has_tool and tool_type == "light_transmission"
+        self._lt_calibration_group.setVisible(lt_should_show)
+
+    def set_light_transmission_state(self, state: Optional[dict[str, Any]]) -> None:
+        self._light_transmission_state = dict(state or {})
+        tool_type = (getattr(self._current_tool, "type", "") or "").lower()
+        if tool_type != "light_transmission":
+            self._lt_calibration_group.setVisible(False)
+            return
+        self._apply_light_transmission_state()
+
+    def _apply_light_transmission_state(self) -> None:
+        state = self._light_transmission_state or {}
+        self._lt_calibration_group.setVisible(True)
+        if not state:
+            self._lt_dark_preview.setPixmap(QPixmap())
+            self._lt_dark_preview.setText("No preview")
+            self._lt_dark_meta.setText("—")
+            self._lt_open_preview.setPixmap(QPixmap())
+            self._lt_open_preview.setText("No preview")
+            self._lt_open_meta.setText("—")
+            return
+
+        dark_pixmap = self._pixmap_from_any(state.get("dark_image"))
+        if dark_pixmap is not None:
+            self._lt_dark_preview.setPixmap(dark_pixmap)
+            self._lt_dark_preview.setText("")
+        else:
+            self._lt_dark_preview.setPixmap(QPixmap())
+            self._lt_dark_preview.setText("No preview")
+        dark_meta = state.get("dark_info") or "—"
+        self._lt_dark_meta.setText(str(dark_meta))
+
+        open_pixmap = self._pixmap_from_any(state.get("open_image"))
+        if open_pixmap is not None:
+            self._lt_open_preview.setPixmap(open_pixmap)
+            self._lt_open_preview.setText("")
+        else:
+            self._lt_open_preview.setPixmap(QPixmap())
+            self._lt_open_preview.setText("No preview")
+        open_meta = state.get("open_info") or "—"
+        self._lt_open_meta.setText(str(open_meta))
+
+    def _on_light_transmission_save_clicked(self, kind: str) -> None:
+        tool_type = (getattr(self._current_tool, "type", "") or "").lower()
+        if tool_type != "light_transmission":
+            return
+        self.lightTransmissionCalibrationRequested.emit(kind)
 
 class GoldenWizard(QDialog):
     """
@@ -2852,6 +3007,9 @@ class GoldenWizard(QDialog):
         self._tool_panel.locatorPolicyWarningChanged.connect(
             self._update_locator_policy_banner
         )
+        self._tool_panel.lightTransmissionCalibrationRequested.connect(
+            self._on_light_transmission_calibration_requested
+        )
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
@@ -2992,6 +3150,87 @@ class GoldenWizard(QDialog):
             return golden
 
         return self._load_saved_golden_image()
+
+    def _capture_frame_for_calibration(self) -> tuple[Optional[np.ndarray], list[str]]:
+        frame: Optional[np.ndarray] = None
+        errors: list[str] = []
+        if self._live_on:
+            try:
+                frame = self._lp.last_frame_u8()
+            except Exception as exc:  # pragma: no cover - defensive
+                errors.append(f"Live preview zlyhal: {exc}")
+        if frame is None:
+            try:
+                frame = self.cam.one_shot()
+            except Exception as exc:  # pragma: no cover - capture fallback
+                errors.append(f"Zachytenie zlyhalo: {exc}")
+
+        if frame is None:
+            return None, errors
+
+        frame_u8 = ToolConfigPanel._ensure_gray_u8(frame)
+        if frame_u8 is None:
+            errors.append("Konverzia frame na Y8 zlyhala.")
+            return None, errors
+
+        return np.asarray(frame_u8), errors
+
+    def _resolve_light_transmission_path(
+        self, tool: Tool, recipe: str, kind: str
+    ) -> tuple[Path, Path]:
+        params = dict(getattr(tool.params, "values", {}) or {})
+        key = f"{kind}_path"
+        raw_path = params.get(key)
+        if raw_path:
+            rel_path = Path(str(raw_path))
+        else:
+            rel_path = Path("recipes") / recipe / "calib" / "light" / f"{kind}.png"
+        abs_path = rel_path if rel_path.is_absolute() else Path("/data") / rel_path
+        return rel_path, abs_path
+
+    def _build_light_transmission_state(self, tool: Tool, recipe: str) -> dict[str, Any]:
+        state: dict[str, Any] = {}
+        try:
+            rel_dark, abs_dark = self._resolve_light_transmission_path(tool, recipe, "dark")
+            rel_open, abs_open = self._resolve_light_transmission_path(tool, recipe, "open")
+        except Exception:
+            return {}
+
+        state["dark_path"] = rel_dark.as_posix()
+        state["open_path"] = rel_open.as_posix()
+
+        def _load_preview(path: Path) -> Optional[np.ndarray]:
+            if not path.exists():
+                return None
+            try:
+                import imageio.v3 as iio
+
+                data = iio.imread(path)
+            except Exception:
+                return None
+            return ToolConfigPanel._ensure_gray_u8(data)
+
+        def _format_info(rel: Path, abs_path: Path) -> str:
+            text = rel.as_posix()
+            if abs_path.exists():
+                try:
+                    ts = datetime.fromtimestamp(abs_path.stat().st_mtime)
+                    text += f"\n{ts.strftime('%Y-%m-%d %H:%M:%S')}"
+                except Exception:
+                    pass
+            else:
+                text += "\n(nenájdené)"
+            return text
+
+        dark_img = _load_preview(abs_dark)
+        open_img = _load_preview(abs_open)
+
+        state["dark_image"] = dark_img
+        state["open_image"] = open_img
+        state["dark_info"] = _format_info(rel_dark, abs_dark)
+        state["open_info"] = _format_info(rel_open, abs_open)
+
+        return state
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -3483,9 +3722,15 @@ class GoldenWizard(QDialog):
                 self._current_locator_failure_policy
             )
             self._selected_tool_row = row
+            if (tool.type or "").lower() == "light_transmission":
+                state = self._build_light_transmission_state(tool, recipe)
+                self._tool_panel.set_light_transmission_state(state)
+            else:
+                self._tool_panel.set_light_transmission_state({})
             self.view.set_tool_overlay(tool)
         else:
             self._tool_panel.clear()
+            self._tool_panel.set_light_transmission_state({})
             self._selected_tool_row = -1
             self.view.set_tool_overlay(None)
 
@@ -3508,6 +3753,9 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+        if (tool.type or "").lower() == "light_transmission" and name in {"dark_path", "open_path"}:
+            state = self._build_light_transmission_state(tool, recipe)
+            self._tool_panel.set_light_transmission_state(state)
         self._update_dirty_state(recipe)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
@@ -3530,6 +3778,51 @@ class GoldenWizard(QDialog):
             return
         self._tool_panel.refresh_values(tool)
         self._update_dirty_state(recipe)
+
+    def _on_light_transmission_calibration_requested(self, kind: str) -> None:
+        row = getattr(self, "_selected_tool_row", -1)
+        if row < 0:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        if (tool.type or "").lower() != "light_transmission":
+            return
+
+        frame, errors = self._capture_frame_for_calibration()
+        if frame is None:
+            message = errors[-1] if errors else "Frame nie je dostupný."
+            self._err(message)
+            return
+
+        frame_u8 = np.asarray(frame, dtype=np.uint8)
+        rel_path, abs_path = self._resolve_light_transmission_path(tool, recipe, kind)
+        try:
+            abs_path.parent.mkdir(parents=True, exist_ok=True)
+            import imageio.v3 as iio
+
+            iio.imwrite(abs_path, frame_u8, extension=".png")
+        except Exception as exc:
+            self._err(f"Uloženie kalibrácie zlyhalo: {exc}")
+            return
+
+        params = dict(getattr(tool.params, "values", {}) or {})
+        params[f"{kind}_path"] = rel_path.as_posix()
+        tool.params = ToolParams(params)
+
+        try:
+            self.recipes.update_tool(recipe, row, tool)
+        except Exception as exc:
+            self._err(f"Aktualizácia parametrov kalibrácie zlyhala: {exc}")
+            return
+
+        self._tool_panel.refresh_values(tool)
+        state = self._build_light_transmission_state(tool, recipe)
+        self._tool_panel.set_light_transmission_state(state)
+        self._update_dirty_state(recipe)
+        self._info(f"Kalibrácia {kind.upper()} uložená: {abs_path.as_posix()}")
 
     def _on_tool_test_requested(self, params: dict[str, Any], thresholds: dict[str, Any]) -> None:
         try:
