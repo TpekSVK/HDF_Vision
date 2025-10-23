@@ -20,6 +20,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.tools.light_presence import LightPresenceCheckTool
+from app.tools.light_transmission import LightTransmissionCheckTool
 
 logger = logging.getLogger(__name__)
 
@@ -481,6 +482,102 @@ def _register_default_tools() -> None:
                     "priority": 1,
                     "description": "Čas behu",
                 },
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "light_transmission",
+        factory=lambda: LightTransmissionCheckTool(),
+        meta={
+            "name": "Light Transmission Check",
+            "description": "Zmeria štatistiky intenzity (odtiene šedej) a percento pixelov nad prahom.",
+            "category": "Presence / Backlight",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "catalog_label": "Priepustnosť svetla (odtiene šedej)",
+            "catalog_short": "Zmeria mean/median/std v ROI vrátane % pixelov nad prahom.",
+            "catalog_tooltip": "Štatistika intenzity v ROI; funguje pre Y8 aj Y12. Pri kalibrácii sa prah interpretuje v %.",
+            "schema": {
+                "params": {
+                    "calibration_enabled": {
+                        "type": "bool",
+                        "default": False,
+                        "label": "Kalibrácia (%)",
+                        "description": "Zapni mapovanie na percentá (využije čiernu/bielu referenciu).",
+                    },
+                    "calibration_dark_gray": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "label": "Dark level [0-255]",
+                        "description": "Hodnota zodpovedajúca 0 % priepustnosti.",
+                    },
+                    "calibration_bright_gray": {
+                        "type": "float",
+                        "default": 255.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "label": "Bright level [0-255]",
+                        "description": "Hodnota zodpovedajúca 100 % priepustnosti.",
+                    },
+                    "threshold_value": {
+                        "type": "float",
+                        "default": 128.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "label": "Prahová hodnota T",
+                        "description": "Prahová hodnota v šedej [0-255] alebo v % pri zapnutej kalibrácii.",
+                    },
+                },
+                "thresholds": {
+                    "min_mean_gray": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "label": "Min. mean",
+                        "description": "Minimálna mean hodnota (alebo % pri kalibrácii).",
+                    },
+                    "max_mean_gray": {
+                        "type": "float",
+                        "default": 255.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "label": "Max. mean",
+                        "description": "Maximálna mean hodnota (alebo % pri kalibrácii).",
+                    },
+                    "min_pct_above_T": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "label": "Min. % nad T",
+                        "description": "Minimálny podiel pixelov nad prahom T [%].",
+                    },
+                    "max_pct_above_T": {
+                        "type": "float",
+                        "default": 100.0,
+                        "min": 0.0,
+                        "max": 100.0,
+                        "label": "Max. % nad T",
+                        "description": "Maximálny podiel pixelov nad prahom T [%].",
+                    },
+                },
+            },
+            "metrics_spec": [
+                {"key": "mean_gray", "unit": None, "priority": 10, "description": "Priemerná intenzita"},
+                {"key": "median_gray", "unit": None, "priority": 9, "description": "Medián intenzity"},
+                {"key": "min_gray", "unit": None, "priority": 7, "description": "Minimum"},
+                {"key": "max_gray", "unit": None, "priority": 7, "description": "Maximum"},
+                {"key": "std_gray", "unit": None, "priority": 6, "description": "Štandardná odchýlka"},
+                {"key": "p10_gray", "unit": None, "priority": 5, "description": "10. percentil"},
+                {"key": "p90_gray", "unit": None, "priority": 5, "description": "90. percentil"},
+                {"key": "pct_above_T", "unit": "%", "priority": 8, "description": "% pixelov nad T"},
+                {"key": "pct_below_T", "unit": "%", "priority": 4, "description": "% pixelov pod T"},
+                {"key": "mean_transmission_pct", "unit": "%", "priority": 3, "description": "Priemerná priepustnosť (%)"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
     )

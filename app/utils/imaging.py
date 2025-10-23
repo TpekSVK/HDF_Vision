@@ -169,9 +169,29 @@ def to_gray_u8(img: np.ndarray) -> np.ndarray:
         x = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     else:
         raise ValueError("Unsupported image shape")
-    if x.dtype != np.uint8:
-        x = np.clip(x, 0, 255).astype(np.uint8)
-    return x
+    if x.dtype == np.uint8:
+        return x
+
+    if np.issubdtype(x.dtype, np.integer):
+        x_int = np.asarray(x, dtype=np.uint32)
+        if x_int.size == 0:
+            return np.zeros_like(x_int, dtype=np.uint8)
+
+        maxv = int(x_int.max())
+        if maxv <= 0:
+            return np.zeros_like(x_int, dtype=np.uint8)
+        if maxv <= 255:
+            return x_int.astype(np.uint8)
+        if maxv <= 1023:
+            return (x_int >> 2).astype(np.uint8)
+        if maxv <= 4095:
+            return (x_int >> 4).astype(np.uint8)
+
+        scale = 255.0 / float(maxv)
+        return cv2.convertScaleAbs(x_int, alpha=scale)
+
+    x_float = np.clip(np.asarray(x, dtype=np.float32), 0.0, 255.0)
+    return x_float.astype(np.uint8)
 
 def blur_gaussian_u8(src: np.ndarray, sigma: float = 0.8, kmin: int = 3) -> np.ndarray:
     """Gaussian blur (u8→u8), GPU fallback na CPU. K = roundup(σ*6)|1, aspoň kmin."""
