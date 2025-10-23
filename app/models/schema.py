@@ -69,6 +69,65 @@ from app.utils import imaging
 
 
 @dataclass(slots=True)
+class CameraProfile:
+    """Descriptor of per-step camera acquisition settings."""
+
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+    exposure: Optional[float] = None
+    gain: Optional[float] = None
+    pixel_format: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        self.width = int(self.width) if self.width is not None else None
+        self.height = int(self.height) if self.height is not None else None
+        self.fps = float(self.fps) if self.fps is not None else None
+        self.exposure = float(self.exposure) if self.exposure is not None else None
+        self.gain = float(self.gain) if self.gain is not None else None
+        self.pixel_format = str(self.pixel_format) if self.pixel_format else None
+
+    def copy(self) -> "CameraProfile":
+        return CameraProfile(
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            exposure=self.exposure,
+            gain=self.gain,
+            pixel_format=self.pixel_format,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.width is not None:
+            data["width"] = int(self.width)
+        if self.height is not None:
+            data["height"] = int(self.height)
+        if self.fps is not None:
+            data["fps"] = float(self.fps)
+        if self.exposure is not None:
+            data["exposure"] = float(self.exposure)
+        if self.gain is not None:
+            data["gain"] = float(self.gain)
+        if self.pixel_format:
+            data["pixel_format"] = str(self.pixel_format)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "CameraProfile | None":
+        if not data:
+            return None
+        return cls(
+            width=data.get("width"),
+            height=data.get("height"),
+            fps=data.get("fps"),
+            exposure=data.get("exposure"),
+            gain=data.get("gain"),
+            pixel_format=data.get("pixel_format"),
+        )
+
+
+@dataclass(slots=True)
 class ToolParams:
     """Container for tool specific parameters."""
 
@@ -131,6 +190,165 @@ class ToolThresholds:
 
     def copy(self) -> "ToolThresholds":
         return ToolThresholds(deepcopy(self.values))
+
+
+@dataclass(slots=True)
+class MultiViewStep:
+    """Configuration describing a single acquisition step within a recipe."""
+
+    step_id: str
+    name: str
+    order: int = 0
+    golden_path: str = "golden.png"
+    pose_enabled: bool = True
+    regions: List[Dict[str, Any]] = field(default_factory=list)
+    thresholds: ToolThresholds = field(default_factory=ToolThresholds)
+    camera_profile: CameraProfile | None = None
+    settle_ms: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        self.step_id = str(self.step_id or "")
+        self.name = str(self.name or "")
+        self.order = int(self.order)
+        self.golden_path = str(self.golden_path or "golden.png")
+        self.pose_enabled = bool(self.pose_enabled)
+        self.regions = [dict(region) for region in self.regions]
+        if isinstance(self.thresholds, ToolThresholds):
+            self.thresholds = self.thresholds.copy()
+        else:
+            self.thresholds = ToolThresholds.from_obj(self.thresholds)
+        if isinstance(self.camera_profile, CameraProfile):
+            self.camera_profile = self.camera_profile.copy()
+        else:
+            self.camera_profile = CameraProfile.from_dict(self.camera_profile)
+        if self.settle_ms is not None:
+            try:
+                self.settle_ms = int(self.settle_ms)
+            except Exception:
+                self.settle_ms = None
+
+    def copy(self) -> "MultiViewStep":
+        return MultiViewStep(
+            step_id=self.step_id,
+            name=self.name,
+            order=self.order,
+            golden_path=self.golden_path,
+            pose_enabled=self.pose_enabled,
+            regions=[deepcopy(region) for region in self.regions],
+            thresholds=self.thresholds.copy(),
+            camera_profile=self.camera_profile.copy() if self.camera_profile else None,
+            settle_ms=self.settle_ms,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "step_id": self.step_id,
+            "name": self.name,
+            "order": int(self.order),
+            "golden_path": self.golden_path,
+            "pose_enabled": bool(self.pose_enabled),
+            "regions": [deepcopy(region) for region in self.regions],
+            "thresholds": self.thresholds.to_dict(),
+        }
+        if self.camera_profile:
+            data["camera_profile"] = self.camera_profile.to_dict()
+        if self.settle_ms is not None:
+            data["settle_ms"] = int(self.settle_ms)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "MultiViewStep":
+        return cls(
+            step_id=data.get("step_id", ""),
+            name=data.get("name", ""),
+            order=data.get("order", 0),
+            golden_path=data.get("golden_path", "golden.png"),
+            pose_enabled=data.get("pose_enabled", True),
+            regions=data.get("regions", []),
+            thresholds=ToolThresholds.from_obj(data.get("thresholds")),
+            camera_profile=CameraProfile.from_dict(data.get("camera_profile")),
+            settle_ms=data.get("settle_ms"),
+        )
+
+
+@dataclass(slots=True)
+class MultiViewConfig:
+    """Container describing multi-view execution parameters."""
+
+    steps: List[MultiViewStep] = field(default_factory=list)
+    aggregation: Literal["AND", "OR", "WEIGHTED"] = "AND"
+    weights: Dict[str, float] = field(default_factory=dict)
+    weighted_threshold: float = 0.5
+
+    def __post_init__(self) -> None:
+        normalized_steps: List[MultiViewStep] = []
+        for step in self.steps:
+            if isinstance(step, MultiViewStep):
+                normalized_steps.append(step.copy())
+            else:
+                normalized_steps.append(MultiViewStep.from_dict(step))
+        normalized_steps.sort(key=lambda entry: (entry.order, entry.step_id))
+        self.steps = normalized_steps
+
+        aggregation = str(self.aggregation or "AND").upper()
+        if aggregation not in {"AND", "OR", "WEIGHTED"}:
+            aggregation = "AND"
+        self.aggregation = aggregation  # type: ignore[assignment]
+
+        weights_dict: Dict[str, float] = {}
+        for key, value in (self.weights or {}).items():
+            try:
+                weights_dict[str(key)] = float(value)
+            except Exception:
+                continue
+        self.weights = weights_dict
+
+        try:
+            threshold = float(self.weighted_threshold)
+        except Exception:
+            threshold = 0.5
+        self.weighted_threshold = max(0.0, min(1.0, threshold))
+
+    def copy(self) -> "MultiViewConfig":
+        return MultiViewConfig(
+            steps=[step.copy() for step in self.steps],
+            aggregation=self.aggregation,
+            weights=dict(self.weights),
+            weighted_threshold=self.weighted_threshold,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "steps": [step.to_dict() for step in self.steps],
+            "aggregation": self.aggregation,
+            "weights": {k: float(v) for k, v in self.weights.items()},
+            "weighted_threshold": float(self.weighted_threshold),
+        }
+
+    @classmethod
+    def from_dict(cls, data: Optional[Dict[str, Any]]) -> "MultiViewConfig":
+        if not data:
+            return cls()
+        return cls(
+            steps=data.get("steps", []),
+            aggregation=data.get("aggregation", "AND"),
+            weights=data.get("weights", {}),
+            weighted_threshold=data.get("weighted_threshold", 0.5),
+        )
+
+    def iter_steps(self) -> Iterable[MultiViewStep]:
+        return tuple(step.copy() for step in self.steps)
+
+    def effective_weights(self, step_ids: Iterable[str]) -> Dict[str, float]:
+        ids = list(step_ids)
+        if not ids:
+            return {}
+        if not self.weights:
+            return {step_id: 1.0 for step_id in ids}
+        mapped = {step_id: float(self.weights.get(step_id, 0.0)) for step_id in ids}
+        if all(weight <= 0.0 for weight in mapped.values()):
+            return {step_id: 1.0 for step_id in ids}
+        return mapped
 
 
 @dataclass(slots=True)
@@ -401,6 +619,7 @@ class RecipeV2:
         "continue_without_alignment"
     )
     export_artifacts: bool = False
+    multi_view: MultiViewConfig = field(default_factory=MultiViewConfig)
 
     def __post_init__(self) -> None:
         self.pose_enabled = bool(self.pose_enabled)
@@ -421,6 +640,11 @@ class RecipeV2:
             "fail" if policy == "fail" else "continue_without_alignment"
         )
 
+        if isinstance(self.multi_view, MultiViewConfig):
+            self.multi_view = self.multi_view.copy()
+        else:
+            self.multi_view = MultiViewConfig.from_dict(self.multi_view)
+
     def to_dict(self) -> Dict[str, Any]:
         return {
             "pose_enabled": bool(self.pose_enabled),
@@ -428,6 +652,7 @@ class RecipeV2:
             "tools": [t.to_dict() for t in self.tools],
             "on_locator_failure": self.on_locator_failure,
             "export_artifacts": bool(self.export_artifacts),
+            "multi_view": self.multi_view.to_dict(),
         }
 
     @classmethod
@@ -442,6 +667,7 @@ class RecipeV2:
                 "on_locator_failure", "continue_without_alignment"
             ),
             export_artifacts=bool(data.get("export_artifacts", False)),
+            multi_view=MultiViewConfig.from_dict(data.get("multi_view")),
         )
 
     @classmethod
@@ -461,6 +687,7 @@ class RecipeV2:
             tools=[tool.copy() for tool in self.tools],
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
+            multi_view=self.multi_view.copy(),
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":
@@ -471,6 +698,7 @@ class RecipeV2:
             tools=new_tools,
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
+            multi_view=self.multi_view.copy(),
         )
 
     def iter_tools(self) -> Iterable[Tool]:

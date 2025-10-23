@@ -6,7 +6,12 @@ from typing import Iterable, List, Sequence
 from app.models.schema import RecipeData, RecipeV2, Tool
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
-from app.services.storage_service import load_recipe_config, save_recipe_config
+from app.services.storage_service import (
+    load_recipe_config,
+    save_recipe_config,
+    load_multi_view_config,
+    save_multi_view_config,
+)
 
 class RecipeService:
     def __init__(self, base_dir="/data", db: DbService | None = None):
@@ -251,7 +256,11 @@ class RecipeService:
         if path.exists():
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return RecipeV2.from_dict(data)
+            recipe = RecipeV2.from_dict(data)
+            recipe.multi_view = load_multi_view_config(
+                name, base_dir=self.base, published=True
+            )
+            return recipe
         return self._load_recipe_config(name)
 
     def _save_published_recipe_config(self, name: str, recipe: RecipeV2) -> None:
@@ -259,3 +268,4 @@ class RecipeService:
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(recipe.to_dict(), f, ensure_ascii=False, indent=2)
+        save_multi_view_config(name, recipe.multi_view, base_dir=self.base, published=True)

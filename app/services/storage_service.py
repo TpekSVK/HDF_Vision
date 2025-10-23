@@ -5,7 +5,7 @@ from datetime import datetime
 import imageio.v3 as iio
 import numpy as np
 
-from app.models.schema import RecipeV2
+from app.models.schema import RecipeV2, MultiViewConfig
 
 # --- Konfigurácia ---
 _CFG_PATH = Path("/data/config.json")
@@ -58,6 +58,16 @@ def _ensure_dirs(recipe: str):
     (base / "validation" / "nok").mkdir(parents=True, exist_ok=True)
     return run_dir
 
+
+def _ensure_multi_view_dirs(serial: str, base: str | Path = "/data") -> Path:
+    name = str(serial or "run")
+    base_path = Path(base)
+    day = datetime.now().strftime("%Y%m%d")
+    run_dir = base_path / "runs" / day / name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
+
+
 def _to_u8(img):
     if img is None:
         return None
@@ -109,6 +119,10 @@ class _SaveQueue:
                     _do_save_golden(**payload)
                 elif job == "validation":
                     _do_save_validation(**payload)
+                elif job == "multi_step":
+                    _do_save_multi_view_step(**payload)
+                elif job == "multi_summary":
+                    _do_save_multi_view_summary(**payload)
             except Exception as e:
                 # len log do konzoly – nech to neblokuje
                 print("[SaveQueue][ERR]", e)
@@ -121,6 +135,63 @@ def _recipe_json_path(recipe: str, base_dir: str | Path = "/data") -> Path:
     return Path(base_dir) / "recipes" / recipe / "recipe.json"
 
 
+def _multi_view_json_path(
+    recipe: str, base_dir: str | Path = "/data", *, published: bool = False
+) -> Path:
+    filename = "multi_view.published.json" if published else "multi_view.json"
+    return Path(base_dir) / "recipes" / recipe / filename
+
+
+def _load_multi_view_config(
+    recipe: str, *, base_dir: str | Path = "/data", published: bool = False
+) -> MultiViewConfig:
+    path = _multi_view_json_path(recipe, base_dir, published=published)
+    if path.exists():
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return MultiViewConfig.from_dict(data)
+        except Exception:
+            return MultiViewConfig()
+    return MultiViewConfig()
+
+
+def _save_multi_view_config(
+    recipe: str,
+    config: MultiViewConfig,
+    *,
+    base_dir: str | Path = "/data",
+    published: bool = False,
+) -> Path | None:
+    path = _multi_view_json_path(recipe, base_dir, published=published)
+    if config.steps:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(config.to_dict(), f, ensure_ascii=False, indent=2)
+        return path
+    if path.exists():
+        path.unlink(missing_ok=True)
+    return None
+
+
+def load_multi_view_config(
+    recipe: str, *, base_dir: str | Path = "/data", published: bool = False
+) -> MultiViewConfig:
+    return _load_multi_view_config(recipe, base_dir=base_dir, published=published)
+
+
+def save_multi_view_config(
+    recipe: str,
+    config: MultiViewConfig,
+    *,
+    base_dir: str | Path = "/data",
+    published: bool = False,
+) -> Path | None:
+    return _save_multi_view_config(
+        recipe, config, base_dir=base_dir, published=published
+    )
+
+
 def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> RecipeV2:
     """Load recipe configuration including tool pipeline."""
 
@@ -128,9 +199,13 @@ def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> Recipe
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-        return RecipeV2.from_dict(data)
+        recipe_obj = RecipeV2.from_dict(data)
+        recipe_obj.multi_view = _load_multi_view_config(recipe, base_dir=base_dir)
+        return recipe_obj
 
-    return RecipeV2()
+    recipe_obj = RecipeV2()
+    recipe_obj.multi_view = _load_multi_view_config(recipe, base_dir=base_dir)
+    return recipe_obj
 
 
 def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/data") -> Path:
@@ -140,6 +215,7 @@ def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data.to_dict(), f, ensure_ascii=False, indent=2)
+    _save_multi_view_config(recipe, data.multi_view, base_dir=base_dir)
     return path
 
 # --- Public API (zachovávame signatúry) ---
@@ -192,6 +268,60 @@ def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_no
     _SAVEQ.put(("prod", payload))
     return {"thumb": str(fthumb), "full": str(ffull) if do_full else None, "meta": str(fmeta)}
 
+
+def save_multi_view_step_result(
+    frame_u8,
+    meta: dict,
+    *,
+    recipe_name: str,
+    serial: str,
+    step_index: int,
+    step_id: str | None = None,
+    nok: bool = False,
+    base_dir: str | Path = "/data",
+) -> dict[str, str]:
+    """Persist thumbnail and metadata for a single multi-view step."""
+
+    run_dir = _ensure_multi_view_dirs(serial, base=base_dir)
+    step_prefix = f"step_{step_index:02d}"
+    fthumb = run_dir / f"{step_prefix}.webp"
+    fmeta = run_dir / f"{step_prefix}.json"
+
+    payload = {
+        "frame": _to_u8(frame_u8),
+        "fthumb": fthumb,
+        "fmeta": fmeta,
+        "meta": {
+            **(meta or {}),
+            "recipe": recipe_name,
+            "serial": serial,
+            "step_index": int(step_index),
+            "step_id": step_id,
+            "nok": bool(nok),
+        },
+    }
+    _SAVEQ.put(("multi_step", payload))
+    return {"thumb": str(fthumb), "meta": str(fmeta)}
+
+
+def save_multi_view_summary(
+    meta: dict,
+    *,
+    recipe_name: str,
+    serial: str,
+    base_dir: str | Path = "/data",
+) -> str:
+    """Store aggregated multi-view run metadata."""
+
+    run_dir = _ensure_multi_view_dirs(serial, base=base_dir)
+    fmeta = run_dir / "summary.json"
+    payload = {
+        "meta": {**(meta or {}), "recipe": recipe_name, "serial": serial},
+        "fmeta": fmeta,
+    }
+    _SAVEQ.put(("multi_summary", payload))
+    return str(fmeta)
+
 # --- Skutočný zápis (worker) ---
 def _do_save_golden(frame, recipe):
     if frame is None: return
@@ -224,3 +354,31 @@ def _do_save_production(frame, fthumb: Path, ffull: Path, fmeta: Path, meta: dic
             json.dump(meta or {}, f, ensure_ascii=False, indent=2)
     except Exception as e:
         print("[save][meta][ERR]", e)
+
+
+def _do_save_multi_view_step(frame, fthumb: Path, fmeta: Path, meta: dict):
+    fthumb.parent.mkdir(parents=True, exist_ok=True)
+    fmeta.parent.mkdir(parents=True, exist_ok=True)
+    if frame is not None:
+        iio.imwrite(
+            fthumb,
+            frame,
+            extension=".webp",
+            quality=int(CFG.get("full_webp_quality", 95)),
+        )
+    else:
+        fthumb.touch(exist_ok=True)
+    try:
+        with open(fmeta, "w", encoding="utf-8") as f:
+            json.dump(meta or {}, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print("[save][multi_step][ERR]", exc)
+
+
+def _do_save_multi_view_summary(meta: dict, fmeta: Path):
+    fmeta.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(fmeta, "w", encoding="utf-8") as f:
+            json.dump(meta or {}, f, ensure_ascii=False, indent=2)
+    except Exception as exc:
+        print("[save][multi_summary][ERR]", exc)
