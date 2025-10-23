@@ -5,6 +5,7 @@ from .mse import MSETool
 from .ncc import NCCTool
 from .edge import EdgeChangeTool
 from .light_presence import LightPresenceCheckTool
+from .light_transmission import LightTransmissionCheckTool
 
 __all__ = [
     "SSDTool",
@@ -12,4 +13,5 @@ __all__ = [
     "NCCTool",
     "EdgeChangeTool",
     "LightPresenceCheckTool",
+    "LightTransmissionCheckTool",
 ]
