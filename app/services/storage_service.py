@@ -41,15 +41,24 @@ def _minimal_mode():
     return _stat_free_percent("/data") < float(CFG.get("disk_guard_min_free_percent", 10))
 
 # --- Helpery cesty ---
-def _ensure_dirs(recipe: str):
+def _ensure_dirs(recipe: str, *, run_id: str | None = None, view_id: str | None = None):
     base = Path("/data")
     (base / "recipes" / recipe).mkdir(parents=True, exist_ok=True)
     # runtime dirs: runs/YYYYMMDD/<recipe>/{thumbs,full,meta}
     day = datetime.now().strftime("%Y%m%d")
-    run_dir = base / "runs" / day / recipe
-    (run_dir / "thumbs").mkdir(parents=True, exist_ok=True)
-    (run_dir / "full").mkdir(parents=True, exist_ok=True)
-    (run_dir / "meta").mkdir(parents=True, exist_ok=True)
+    run_key = str(run_id).strip() if run_id else recipe
+    run_dir = base / "runs" / day / run_key
+    thumbs_dir = run_dir / "thumbs"
+    full_dir = run_dir / "full"
+    meta_dir = run_dir / "meta"
+    if view_id:
+        view_key = str(view_id).strip() or "view"
+        thumbs_dir /= view_key
+        full_dir /= view_key
+        meta_dir /= view_key
+    thumbs_dir.mkdir(parents=True, exist_ok=True)
+    full_dir.mkdir(parents=True, exist_ok=True)
+    meta_dir.mkdir(parents=True, exist_ok=True)
     # placeholders for future artefacts
     (run_dir / "aligned").mkdir(parents=True, exist_ok=True)
     (run_dir / "overlay").mkdir(parents=True, exist_ok=True)
@@ -174,29 +183,60 @@ def save_validation_image(frame_u8, ok: bool, recipe_name: str):
     _SAVEQ.put(("validation", payload))
     return {"full": str(ffull), "thumb": str(fthumb)}
 
-def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_nok: bool, nok: bool):
+def save_production_result(
+    frame_u8,
+    meta: dict,
+    recipe_name: str,
+    store_full_nok: bool,
+    nok: bool,
+    *,
+    run_id: str | None = None,
+    view_id: str | None = None,
+):
     recipe = recipe_name or "default"
-    run_dir = _ensure_dirs(recipe)
+    view_key = str(view_id).strip() if view_id else None
+    run_dir = _ensure_dirs(recipe, run_id=run_id, view_id=view_key)
     ts = int(time.time() * 1000)
     uid = uuid.uuid4().hex[:8]
     # očakávané cesty
-    fthumb = run_dir / "thumbs" / f"{ts}_{uid}.jpg"
-    ffull  = run_dir / "full"   / f"{ts}_{uid}.webp"
-    fmeta  = run_dir / "meta"   / f"{ts}_{uid}.json"
+    thumbs_dir = run_dir / "thumbs"
+    full_dir = run_dir / "full"
+    meta_dir = run_dir / "meta"
+    if view_key:
+        thumbs_dir /= view_key
+        full_dir /= view_key
+        meta_dir /= view_key
+    fthumb = thumbs_dir / f"{ts}_{uid}.jpg"
+    ffull = full_dir / f"{ts}_{uid}.webp"
+    fmeta = meta_dir / f"{ts}_{uid}.json"
 
     # aplikuj politiku (NOK-only/full + disk guard)
     cfg_store_full = bool(CFG.get("store_full_nok", True))
     guard_minimal = _minimal_mode()
     do_full = (not guard_minimal) and ((cfg_store_full and nok) or (not cfg_store_full and store_full_nok))
 
+    meta_payload = {**(meta or {}), "nok": bool(nok), "ts_ms": ts, "recipe": recipe}
+    if view_key:
+        meta_payload["view_id"] = view_key
+    if run_id:
+        meta_payload["run_id"] = str(run_id)
+
     payload = {
         "frame": _to_u8(frame_u8),
-        "fthumb": fthumb, "ffull": ffull, "fmeta": fmeta,
-        "meta": {**(meta or {}), "nok": bool(nok), "ts_ms": ts, "recipe": recipe},
-        "do_full": do_full
+        "fthumb": fthumb,
+        "ffull": ffull,
+        "fmeta": fmeta,
+        "meta": meta_payload,
+        "do_full": do_full,
     }
     _SAVEQ.put(("prod", payload))
-    return {"thumb": str(fthumb), "full": str(ffull) if do_full else None, "meta": str(fmeta)}
+    return {
+        "thumb": str(fthumb),
+        "full": str(ffull) if do_full else None,
+        "meta": str(fmeta),
+        "view_id": view_key,
+        "run_id": str(run_id) if run_id else None,
+    }
 
 # --- Skutočný zápis (worker) ---
 def _do_save_golden(frame, recipe, golden_path="golden.png"):

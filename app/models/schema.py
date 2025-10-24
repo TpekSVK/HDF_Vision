@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Literal
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Literal, cast
 
 
 @dataclass(slots=True)
@@ -380,12 +380,16 @@ class RecipeAggregation:
 
     mode: Literal["AND", "OR", "WEIGHTED"] = "AND"
     weights: Dict[str, float] = field(default_factory=dict)
+    fail_fast: bool = False
 
     def __post_init__(self) -> None:
         mode = str(self.mode or "AND").upper()
         if mode not in {"AND", "OR", "WEIGHTED"}:
             mode = "AND"
         self.mode = mode
+
+        self.fail_fast = bool(self.fail_fast)
+
         normalized: Dict[str, float] = {}
         if mode == "WEIGHTED":
             for key, value in dict(self.weights).items():
@@ -399,6 +403,7 @@ class RecipeAggregation:
         return {
             "mode": self.mode,
             "weights": dict(self.weights) if self.mode == "WEIGHTED" else {},
+            "fail_fast": bool(self.fail_fast),
         }
 
     @classmethod
@@ -408,11 +413,23 @@ class RecipeAggregation:
         if obj is None:
             return cls()
         if isinstance(obj, dict):
-            return cls(mode=obj.get("mode", "AND"), weights=obj.get("weights", {}))
-        return cls(mode=getattr(obj, "mode", "AND"), weights=getattr(obj, "weights", {}))
+            return cls(
+                mode=obj.get("mode", "AND"),
+                weights=obj.get("weights", {}),
+                fail_fast=obj.get("fail_fast", False),
+            )
+        return cls(
+            mode=getattr(obj, "mode", "AND"),
+            weights=getattr(obj, "weights", {}),
+            fail_fast=getattr(obj, "fail_fast", False),
+        )
 
     def copy(self) -> "RecipeAggregation":
-        return RecipeAggregation(mode=self.mode, weights=dict(self.weights))
+        return RecipeAggregation(
+            mode=self.mode,
+            weights=dict(self.weights),
+            fail_fast=self.fail_fast,
+        )
 
     def align_with_views(self, views: Sequence["RecipeView"]) -> "RecipeAggregation":
         if self.mode != "WEIGHTED":
@@ -430,6 +447,67 @@ class RecipeAggregation:
 
         self.weights = aligned
         return self
+
+    @staticmethod
+    def _normalize_status(value: str | None) -> Literal["ok", "nok", "warn"]:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"ok", "nok", "warn"}:
+            return "nok"
+        return cast(Literal["ok", "nok", "warn"], normalized)
+
+    def aggregate_statuses(
+        self, statuses: Mapping[str, str | None]
+    ) -> Literal["ok", "nok", "warn"]:
+        """Aggregate per-view statuses into a single verdict."""
+
+        normalized: dict[str, Literal["ok", "nok", "warn"]] = {
+            key: self._normalize_status(value)
+            for key, value in statuses.items()
+            if key
+        }
+
+        if not normalized:
+            return "ok"
+
+        if self.mode == "OR":
+            priority = {"ok": 2, "warn": 1, "nok": 0}
+            best = "nok"
+            for status in normalized.values():
+                if priority[status] > priority[best]:
+                    best = status
+            return cast(Literal["ok", "nok", "warn"], best)
+
+        if self.mode == "WEIGHTED" and any(self.weights.values()):
+            score_map = {"ok": 1.0, "warn": 0.5, "nok": 0.0}
+            total_weight = 0.0
+            weighted_score = 0.0
+            for key, status in normalized.items():
+                weight = float(self.weights.get(key, 0.0))
+                if weight <= 0.0:
+                    continue
+                total_weight += weight
+                weighted_score += weight * score_map[status]
+            if total_weight <= 0.0:
+                return self._aggregate_priority(normalized.values())
+            score = weighted_score / total_weight
+            if score >= 0.75:
+                return "ok"
+            if score >= 0.5:
+                return "warn"
+            return "nok"
+
+        return self._aggregate_priority(normalized.values())
+
+    @staticmethod
+    def _aggregate_priority(
+        statuses: Iterable[Literal["ok", "nok", "warn"]]
+    ) -> Literal["ok", "nok", "warn"]:
+        priority = {"ok": 0, "warn": 1, "nok": 2}
+        worst = "ok"
+        for status in statuses:
+            if priority[status] > priority[worst]:
+                worst = status
+        return cast(Literal["ok", "nok", "warn"], worst)
 
 
 @dataclass(slots=True)

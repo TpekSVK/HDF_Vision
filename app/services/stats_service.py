@@ -22,7 +22,7 @@ class StatsService:
 
     # ---------- Public API ----------
 
-    def daily_for_recipe(self, recipe: str) -> Dict[str, Any]:
+    def daily_for_recipe(self, recipe: str, *, view_id: str | None = None) -> Dict[str, Any]:
         """
         Vráti denné štatistiky pre recept.
         Ak recept neexistuje alebo DB zlyhá, vráti default prázdne štatistiky.
@@ -38,7 +38,7 @@ class StatsService:
             return self._default_summary()
 
         try:
-            raw = self.db.daily_stats(rid)
+            raw = self.db.daily_stats(rid, view_id=view_id)
         except Exception:
             return self._default_summary()
 

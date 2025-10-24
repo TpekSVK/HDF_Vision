@@ -3,9 +3,11 @@ from PySide6.QtWidgets import (
     QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont, QImage, QPixmap
+from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import math
+from pathlib import Path
+import uuid
 from collections.abc import Mapping, Sequence
 from numbers import Integral, Real
 from typing import Any
@@ -25,9 +27,11 @@ from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.results_strip import ResultsStrip
+from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
+from app.models.schema import RecipeV2
 
 
 class MainWindow(QMainWindow):
@@ -56,6 +60,8 @@ class MainWindow(QMainWindow):
         self._last_cycle_time_ms: float | None = None
         self._last_pipeline_status: str | None = None
         self._tool_selector_items: list[dict[str, Any]] = []
+        self._view_states: dict[str, dict[str, Any]] = {}
+        self._active_view_id: str | None = None
 
         # Tool/Recipe
         try:
@@ -178,6 +184,18 @@ class MainWindow(QMainWindow):
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
 
+        view_strip_container = QWidget()
+        view_strip_layout = QVBoxLayout(view_strip_container)
+        view_strip_layout.setContentsMargins(0, 0, 0, 0)
+        view_strip_layout.setSpacing(4)
+        view_strip_label = QLabel("Pohľady")
+        vf = QFont(); vf.setBold(True)
+        view_strip_label.setFont(vf)
+        view_strip_layout.addWidget(view_strip_label)
+        self.view_strip = ViewStrip(on_view_selected=self._on_view_selected_view)
+        view_strip_layout.addWidget(self.view_strip)
+        run.addWidget(view_strip_container)
+
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
         preview_container.setMaximumHeight(540)
@@ -264,9 +282,10 @@ class MainWindow(QMainWindow):
         self._run_timer.timeout.connect(self._update_live_view)
         # spúšťa sa až pri Live ON v _toggle_live()
 
-        # inicializuj pravý panel hodnotami
-        self._update_sidebar()
+        # inicializuj pohľady a pravý panel
+        self._refresh_views()
         self._refresh_tool_selector()
+        self._update_sidebar(view_id=self._active_view_id)
 
         # maximalizovať a uzamknúť veľkosť okna po zobrazení
         QTimer.singleShot(0, self._maximize_and_lock)
@@ -319,6 +338,10 @@ class MainWindow(QMainWindow):
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
         return getattr(self.tool, "recipe", "default") or "default"
+
+    @property
+    def active_view_id(self) -> str | None:
+        return self._active_view_id
 
     # ---------- UI akcie ----------
     def toggle_mode(self):
@@ -396,10 +419,9 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setText("Žiadny snímok z kamery.")
                 return
 
-            frame_u8 = frame.copy()
+            base_frame = frame.copy()
             self.gpio.emit_heartbeat()
             recipe_name = self.current_recipe_name()
-            golden = getattr(self.tool, "golden", None)
 
             try:
                 recipe_cfg = load_recipe_config(recipe_name)
@@ -407,65 +429,141 @@ class MainWindow(QMainWindow):
                 print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
                 recipe_cfg = None
 
-            if golden is None or recipe_cfg is None or not getattr(recipe_cfg, "tools", []):
-                self._run_legacy_trigger(frame_u8, recipe_name)
+            if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
+                self._run_legacy_trigger(base_frame, recipe_name)
                 return
 
             if not getattr(recipe_cfg, "regions", None):
                 recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
             recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
 
-            result = run_pipeline(
-                golden,
-                frame_u8,
-                recipe_cfg,
-                recipe_name=recipe_name,
-                notes="manual_trigger",
-            )
+            fail_fast = bool(getattr(recipe_cfg.aggregation, "fail_fast", False))
+            run_id = f"{recipe_name}_{uuid.uuid4().hex[:8]}"
+            per_view_statuses: dict[str, str] = {}
 
-            status = (result.status or "ok").lower()
-            status_text = status.upper()
+            # reset strip statuses before nového cyklu
+            for vid in self.view_strip.view_ids():
+                self.view_strip.set_status(vid, None)
+                state = self._view_states.get(vid)
+                if isinstance(state, dict):
+                    state.pop("reports", None)
+                    state.pop("status", None)
+                    state.pop("cycle_time_ms", None)
+                    state.pop("combined_metrics", None)
+            self._update_metrics_panel()
+
+            last_preview_frame = base_frame
+
+            for index, view in enumerate(recipe_cfg.views):
+                view_id = getattr(view, "id", None) or f"view_{index+1}"
+                view_name = getattr(view, "name", view_id)
+                golden = self._load_view_golden_array(recipe_name, view)
+
+                if index == 0:
+                    view_frame = base_frame
+                else:
+                    view_frame = self.cam.last_frame() or base_frame
+
+                view_frame_u8 = view_frame.copy()
+
+                if golden is None:
+                    status = "nok"
+                    reports: list[dict[str, Any]] = []
+                    diagnostics_payload = ["missing_golden"]
+                    combined_metrics: dict[str, Any] = {}
+                    policy_applied = None
+                    result = None
+                    last_preview_frame = view_frame_u8.copy()
+                else:
+                    view_recipe = RecipeV2(
+                        pose_enabled=recipe_cfg.pose_enabled,
+                        regions=[dict(r) for r in recipe_cfg.regions],
+                        tools=[tool.copy() for tool in getattr(view, "tools", [])],
+                        views=[view.copy()],
+                        aggregation=recipe_cfg.aggregation.copy(),
+                        on_locator_failure=recipe_cfg.on_locator_failure,
+                        export_artifacts=recipe_cfg.export_artifacts,
+                    )
+
+                    result = run_pipeline(
+                        golden,
+                        view_frame_u8,
+                        view_recipe,
+                        recipe_name=recipe_name,
+                        notes=f"manual_trigger::{view_id}",
+                    )
+
+                    status = (result.status or "ok").lower()
+                    diagnostics_payload = [
+                        self._simplify_value(diag)
+                        for diag in getattr(result, "diagnostics", []) or []
+                    ]
+                    reports = [
+                        self._serialize_tool_report(report)
+                        for report in result.per_tool
+                    ]
+                    combined_metrics = self._merge_pipeline_metrics(reports)
+                    policy_applied = getattr(result, "policy_applied", None)
+
+                    context_frame = getattr(result.context, "frame_aligned", None)
+                    if context_frame is None:
+                        context_frame = getattr(result.context, "frame", None)
+                    if isinstance(context_frame, np.ndarray):
+                        last_preview_frame = context_frame.copy()
+                    else:
+                        last_preview_frame = view_frame_u8.copy()
+
+                per_view_statuses[view_id] = status
+
+                cycle_time_value = float(result.cycle_time_ms) if result is not None else None
+
+                meta_payload = {
+                    "mode": "manual",
+                    "status": status,
+                    "view_id": view_id,
+                    "view_name": view_name,
+                    "cycle_time_ms": cycle_time_value,
+                    "per_tool": reports,
+                    "diagnostics": diagnostics_payload,
+                    "metrics": combined_metrics,
+                    "sequence_statuses": dict(per_view_statuses),
+                }
+                if policy_applied:
+                    meta_payload["policy_applied"] = policy_applied
+
+                save_production_result(
+                    view_frame_u8,
+                    meta_payload,
+                    recipe_name,
+                    store_full_nok=True,
+                    nok=status != "ok",
+                    run_id=run_id,
+                    view_id=view_id,
+                )
+
+                self.view_strip.set_status(view_id, status)
+                self._update_sidebar(
+                    per_tool=reports,
+                    status=status,
+                    cycle_time_ms=cycle_time_value,
+                    view_id=view_id,
+                )
+
+                if fail_fast and status == "nok":
+                    break
+
+            if self._active_view_id and self._active_view_id not in per_view_statuses:
+                self._update_sidebar(view_id=self._active_view_id)
+
+            aggregated_status = recipe_cfg.aggregation.aggregate_statuses(per_view_statuses)
             color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
-            self.lbl_status.setText(status_text)
-            self.lbl_status.setStyleSheet(f"color: {color_map.get(status, '#33dd66')};")
-            self.gpio.signal_result(status)
-
-            context_frame = getattr(result.context, "frame_aligned", None)
-            if context_frame is None:
-                context_frame = getattr(result.context, "frame", None)
-            if isinstance(context_frame, np.ndarray):
-                self._last_trigger_frame = context_frame.copy()
-            else:
-                self._last_trigger_frame = frame_u8.copy()
-
-            reports = [self._serialize_tool_report(report) for report in result.per_tool]
-            st = self.stats.daily_for_recipe(recipe_name)
-            self._update_sidebar(st, reports, status=status, cycle_time_ms=float(result.cycle_time_ms))
-
-            diagnostics_payload: list[Any] = []
-            for diag in getattr(result, "diagnostics", []) or []:
-                diagnostics_payload.append(self._simplify_value(diag))
-
-            combined_metrics = self._merge_pipeline_metrics(reports)
-
-            meta_payload = {
-                "mode": "manual",
-                "status": status,
-                "cycle_time_ms": float(result.cycle_time_ms),
-                "per_tool": reports,
-                "diagnostics": diagnostics_payload,
-                "metrics": combined_metrics,
-            }
-            if getattr(result, "policy_applied", None):
-                meta_payload["policy_applied"] = result.policy_applied
-
-            save_production_result(
-                frame_u8,
-                meta_payload,
-                recipe_name,
-                store_full_nok=True,
-                nok=status != "ok",
+            self.lbl_status.setText(aggregated_status.upper())
+            self.lbl_status.setStyleSheet(
+                f"color: {color_map.get(aggregated_status, '#33dd66')};"
             )
+            self.gpio.signal_result(aggregated_status)
+
+            self._last_trigger_frame = last_preview_frame.copy()
 
             self.strip.reload()
 
@@ -544,8 +642,10 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self.recipes, self)
         dlg.resize(1200, 800)
         dlg.exec()
-        self._update_sidebar()
+        self._refresh_views()
+        self.strip.reload()
         self._refresh_tool_selector()
+        self._update_sidebar(view_id=self._active_view_id)
 
     def open_gpio_wizard(self):
         self.gpio.set_active_recipe(self.current_recipe_name())
@@ -661,13 +761,15 @@ class MainWindow(QMainWindow):
         *,
         status: str | None = None,
         cycle_time_ms: float | None = None,
+        view_id: str | None = None,
     ):
         """Naplní pravý panel dennými štatistikami a poslednými metrikami."""
         try:
+            active_view = view_id or self._active_view_id
             name = self.current_recipe_name()
             self.sb_recipe.setText(f"Recept: {name}")
             if st is None:
-                st = self.stats.daily_for_recipe(name)
+                st = self.stats.daily_for_recipe(name, view_id=active_view)
             pose_enabled = getattr(self.tool, "pose_enabled", True)
             self.sb_pose.setText(f"Pose alignment: {'ON' if pose_enabled else 'OFF'}")
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")
@@ -675,14 +777,30 @@ class MainWindow(QMainWindow):
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
             self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
 
-            if per_tool is not None:
-                self._last_tool_reports = [dict(entry) for entry in per_tool]
-            if status is not None:
-                self._last_pipeline_status = status
-            if cycle_time_ms is not None:
-                self._last_cycle_time_ms = cycle_time_ms
+            if active_view:
+                state = self._view_states.setdefault(active_view, {})
+            else:
+                state = self._view_states.setdefault("", {})
 
-            self._update_metrics_panel()
+            if per_tool is not None:
+                reports = [dict(entry) for entry in per_tool]
+                state["reports"] = reports
+                if active_view == self._active_view_id:
+                    self._last_tool_reports = reports
+            if status is not None:
+                state["status"] = status
+                if active_view == self._active_view_id:
+                    self._last_pipeline_status = status
+            if cycle_time_ms is not None:
+                state["cycle_time_ms"] = cycle_time_ms
+                if active_view == self._active_view_id:
+                    self._last_cycle_time_ms = cycle_time_ms
+
+            if per_tool is not None:
+                state["combined_metrics"] = self._merge_pipeline_metrics(per_tool)
+
+            if active_view == self._active_view_id:
+                self._update_metrics_panel()
         except Exception:
             pass
 
@@ -719,35 +837,55 @@ class MainWindow(QMainWindow):
 
     def _update_metrics_panel(self):
         try:
+            active_view = self._active_view_id or ""
+            state = self._view_states.get(active_view, {})
+            reports = list(state.get("reports", []) or [])
+            status = state.get("status")
+            cycle_time = state.get("cycle_time_ms")
+
+            if active_view == self._active_view_id:
+                self._last_tool_reports = reports
+                self._last_pipeline_status = status
+                self._last_cycle_time_ms = cycle_time
+
             selection = self.cmb_tool.currentData()
-            if not self._last_tool_reports:
+            if not reports:
                 self._set_metrics_rows([])
                 return
 
             if selection is None:
-                rows = self._build_summary_rows()
+                rows = self._build_summary_rows(reports, status, cycle_time)
             else:
-                rows = self._build_tool_metric_rows(selection)
+                rows = self._build_tool_metric_rows(selection, reports)
             self._set_metrics_rows(rows)
         except Exception:
             self._set_metrics_rows([])
 
-    def _build_summary_rows(self) -> list[tuple[str, str]]:
+    def _build_summary_rows(
+        self,
+        reports: Sequence[Mapping[str, Any]],
+        status: str | None,
+        cycle_time_ms: float | None,
+    ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
-        if self._last_pipeline_status:
-            rows.append(("Celkový status", self._last_pipeline_status.upper()))
-        if self._last_cycle_time_ms is not None:
-            rows.append(("Cyklus [ms]", self._format_metric_value(self._last_cycle_time_ms)))
-        for report in self._last_tool_reports:
+        if status:
+            rows.append(("Celkový status", str(status).upper()))
+        if cycle_time_ms is not None:
+            rows.append(("Cyklus [ms]", self._format_metric_value(cycle_time_ms)))
+        for report in reports:
             name = str(report.get("name") or report.get("id") or "Tool")
             status = str(report.get("status") or "").upper() or "—"
             rows.append((name, status))
         return rows or [("Info", "Žiadne dáta")]
 
-    def _build_tool_metric_rows(self, selection: dict[str, Any]) -> list[tuple[str, str]]:
+    def _build_tool_metric_rows(
+        self,
+        selection: dict[str, Any],
+        reports: Sequence[Mapping[str, Any]],
+    ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         tool_id = str(selection.get("id")) if isinstance(selection, Mapping) else str(selection or "")
-        report = next((r for r in self._last_tool_reports if str(r.get("id")) == tool_id), None)
+        report = next((r for r in reports if str(r.get("id")) == tool_id), None)
         if report is None:
             return [("Info", "Žiadne dáta")]
 
@@ -874,6 +1012,88 @@ class MainWindow(QMainWindow):
                     combined[key] = value
         return combined
 
+    def _refresh_views(self):
+        try:
+            recipe_name = self.current_recipe_name()
+        except Exception:
+            recipe_name = "default"
+
+        try:
+            views = self.recipes.list_views(recipe_name)
+        except Exception:
+            views = []
+
+        entries = [view for view in views if getattr(view, "id", "")]
+        if not entries and views:
+            entries = views
+
+        self._view_states = {getattr(view, "id", ""): {} for view in entries if getattr(view, "id", "")}
+        default_view_id = entries[0].id if entries else None
+        self._active_view_id = default_view_id
+
+        self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
+        self.view_strip.set_active(self._active_view_id)
+
+    def _load_view_thumbnail(self, view: object) -> QPixmap | None:
+        try:
+            recipe_name = self.current_recipe_name()
+        except Exception:
+            recipe_name = "default"
+        golden_name = getattr(view, "golden_path", "golden.png") or "golden.png"
+        path = Path("/data") / "recipes" / recipe_name / golden_name
+        if not path.exists():
+            return None
+        reader = QImageReader(str(path))
+        reader.setAutoTransform(True)
+        img = reader.read()
+        if img.isNull():
+            return None
+        return QPixmap.fromImage(img)
+
+    def _load_view_golden_array(self, recipe_name: str, view: object):
+        import imageio.v3 as iio
+        import numpy as np
+
+        golden_name = getattr(view, "golden_path", "golden.png") or "golden.png"
+        path = Path("/data") / "recipes" / recipe_name / golden_name
+        if not path.exists():
+            return None
+        try:
+            arr = iio.imread(path)
+        except Exception as exc:
+            print(f"[Run] Golden read failed for {golden_name}: {exc}")
+            return None
+        if arr is None:
+            return None
+        arr = np.asarray(arr)
+        if arr.ndim == 3:
+            try:
+                import cv2
+
+                if arr.shape[2] >= 3:
+                    arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+                else:
+                    arr = arr[:, :, 0]
+            except Exception:
+                arr = arr[:, :, 0]
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8)
+        return arr
+
+    def _on_view_selected_view(self, view_id: str):
+        if not view_id or view_id == self._active_view_id:
+            return
+        if not self.view_strip.has_view(view_id):
+            return
+        self._active_view_id = view_id
+        self.view_strip.set_active(view_id)
+        self._refresh_tool_selector()
+        self._update_sidebar(view_id=view_id)
+        try:
+            self.strip.reload()
+        except Exception:
+            pass
+
     def _refresh_tool_selector(self):
         try:
             recipe_name = self.current_recipe_name()
@@ -881,7 +1101,7 @@ class MainWindow(QMainWindow):
             recipe_name = "default"
 
         try:
-            tools = self.recipes.get_published_tools(recipe_name)
+            tools = self.recipes.get_published_tools(recipe_name, self._active_view_id)
         except Exception:
             tools = []
 
@@ -964,12 +1184,13 @@ class MainWindow(QMainWindow):
         try:
             self.recipes.load(name)
             self.tool = self.recipes.tool
+            self._refresh_views()
             self.lbl_status.setText("Recipe loaded.")
             # refresh štatistík + strip
-            st = self.stats.daily_for_recipe(name)
+            st = self.stats.daily_for_recipe(name, view_id=self._active_view_id)
             self.strip.reload()
             # update sidebar (nový recept, reset posledných metrík)
-            self._update_sidebar(st, [])
+            self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
             self.gpio.set_active_recipe(name)
         except Exception as e:
@@ -985,7 +1206,10 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(name)
         self.tool = self.recipes.tool
+        self._refresh_views()
+        self.strip.reload()
         self._refresh_tool_selector()
+        self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
@@ -1000,7 +1224,10 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
+        self._refresh_views()
+        self.strip.reload()
         self._refresh_tool_selector()
+        self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
@@ -1017,7 +1244,10 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        self._refresh_views()
+        self.strip.reload()
         self._refresh_tool_selector()
+        self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
