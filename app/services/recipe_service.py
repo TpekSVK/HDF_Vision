@@ -3,7 +3,13 @@ from pathlib import Path
 import json
 from typing import Iterable, List, Sequence, Optional
 
-from app.models.schema import RecipeData, RecipeV2, Tool, RecipeView
+from app.models.schema import (
+    RecipeData,
+    RecipeV2,
+    Tool,
+    RecipeView,
+    ViewCameraProfile,
+)
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
@@ -105,35 +111,63 @@ class RecipeService:
         name: str,
         *,
         source_view_id: str | None = None,
+        view_id: str | None = None,
+        view_name: str | None = None,
+        camera_profile: ViewCameraProfile | dict | str | None = None,
+        settle_ms: int | None = None,
+        trigger_mode: str | None = None,
+        trigger_interval_ms: int | None = None,
     ) -> RecipeView:
         import shutil
 
         recipe = self._load_recipe_config(name)
         existing_ids = {view.id for view in recipe.views}
-        new_index = 1
-        new_id = ""
-        while not new_id:
-            candidate = f"view_{new_index}"
-            if candidate not in existing_ids:
-                new_id = candidate
-            else:
-                new_index += 1
+        if view_id:
+            candidate_id = str(view_id).strip()
+            if not candidate_id:
+                raise ValueError("View ID must be a non-empty string")
+            if candidate_id in existing_ids:
+                raise ValueError(f"View ID '{candidate_id}' already exists")
+            new_id = candidate_id
+        else:
+            new_index = 1
+            new_id = ""
+            while not new_id:
+                candidate = f"view_{new_index}"
+                if candidate not in existing_ids:
+                    new_id = candidate
+                else:
+                    new_index += 1
 
         existing_names = {view.name for view in recipe.views}
-        new_name = f"View {new_index}"
-        while new_name in existing_names:
-            new_index += 1
-            new_name = f"View {new_index}"
+        if view_name:
+            new_name = str(view_name).strip() or f"View {len(existing_names) + 1}"
+        else:
+            new_index_for_name = 1
+            new_name = f"View {new_index_for_name}"
+            while new_name in existing_names:
+                new_index_for_name += 1
+                new_name = f"View {new_index_for_name}"
 
         source_tools: List[Tool] = []
-        source_camera: Optional[str] = None
+        source_camera: ViewCameraProfile | dict | str | None = None
         source_settle: Optional[int] = None
+        source_trigger_mode: str | None = None
+        source_trigger_interval: Optional[int] = None
         source_golden: Optional[str] = None
         if source_view_id:
             try:
                 source_view = recipe.get_view(source_view_id)
-                source_camera = source_view.camera_profile
+                profile = source_view.camera_profile
+                if isinstance(profile, ViewCameraProfile):
+                    source_camera = profile.copy()
+                elif isinstance(profile, dict):
+                    source_camera = dict(profile)
+                else:
+                    source_camera = profile
                 source_settle = source_view.settle_ms
+                source_trigger_mode = source_view.trigger_mode
+                source_trigger_interval = source_view.trigger_interval_ms
                 source_golden = source_view.golden_path
                 draft_tools = self._ensure_draft_tools(name, source_view_id, recipe)
                 source_tools = [tool.copy() for tool in draft_tools]
@@ -141,12 +175,35 @@ class RecipeService:
                 source_tools = []
 
         golden_filename = f"golden_{new_id}.png"
+        target_camera = camera_profile if camera_profile is not None else source_camera
+        if isinstance(target_camera, ViewCameraProfile):
+            camera_payload: ViewCameraProfile | dict | str | None = target_camera.copy()
+        elif isinstance(target_camera, dict):
+            camera_payload = dict(target_camera)
+        else:
+            camera_payload = target_camera
+
+        target_settle = settle_ms if settle_ms is not None else source_settle
+        target_trigger_mode = (trigger_mode or source_trigger_mode or "timed").strip().lower()
+        if target_trigger_mode not in {"timed", "external"}:
+            target_trigger_mode = "timed"
+        if target_trigger_mode != "timed":
+            target_trigger_interval = None
+        else:
+            target_trigger_interval = (
+                trigger_interval_ms
+                if trigger_interval_ms is not None
+                else source_trigger_interval
+            )
+
         new_view = RecipeView(
             id=new_id,
             name=new_name,
             golden_path=golden_filename,
-            camera_profile=source_camera,
-            settle_ms=source_settle,
+            camera_profile=camera_payload,
+            settle_ms=target_settle,
+            trigger_mode=target_trigger_mode,
+            trigger_interval_ms=target_trigger_interval,
             tools=[],
         )
         if source_tools:
@@ -171,6 +228,68 @@ class RecipeService:
         drafts[new_id] = [tool.copy() for tool in normalized_view.tools]
         self.db.mark_recipe_draft_updated(name)
         return normalized_view.copy()
+
+    def update_view(
+        self,
+        name: str,
+        view_id: str,
+        *,
+        view_name: str,
+        camera_profile: ViewCameraProfile | dict | str | None,
+        settle_ms: int | None,
+        trigger_mode: str,
+        trigger_interval_ms: int | None,
+    ) -> RecipeView:
+        recipe = self._load_recipe_config(name)
+        view = recipe.get_view(view_id)
+
+        normalized_name = str(view_name or "").strip()
+        if not normalized_name:
+            raise ValueError("View name must not be empty")
+
+        if isinstance(camera_profile, ViewCameraProfile):
+            camera_payload: ViewCameraProfile | dict | str | None = camera_profile.copy()
+        elif isinstance(camera_profile, dict):
+            camera_payload = dict(camera_profile)
+        else:
+            camera_payload = camera_profile
+
+        normalized_mode = str(trigger_mode or "timed").strip().lower()
+        if normalized_mode not in {"timed", "external"}:
+            normalized_mode = "timed"
+        if normalized_mode != "timed":
+            normalized_interval = None
+        else:
+            normalized_interval = (
+                int(trigger_interval_ms)
+                if trigger_interval_ms is not None
+                else None
+            )
+
+        updated_view = RecipeView(
+            id=view.id,
+            name=normalized_name,
+            golden_path=view.golden_path,
+            camera_profile=camera_payload,
+            settle_ms=settle_ms,
+            trigger_mode=normalized_mode,
+            trigger_interval_ms=normalized_interval,
+            tools=[tool.copy() for tool in view.tools],
+        )
+
+        replaced: list[RecipeView] = []
+        for existing in recipe.views:
+            if existing.id == view.id:
+                replaced.append(updated_view)
+            else:
+                replaced.append(existing.copy())
+        recipe.views = replaced
+        normalized = self._save_recipe_config(name, recipe)
+        updated = normalized.get_view(view.id)
+        drafts = self._draft_tools.setdefault(name, {})
+        drafts.setdefault(view.id, [tool.copy() for tool in updated.tools])
+        self.db.mark_recipe_draft_updated(name)
+        return updated.copy()
 
     def remove_view(self, name: str, view_id: str) -> List[RecipeView]:
         recipe = self._load_recipe_config(name)
