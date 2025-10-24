@@ -13,8 +13,8 @@ class RecipeService:
         self.base = Path(base_dir)
         self.db = db or DbService(self.base / "HDF_Vision.db")
         self.tool = ToolService(base_dir=base_dir)
-        self._draft_tools: dict[str, List[Tool]] = {}
-        self._locator_autosort: dict[str, bool] = {}
+        self._draft_tools: dict[str, dict[str, List[Tool]]] = {}
+        self._locator_autosort: dict[tuple[str, str], bool] = {}
 
     def list(self) -> list[str]:
         # DB je master
@@ -92,36 +92,62 @@ class RecipeService:
         return normalized
 
     # --- tools ---
-    def load_tools(self, name: str, *, use_draft: bool = True) -> List[Tool]:
-        if use_draft:
-            tools = self._get_persisted_tools(name)
-            self._draft_tools[name] = [tool.copy() for tool in tools]
-            return [tool.copy() for tool in tools]
-
-        return [tool.copy() for tool in self.get_published_tools(name)]
-
-    def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> tuple[List[Tool], bool]:
+    def load_tools(
+        self, name: str, *, use_draft: bool = True, view_id: str | None = None
+    ) -> List[Tool]:
         recipe = self._load_recipe_config(name)
-        recipe.tools = self._coerce_tools(tools)
-        normalized = self._save_recipe_config(name, recipe)
-        autosorted = self._locator_autosort.pop(name, False)
-        self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
-        self.db.mark_recipe_draft_updated(name)
-        return [tool.copy() for tool in normalized.tools], autosorted
+        view = recipe.get_view(view_id)
+        if use_draft:
+            draft = self._ensure_draft_tools(name, view.id, recipe)
+            return [tool.copy() for tool in draft]
 
-    def publish_recipe(self, name: str) -> tuple[List[Tool], bool]:
+        return [tool.copy() for tool in self.get_published_tools(name, view.id)]
+
+    def save_tools(
+        self,
+        name: str,
+        tools: Sequence[Tool | dict],
+        *,
+        view_id: str | None = None,
+    ) -> tuple[List[Tool], bool]:
+        recipe = self._load_recipe_config(name)
+        view = recipe.get_view(view_id)
+        coerced = self._coerce_tools(tools)
+        view.set_tools(coerced)
+        normalized = self._save_recipe_config(name, recipe)
+        normalized_view = normalized.get_view(view.id)
+        autosorted = self._locator_autosort.pop((name, view.id), False)
+        self._draft_tools.setdefault(name, {})[view.id] = [
+            tool.copy() for tool in normalized_view.tools
+        ]
+        self.db.mark_recipe_draft_updated(name)
+        return [tool.copy() for tool in normalized_view.tools], autosorted
+
+    def publish_recipe(
+        self, name: str, *, view_id: str | None = None
+    ) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
         publish_copy = recipe.copy()
-        normalized_tools, autosorted = self._normalize_tools(publish_copy.tools)
-        publish_copy.tools = normalized_tools
+        autosorted_any = False
+        for view in publish_copy.views:
+            normalized_tools, autosorted = self._normalize_tools(view.tools)
+            view.set_tools(normalized_tools)
+            self._locator_autosort[(name, view.id)] = autosorted
+            autosorted_any = autosorted_any or autosorted
+        publish_copy._sync_tools_from_views()
         self._save_published_recipe_config(name, publish_copy)
         self.db.mark_recipe_published(name)
-        self._draft_tools[name] = [tool.copy() for tool in publish_copy.tools]
-        return [tool.copy() for tool in publish_copy.tools], autosorted
+        self._draft_tools[name] = {
+            view.id: [tool.copy() for tool in view.tools]
+            for view in publish_copy.views
+        }
+        target_view = publish_copy.get_view(view_id)
+        return [tool.copy() for tool in target_view.tools], autosorted_any
 
-    def get_published_tools(self, name: str) -> List[Tool]:
+    def get_published_tools(self, name: str, view_id: str | None = None) -> List[Tool]:
         recipe = self._load_published_recipe_config(name)
-        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+        view = recipe.get_view(view_id)
+        return [tool.copy() for tool in self._sort_tools(view.tools)]
 
     def has_unpublished_changes(self, name: str) -> bool:
         state = self.db.recipe_publish_state(name)
@@ -145,40 +171,59 @@ class RecipeService:
         self.db.mark_recipe_draft_updated(name)
 
     # --- draft tool management ---
-    def get_draft_tools(self, name: str) -> List[Tool]:
-        draft = self._ensure_draft_tools(name)
+    def get_draft_tools(self, name: str, view_id: str | None = None) -> List[Tool]:
+        draft = self._ensure_draft_tools(name, view_id)
         return [tool.copy() for tool in draft]
 
-    def add_tool(self, recipe_id: str, tool: Tool | dict) -> List[Tool]:
-        draft = self._ensure_draft_tools(recipe_id)
+    def add_tool(
+        self, recipe_id: str, tool: Tool | dict, *, view_id: str | None = None
+    ) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id, view_id)
         draft.append(Tool.from_dict(tool))
-        self._normalize_draft_orders(draft)
+        self._normalize_draft_orders(draft, self._resolve_view_id(recipe_id, view_id))
         return [tool.copy() for tool in draft]
 
-    def remove_tool(self, recipe_id: str, tool_index: int) -> List[Tool]:
-        draft = self._ensure_draft_tools(recipe_id)
+    def remove_tool(
+        self, recipe_id: str, tool_index: int, *, view_id: str | None = None
+    ) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id, view_id)
         if 0 <= tool_index < len(draft):
             del draft[tool_index]
-            self._normalize_draft_orders(draft)
+            self._normalize_draft_orders(
+                draft, self._resolve_view_id(recipe_id, view_id)
+            )
         return [tool.copy() for tool in draft]
 
-    def update_tool(self, recipe_id: str, tool_index: int, tool: Tool | dict) -> List[Tool]:
-        draft = self._ensure_draft_tools(recipe_id)
+    def update_tool(
+        self,
+        recipe_id: str,
+        tool_index: int,
+        tool: Tool | dict,
+        *,
+        view_id: str | None = None,
+    ) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id, view_id)
         if tool_index < 0 or tool_index >= len(draft):
             raise IndexError("tool_index out of range")
         draft[tool_index] = Tool.from_dict(tool)
-        self._normalize_draft_orders(draft)
+        self._normalize_draft_orders(draft, self._resolve_view_id(recipe_id, view_id))
         return [entry.copy() for entry in draft]
 
-    def reorder_tools(self, recipe_id: str, new_order: Sequence[int]) -> List[Tool]:
-        draft = self._ensure_draft_tools(recipe_id)
+    def reorder_tools(
+        self,
+        recipe_id: str,
+        new_order: Sequence[int],
+        *,
+        view_id: str | None = None,
+    ) -> List[Tool]:
+        draft = self._ensure_draft_tools(recipe_id, view_id)
         if len(new_order) != len(draft):
             raise ValueError("new_order must match number of tools")
         if sorted(new_order) != list(range(len(draft))):
             raise ValueError("new_order must be a permutation of current indices")
         reordered = [draft[idx] for idx in new_order]
         draft[:] = reordered
-        self._normalize_draft_orders(draft)
+        self._normalize_draft_orders(draft, self._resolve_view_id(recipe_id, view_id))
         return [tool.copy() for tool in draft]
 
     # --- internals ---
@@ -193,9 +238,12 @@ class RecipeService:
                 raise TypeError(f"Unsupported tool entry: {type(tool)!r}")
         return coerced
 
-    def _get_persisted_tools(self, name: str) -> List[Tool]:
-        recipe = self._load_recipe_config(name)
-        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+    def _get_persisted_tools(
+        self, name: str, view_id: str | None, recipe: RecipeV2 | None = None
+    ) -> List[Tool]:
+        recipe_obj = recipe or self._load_recipe_config(name)
+        view = recipe_obj.get_view(view_id)
+        return [tool.copy() for tool in self._sort_tools(view.tools)]
 
     def _sort_tools(self, tools: Iterable[Tool]) -> List[Tool]:
         return [tool.copy() for tool in sorted(tools, key=lambda t: (t.order, t.name))]
@@ -212,17 +260,34 @@ class RecipeService:
         normalized = [tool.with_order(idx) for idx, tool in enumerate(enforced_order)]
         return normalized, autosorted
 
-    def _ensure_draft_tools(self, name: str) -> List[Tool]:
-        draft = self._draft_tools.get(name)
+    def _ensure_draft_tools(
+        self,
+        name: str,
+        view_id: str | None = None,
+        recipe: RecipeV2 | None = None,
+    ) -> List[Tool]:
+        recipe_views = self._draft_tools.setdefault(name, {})
+        resolved_view_id = self._resolve_view_id(name, view_id, recipe)
+        draft = recipe_views.get(resolved_view_id)
         if draft is None:
-            draft = self._get_persisted_tools(name)
-            self._draft_tools[name] = [tool.copy() for tool in draft]
-            draft = self._draft_tools[name]
+            persisted = self._get_persisted_tools(name, resolved_view_id, recipe)
+            draft = [tool.copy() for tool in persisted]
+            recipe_views[resolved_view_id] = draft
         return draft
 
-    def _normalize_draft_orders(self, draft: List[Tool]) -> None:
+    def _normalize_draft_orders(self, draft: List[Tool], view_id: str) -> None:
         for idx, tool in enumerate(draft):
             tool.order = idx
+            tool.view_id = view_id
+
+    def _resolve_view_id(
+        self,
+        name: str,
+        view_id: str | None,
+        recipe: RecipeV2 | None = None,
+    ) -> str:
+        recipe_obj = recipe or self._load_recipe_config(name)
+        return recipe_obj.get_view(view_id).id
 
     def _load_recipe_config(self, name: str) -> RecipeV2:
         recipe = load_recipe_config(name, base_dir=self.base)
@@ -232,9 +297,11 @@ class RecipeService:
 
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
         recipe_copy = recipe.copy()
-        normalized_tools, autosorted = self._normalize_tools(recipe_copy.tools)
-        recipe_copy.tools = normalized_tools
-        self._locator_autosort[name] = autosorted
+        for view in recipe_copy.views:
+            normalized_tools, autosorted = self._normalize_tools(view.tools)
+            view.set_tools(normalized_tools)
+            self._locator_autosort[(name, view.id)] = autosorted
+        recipe_copy._sync_tools_from_views()
         save_recipe_config(name, recipe_copy, base_dir=self.base)
         return recipe_copy
 

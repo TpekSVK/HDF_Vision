@@ -291,6 +291,7 @@ class Tool:
     params: ToolParams = field(default_factory=ToolParams)
     thresholds: ToolThresholds = field(default_factory=ToolThresholds)
     template_roi: ToolRoi = field(default_factory=ToolRoi)
+    view_id: str = ""
 
     def __post_init__(self) -> None:
         self.type = str(self.type)
@@ -314,6 +315,7 @@ class Tool:
                 self.params.values["template_roi"] = template_roi_dict
             elif has_template_key:
                 self.params.values["template_roi"] = None
+        self.view_id = str(self.view_id or "")
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -326,6 +328,7 @@ class Tool:
             "params": self.params.to_dict(),
             "thresholds": self.thresholds.to_dict(),
             "template_roi": self.template_roi.to_dict() if self.template_roi.rect() else None,
+            "view_id": self.view_id or None,
         }
 
     @classmethod
@@ -348,6 +351,7 @@ class Tool:
             params=params,
             thresholds=ToolThresholds.from_obj(data.get("thresholds")),
             template_roi=ToolRoi.from_obj(template_roi_data),
+            view_id=str(data.get("view_id", "")),
         )
 
     def copy(self) -> "Tool":
@@ -361,12 +365,147 @@ class Tool:
             params=self.params.copy(),
             thresholds=self.thresholds.copy(),
             template_roi=self.template_roi.copy(),
+            view_id=self.view_id,
         )
 
     def with_order(self, order: int) -> "Tool":
         tool = self.copy()
         tool.order = int(order)
         return tool
+
+
+@dataclass(slots=True)
+class RecipeAggregation:
+    """Aggregation policy for combining per-view results."""
+
+    mode: Literal["AND", "OR", "WEIGHTED"] = "AND"
+    weights: Dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        mode = str(self.mode or "AND").upper()
+        if mode not in {"AND", "OR", "WEIGHTED"}:
+            mode = "AND"
+        self.mode = mode
+        normalized: Dict[str, float] = {}
+        if mode == "WEIGHTED":
+            for key, value in dict(self.weights).items():
+                try:
+                    normalized[str(key)] = float(value)
+                except Exception:
+                    continue
+        self.weights = normalized
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "weights": dict(self.weights) if self.mode == "WEIGHTED" else {},
+        }
+
+    @classmethod
+    def from_obj(cls, obj: Any | None) -> "RecipeAggregation":
+        if isinstance(obj, RecipeAggregation):
+            return obj.copy()
+        if obj is None:
+            return cls()
+        if isinstance(obj, dict):
+            return cls(mode=obj.get("mode", "AND"), weights=obj.get("weights", {}))
+        return cls(mode=getattr(obj, "mode", "AND"), weights=getattr(obj, "weights", {}))
+
+    def copy(self) -> "RecipeAggregation":
+        return RecipeAggregation(mode=self.mode, weights=dict(self.weights))
+
+    def align_with_views(self, views: Sequence["RecipeView"]) -> "RecipeAggregation":
+        if self.mode != "WEIGHTED":
+            self.weights = {}
+            return self
+
+        aligned: Dict[str, float] = {}
+        for view in views:
+            weight = float(self.weights.get(view.id, 0.0)) if view.id else 0.0
+            aligned[view.id] = weight
+
+        if views and all(weight <= 0.0 for weight in aligned.values()):
+            default_weight = 1.0 / float(len(views))
+            aligned = {view.id: default_weight for view in views}
+
+        self.weights = aligned
+        return self
+
+
+@dataclass(slots=True)
+class RecipeView:
+    """Single viewpoint definition within a multi-view recipe."""
+
+    id: str = ""
+    name: str = ""
+    golden_path: str = "golden.png"
+    camera_profile: Optional[str] = None
+    settle_ms: Optional[int] = None
+    tools: List[Tool] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        self.id = str(self.id or "").strip()
+        self.name = str(self.name or "").strip()
+        self.golden_path = str(self.golden_path or "golden.png")
+        self.camera_profile = (str(self.camera_profile) if self.camera_profile else None)
+        if self.settle_ms is not None:
+            try:
+                self.settle_ms = int(self.settle_ms)
+            except Exception:
+                self.settle_ms = None
+
+        converted: List[Tool] = []
+        for tool in self.tools:
+            if isinstance(tool, Tool):
+                converted.append(tool.copy())
+            else:
+                converted.append(Tool.from_dict(tool))
+        if self.id:
+            for tool in converted:
+                if not tool.view_id:
+                    tool.view_id = self.id
+        self.tools = converted
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "golden_path": self.golden_path,
+            "camera_profile": self.camera_profile,
+            "settle_ms": self.settle_ms,
+            "tools": [tool.to_dict() for tool in self.tools],
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any] | "RecipeView") -> "RecipeView":
+        if isinstance(data, RecipeView):
+            return data.copy()
+        if not isinstance(data, dict):
+            raise TypeError("RecipeView.from_dict expects a dict or RecipeView instance")
+        return cls(
+            id=data.get("id", ""),
+            name=data.get("name", ""),
+            golden_path=data.get("golden_path", "golden.png"),
+            camera_profile=data.get("camera_profile"),
+            settle_ms=data.get("settle_ms"),
+            tools=data.get("tools", []),
+        )
+
+    def copy(self) -> "RecipeView":
+        return RecipeView(
+            id=self.id,
+            name=self.name,
+            golden_path=self.golden_path,
+            camera_profile=self.camera_profile,
+            settle_ms=self.settle_ms,
+            tools=[tool.copy() for tool in self.tools],
+        )
+
+    def set_tools(self, tools: Sequence[Tool]) -> None:
+        converted = [tool.copy() for tool in tools]
+        for tool in converted:
+            tool.view_id = self.id
+        self.tools = converted
 
 
 @dataclass(slots=True)
@@ -397,6 +536,8 @@ class RecipeV2:
     pose_enabled: bool = True
     regions: List[Dict[str, Any]] = field(default_factory=list)
     tools: List[Tool] = field(default_factory=list)
+    views: List[RecipeView] = field(default_factory=list)
+    aggregation: RecipeAggregation = field(default_factory=RecipeAggregation)
     on_locator_failure: Literal["fail", "continue_without_alignment"] = (
         "continue_without_alignment"
     )
@@ -405,14 +546,43 @@ class RecipeV2:
     def __post_init__(self) -> None:
         self.pose_enabled = bool(self.pose_enabled)
         self.regions = [dict(r) for r in self.regions]
-        converted: List[Tool] = []
+        converted_tools: List[Tool] = []
         for tool in self.tools:
             if isinstance(tool, Tool):
-                converted.append(tool.copy())
+                converted_tools.append(tool.copy())
             else:
-                converted.append(Tool.from_dict(tool))
-        converted.sort(key=lambda t: t.order)
-        self.tools = converted
+                converted_tools.append(Tool.from_dict(tool))
+        converted_tools.sort(key=lambda t: t.order)
+        self.tools = converted_tools
+
+        converted_views: List[RecipeView] = []
+        for view in self.views:
+            if isinstance(view, RecipeView):
+                converted_views.append(view.copy())
+            else:
+                converted_views.append(RecipeView.from_dict(view))
+
+        if not converted_views:
+            default_view = RecipeView(
+                id="view_1",
+                name="View 1",
+                golden_path="golden.png",
+                tools=[tool.copy() for tool in self.tools],
+            )
+            converted_views = [default_view]
+        else:
+            for idx, view in enumerate(converted_views, start=1):
+                if not view.id:
+                    view.id = f"view_{idx}"
+                if not view.name:
+                    view.name = f"View {idx}"
+                for tool in view.tools:
+                    if not tool.view_id:
+                        tool.view_id = view.id
+
+        self.views = converted_views
+        self.aggregation = RecipeAggregation.from_obj(self.aggregation)
+        self._sync_tools_from_views()
 
         policy = str(self.on_locator_failure or "").lower()
         if policy not in {"fail", "continue_without_alignment"}:
@@ -426,6 +596,8 @@ class RecipeV2:
             "pose_enabled": bool(self.pose_enabled),
             "regions": [dict(r) for r in self.regions],
             "tools": [t.to_dict() for t in self.tools],
+            "views": [view.to_dict() for view in self.views],
+            "aggregation": self.aggregation.to_dict(),
             "on_locator_failure": self.on_locator_failure,
             "export_artifacts": bool(self.export_artifacts),
         }
@@ -438,6 +610,8 @@ class RecipeV2:
             pose_enabled=data.get("pose_enabled", True),
             regions=data.get("regions", []),
             tools=data.get("tools", []),
+            views=data.get("views", []),
+            aggregation=data.get("aggregation"),
             on_locator_failure=data.get(
                 "on_locator_failure", "continue_without_alignment"
             ),
@@ -450,6 +624,15 @@ class RecipeV2:
             pose_enabled=recipe.pose_enabled,
             regions=recipe.regions,
             tools=[],
+            views=[
+                RecipeView(
+                    id="view_1",
+                    name="View 1",
+                    golden_path="golden.png",
+                    tools=[],
+                )
+            ],
+            aggregation=RecipeAggregation(),
             on_locator_failure="continue_without_alignment",
             export_artifacts=False,
         )
@@ -459,19 +642,52 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=[tool.copy() for tool in self.tools],
+            views=[view.copy() for view in self.views],
+            aggregation=self.aggregation.copy(),
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":
-        new_tools = [tool.copy() for tool in tools]
-        return RecipeV2(
-            pose_enabled=self.pose_enabled,
-            regions=[deepcopy(r) for r in self.regions],
-            tools=new_tools,
-            on_locator_failure=self.on_locator_failure,
-            export_artifacts=self.export_artifacts,
-        )
+        new_recipe = self.copy()
+        if new_recipe.views:
+            new_recipe.views[0].set_tools(tools)
+            new_recipe._sync_tools_from_views()
+        else:
+            new_recipe.tools = [tool.copy() for tool in tools]
+        return new_recipe
 
-    def iter_tools(self) -> Iterable[Tool]:
-        return tuple(tool.copy() for tool in self.tools)
+    def iter_tools(self, view_id: Optional[str] = None) -> Iterable[Tool]:
+        if view_id is None:
+            return tuple(tool.copy() for tool in self.tools)
+        view = self.get_view(view_id)
+        return tuple(tool.copy() for tool in view.tools)
+
+    def get_view(self, view_id: Optional[str] = None) -> RecipeView:
+        if not self.views:
+            raise ValueError("Recipe has no views configured")
+        if view_id is None:
+            return self.views[0]
+        for view in self.views:
+            if view.id == view_id:
+                return view
+        raise KeyError(f"View '{view_id}' not found in recipe")
+
+    def _sync_tools_from_views(self) -> None:
+        aggregated: List[Tool] = []
+        base_index = 0
+        for view in self.views:
+            ordered_tools = sorted(view.tools, key=lambda t: (t.order, t.name))
+            normalized_view_tools: List[Tool] = []
+            for local_index, tool in enumerate(ordered_tools):
+                tool_copy = tool.copy()
+                tool_copy.order = local_index
+                tool_copy.view_id = view.id
+                normalized_view_tools.append(tool_copy)
+                aggregated_tool = tool_copy.copy()
+                aggregated_tool.order = base_index + local_index
+                aggregated.append(aggregated_tool)
+            view.tools = normalized_view_tools
+            base_index += len(normalized_view_tools)
+        self.tools = aggregated
+        self.aggregation.align_with_views(self.views)
