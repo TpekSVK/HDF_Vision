@@ -30,6 +30,8 @@ CREATE TABLE IF NOT EXISTS results (
   ssim REAL,
   blob_count INTEGER,
   total_area INTEGER,
+  view_id TEXT,
+  run_id TEXT,
   thumb_path TEXT,
   full_path TEXT,
   meta_json TEXT,
@@ -58,6 +60,12 @@ class DbService:
             cur.execute("ALTER TABLE recipes ADD COLUMN draft_updated_at TIMESTAMP")
         if "published_at" not in columns:
             cur.execute("ALTER TABLE recipes ADD COLUMN published_at TIMESTAMP")
+        cur.execute("PRAGMA table_info(results)")
+        result_columns = {row[1] for row in cur.fetchall()}
+        if "view_id" not in result_columns:
+            cur.execute("ALTER TABLE results ADD COLUMN view_id TEXT")
+        if "run_id" not in result_columns:
+            cur.execute("ALTER TABLE results ADD COLUMN run_id TEXT")
         self._conn.commit()
 
     def conn(self):
@@ -167,29 +175,48 @@ class DbService:
         return {k: float(v) for (k, v) in cur.fetchall()}
 
     # -------- results --------
-    def insert_result(self, ts_ms: int, recipe_id: int, ok: bool, metrics: Dict[str, Any],
-                      thumb_path: str, full_path: Optional[str], meta_json: str):
+    def insert_result(
+        self,
+        ts_ms: int,
+        recipe_id: int,
+        ok: bool,
+        metrics: Dict[str, Any],
+        thumb_path: str,
+        full_path: Optional[str],
+        meta_json: str,
+        *,
+        view_id: str | None = None,
+        run_id: str | None = None,
+    ):
         cur = self._conn.cursor()
         cur.execute(
-            "INSERT INTO results(ts_ms, recipe_id, ok, ssim, blob_count, total_area, thumb_path, full_path, meta_json) "
-            "VALUES (?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO results(ts_ms, recipe_id, ok, ssim, blob_count, total_area, view_id, run_id, thumb_path, full_path, meta_json) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (
                 int(ts_ms), int(recipe_id), 1 if ok else 0,
                 float(metrics.get("ssim")) if "ssim" in metrics else None,
                 int(metrics.get("blob_count")) if "blob_count" in metrics else None,
                 int(metrics.get("total_area")) if "total_area" in metrics else None,
-                thumb_path, full_path, meta_json,
+                str(view_id) if view_id else None,
+                str(run_id) if run_id else None,
+                thumb_path,
+                full_path,
+                meta_json,
             )
         )
         self._conn.commit()
 
-    def daily_stats(self, recipe_id: int) -> Dict[str, Any]:
+    def daily_stats(self, recipe_id: int, view_id: str | None = None) -> Dict[str, Any]:
         cur = self._conn.cursor()
-        cur.execute(
+        query = (
             "SELECT COUNT(*), SUM(ok), COUNT(*)-SUM(ok) FROM results "
-            "WHERE recipe_id=? AND date(created_at)=date('now','localtime')",
-            (recipe_id,)
+            "WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
         )
+        params: list[Any] = [recipe_id]
+        if view_id:
+            query += " AND view_id=?"
+            params.append(str(view_id))
+        cur.execute(query, params)
         row = cur.fetchone()
         total = row[0] or 0
         ok = row[1] or 0
@@ -197,14 +224,21 @@ class DbService:
         yield_pct = (ok / total * 100.0) if total else 0.0
         return {"total": total, "ok": ok, "nok": nok, "yield": round(yield_pct, 2)}
    
-    def recent_results(self, recipe_id: int, limit: int = 12):
+    def recent_results(
+        self, recipe_id: int, limit: int = 12, *, view_id: str | None = None
+    ):
         cur = self._conn.cursor()
-        cur.execute(
-            "SELECT ts_ms, ok, thumb_path, full_path, ssim, blob_count, total_area "
-            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime') "
-            "ORDER BY id DESC LIMIT ?",
-            (recipe_id, int(limit))
+        query = (
+            "SELECT ts_ms, ok, thumb_path, full_path, ssim, blob_count, total_area, view_id, run_id "
+            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
         )
+        params: list[Any] = [recipe_id]
+        if view_id:
+            query += " AND view_id=?"
+            params.append(str(view_id))
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limit))
+        cur.execute(query, params)
         rows = cur.fetchall()
         return [
             {
@@ -215,6 +249,8 @@ class DbService:
                 "ssim": r[4],
                 "blob_count": r[5],
                 "total_area": r[6],
+                "view_id": r[7] if len(r) > 7 else None,
+                "run_id": r[8] if len(r) > 8 else None,
             }
             for r in rows
         ]
@@ -254,6 +290,7 @@ class DbService:
         *,
         limit: int = 12,
         tool_key: Optional[str] = None,
+        view_id: str | None = None,
     ) -> List[Dict[str, Any]]:
         records: list[dict[str, Any]] = []
 
@@ -270,6 +307,9 @@ class DbService:
             if tool_key and key_column:
                 query += f" AND {key_column}=?"
                 params.append(str(tool_key))
+            if view_id and "view_id" in columns:
+                query += " AND view_id=?"
+                params.append(str(view_id))
             if "created_at" in columns:
                 query += " ORDER BY datetime(created_at) DESC, id DESC LIMIT ?"
             else:
@@ -283,7 +323,7 @@ class DbService:
                 records.clear()
 
         if not records:
-            fallback = self.recent_results(recipe_id, limit)
+            fallback = self.recent_results(recipe_id, limit, view_id=view_id)
             for row in fallback:
                 records.append(
                     {

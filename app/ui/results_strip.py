@@ -138,7 +138,10 @@ class ResultsStrip(QWidget):
 
         try:
             records = self.mw.db.recent_image_records(
-                rid, limit=self.limit * 2, tool_key=tool_key
+                rid,
+                limit=self.limit * 2,
+                tool_key=tool_key,
+                view_id=self.mw.active_view_id,
             )
         except Exception as exc:
             logger.debug("Failed to fetch recent image records: %s", exc)
@@ -282,9 +285,22 @@ class ResultsStrip(QWidget):
             recipe_name = recipe_name or "default"
         except Exception:
             recipe_name = "default"
-        candidate = base / datetime.now().strftime("%Y%m%d") / recipe_name
-        if candidate.exists():
-            return candidate
+        day_dir = base / datetime.now().strftime("%Y%m%d")
+        if day_dir.exists():
+            if (day_dir / recipe_name).exists():
+                return day_dir / recipe_name
+            prefixed = sorted(
+                [
+                    child
+                    for child in day_dir.iterdir()
+                    if child.is_dir() and child.name.startswith(f"{recipe_name}_")
+                ],
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if prefixed:
+                return prefixed[0]
+            return day_dir
         if base.exists():
             return base
         return Path("/data")
@@ -427,19 +443,28 @@ class ResultsStrip(QWidget):
         for day_dir in day_dirs:
             if not day_dir.is_dir():
                 continue
+            candidate_roots: list[Path] = []
             recipe_dir = day_dir / recipe_name
-            search_roots: Iterable[Path]
             if recipe_dir.exists():
-                search_roots = [recipe_dir]
-            else:
-                search_roots = [day_dir]
-            for root in search_roots:
+                candidate_roots.append(recipe_dir)
+            try:
+                for child in day_dir.iterdir():
+                    if not child.is_dir():
+                        continue
+                    if child.name.startswith(f"{recipe_name}_"):
+                        candidate_roots.append(child)
+            except Exception:
+                pass
+            if not candidate_roots:
+                candidate_roots.append(day_dir)
+
+            for root in candidate_roots:
                 for subdir in ("overlay", "aligned", "thumbs", "full"):
                     directory = root / subdir
                     if not directory.exists():
                         continue
                     for ext in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
-                        for path in directory.glob(ext):
+                        for path in directory.rglob(ext):
                             try:
                                 candidates.append((path.stat().st_mtime, path))
                             except OSError:
