@@ -1,7 +1,7 @@
 # app/services/recipe_service.py
 from pathlib import Path
 import json
-from typing import Dict, Iterable, List, Sequence
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from app.models.schema import (
     DEFAULT_VIEW_ID,
@@ -104,6 +104,65 @@ class RecipeService:
         self.db.mark_recipe_draft_updated(name)
         return normalized
 
+    # --- views ---
+    def get_views(self, name: str) -> List[RecipeView]:
+        recipe = self._load_recipe_config(name)
+        return [self._copy_view(view) for view in recipe.views]
+
+    def add_view(
+        self,
+        name: str,
+        view: RecipeView | Dict[str, Any],
+        *,
+        duplicate_from: Optional[str] = None,
+    ) -> Tuple[List[RecipeView], List[Tool]]:
+        recipe = self._load_recipe_config(name)
+        primary_view = recipe.primary_view_id
+        new_view = self._coerce_view(view)
+        recipe.views.append(new_view)
+
+        source_view_id = (duplicate_from or primary_view).strip() or primary_view
+        valid_ids = {entry.id for entry in recipe.views}
+        if source_view_id not in valid_ids:
+            source_view_id = primary_view
+
+        clones: List[Tool] = []
+        for tool in recipe.tools:
+            current_view_id = (tool.view_id or primary_view).strip() or primary_view
+            if current_view_id == source_view_id:
+                clone = tool.copy()
+                clone.view_id = new_view.id
+                clones.append(clone)
+        if clones:
+            recipe.tools.extend(clones)
+
+        normalized = self._save_recipe_config(name, recipe)
+        self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
+        self.db.mark_recipe_draft_updated(name)
+        return (
+            [self._copy_view(view) for view in normalized.views],
+            [tool.copy() for tool in normalized.tools],
+        )
+
+    def set_view_golden_path(
+        self, name: str, view_id: str, golden_path: str
+    ) -> List[RecipeView]:
+        recipe = self._load_recipe_config(name)
+        normalized_path = str(golden_path or "").strip()
+        updated = False
+        for view in recipe.views:
+            if view.id == view_id:
+                view.golden_path = normalized_path
+                updated = True
+                break
+        if not updated:
+            raise KeyError(f"Unknown view: {view_id}")
+
+        normalized = self._save_recipe_config(name, recipe)
+        self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
+        self.db.mark_recipe_draft_updated(name)
+        return [self._copy_view(view) for view in normalized.views]
+
     # --- tools ---
     def load_tools(self, name: str, *, use_draft: bool = True) -> List[Tool]:
         if use_draft:
@@ -205,6 +264,22 @@ class RecipeService:
             else:
                 raise TypeError(f"Unsupported tool entry: {type(tool)!r}")
         return coerced
+
+    def _coerce_view(self, view: RecipeView | Dict[str, Any]) -> RecipeView:
+        if isinstance(view, RecipeView):
+            return self._copy_view(view)
+        if isinstance(view, dict):
+            return RecipeView(**dict(view))
+        raise TypeError(f"Unsupported view entry: {type(view)!r}")
+
+    def _copy_view(self, view: RecipeView) -> RecipeView:
+        return RecipeView(
+            id=view.id,
+            name=view.name,
+            golden_path=view.golden_path,
+            camera_profile=view.camera_profile,
+            settle_ms=view.settle_ms,
+        )
 
     def _get_persisted_tools(self, name: str) -> List[Tool]:
         recipe = self._load_recipe_config(name)
