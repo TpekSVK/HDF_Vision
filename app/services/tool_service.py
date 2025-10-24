@@ -16,8 +16,11 @@ import numpy as np
 from app.services.compare_service import analyze
 from app.services import logging_service, settings_service
 from app.models.schema import (
+    DEFAULT_VIEW_ID,
+    RecipeAggregation,
     RecipeData,
     RecipeV2,
+    RecipeView,
     Tool,
     ToolDefinition,
     ToolMask,
@@ -566,6 +569,7 @@ class PipelineResult:
     status: Literal["ok", "nok", "warn"]
     policy_applied: Optional[str] = None
     overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
+    per_view: Dict[str, Literal["ok", "nok", "warn"]] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -714,7 +718,7 @@ class PipelineOrchestrator:
         failure_policy = self._normalize_failure_policy(
             getattr(recipe, "on_locator_failure", "continue_without_alignment")
         )
-        tools = self._order_tools(recipe.tools)
+        tools = self._order_tools(recipe)
 
         for tool in tools:
             definition = ToolRegistry.get_tool_definition(tool.type)
@@ -850,7 +854,7 @@ class PipelineOrchestrator:
                     self._apply_locator_alignment(tool, context, diag_entry)
 
         cycle_time_ms = (time.perf_counter() - start_time) * 1000.0
-        pipeline_status = self._aggregate_status(per_tool)
+        pipeline_status, per_view_status = self._aggregate_status(recipe, per_tool)
 
         result = PipelineResult(
             context=context,
@@ -860,6 +864,7 @@ class PipelineOrchestrator:
             status=pipeline_status,
             policy_applied=policy_applied,
             overlay_items=pipeline_overlay_items if collect_overlay else [],
+            per_view=per_view_status,
         )
 
         try:
@@ -904,7 +909,7 @@ class PipelineOrchestrator:
         failure_policy = self._normalize_failure_policy(
             getattr(recipe, "on_locator_failure", "continue_without_alignment")
         )
-        tools = self._order_tools(recipe.tools)
+        tools = self._order_tools(recipe)
         if not tools:
             raise ValueError("Recipe does not contain any tools")
 
@@ -1077,11 +1082,27 @@ class PipelineOrchestrator:
             overlay_items=pipeline_overlay_items,
         )
 
-    def _order_tools(self, tools: Sequence[Tool]) -> List[Tool]:
-        sorted_tools = sorted(tools, key=lambda t: t.order)
-        locators = [tool for tool in sorted_tools if self._is_locator(tool)]
-        analyzers = [tool for tool in sorted_tools if not self._is_locator(tool)]
-        return locators + analyzers
+    def _order_tools(self, recipe: RecipeV2) -> List[Tool]:
+        views: Sequence[RecipeView] = getattr(recipe, "views", [])
+        view_order = {view.id: idx for idx, view in enumerate(views)}
+        default_view_id = getattr(recipe, "primary_view_id", DEFAULT_VIEW_ID)
+
+        grouped: Dict[str, List[Tool]] = {}
+        for tool in recipe.tools:
+            view_id = getattr(tool, "view_id", "") or default_view_id
+            grouped.setdefault(view_id, []).append(tool)
+
+        ordered: List[Tool] = []
+        for view_id in sorted(grouped.keys(), key=lambda vid: view_order.get(vid, len(view_order))):
+            view_tools = sorted(grouped[view_id], key=lambda t: int(getattr(t, "order", 0)))
+            for tool in view_tools:
+                if not getattr(tool, "view_id", ""):
+                    tool.view_id = view_id
+            locators = [tool for tool in view_tools if self._is_locator(tool)]
+            analyzers = [tool for tool in view_tools if not self._is_locator(tool)]
+            ordered.extend(locators + analyzers)
+
+        return ordered
 
     def _is_locator(self, tool: Tool) -> bool:
         return tool.type.startswith(self._LOCATOR_PREFIX) or tool.type == "template_match"
@@ -1126,16 +1147,87 @@ class PipelineOrchestrator:
             return "fail"
         return "continue_without_alignment"
 
-    @staticmethod
     def _aggregate_status(
+        self,
+        recipe: RecipeV2,
         per_tool: Sequence[PipelineToolReport],
-    ) -> Literal["ok", "nok", "warn"]:
+    ) -> Tuple[Literal["ok", "nok", "warn"], Dict[str, Literal["ok", "nok", "warn"]]]:
+        view_statuses = self._view_statuses(recipe, per_tool)
+        overall = self._combine_view_statuses(recipe, view_statuses)
+        return overall, view_statuses
+
+    def _view_statuses(
+        self,
+        recipe: RecipeV2,
+        per_tool: Sequence[PipelineToolReport],
+    ) -> Dict[str, Literal["ok", "nok", "warn"]]:
         priority: Dict[str, int] = {"ok": 0, "warn": 1, "nok": 2}
-        current: Literal["ok", "nok", "warn"] = "ok"
-        for entry in per_tool:
-            if priority[entry.status] > priority[current]:
-                current = entry.status
-        return current
+        statuses: Dict[str, Literal["ok", "nok", "warn"]] = {
+            view.id: "ok" for view in getattr(recipe, "views", [])
+        }
+        default_view_id = getattr(recipe, "primary_view_id", DEFAULT_VIEW_ID)
+        for report in per_tool:
+            view_id = getattr(report.tool, "view_id", "") or default_view_id
+            current = statuses.get(view_id, "ok")
+            if priority[report.status] > priority[current]:
+                statuses[view_id] = report.status
+            else:
+                statuses.setdefault(view_id, current)
+        return statuses
+
+    def _combine_view_statuses(
+        self,
+        recipe: RecipeV2,
+        view_statuses: Dict[str, Literal["ok", "nok", "warn"]],
+    ) -> Literal["ok", "nok", "warn"]:
+        aggregation = getattr(recipe, "aggregation", None)
+        if not isinstance(aggregation, RecipeAggregation):
+            raw_mode = str(getattr(aggregation, "mode", "AND") or "AND")
+            raw_weights = getattr(aggregation, "weights", {})
+            try:
+                weights_dict = dict(raw_weights)
+            except Exception:
+                weights_dict = {}
+            aggregation = RecipeAggregation(mode=raw_mode, weights=weights_dict)
+
+        mode = aggregation.mode
+        statuses = list(view_statuses.values())
+
+        if not statuses:
+            return "ok"
+
+        if mode == "OR":
+            if any(status == "ok" for status in statuses):
+                return "ok"
+            if any(status == "warn" for status in statuses):
+                return "warn"
+            return "nok"
+
+        if mode == "WEIGHTED":
+            weights: Dict[str, float] = {}
+            for view in getattr(recipe, "views", []):
+                weights[view.id] = aggregation.weight_for(view.id, 1.0)
+            for vid in view_statuses:
+                weights.setdefault(vid, aggregation.weight_for(vid, 1.0))
+            total = sum(weights.values())
+            if total > 0:
+                score_map = {"ok": 1.0, "warn": 0.5, "nok": 0.0}
+                score = 0.0
+                for vid, status in view_statuses.items():
+                    weight = weights.get(vid, 1.0)
+                    score += weight * score_map[status]
+                score /= total
+                if score >= 0.999:
+                    return "ok"
+                if score >= 0.5:
+                    return "warn"
+                return "nok"
+
+        if any(status == "nok" for status in statuses):
+            return "nok"
+        if any(status == "warn" for status in statuses):
+            return "warn"
+        return "ok"
 
 
 def run_pipeline(

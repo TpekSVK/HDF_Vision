@@ -1,9 +1,16 @@
 # app/services/recipe_service.py
 from pathlib import Path
 import json
-from typing import Iterable, List, Sequence
+from typing import Dict, Iterable, List, Sequence
 
-from app.models.schema import RecipeData, RecipeV2, Tool
+from app.models.schema import (
+    DEFAULT_VIEW_ID,
+    RecipeAggregation,
+    RecipeData,
+    RecipeV2,
+    RecipeView,
+    Tool,
+)
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
@@ -41,7 +48,13 @@ class RecipeService:
         p = self.base / "recipes" / name
         p.mkdir(parents=True, exist_ok=True)
         # create empty recipe.json with empty tools
-        recipe = RecipeV2(pose_enabled=True, regions=[], tools=[])
+        recipe = RecipeV2(
+            pose_enabled=True,
+            regions=[],
+            tools=[],
+            views=[RecipeView(id=DEFAULT_VIEW_ID, name="Default View", golden_path="golden.png")],
+            aggregation=RecipeAggregation(),
+        )
         self._save_recipe_config(name, recipe)
         # nechaj usera cez Wizard uložiť golden/regions
         return name
@@ -112,7 +125,7 @@ class RecipeService:
     def publish_recipe(self, name: str) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
         publish_copy = recipe.copy()
-        normalized_tools, autosorted = self._normalize_tools(publish_copy.tools)
+        normalized_tools, autosorted = self._normalize_tools(publish_copy)
         publish_copy.tools = normalized_tools
         self._save_published_recipe_config(name, publish_copy)
         self.db.mark_recipe_published(name)
@@ -121,7 +134,7 @@ class RecipeService:
 
     def get_published_tools(self, name: str) -> List[Tool]:
         recipe = self._load_published_recipe_config(name)
-        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+        return [tool.copy() for tool in self._sort_tools(recipe.tools, recipe.views)]
 
     def has_unpublished_changes(self, name: str) -> bool:
         state = self.db.recipe_publish_state(name)
@@ -195,21 +208,44 @@ class RecipeService:
 
     def _get_persisted_tools(self, name: str) -> List[Tool]:
         recipe = self._load_recipe_config(name)
-        return [tool.copy() for tool in self._sort_tools(recipe.tools)]
+        return [tool.copy() for tool in self._sort_tools(recipe.tools, recipe.views)]
 
-    def _sort_tools(self, tools: Iterable[Tool]) -> List[Tool]:
-        return [tool.copy() for tool in sorted(tools, key=lambda t: (t.order, t.name))]
+    def _sort_tools(
+        self,
+        tools: Iterable[Tool],
+        views: Sequence[RecipeView] | None = None,
+    ) -> List[Tool]:
+        view_order = {view.id: idx for idx, view in enumerate(views or [])}
+        default_view_id = (views[0].id if views else DEFAULT_VIEW_ID)
+        default_rank = len(view_order)
 
-    def _normalize_tools(self, tools: Iterable[Tool]) -> tuple[List[Tool], bool]:
-        sorted_tools = self._sort_tools(tools)
-        locators: List[Tool] = []
-        analyzers: List[Tool] = []
+        def sort_key(tool: Tool) -> tuple[int, int, str]:
+            vid = tool.view_id or default_view_id
+            return (view_order.get(vid, default_rank), int(tool.order), str(tool.name))
+
+        return [tool.copy() for tool in sorted(tools, key=sort_key)]
+
+    def _normalize_tools(self, recipe: RecipeV2) -> tuple[List[Tool], bool]:
+        sorted_tools = self._sort_tools(recipe.tools, recipe.views)
+        view_order = {view.id: idx for idx, view in enumerate(recipe.views)}
+        default_view_id = recipe.primary_view_id
+        grouped: Dict[str, List[Tool]] = {}
         for tool in sorted_tools:
-            (locators if tool.type.startswith("locator.") else analyzers).append(tool)
+            vid = tool.view_id or default_view_id
+            grouped.setdefault(vid, []).append(tool)
 
-        enforced_order = locators + analyzers
-        autosorted = enforced_order != sorted_tools
-        normalized = [tool.with_order(idx) for idx, tool in enumerate(enforced_order)]
+        enforced: List[Tool] = []
+        for vid in sorted(grouped.keys(), key=lambda key: view_order.get(key, len(view_order))):
+            view_tools = grouped[vid]
+            for tool in view_tools:
+                if not tool.view_id:
+                    tool.view_id = vid
+            locators = [tool for tool in view_tools if tool.type.startswith("locator.")]
+            analyzers = [tool for tool in view_tools if not tool.type.startswith("locator.")]
+            enforced.extend(locators + analyzers)
+
+        autosorted = enforced != sorted_tools
+        normalized = [tool.with_order(idx) for idx, tool in enumerate(enforced)]
         return normalized, autosorted
 
     def _ensure_draft_tools(self, name: str) -> List[Tool]:
@@ -232,7 +268,7 @@ class RecipeService:
 
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
         recipe_copy = recipe.copy()
-        normalized_tools, autosorted = self._normalize_tools(recipe_copy.tools)
+        normalized_tools, autosorted = self._normalize_tools(recipe_copy)
         recipe_copy.tools = normalized_tools
         self._locator_autosort[name] = autosorted
         save_recipe_config(name, recipe_copy, base_dir=self.base)

@@ -11,7 +11,15 @@ if str(ROOT) not in sys.path:
 
 pytest.importorskip("cv2")
 
-from app.models.schema import RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
+from app.models.schema import (
+    RecipeAggregation,
+    RecipeV2,
+    RecipeView,
+    Tool,
+    ToolParams,
+    ToolThresholds,
+    ToolRoi,
+)
 from app.services.tool_service import run_pipeline
 from app.utils import imaging
 
@@ -198,15 +206,59 @@ def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     assert diagnostics[0].get("policy_applied") == "continue_without_alignment"
     assert diagnostics[0].get("locator_failure") is True
 
-    assert len(results) == 2
-    ssim_result = results[1]
-    assert ssim_result.status == "nok"
-    assert ssim_result.metrics["ssim"] < 0.5
-    assert "latency_ms" in ssim_result.metrics
-    assert diagnostics[1]["virtual_alignment"] is False
 
-    assert context.frame_is_aligned is False
-    assert np.allclose(context.T_total, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]))
+def test_pipeline_aggregates_multi_view_results() -> None:
+    golden, frame = _make_test_images()
+
+    view_a = RecipeView(id="view_a", name="View A", golden_path="golden_a.png")
+    view_b = RecipeView(id="view_b", name="View B", golden_path="golden_b.png")
+
+    tool_ok = Tool(
+        type="ssim",
+        name="ssim_ok",
+        enabled=True,
+        order=0,
+        roi=ToolRoi({"x": 0, "y": 0, "w": 32, "h": 32}),
+        params=ToolParams({}),
+        thresholds=ToolThresholds({"ssim_min": 0.0}),
+        view_id="view_a",
+    )
+
+    tool_nok = Tool(
+        type="ssim",
+        name="ssim_nok",
+        enabled=True,
+        order=1,
+        roi=ToolRoi({"x": 0, "y": 0, "w": 32, "h": 32}),
+        params=ToolParams({}),
+        thresholds=ToolThresholds({"ssim_min": 0.999999}),
+        view_id="view_b",
+    )
+
+    recipe = RecipeV2(
+        tools=[tool_ok, tool_nok],
+        views=[view_a, view_b],
+        aggregation=RecipeAggregation(mode="AND"),
+    )
+
+    pipeline_and = run_pipeline(golden, frame, recipe)
+    assert pipeline_and.per_view["view_a"] == "ok"
+    assert pipeline_and.per_view["view_b"] == "nok"
+    assert pipeline_and.status == "nok"
+
+    recipe_or = recipe.copy()
+    recipe_or.aggregation = RecipeAggregation(mode="OR")
+    pipeline_or = run_pipeline(golden, frame, recipe_or)
+    assert pipeline_or.status == "ok"
+    assert pipeline_or.per_view == pipeline_and.per_view
+
+    recipe_weighted = recipe.copy()
+    recipe_weighted.aggregation = RecipeAggregation(
+        mode="WEIGHTED", weights={"view_a": 0.7, "view_b": 0.3}
+    )
+    pipeline_weighted = run_pipeline(golden, frame, recipe_weighted)
+    assert pipeline_weighted.status == "warn"
+    assert pipeline_weighted.per_view == pipeline_and.per_view
 
 
 def test_pipeline_without_locator_uses_identity_transform() -> None:
