@@ -462,7 +462,8 @@ class MainWindow(QMainWindow):
                 if index == 0:
                     view_frame = base_frame
                 else:
-                    view_frame = self.cam.last_frame() or base_frame
+                    latest_frame = self.cam.last_frame()
+                    view_frame = latest_frame if latest_frame is not None else base_frame
 
                 view_frame_u8 = view_frame.copy()
 
