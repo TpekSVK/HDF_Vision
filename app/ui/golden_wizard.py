@@ -75,6 +75,11 @@ from app.services.tool_service import (
     run_tool_test,
 )
 from app.ui.view_utils import view_uses_global_golden
+from app.ui.camera_profile_utils import (
+    apply_camera_state,
+    apply_view_camera_profile,
+    snapshot_camera_state,
+)
 
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
@@ -82,22 +87,6 @@ _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
 _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
 _LOCATOR_PREVIEW_MIN_HEIGHT = 280
-
-_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
-    (
-        "1920x1080@60 Y8",
-        {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "1280x720@60 Y8",
-        {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "2592x1944@30 Y8 (len setup/pomalé)",
-        {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"},
-    ),
-)
-
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
@@ -3033,6 +3022,7 @@ class GoldenWizard(QDialog):
         self.cam = camera
         self.recipes = recipes
         self.current_img = None
+        self._default_camera_state = self._snapshot_camera_state()
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._dirty_views: dict[str, dict[str, bool]] = {}
@@ -3414,6 +3404,9 @@ class GoldenWizard(QDialog):
         if view_id != self._active_view_id:
             self._store_view_state(self._active_view_id)
             self._active_view_id = view_id
+
+        view = self._view_by_id(view_id)
+        self._apply_view_camera_profile(view)
 
         recipe = self._current_recipe_name()
         try:
@@ -3858,6 +3851,23 @@ class GoldenWizard(QDialog):
                 "pixel_format": (pixel_format or "Y8").upper(),
             }
         return None
+
+    def _snapshot_camera_state(self) -> dict[str, Any]:
+        return snapshot_camera_state(self.cam)
+
+    def _apply_camera_state(self, state: dict[str, Any], *, show_warnings: bool = True) -> None:
+        warn = self._warn if show_warnings else None
+        apply_camera_state(self.cam, state, warn=warn)
+
+    def _apply_view_camera_profile(self, view: Optional[RecipeView]) -> None:
+        base_state = getattr(self, "_default_camera_state", {})
+        profile = getattr(view, "camera_profile", None) if view else None
+        apply_view_camera_profile(
+            self.cam,
+            base_state,
+            profile,
+            warn=self._warn,
+        )
 
     @staticmethod
     def _suggest_view_id(existing: Sequence[RecipeView]) -> str:
@@ -4527,6 +4537,12 @@ class GoldenWizard(QDialog):
             if result != QMessageBox.Yes:
                 e.ignore()
                 return
+        try:
+            base_state = getattr(self, "_default_camera_state", None)
+            if isinstance(base_state, dict) and base_state:
+                self._apply_camera_state(base_state, show_warnings=False)
+        except Exception:
+            pass
         try:
             self._live_timer.stop()
             self._lp.stop()
