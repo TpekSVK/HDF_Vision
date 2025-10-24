@@ -67,6 +67,7 @@ class CameraService:
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
                                 "pixel_format": self.pixel_format}
         self._xu: XUControls | None = None
+        self._current_profile: str | None = None
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -487,6 +488,11 @@ class CameraService:
                 except Exception:
                     pass
                 raise RuntimeError(f"Camera reopen failed: {exc}") from exc
+
+    def apply_profile(self, profile: str) -> None:
+        """Apply a named camera profile if available."""
+
+        self._current_profile = str(profile or "")
 
     def _ensure_xu(self) -> XUControls:
         if self._xu is None or getattr(self._xu, "video_dev", None) != self.device:

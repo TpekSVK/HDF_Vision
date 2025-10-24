@@ -91,6 +91,7 @@ class ResultsStrip(QWidget):
         self.limit = int(limit)
         self._thumb_cache: dict[str, tuple[float, QSize, QPixmap]] = {}
         self._last_folder_to_open: Optional[Path] = None
+        self._active_view_id: Optional[str] = None
 
         self.area = QScrollArea(self)
         self.area.setWidgetResizable(True)
@@ -153,6 +154,22 @@ class ResultsStrip(QWidget):
         if not entries:
             entries = self._load_filesystem_entries(recipe_name)
 
+        active_view = self._active_view_id
+        if active_view:
+            filtered_entries: list[dict[str, Any]] = []
+            for row in entries:
+                row_view = row.get("view_id")
+                if row_view is None and isinstance(row.get("meta"), Mapping):
+                    meta_view = row["meta"].get("view_id") or row["meta"].get("viewId")
+                    if meta_view:
+                        row_view = str(meta_view)
+                if row_view is None and isinstance(row.get("display_path"), str):
+                    row_view = self._extract_view_from_path(row["display_path"])
+                if row_view and str(row_view) != active_view:
+                    continue
+                filtered_entries.append(row)
+            entries = filtered_entries
+
         if not entries:
             self._show_placeholder(self._default_folder(recipe_name))
             return
@@ -187,6 +204,9 @@ class ResultsStrip(QWidget):
             self.h.addWidget(thumb)
 
         self.h.addStretch(1)
+
+    def set_active_view(self, view_id: Optional[str]) -> None:
+        self._active_view_id = view_id if view_id else None
 
     def _clear_layout(self) -> None:
         while self.h.count():
@@ -225,6 +245,14 @@ class ResultsStrip(QWidget):
         metrics = data.get("metrics")
         if not isinstance(metrics, Mapping):
             data["metrics"] = {}
+
+        meta = data.get("meta")
+        if isinstance(meta, Mapping):
+            view_id = meta.get("view_id") or meta.get("viewId")
+            if view_id:
+                data["view_id"] = str(view_id)
+        elif "view_id" in data:
+            data["view_id"] = str(data["view_id"])
 
         data["_display_source"] = source_key
         return data
@@ -276,15 +304,32 @@ class ResultsStrip(QWidget):
             return False
         return True
 
+    def _extract_view_from_path(self, path: str) -> Optional[str]:
+        try:
+            name = Path(path).name
+        except Exception:
+            return None
+        parts = name.split("_", 1)
+        if len(parts) >= 2 and parts[0]:
+            return parts[0]
+        return None
+
     def _default_folder(self, recipe_name: str) -> Path:
         base = Path("/data/runs")
         try:
             recipe_name = recipe_name or "default"
         except Exception:
             recipe_name = "default"
-        candidate = base / datetime.now().strftime("%Y%m%d") / recipe_name
-        if candidate.exists():
-            return candidate
+        day_dir = base / datetime.now().strftime("%Y%m%d")
+        if day_dir.exists():
+            pattern = f"{recipe_name}_"
+            candidates = [
+                entry
+                for entry in sorted(day_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+                if entry.is_dir() and (entry.name.startswith(pattern) or entry.name == recipe_name)
+            ]
+            if candidates:
+                return candidates[0]
         if base.exists():
             return base
         return Path("/data")
@@ -427,12 +472,18 @@ class ResultsStrip(QWidget):
         for day_dir in day_dirs:
             if not day_dir.is_dir():
                 continue
+            search_roots: list[Path] = []
             recipe_dir = day_dir / recipe_name
-            search_roots: Iterable[Path]
             if recipe_dir.exists():
-                search_roots = [recipe_dir]
-            else:
-                search_roots = [day_dir]
+                search_roots.append(recipe_dir)
+            pattern = f"{recipe_name}_"
+            for entry in sorted(day_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+                if not entry.is_dir():
+                    continue
+                if entry.name.startswith(pattern):
+                    search_roots.append(entry)
+            if not search_roots:
+                search_roots.append(day_dir)
             for root in search_roots:
                 for subdir in ("overlay", "aligned", "thumbs", "full"):
                     directory = root / subdir
@@ -465,6 +516,18 @@ class ResultsStrip(QWidget):
                 "status": None,
                 "metrics": {},
             }
+            meta_candidate = None
+            try:
+                parent = path.parent
+                run_root = parent.parent if parent.name in {"thumbs", "full", "aligned", "overlay"} else parent
+                meta_candidate = run_root / "meta" / f"{path.stem}.json"
+            except Exception:
+                meta_candidate = None
+            if meta_candidate and meta_candidate.exists():
+                entry["meta_path"] = str(meta_candidate)
+            view_from_name = self._extract_view_from_path(str(path))
+            if view_from_name:
+                entry["view_id"] = view_from_name
             entries.append(entry)
             if len(entries) >= self.limit:
                 break

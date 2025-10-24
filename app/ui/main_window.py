@@ -6,8 +6,12 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap
 
 import math
+import os
+import uuid
 from collections.abc import Mapping, Sequence
+from datetime import datetime
 from numbers import Integral, Real
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -25,7 +29,9 @@ from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.results_strip import ResultsStrip
-from app.services.tool_service import run_pipeline
+from app.ui.view_strip import ViewStrip
+from app.models.schema import DEFAULT_VIEW_ID, RecipeAggregation, RecipeView, RecipeV2
+from app.services.tool_service import PipelineOrchestrator, run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 
@@ -56,6 +62,15 @@ class MainWindow(QMainWindow):
         self._last_cycle_time_ms: float | None = None
         self._last_pipeline_status: str | None = None
         self._tool_selector_items: list[dict[str, Any]] = []
+        self._view_reports: dict[str, list[dict[str, Any]]] = {}
+        self._view_statuses: dict[str, str] = {}
+        self._view_cycle_times: dict[str, float | None] = {}
+        self._view_frames: dict[str, np.ndarray] = {}
+        self._view_metrics: dict[str, dict[str, Any]] = {}
+        self._active_view_id: str | None = None
+        self._last_run_serial: str | None = None
+        env_fail_fast = os.getenv("HDF_FAIL_FAST", "0").strip().lower()
+        self.fail_fast_enabled = env_fail_fast in {"1", "true", "yes", "on"}
 
         # Tool/Recipe
         try:
@@ -178,6 +193,12 @@ class MainWindow(QMainWindow):
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
 
+        # View strip (multi-view selector)
+        self.view_strip = ViewStrip(self)
+        self.view_strip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.view_strip.view_selected.connect(self._on_view_selected)
+        run.addWidget(self.view_strip)
+
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
         preview_container.setMaximumHeight(540)
@@ -266,7 +287,7 @@ class MainWindow(QMainWindow):
 
         # inicializuj pravý panel hodnotami
         self._update_sidebar()
-        self._refresh_tool_selector()
+        self._sync_views_with_recipe()
 
         # maximalizovať a uzamknúť veľkosť okna po zobrazení
         QTimer.singleShot(0, self._maximize_and_lock)
@@ -319,6 +340,177 @@ class MainWindow(QMainWindow):
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
         return getattr(self.tool, "recipe", "default") or "default"
+
+    def _load_recipe_configuration(self, name: str | None = None) -> RecipeV2 | None:
+        recipe_name = name or self.current_recipe_name()
+        try:
+            recipe = load_recipe_config(recipe_name)
+        except Exception:
+            return None
+        if isinstance(recipe, RecipeV2):
+            return recipe
+        return None
+
+    def _sync_views_with_recipe(self, recipe: RecipeV2 | None = None) -> None:
+        if recipe is None:
+            recipe = self._load_recipe_configuration()
+        views: list[RecipeView] = []
+        if recipe is not None and getattr(recipe, "views", None):
+            views = [view for view in recipe.views if isinstance(view, RecipeView)]
+        if not views:
+            views = [RecipeView(id=DEFAULT_VIEW_ID, name="View", golden_path="golden.png")]
+
+        view_entries = [(view.id, view.name or view.id) for view in views]
+
+        self._filter_view_state({vid for vid, _ in view_entries})
+        self.view_strip.set_views(view_entries)
+
+        if self._active_view_id and any(vid == self._active_view_id for vid, _ in view_entries):
+            self.view_strip.set_active_view(self._active_view_id)
+        else:
+            self._active_view_id = view_entries[0][0] if view_entries else None
+            if self._active_view_id:
+                self.view_strip.set_active_view(self._active_view_id)
+
+        self._refresh_tool_selector()
+        if self._active_view_id:
+            self._apply_view_selection(self._active_view_id)
+
+    def _filter_view_state(self, valid_ids: set[str]) -> None:
+        self._view_reports = {k: v for k, v in self._view_reports.items() if k in valid_ids}
+        self._view_statuses = {k: v for k, v in self._view_statuses.items() if k in valid_ids}
+        self._view_cycle_times = {
+            k: v for k, v in self._view_cycle_times.items() if k in valid_ids
+        }
+        self._view_frames = {k: v for k, v in self._view_frames.items() if k in valid_ids}
+        self._view_metrics = {k: v for k, v in self._view_metrics.items() if k in valid_ids}
+
+    def _on_view_selected(self, view_id: str) -> None:
+        if not view_id:
+            return
+        self._active_view_id = view_id
+        self.view_strip.set_active_view(view_id)
+        self._refresh_tool_selector()
+        self._apply_view_selection(view_id)
+
+    def _apply_view_selection(self, view_id: str | None) -> None:
+        if view_id is None:
+            return
+        reports = self._view_reports.get(view_id, [])
+        self._last_tool_reports = [dict(entry) for entry in reports]
+        self._last_pipeline_status = self._view_statuses.get(view_id)
+        self._last_cycle_time_ms = self._view_cycle_times.get(view_id)
+        self._update_metrics_panel()
+        if not self.live_enabled:
+            frame = self._view_frames.get(view_id)
+            if isinstance(frame, np.ndarray):
+                img = frame
+                if self.chk_heatmap.isChecked():
+                    try:
+                        img = self._make_heatmap_overlay(img)
+                    except Exception:
+                        pass
+                self._show_gray_or_bgr(self.live_view, img)
+        try:
+            self.strip.set_active_view(view_id)
+            self.strip.reload()
+        except Exception:
+            pass
+
+    def _primary_view_id(self, recipe: RecipeV2 | None = None) -> str:
+        if recipe is None:
+            recipe = self._load_recipe_configuration()
+        if recipe and getattr(recipe, "views", None):
+            for view in recipe.views:
+                if isinstance(view, RecipeView):
+                    return view.id
+        return DEFAULT_VIEW_ID
+
+    def _generate_run_serial(self, recipe_name: str) -> str:
+        safe = str(recipe_name or "run").strip().replace("/", "_").replace(" ", "_")
+        timestamp = datetime.now().strftime("%H%M%S")
+        unique = uuid.uuid4().hex[:8]
+        return f"{safe}_{timestamp}_{unique}"
+
+    def _load_view_golden(self, recipe_name: str, view: RecipeView) -> np.ndarray | None:
+        golden_name = (view.golden_path or "golden.png").strip() or "golden.png"
+        path = Path("/data") / "recipes" / recipe_name / golden_name
+        if not path.exists():
+            return None
+        try:
+            import imageio.v3 as iio
+
+            golden = iio.imread(path)
+        except Exception:
+            return None
+        arr = np.asarray(golden)
+        if arr.ndim == 3:
+            arr = arr[:, :, 0]
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        return arr
+
+    def _prepare_frame(self, frame: np.ndarray | None) -> np.ndarray | None:
+        if frame is None:
+            return None
+        arr = np.asarray(frame)
+        if arr.ndim == 3 and arr.shape[2] > 1:
+            arr = arr[:, :, 0]
+        if arr.dtype != np.uint8:
+            arr = arr.astype(np.uint8, copy=False)
+        return arr.copy()
+
+    def _capture_frame_for_view(self, *, reuse_last: bool = False) -> np.ndarray | None:
+        frame = None
+        try:
+            if reuse_last:
+                frame = self.cam.last_frame()
+            else:
+                frame = self.cam.one_shot()
+        except Exception:
+            frame = None
+        return self._prepare_frame(frame)
+
+    def _apply_camera_profile(self, view: RecipeView) -> None:
+        profile = str(getattr(view, "camera_profile", "") or "").strip()
+        if not profile:
+            return
+        if hasattr(self.cam, "apply_profile"):
+            try:
+                self.cam.apply_profile(profile)
+            except Exception:
+                pass
+
+    def _make_view_recipe(self, recipe: RecipeV2, view: RecipeView) -> RecipeV2:
+        primary_view_id = self._primary_view_id(recipe)
+        view_copy = RecipeView(
+            id=view.id,
+            name=view.name,
+            golden_path=view.golden_path,
+            camera_profile=view.camera_profile,
+            settle_ms=view.settle_ms,
+        )
+        view_tools = [
+            tool.copy()
+            for tool in getattr(recipe, "tools", [])
+            if (getattr(tool, "view_id", "") or primary_view_id) == view.id
+        ]
+        return RecipeV2(
+            pose_enabled=recipe.pose_enabled,
+            regions=[dict(r) for r in getattr(recipe, "regions", [])],
+            tools=view_tools,
+            on_locator_failure=recipe.on_locator_failure,
+            export_artifacts=recipe.export_artifacts,
+            views=[view_copy],
+            aggregation=RecipeAggregation(mode="AND"),
+        )
+
+    def _update_overall_status(self, status: str | None) -> None:
+        normalized = (status or "ok").lower()
+        text = normalized.upper()
+        color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
+        self.lbl_status.setText(text)
+        self.lbl_status.setStyleSheet(f"color: {color_map.get(normalized, '#33dd66')};")
 
     # ---------- UI akcie ----------
     def toggle_mode(self):
@@ -391,62 +583,239 @@ class MainWindow(QMainWindow):
 
     def manual_trigger(self):
         try:
-            frame = self.cam.last_frame()
-            if frame is None:
-                self.lbl_status.setText("Žiadny snímok z kamery.")
-                return
-
-            frame_u8 = frame.copy()
-            self.gpio.emit_heartbeat()
-            recipe_name = self.current_recipe_name()
-            golden = getattr(self.tool, "golden", None)
+            try:
+                recipe_name = self.current_recipe_name()
+            except Exception:
+                recipe_name = "default"
 
             try:
-                recipe_cfg = load_recipe_config(recipe_name)
-            except Exception as exc:
-                print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
+                recipe_cfg = self._load_recipe_configuration(recipe_name)
+            except Exception:
                 recipe_cfg = None
 
-            if golden is None or recipe_cfg is None or not getattr(recipe_cfg, "tools", []):
-                self._run_legacy_trigger(frame_u8, recipe_name)
+            try:
+                self.gpio.emit_heartbeat()
+            except Exception:
+                pass
+
+            if recipe_cfg is None or not getattr(recipe_cfg, "tools", []):
+                frame = self._prepare_frame(self.cam.last_frame())
+                if frame is None:
+                    self.lbl_status.setText("Žiadny snímok z kamery.")
+                    return
+                self._run_legacy_trigger(frame, recipe_name)
                 return
 
-            if not getattr(recipe_cfg, "regions", None):
-                recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
-            recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
+            views = [view for view in getattr(recipe_cfg, "views", []) if isinstance(view, RecipeView)]
+            if not views:
+                views = [RecipeView(id=DEFAULT_VIEW_ID, name="View", golden_path="golden.png")]
+
+            self._sync_views_with_recipe(recipe_cfg)
+
+            run_serial = self._generate_run_serial(recipe_name)
+            self._last_run_serial = run_serial
+
+            if len(views) == 1:
+                frame = self._prepare_frame(self.cam.last_frame())
+                if frame is None:
+                    self.lbl_status.setText("Žiadny snímok z kamery.")
+                    return
+                self._run_single_view_trigger(
+                    recipe_cfg,
+                    views[0],
+                    frame,
+                    recipe_name,
+                    run_serial,
+                )
+                return
+
+            self._run_multi_view_trigger(recipe_cfg, views, recipe_name, run_serial)
+
+            if self._active_view_id:
+                self._apply_view_selection(self._active_view_id)
+
+            if not self.live_enabled and self._active_view_id:
+                frame = self._view_frames.get(self._active_view_id)
+                if isinstance(frame, np.ndarray):
+                    img = frame
+                    if self.chk_heatmap.isChecked():
+                        try:
+                            img = self._make_heatmap_overlay(img)
+                        except Exception:
+                            pass
+                    self._show_gray_or_bgr(self.live_view, img)
+        except Exception:
+            self.gpio.signal_result("nok")
+            import traceback
+
+            traceback.print_exc()
+
+    def _run_single_view_trigger(
+        self,
+        recipe_cfg: RecipeV2,
+        view: RecipeView,
+        frame_u8: np.ndarray,
+        recipe_name: str,
+        run_serial: str,
+    ) -> None:
+        golden = self._load_view_golden(recipe_name, view)
+        if golden is None:
+            golden = getattr(self.tool, "golden", None)
+        if golden is None:
+            self._run_legacy_trigger(frame_u8, recipe_name)
+            return
+
+        sub_recipe = self._make_view_recipe(recipe_cfg, view)
+        if not getattr(sub_recipe, "regions", None):
+            sub_recipe.regions = list(getattr(self.tool, "regions", []) or [])
+        sub_recipe.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
+
+        result = run_pipeline(
+            golden,
+            frame_u8,
+            sub_recipe,
+            recipe_name=recipe_name,
+            notes=f"manual_trigger:view={view.id}",
+        )
+
+        status = (result.status or "ok").lower()
+        self._update_overall_status(status)
+        self.gpio.signal_result(status)
+
+        context_frame = getattr(result.context, "frame_aligned", None)
+        if context_frame is None:
+            context_frame = getattr(result.context, "frame", None)
+        if isinstance(context_frame, np.ndarray):
+            self._last_trigger_frame = context_frame.copy()
+        else:
+            self._last_trigger_frame = frame_u8.copy()
+
+        reports = [self._serialize_tool_report(report) for report in result.per_tool]
+        st = self.stats.daily_for_recipe(recipe_name)
+        self._update_sidebar(
+            st,
+            reports,
+            status=status,
+            cycle_time_ms=float(result.cycle_time_ms),
+            view_id=view.id,
+        )
+
+        diagnostics_payload: list[Any] = []
+        for diag in getattr(result, "diagnostics", []) or []:
+            diagnostics_payload.append(self._simplify_value(diag))
+
+        combined_metrics = self._merge_pipeline_metrics(reports)
+        self._view_reports[view.id] = [dict(entry) for entry in reports]
+        self._view_statuses[view.id] = status
+        self._view_cycle_times[view.id] = float(result.cycle_time_ms)
+        self._view_frames[view.id] = frame_u8.copy()
+        self._view_metrics[view.id] = combined_metrics
+
+        meta_payload = {
+            "mode": "manual",
+            "status": status,
+            "cycle_time_ms": float(result.cycle_time_ms),
+            "per_tool": reports,
+            "diagnostics": diagnostics_payload,
+            "metrics": combined_metrics,
+            "view_id": view.id,
+            "view_name": view.name,
+            "run_serial": run_serial,
+        }
+        if getattr(result, "policy_applied", None):
+            meta_payload["policy_applied"] = result.policy_applied
+
+        save_production_result(
+            frame_u8,
+            meta_payload,
+            recipe_name,
+            store_full_nok=True,
+            nok=status != "ok",
+            run_id=run_serial,
+            view_id=view.id,
+        )
+
+        self.view_strip.update_snapshot(view.id, frame_u8)
+        self.view_strip.update_status(view.id, status)
+
+        self._active_view_id = view.id
+        self.strip.set_active_view(view.id)
+        try:
+            self.strip.reload()
+        except Exception:
+            pass
+
+    def _run_multi_view_trigger(
+        self,
+        recipe_cfg: RecipeV2,
+        views: Sequence[RecipeView],
+        recipe_name: str,
+        run_serial: str,
+    ) -> None:
+        orchestrator = PipelineOrchestrator()
+        per_view_status: dict[str, str] = {}
+
+        for index, view in enumerate(views):
+            self._apply_camera_profile(view)
+            frame = self._capture_frame_for_view(reuse_last=index == 0)
+            if frame is None:
+                status = "nok"
+                per_view_status[view.id] = status
+                self.view_strip.update_status(view.id, status)
+                self._view_reports[view.id] = []
+                self._view_cycle_times[view.id] = None
+                self._view_metrics[view.id] = {}
+                continue
+
+            golden = self._load_view_golden(recipe_name, view)
+            if golden is None:
+                status = "nok"
+                per_view_status[view.id] = status
+                self._view_frames[view.id] = frame.copy()
+                self.view_strip.update_snapshot(view.id, frame)
+                self.view_strip.update_status(view.id, status)
+                self._view_reports[view.id] = []
+                self._view_cycle_times[view.id] = None
+                self._view_metrics[view.id] = {}
+                continue
+
+            sub_recipe = self._make_view_recipe(recipe_cfg, view)
+            if not getattr(sub_recipe, "regions", None):
+                sub_recipe.regions = list(getattr(self.tool, "regions", []) or [])
+            sub_recipe.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
 
             result = run_pipeline(
                 golden,
-                frame_u8,
-                recipe_cfg,
+                frame,
+                sub_recipe,
                 recipe_name=recipe_name,
-                notes="manual_trigger",
+                notes=f"manual_trigger:view={view.id}",
             )
 
             status = (result.status or "ok").lower()
-            status_text = status.upper()
-            color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
-            self.lbl_status.setText(status_text)
-            self.lbl_status.setStyleSheet(f"color: {color_map.get(status, '#33dd66')};")
-            self.gpio.signal_result(status)
-
-            context_frame = getattr(result.context, "frame_aligned", None)
-            if context_frame is None:
-                context_frame = getattr(result.context, "frame", None)
-            if isinstance(context_frame, np.ndarray):
-                self._last_trigger_frame = context_frame.copy()
-            else:
-                self._last_trigger_frame = frame_u8.copy()
+            per_view_status[view.id] = status
 
             reports = [self._serialize_tool_report(report) for report in result.per_tool]
-            st = self.stats.daily_for_recipe(recipe_name)
-            self._update_sidebar(st, reports, status=status, cycle_time_ms=float(result.cycle_time_ms))
-
             diagnostics_payload: list[Any] = []
             for diag in getattr(result, "diagnostics", []) or []:
                 diagnostics_payload.append(self._simplify_value(diag))
-
             combined_metrics = self._merge_pipeline_metrics(reports)
+
+            self._view_reports[view.id] = [dict(entry) for entry in reports]
+            self._view_statuses[view.id] = status
+            self._view_cycle_times[view.id] = float(result.cycle_time_ms)
+            self._view_frames[view.id] = frame.copy()
+            self._view_metrics[view.id] = combined_metrics
+            self._last_trigger_frame = frame.copy()
+
+            st = self.stats.daily_for_recipe(recipe_name)
+            self._update_sidebar(
+                st,
+                reports,
+                status=status,
+                cycle_time_ms=float(result.cycle_time_ms),
+                view_id=view.id,
+            )
 
             meta_payload = {
                 "mode": "manual",
@@ -455,32 +824,48 @@ class MainWindow(QMainWindow):
                 "per_tool": reports,
                 "diagnostics": diagnostics_payload,
                 "metrics": combined_metrics,
+                "view_id": view.id,
+                "view_name": view.name,
+                "run_serial": run_serial,
             }
             if getattr(result, "policy_applied", None):
                 meta_payload["policy_applied"] = result.policy_applied
 
             save_production_result(
-                frame_u8,
+                frame,
                 meta_payload,
                 recipe_name,
                 store_full_nok=True,
                 nok=status != "ok",
+                run_id=run_serial,
+                view_id=view.id,
             )
 
+            self.view_strip.update_snapshot(view.id, frame)
+            self.view_strip.update_status(view.id, status)
+
+            if self.fail_fast_enabled and status == "nok":
+                break
+
+        normalized_statuses: dict[str, str] = {}
+        for view in views:
+            normalized_statuses[view.id] = per_view_status.get(view.id, "nok")
+
+        overall_status = orchestrator._combine_view_statuses(recipe_cfg, normalized_statuses)
+        self._update_overall_status(overall_status)
+        self.gpio.signal_result(overall_status)
+        self._view_statuses.update(normalized_statuses)
+        for view in views:
+            view_status = normalized_statuses.get(view.id, "nok")
+            self.view_strip.update_status(view.id, view_status)
+            self._view_reports.setdefault(view.id, [])
+            self._view_cycle_times.setdefault(view.id, None)
+            self._view_metrics.setdefault(view.id, {})
+        self._active_view_id = self._active_view_id or views[0].id
+        try:
             self.strip.reload()
-
-            if not self.live_enabled and self._last_trigger_frame is not None:
-                img = self._last_trigger_frame
-                if self.chk_heatmap.isChecked():
-                    try:
-                        img = self._make_heatmap_overlay(img)
-                    except Exception:
-                        pass
-                self._show_gray_or_bgr(self.live_view, img)
-
         except Exception:
-            self.gpio.signal_result("nok")
-            import traceback; traceback.print_exc()
+            pass
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
         try:
@@ -495,9 +880,7 @@ class MainWindow(QMainWindow):
 
         self._last_trigger_frame = frame_u8.copy() if isinstance(frame_u8, np.ndarray) else frame_u8
 
-        color = "#33dd66" if status == "ok" else "#ff3366"
-        self.lbl_status.setText(status.upper())
-        self.lbl_status.setStyleSheet(f"color: {color};")
+        self._update_overall_status(status)
         self.gpio.signal_result(status)
 
         legacy_report = [{
@@ -512,13 +895,23 @@ class MainWindow(QMainWindow):
 
         self._last_cycle_time_ms = None
         st = self.stats.daily_for_recipe(recipe_name)
-        self._update_sidebar(st, legacy_report, status=status)
+        view_id = self._active_view_id or DEFAULT_VIEW_ID
+        self._update_sidebar(st, legacy_report, status=status, view_id=view_id)
+        self._view_reports[view_id] = [dict(entry) for entry in legacy_report]
+        self._view_statuses[view_id] = status
+        self._view_cycle_times[view_id] = None
+        self._view_frames[view_id] = frame_u8.copy() if isinstance(frame_u8, np.ndarray) else frame_u8
+        self._view_metrics[view_id] = metrics
 
+        run_serial = self._generate_run_serial(recipe_name)
+        self._last_run_serial = run_serial
         meta_payload = {
             "mode": "manual",
             "status": status,
             "metrics": metrics,
             "per_tool": legacy_report,
+            "view_id": view_id,
+            "run_serial": run_serial,
         }
 
         save_production_result(
@@ -527,9 +920,18 @@ class MainWindow(QMainWindow):
             recipe_name,
             store_full_nok=True,
             nok=status != "ok",
+            run_id=run_serial,
+            view_id=view_id,
         )
 
-        self.strip.reload()
+        self.view_strip.update_snapshot(view_id, frame_u8)
+        self.view_strip.update_status(view_id, status)
+        self._active_view_id = view_id
+        self.strip.set_active_view(view_id)
+        try:
+            self.strip.reload()
+        except Exception:
+            pass
 
         if not self.live_enabled and self._last_trigger_frame is not None:
             img = self._last_trigger_frame
@@ -539,6 +941,8 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
             self._show_gray_or_bgr(self.live_view, img)
+
+        self._apply_view_selection(view_id)
 
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self.recipes, self)
@@ -661,6 +1065,7 @@ class MainWindow(QMainWindow):
         *,
         status: str | None = None,
         cycle_time_ms: float | None = None,
+        view_id: str | None = None,
     ):
         """Naplní pravý panel dennými štatistikami a poslednými metrikami."""
         try:
@@ -675,14 +1080,28 @@ class MainWindow(QMainWindow):
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
             self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
 
-            if per_tool is not None:
+            if view_id is not None and per_tool is not None:
+                self._view_reports[view_id] = [dict(entry) for entry in per_tool]
+            if view_id is not None and status is not None:
+                self._view_statuses[view_id] = status
+            if view_id is not None and cycle_time_ms is not None:
+                self._view_cycle_times[view_id] = cycle_time_ms
+
+            should_update_active = (
+                view_id is None
+                or self._active_view_id is None
+                or view_id == self._active_view_id
+            )
+
+            if per_tool is not None and should_update_active:
                 self._last_tool_reports = [dict(entry) for entry in per_tool]
-            if status is not None:
+            if status is not None and should_update_active:
                 self._last_pipeline_status = status
-            if cycle_time_ms is not None:
+            if cycle_time_ms is not None and should_update_active:
                 self._last_cycle_time_ms = cycle_time_ms
 
-            self._update_metrics_panel()
+            if should_update_active:
+                self._update_metrics_panel()
         except Exception:
             pass
 
@@ -880,13 +1299,21 @@ class MainWindow(QMainWindow):
         except Exception:
             recipe_name = "default"
 
+        recipe_cfg = self._load_recipe_configuration(recipe_name)
+
         try:
             tools = self.recipes.get_published_tools(recipe_name)
         except Exception:
             tools = []
 
+        primary_view_id = self._primary_view_id(recipe_cfg)
+        active_view_id = self._active_view_id or primary_view_id
+
         entries: list[dict[str, Any]] = []
         for tool in tools:
+            tool_view_id = getattr(tool, "view_id", "") or primary_view_id
+            if active_view_id and tool_view_id != active_view_id:
+                continue
             tool_id = tool.name or f"tool_{tool.order}"
             display_name = tool.name or tool.type or tool_id
             tool_type = tool.type or ""
