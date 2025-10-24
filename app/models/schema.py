@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
+import uuid
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Literal
 
 
@@ -363,6 +364,174 @@ class Tool:
             template_roi=self.template_roi.copy(),
         )
 
+
+@dataclass(slots=True)
+class CameraProfile:
+    """Camera configuration overrides applied before capturing a step."""
+
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[float] = None
+    exposure: Optional[float] = None
+    gain: Optional[float] = None
+    pixel_format: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        self.width = int(self.width) if self.width is not None else None
+        self.height = int(self.height) if self.height is not None else None
+        self.fps = float(self.fps) if self.fps is not None else None
+        self.exposure = float(self.exposure) if self.exposure is not None else None
+        self.gain = float(self.gain) if self.gain is not None else None
+        if self.pixel_format is not None:
+            self.pixel_format = str(self.pixel_format)
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {}
+        if self.width is not None:
+            payload["width"] = int(self.width)
+        if self.height is not None:
+            payload["height"] = int(self.height)
+        if self.fps is not None:
+            payload["fps"] = float(self.fps)
+        if self.exposure is not None:
+            payload["exposure"] = float(self.exposure)
+        if self.gain is not None:
+            payload["gain"] = float(self.gain)
+        if self.pixel_format:
+            payload["pixel_format"] = self.pixel_format
+        return payload
+
+    @classmethod
+    def from_obj(cls, obj: Any | None) -> "CameraProfile | None":
+        if obj is None:
+            return None
+        if isinstance(obj, CameraProfile):
+            return obj.copy()
+        if isinstance(obj, dict):
+            width: Optional[int] = None
+            height: Optional[int] = None
+            resolution = obj.get("resolution")
+            if isinstance(resolution, dict):
+                width = resolution.get("width")
+                height = resolution.get("height")
+            elif isinstance(resolution, (list, tuple)) and len(resolution) == 2:
+                width = resolution[0]
+                height = resolution[1]
+            if obj.get("width") is not None:
+                width = obj.get("width")
+            if obj.get("height") is not None:
+                height = obj.get("height")
+            return cls(
+                width=width,
+                height=height,
+                fps=obj.get("fps"),
+                exposure=obj.get("exposure"),
+                gain=obj.get("gain"),
+                pixel_format=obj.get("pixel_format"),
+            )
+        return cls()
+
+    def copy(self) -> "CameraProfile":
+        return CameraProfile(
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            exposure=self.exposure,
+            gain=self.gain,
+            pixel_format=self.pixel_format,
+        )
+
+
+StepAggregationMode = Literal["AND", "OR", "WEIGHTED"]
+
+
+@dataclass(slots=True)
+class RecipeStep:
+    """Single capture/view definition belonging to a recipe."""
+
+    step_id: str
+    name: str = ""
+    golden_path: str = ""
+    tools: List[Tool] = field(default_factory=list)
+    camera_profile: CameraProfile | None = None
+    settle_ms: Optional[int] = None
+    weight: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        identifier = str(self.step_id or "").strip()
+        self.step_id = identifier or uuid.uuid4().hex
+        self.name = str(self.name or "").strip()
+        self.golden_path = str(self.golden_path or "").strip()
+        self.camera_profile = CameraProfile.from_obj(self.camera_profile)
+        self.settle_ms = int(self.settle_ms) if self.settle_ms is not None else None
+        self.weight = float(self.weight) if self.weight is not None else None
+
+        converted: List[Tool] = []
+        for tool in self.tools:
+            if isinstance(tool, Tool):
+                converted.append(tool.copy())
+            else:
+                converted.append(Tool.from_dict(tool))
+        converted.sort(key=lambda t: t.order)
+        self.tools = converted
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "id": self.step_id,
+            "name": self.name,
+            "golden_path": self.golden_path,
+            "tools": [tool.to_dict() for tool in self.tools],
+        }
+        if self.camera_profile is not None:
+            data["camera_profile"] = self.camera_profile.to_dict()
+        if self.settle_ms is not None:
+            data["settle_ms"] = int(self.settle_ms)
+        if self.weight is not None:
+            data["weight"] = float(self.weight)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RecipeStep":
+        return cls(
+            step_id=data.get("id") or data.get("step_id") or uuid.uuid4().hex,
+            name=data.get("name", ""),
+            golden_path=data.get("golden_path", data.get("golden", "")),
+            tools=data.get("tools", []),
+            camera_profile=CameraProfile.from_obj(data.get("camera_profile")),
+            settle_ms=data.get("settle_ms"),
+            weight=data.get("weight"),
+        )
+
+    def copy(self) -> "RecipeStep":
+        return RecipeStep(
+            step_id=self.step_id,
+            name=self.name,
+            golden_path=self.golden_path,
+            tools=[tool.copy() for tool in self.tools],
+            camera_profile=self.camera_profile.copy() if self.camera_profile else None,
+            settle_ms=self.settle_ms,
+            weight=self.weight,
+        )
+
+
+def _ensure_unique_step_ids(steps: List[RecipeStep]) -> None:
+    seen: set[str] = set()
+    for index, step in enumerate(steps, start=1):
+        identifier = step.step_id or ""
+        if not identifier:
+            identifier = f"step_{index:02d}"
+        if identifier in seen:
+            base = identifier or f"step_{index:02d}"
+            suffix = 1
+            candidate = base
+            while candidate in seen:
+                candidate = f"{base}_{suffix}"
+                suffix += 1
+            step.step_id = candidate
+        else:
+            step.step_id = identifier
+        seen.add(step.step_id)
+
     def with_order(self, order: int) -> "Tool":
         tool = self.copy()
         tool.order = int(order)
@@ -397,6 +566,8 @@ class RecipeV2:
     pose_enabled: bool = True
     regions: List[Dict[str, Any]] = field(default_factory=list)
     tools: List[Tool] = field(default_factory=list)
+    steps: List[RecipeStep] = field(default_factory=list)
+    aggregation_mode: StepAggregationMode = "AND"
     on_locator_failure: Literal["fail", "continue_without_alignment"] = (
         "continue_without_alignment"
     )
@@ -414,6 +585,35 @@ class RecipeV2:
         converted.sort(key=lambda t: t.order)
         self.tools = converted
 
+        converted_steps: List[RecipeStep] = []
+        for step in self.steps:
+            if isinstance(step, RecipeStep):
+                converted_steps.append(step.copy())
+            else:
+                try:
+                    converted_steps.append(RecipeStep.from_dict(step))
+                except Exception:
+                    continue
+        if not converted_steps and converted:
+            converted_steps.append(
+                RecipeStep(
+                    step_id="step_01",
+                    name="Step 1",
+                    golden_path="",
+                    tools=[tool.copy() for tool in converted],
+                )
+            )
+        _ensure_unique_step_ids(converted_steps)
+        self.steps = converted_steps
+
+        if self.steps:
+            self.tools = [tool.copy() for tool in self.steps[0].tools]
+
+        aggregation = str(self.aggregation_mode or "AND").upper()
+        if aggregation not in {"AND", "OR", "WEIGHTED"}:
+            aggregation = "AND"
+        self.aggregation_mode = aggregation  # type: ignore[assignment]
+
         policy = str(self.on_locator_failure or "").lower()
         if policy not in {"fail", "continue_without_alignment"}:
             policy = "continue_without_alignment"
@@ -426,6 +626,8 @@ class RecipeV2:
             "pose_enabled": bool(self.pose_enabled),
             "regions": [dict(r) for r in self.regions],
             "tools": [t.to_dict() for t in self.tools],
+            "steps": [step.to_dict() for step in self.steps],
+            "aggregation": self.aggregation_mode,
             "on_locator_failure": self.on_locator_failure,
             "export_artifacts": bool(self.export_artifacts),
         }
@@ -438,6 +640,9 @@ class RecipeV2:
             pose_enabled=data.get("pose_enabled", True),
             regions=data.get("regions", []),
             tools=data.get("tools", []),
+            steps=data.get("steps", []),
+            aggregation_mode=data.get("aggregation")
+            or data.get("aggregation_mode", "AND"),
             on_locator_failure=data.get(
                 "on_locator_failure", "continue_without_alignment"
             ),
@@ -459,19 +664,49 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=[tool.copy() for tool in self.tools],
+            steps=[step.copy() for step in self.steps],
+            aggregation_mode=self.aggregation_mode,
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":
         new_tools = [tool.copy() for tool in tools]
+        updated_steps = [step.copy() for step in self.steps]
+        if updated_steps:
+            primary = updated_steps[0]
+            updated_steps[0] = RecipeStep(
+                step_id=primary.step_id,
+                name=primary.name,
+                golden_path=primary.golden_path,
+                tools=new_tools,
+                camera_profile=primary.camera_profile.copy()
+                if primary.camera_profile
+                else None,
+                settle_ms=primary.settle_ms,
+                weight=primary.weight,
+            )
+        else:
+            updated_steps = [
+                RecipeStep(
+                    step_id="step_01",
+                    name="Step 1",
+                    golden_path="",
+                    tools=new_tools,
+                )
+            ]
         return RecipeV2(
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=new_tools,
+            steps=updated_steps,
+            aggregation_mode=self.aggregation_mode,
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
         )
 
     def iter_tools(self) -> Iterable[Tool]:
         return tuple(tool.copy() for tool in self.tools)
+
+    def iter_steps(self) -> Iterable[RecipeStep]:
+        return tuple(step.copy() for step in self.steps)

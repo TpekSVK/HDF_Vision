@@ -17,7 +17,9 @@ from app.services.compare_service import analyze
 from app.services import logging_service, settings_service
 from app.models.schema import (
     RecipeData,
+    RecipeStep,
     RecipeV2,
+    StepAggregationMode,
     Tool,
     ToolDefinition,
     ToolMask,
@@ -552,7 +554,38 @@ class PipelineToolReport:
     metrics: Dict[str, Any]
     latency_ms: float
     diagnostics: Dict[str, Any]
+    step_id: Optional[str] = None
+    step_name: Optional[str] = None
     overlay_items: list[overlay_utils.OverlayItem] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PipelineStepResult:
+    """Aggregated result for a single recipe step."""
+
+    step_id: str
+    step_name: str
+    status: Literal["ok", "nok", "warn"]
+    per_tool: List[PipelineToolReport]
+    diagnostics: List[Dict[str, Any]]
+    cycle_time_ms: float
+    policy_applied: Optional[str] = None
+    overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
+    metrics: Dict[str, Any] = field(default_factory=dict)
+    context: Optional[ToolRunnerContext] = None
+    weight: Optional[float] = None
+
+
+@dataclass(slots=True)
+class _StepExecution:
+    context: ToolRunnerContext
+    per_tool: List[PipelineToolReport]
+    diagnostics: List[Dict[str, Any]]
+    cycle_time_ms: float
+    status: Literal["ok", "nok", "warn"]
+    policy_applied: Optional[str]
+    overlay_items: List[overlay_utils.OverlayItem]
+    overlay_index: int
 
 
 @dataclass(slots=True)
@@ -566,6 +599,7 @@ class PipelineResult:
     status: Literal["ok", "nok", "warn"]
     policy_applied: Optional[str] = None
     overlay_items: List[overlay_utils.OverlayItem] = field(default_factory=list)
+    steps: List[PipelineStepResult] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -687,8 +721,116 @@ class PipelineOrchestrator:
 
         start_time = time.perf_counter()
 
-        golden_array = np.asarray(golden)
-        frame_array = np.asarray(frame)
+        steps = self._resolve_steps(recipe)
+        golden_payloads = self._materialize_step_payload(golden, steps, kind="golden")
+        frame_payloads = self._materialize_step_payload(frame, steps, kind="frame")
+
+        session_settings = settings_service.get_session_settings()
+        collect_overlay = (
+            session_settings.logging_enabled
+            and session_settings.export_artifacts
+            and session_settings.export_overlay
+        )
+        overlay_palette = overlay_utils.default_palette() if collect_overlay else []
+        overlay_index = 0
+
+        failure_policy = self._normalize_failure_policy(
+            getattr(recipe, "on_locator_failure", "continue_without_alignment")
+        )
+
+        all_reports: List[PipelineToolReport] = []
+        all_diagnostics: List[Dict[str, Any]] = []
+        aggregated_overlay: List[overlay_utils.OverlayItem] = []
+        step_results: List[PipelineStepResult] = []
+        overall_policy: Optional[str] = None
+
+        registry = ToolRegistry
+
+        for index, step in enumerate(steps):
+            execution = self._execute_step(
+                step=step,
+                golden_array=np.asarray(golden_payloads[index]),
+                frame_array=np.asarray(frame_payloads[index]),
+                failure_policy=failure_policy,
+                collect_overlay=collect_overlay,
+                overlay_palette=overlay_palette,
+                overlay_index=overlay_index,
+                registry=registry,
+            )
+            overlay_index = execution.overlay_index
+
+            all_reports.extend(execution.per_tool)
+            all_diagnostics.extend(execution.diagnostics)
+            if collect_overlay and execution.overlay_items:
+                aggregated_overlay.extend(execution.overlay_items)
+
+            step_result = PipelineStepResult(
+                step_id=step.step_id,
+                step_name=step.name or f"Step {index + 1}",
+                status=execution.status,
+                per_tool=[report for report in execution.per_tool],
+                diagnostics=[diag for diag in execution.diagnostics],
+                cycle_time_ms=float(execution.cycle_time_ms),
+                policy_applied=execution.policy_applied,
+                overlay_items=[item for item in execution.overlay_items] if collect_overlay else [],
+                metrics=self._summarize_step_metrics(execution.per_tool),
+                context=execution.context,
+                weight=step.weight,
+            )
+            step_results.append(step_result)
+            if execution.policy_applied is not None and overall_policy is None:
+                overall_policy = execution.policy_applied
+
+        total_cycle_ms = (time.perf_counter() - start_time) * 1000.0
+        pipeline_status = self._aggregate_step_statuses(step_results, recipe.aggregation_mode)
+
+        if step_results and step_results[-1].context is not None:
+            context = step_results[-1].context  # type: ignore[assignment]
+        else:
+            fallback_frame = np.asarray(frame_payloads[-1] if frame_payloads else frame)
+            context = ToolRunnerContext(
+                frame=fallback_frame,
+                frame_aligned=fallback_frame,
+                T_total=_identity_affine(),
+                frame_is_aligned=False,
+            )
+
+        result = PipelineResult(
+            context=context,
+            per_tool=all_reports,
+            diagnostics=all_diagnostics,
+            cycle_time_ms=float(total_cycle_ms),
+            status=pipeline_status,
+            policy_applied=overall_policy,
+            overlay_items=aggregated_overlay if collect_overlay else [],
+            steps=step_results,
+        )
+
+        try:
+            logging_service.record_pipeline_run(
+                recipe=recipe,
+                recipe_name=recipe_name,
+                result=result,
+                notes=notes,
+            )
+        except Exception as exc:  # pragma: no cover - logging must not break pipeline
+            print("[pipeline][log][err]", exc)
+
+        return result
+
+    def _execute_step(
+        self,
+        *,
+        step: RecipeStep,
+        golden_array: "np.ndarray",
+        frame_array: "np.ndarray",
+        failure_policy: str,
+        collect_overlay: bool,
+        overlay_palette: List[overlay_utils.OverlayItem],
+        overlay_index: int,
+        registry: Any,
+    ) -> _StepExecution:
+        start_time = time.perf_counter()
 
         context = ToolRunnerContext(
             frame=frame_array,
@@ -699,25 +841,13 @@ class PipelineOrchestrator:
 
         diagnostics: List[Dict[str, Any]] = []
         per_tool: List[PipelineToolReport] = []
-        policy_applied: Optional[str] = None
-        session_settings = settings_service.get_session_settings()
-        collect_overlay = (
-            session_settings.logging_enabled
-            and session_settings.export_artifacts
-            and session_settings.export_overlay
-        )
-
-        overlay_palette = overlay_utils.default_palette() if collect_overlay else []
-        overlay_index = 0
         pipeline_overlay_items: List[overlay_utils.OverlayItem] = []
+        policy_applied: Optional[str] = None
 
-        failure_policy = self._normalize_failure_policy(
-            getattr(recipe, "on_locator_failure", "continue_without_alignment")
-        )
-        tools = self._order_tools(recipe.tools)
+        tools = self._order_tools(step.tools)
 
         for tool in tools:
-            definition = ToolRegistry.get_tool_definition(tool.type)
+            definition = registry.get_tool_definition(tool.type)
             if definition is None:
                 raise ValueError(f"Tool type '{tool.type}' is not registered")
 
@@ -727,10 +857,13 @@ class PipelineOrchestrator:
             _validate_params(tool)
 
             tool_id = tool.name or f"tool_{tool.order}"
+            step_label = step.name or step.step_id or f"step_{tool.order}"
             diag_entry: Dict[str, Any] = {
                 "tool_id": tool_id,
                 "type": tool.type,
                 "status": "skipped",
+                "step_id": step.step_id,
+                "step_name": step_label,
             }
 
             if not tool.enabled:
@@ -738,7 +871,7 @@ class PipelineOrchestrator:
                 diagnostics.append(diag_entry)
                 continue
 
-            runner = ToolRegistry.create_tool(tool.type)
+            runner = registry.create_tool(tool.type)
             runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
 
             frame_for_tool = (
@@ -810,6 +943,8 @@ class PipelineOrchestrator:
                     metrics=metrics,
                     latency_ms=float(result.latency_ms),
                     diagnostics=dict(diag_entry),
+                    step_id=step.step_id,
+                    step_name=step_label,
                     overlay_items=tool_overlay_items,
                 )
             )
@@ -850,29 +985,121 @@ class PipelineOrchestrator:
                     self._apply_locator_alignment(tool, context, diag_entry)
 
         cycle_time_ms = (time.perf_counter() - start_time) * 1000.0
-        pipeline_status = self._aggregate_status(per_tool)
+        step_status = self._aggregate_status(per_tool)
 
-        result = PipelineResult(
+        return _StepExecution(
             context=context,
             per_tool=per_tool,
             diagnostics=diagnostics,
             cycle_time_ms=float(cycle_time_ms),
-            status=pipeline_status,
+            status=step_status,
             policy_applied=policy_applied,
             overlay_items=pipeline_overlay_items if collect_overlay else [],
+            overlay_index=overlay_index,
         )
 
-        try:
-            logging_service.record_pipeline_run(
-                recipe=recipe,
-                recipe_name=recipe_name,
-                result=result,
-                notes=notes,
+    def _resolve_steps(self, recipe: RecipeV2) -> List[RecipeStep]:
+        steps = list(recipe.iter_steps())
+        if steps:
+            return steps
+        fallback_tools = [tool.copy() for tool in recipe.iter_tools()]
+        return [
+            RecipeStep(
+                step_id="step_01",
+                name="Step 1",
+                golden_path="",
+                tools=fallback_tools,
             )
-        except Exception as exc:  # pragma: no cover - logging must not break pipeline
-            print("[pipeline][log][err]", exc)
+        ]
 
-        return result
+    def _materialize_step_payload(
+        self, payload: Any, steps: Sequence[RecipeStep], *, kind: str
+    ) -> List["np.ndarray"]:
+        import numpy as np
+
+        if isinstance(payload, dict):
+            arrays: List["np.ndarray"] = []
+            for step in steps:
+                if step.step_id not in payload:
+                    raise ValueError(f"{kind} payload missing for step '{step.step_id}'")
+                arrays.append(np.asarray(payload[step.step_id]))
+            return arrays
+
+        if isinstance(payload, np.ndarray):
+            return [payload] * len(steps)
+
+        if hasattr(payload, "__array__") and not isinstance(payload, (list, tuple)):
+            arr = np.asarray(payload)
+            return [arr] * len(steps)
+
+        if isinstance(payload, (list, tuple)) and not isinstance(payload, (bytes, bytearray)):
+            if len(payload) != len(steps):
+                raise ValueError(
+                    f"{kind} payload length {len(payload)} does not match steps {len(steps)}"
+                )
+            return [np.asarray(value) for value in payload]
+
+        if not steps:
+            return []
+
+        return [np.asarray(payload)] * len(steps)
+
+    @staticmethod
+    def _summarize_step_metrics(per_tool: Sequence[PipelineToolReport]) -> Dict[str, Any]:
+        summary = {
+            "tools_total": len(per_tool),
+            "tools_ok": 0,
+            "tools_warn": 0,
+            "tools_nok": 0,
+            "latency_ms_total": 0.0,
+        }
+        for report in per_tool:
+            summary["latency_ms_total"] += float(report.latency_ms)
+            key = f"tools_{report.status}"
+            if key in summary:
+                summary[key] += 1
+        return summary
+
+    def _aggregate_step_statuses(
+        self, steps: Sequence[PipelineStepResult], mode: StepAggregationMode
+    ) -> Literal["ok", "nok", "warn"]:
+        if not steps:
+            return "ok"
+
+        normalized = str(mode or "AND").upper()
+        if normalized == "OR":
+            if any(step.status == "ok" for step in steps):
+                return "ok"
+            if any(step.status == "warn" for step in steps):
+                return "warn"
+            return "nok"
+
+        if normalized == "WEIGHTED":
+            total_weight = 0.0
+            score = 0.0
+            for step in steps:
+                weight = step.weight if step.weight is not None else 1.0
+                weight = max(0.0, float(weight))
+                total_weight += weight
+                if step.status == "ok":
+                    score += weight
+                elif step.status == "warn":
+                    score += weight * 0.5
+            if total_weight <= 0.0:
+                normalized = "AND"
+            else:
+                if score >= total_weight:
+                    return "ok"
+                if score > 0.0:
+                    return "warn"
+                return "nok"
+
+        priority: Dict[str, int] = {"ok": 0, "warn": 1, "nok": 2}
+        current: Literal["ok", "nok", "warn"] = "ok"
+        for step in steps:
+            if priority[step.status] > priority[current]:
+                current = step.status
+        return current
 
     def run_tool_test(
         self,

@@ -1,9 +1,9 @@
 # app/services/recipe_service.py
 from pathlib import Path
 import json
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Optional, Sequence
 
-from app.models.schema import RecipeData, RecipeV2, Tool
+from app.models.schema import RecipeData, RecipeV2, Tool, RecipeStep
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
@@ -102,12 +102,125 @@ class RecipeService:
 
     def save_tools(self, name: str, tools: Sequence[Tool | dict]) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
-        recipe.tools = self._coerce_tools(tools)
+        coerced = self._coerce_tools(tools)
+        recipe = recipe.with_tools(coerced)
         normalized = self._save_recipe_config(name, recipe)
         autosorted = self._locator_autosort.pop(name, False)
         self._draft_tools[name] = [tool.copy() for tool in normalized.tools]
         self.db.mark_recipe_draft_updated(name)
         return [tool.copy() for tool in normalized.tools], autosorted
+
+    # --- multi-view steps ---
+    def load_steps(self, name: str) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        return [step.copy() for step in recipe.steps]
+
+    def save_steps(
+        self,
+        name: str,
+        steps: Sequence[RecipeStep | dict],
+        *,
+        aggregation: str | None = None,
+    ) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        recipe.steps = self._coerce_steps(steps)
+        if aggregation is not None:
+            recipe.aggregation_mode = self._normalize_aggregation(aggregation)
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [step.copy() for step in normalized.steps]
+
+    def add_step(
+        self, name: str, step: RecipeStep | dict, *, index: Optional[int] = None
+    ) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        steps = [entry.copy() for entry in recipe.steps]
+        new_step = step.copy() if isinstance(step, RecipeStep) else RecipeStep.from_dict(step)
+        if index is None or index >= len(steps):
+            steps.append(new_step)
+        else:
+            insert_at = max(0, int(index))
+            steps.insert(insert_at, new_step)
+        recipe.steps = steps
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [entry.copy() for entry in normalized.steps]
+
+    def update_step(self, name: str, step_id: str, step: RecipeStep | dict) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        steps = [entry.copy() for entry in recipe.steps]
+        target_index = next((idx for idx, entry in enumerate(steps) if entry.step_id == step_id), -1)
+        if target_index < 0:
+            raise ValueError(f"Step '{step_id}' not found")
+        updated = step.copy() if isinstance(step, RecipeStep) else RecipeStep.from_dict(step)
+        updated.step_id = step_id
+        steps[target_index] = updated
+        recipe.steps = steps
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [entry.copy() for entry in normalized.steps]
+
+    def remove_step(self, name: str, step_id: str) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        filtered = [step.copy() for step in recipe.steps if step.step_id != step_id]
+        if len(filtered) == len(recipe.steps):
+            raise ValueError(f"Step '{step_id}' not found")
+        if not filtered:
+            raise ValueError("Recipe must contain at least one step")
+        recipe.steps = filtered
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [entry.copy() for entry in normalized.steps]
+
+    def reorder_steps(self, name: str, order: Sequence[str]) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        mapping = {step.step_id: step.copy() for step in recipe.steps}
+        if set(order) != set(mapping.keys()):
+            raise ValueError("order must reference each existing step exactly once")
+        reordered = [mapping[step_id].copy() for step_id in order]
+        recipe.steps = reordered
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [entry.copy() for entry in normalized.steps]
+
+    def set_step_tools(
+        self, name: str, step_id: str, tools: Sequence[Tool | dict]
+    ) -> List[RecipeStep]:
+        recipe = self._load_recipe_config(name)
+        coerced_tools = self._coerce_tools(tools)
+        updated_steps: List[RecipeStep] = []
+        replaced = False
+        for step in recipe.steps:
+            if step.step_id == step_id:
+                updated_steps.append(
+                    RecipeStep(
+                        step_id=step.step_id,
+                        name=step.name,
+                        golden_path=step.golden_path,
+                        tools=[tool.copy() for tool in coerced_tools],
+                        camera_profile=step.camera_profile.copy()
+                        if step.camera_profile
+                        else None,
+                        settle_ms=step.settle_ms,
+                        weight=step.weight,
+                    )
+                )
+                replaced = True
+            else:
+                updated_steps.append(step.copy())
+        if not replaced:
+            raise ValueError(f"Step '{step_id}' not found")
+        recipe.steps = updated_steps
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return [entry.copy() for entry in normalized.steps]
+
+    def set_aggregation_mode(self, name: str, mode: str) -> str:
+        recipe = self._load_recipe_config(name)
+        recipe.aggregation_mode = self._normalize_aggregation(mode)
+        normalized = self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return normalized.aggregation_mode
 
     def publish_recipe(self, name: str) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
@@ -192,6 +305,28 @@ class RecipeService:
             else:
                 raise TypeError(f"Unsupported tool entry: {type(tool)!r}")
         return coerced
+
+    def _coerce_steps(self, steps: Sequence[RecipeStep | dict]) -> List[RecipeStep]:
+        coerced: List[RecipeStep] = []
+        for step in steps:
+            if isinstance(step, RecipeStep):
+                coerced.append(step.copy())
+            elif isinstance(step, dict):
+                coerced.append(RecipeStep.from_dict(step))
+            else:
+                raise TypeError(f"Unsupported step entry: {type(step)!r}")
+        if not coerced:
+            raise ValueError("Recipe must contain at least one step")
+        return coerced
+
+    @staticmethod
+    def _normalize_aggregation(mode: str | None) -> str:
+        if not isinstance(mode, str):
+            return "AND"
+        normalized = mode.strip().upper()
+        if normalized not in {"AND", "OR", "WEIGHTED"}:
+            return "AND"
+        return normalized
 
     def _get_persisted_tools(self, name: str) -> List[Tool]:
         recipe = self._load_recipe_config(name)

@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 
 pytest.importorskip("cv2")
 
-from app.models.schema import RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
+from app.models.schema import RecipeStep, RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
 from app.services.tool_service import run_pipeline
 from app.utils import imaging
 
@@ -49,6 +49,18 @@ def _make_recipe(
     )
 
     return RecipeV2(tools=[locator, ssim_tool])
+
+
+def _make_ssim_tool(*, name: str, order: int, threshold: float) -> Tool:
+    return Tool(
+        type="ssim",
+        name=name,
+        enabled=True,
+        order=order,
+        roi=ToolRoi({"x": 0, "y": 0, "w": 32, "h": 32}),
+        params=ToolParams({}),
+        thresholds=ToolThresholds({"ssim_min": threshold}),
+    )
 
 
 def _make_test_images() -> tuple[np.ndarray, np.ndarray]:
@@ -286,3 +298,55 @@ def test_pipeline_enforces_locator_first_even_when_order_swapped() -> None:
     assert pipeline.per_tool
     assert pipeline.per_tool[0].tool.type.startswith("locator")
     assert pipeline.diagnostics[0]["type"].startswith("locator")
+
+
+def test_multi_view_step_aggregation() -> None:
+    golden_ok = np.zeros((32, 32), dtype=np.uint8)
+    frame_ok = golden_ok.copy()
+    frame_bad = np.full_like(golden_ok, 255)
+
+    tool_ok = _make_ssim_tool(name="front", order=0, threshold=0.1)
+    tool_bad = _make_ssim_tool(name="back", order=0, threshold=0.95)
+
+    step_front = RecipeStep(step_id="front", name="Front", tools=[tool_ok])
+    step_back = RecipeStep(step_id="back", name="Back", tools=[tool_bad])
+
+    recipe_and = RecipeV2(steps=[step_front, step_back], aggregation_mode="AND")
+
+    result_and = run_pipeline(
+        [golden_ok, golden_ok],
+        [frame_ok, frame_bad],
+        recipe_and,
+    )
+
+    assert result_and.status == "nok"
+    assert len(result_and.steps) == 2
+    assert result_and.steps[0].status == "ok"
+    assert result_and.steps[1].status == "nok"
+    assert result_and.steps[1].metrics["tools_nok"] == 1
+    assert any(report.step_id == "back" for report in result_and.per_tool)
+
+    recipe_or = RecipeV2(steps=[step_front.copy(), step_back.copy()], aggregation_mode="OR")
+    result_or = run_pipeline(
+        [golden_ok, golden_ok],
+        [frame_ok, frame_bad],
+        recipe_or,
+    )
+    assert result_or.status == "ok"
+
+    weighted_back = RecipeStep(
+        step_id="back_w",
+        name="Back Weighted",
+        tools=[tool_bad.copy()],
+        weight=0.0,
+    )
+    recipe_weighted = RecipeV2(
+        steps=[step_front.copy(), weighted_back],
+        aggregation_mode="WEIGHTED",
+    )
+    result_weighted = run_pipeline(
+        [golden_ok, golden_ok],
+        [frame_ok, frame_bad],
+        recipe_weighted,
+    )
+    assert result_weighted.status == "ok"

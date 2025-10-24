@@ -19,7 +19,11 @@ from app.services.settings_service import DEFAULT_LOG_DIR, get_session_settings
 from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
-    from app.services.tool_service import PipelineResult, PipelineToolReport
+    from app.services.tool_service import (
+        PipelineResult,
+        PipelineToolReport,
+        PipelineStepResult,
+    )
 
 
 _DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "pipeline_runs.jsonl"
@@ -183,6 +187,36 @@ def _export_artifacts(
         iio.imwrite(overlay_path, overlay)
         artifacts["overlay_png"] = str(overlay_path)
 
+    step_results = getattr(result, "steps", [])
+    for index, step in enumerate(step_results, start=1):
+        step_context = getattr(step, "context", None)
+        if step_context is None:
+            continue
+        step_frame = getattr(step_context, "frame_aligned", None)
+        if step_frame is None:
+            step_frame = getattr(step_context, "frame", None)
+        step_frame_u8 = _to_u8(step_frame)
+        if step_frame_u8 is None:
+            continue
+        step_path = base_dir / f"{safe_name}_{ts}_{run_id}_step_{index:02d}.webp"
+        iio.imwrite(step_path, step_frame_u8)
+        artifacts[f"step_{index:02d}_webp"] = str(step_path)
+
+        meta_path = base_dir / f"{safe_name}_{ts}_{run_id}_step_{index:02d}.json"
+        meta_payload = {
+            "id": getattr(step, "step_id", ""),
+            "name": getattr(step, "step_name", ""),
+            "status": getattr(step, "status", "unknown"),
+            "ok": bool(getattr(step, "status", "") == "ok"),
+            "metrics": _json_safe(getattr(step, "metrics", {})),
+        }
+        weight = getattr(step, "weight", None)
+        if weight is not None:
+            meta_payload["weight"] = float(weight)
+        with open(meta_path, "w", encoding="utf-8") as handle:
+            json.dump(meta_payload, handle, ensure_ascii=False, indent=2)
+        artifacts[f"step_{index:02d}_meta"] = str(meta_path)
+
     return artifacts
 
 
@@ -270,8 +304,31 @@ def record_pipeline_run(
             "latency_ms": float(report.latency_ms),
             "metrics": _json_safe(report.metrics),
         }
+        if getattr(report, "step_id", None):
+            tool_payload["step_id"] = report.step_id
+        if getattr(report, "step_name", None):
+            tool_payload["step_name"] = report.step_name
         tools_payload.append(tool_payload)
     run_entry["tools"] = tools_payload
+
+    step_results = getattr(result, "steps", [])
+    if step_results:
+        steps_payload: List[Dict[str, Any]] = []
+        for step in step_results:
+            step_payload = {
+                "id": getattr(step, "step_id", ""),
+                "name": getattr(step, "step_name", ""),
+                "status": getattr(step, "status", "unknown"),
+                "ok": bool(getattr(step, "status", "") == "ok"),
+                "cycle_time_ms": float(getattr(step, "cycle_time_ms", 0.0) or 0.0),
+                "policy_applied": getattr(step, "policy_applied", None),
+                "metrics": _json_safe(getattr(step, "metrics", {})),
+            }
+            weight = getattr(step, "weight", None)
+            if weight is not None:
+                step_payload["weight"] = float(weight)
+            steps_payload.append(step_payload)
+        run_entry["steps"] = steps_payload
 
     if notes:
         run_entry["notes"] = str(notes)
