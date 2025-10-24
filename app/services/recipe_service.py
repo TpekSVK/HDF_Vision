@@ -183,9 +183,22 @@ class RecipeService:
 
     def publish_recipe(self, name: str) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
-        publish_copy = recipe.copy()
-        normalized_tools, autosorted = self._normalize_tools(publish_copy)
-        publish_copy.tools = normalized_tools
+        working_copy = recipe.copy()
+        normalized_tools, autosorted = self._normalize_tools(working_copy)
+
+        publish_copy = RecipeV2(
+            pose_enabled=recipe.pose_enabled,
+            regions=[dict(region) for region in recipe.regions],
+            tools=[tool.copy() for tool in normalized_tools],
+            on_locator_failure=recipe.on_locator_failure,
+            export_artifacts=recipe.export_artifacts,
+            views=[self._copy_view(view) for view in recipe.views],
+            aggregation=RecipeAggregation(
+                mode=recipe.aggregation.mode,
+                weights=dict(recipe.aggregation.weights),
+            ),
+        )
+
         self._save_published_recipe_config(name, publish_copy)
         self.db.mark_recipe_published(name)
         self._draft_tools[name] = [tool.copy() for tool in publish_copy.tools]
