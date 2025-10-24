@@ -7,6 +7,7 @@ from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import math
 from pathlib import Path
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from numbers import Integral, Real
@@ -62,6 +63,8 @@ class MainWindow(QMainWindow):
         self._tool_selector_items: list[dict[str, Any]] = []
         self._view_states: dict[str, dict[str, Any]] = {}
         self._active_view_id: str | None = None
+        self._manual_trigger_positions: dict[str, int] = {}
+        self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
 
         # Tool/Recipe
         try:
@@ -412,6 +415,25 @@ class MainWindow(QMainWindow):
         if success:
             self._update_live_view()
 
+    def _reset_manual_trigger_progress(self, recipe_name: str | None = None) -> None:
+        if recipe_name is None:
+            self._manual_trigger_positions.clear()
+            self._manual_trigger_statuses.clear()
+            return
+        self._manual_trigger_positions.pop(recipe_name, None)
+        self._manual_trigger_statuses.pop(recipe_name, None)
+
+    def _reset_view_sequence_state(self) -> None:
+        for vid in self.view_strip.view_ids():
+            self.view_strip.set_status(vid, None)
+            state = self._view_states.get(vid)
+            if isinstance(state, dict):
+                state.pop("reports", None)
+                state.pop("status", None)
+                state.pop("cycle_time_ms", None)
+                state.pop("combined_metrics", None)
+        self._update_metrics_panel()
+
     def manual_trigger(self):
         try:
             frame = self.cam.last_frame()
@@ -430,6 +452,7 @@ class MainWindow(QMainWindow):
                 recipe_cfg = None
 
             if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
+                self._reset_manual_trigger_progress(recipe_name)
                 self._run_legacy_trigger(base_frame, recipe_name)
                 return
 
@@ -439,31 +462,84 @@ class MainWindow(QMainWindow):
 
             fail_fast = bool(getattr(recipe_cfg.aggregation, "fail_fast", False))
             run_id = f"{recipe_name}_{uuid.uuid4().hex[:8]}"
-            per_view_statuses: dict[str, str] = {}
+            view_specs: list[dict[str, Any]] = []
+            for index, view in enumerate(recipe_cfg.views):
+                settle_ms = getattr(view, "settle_ms", None)
+                settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
+                if settle_ms is not None and settle_ms < 0:
+                    settle_ms = 0
+                trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").lower()
+                if trigger_mode not in {"timed", "external", "manual"}:
+                    trigger_mode = "timed"
+                interval_ms = getattr(view, "trigger_interval_ms", None)
+                interval_ms = (
+                    int(interval_ms)
+                    if isinstance(interval_ms, Integral) and interval_ms is not None
+                    else None
+                )
+                if interval_ms is not None and interval_ms < 0:
+                    interval_ms = 0
+                view_specs.append(
+                    {
+                        "index": index,
+                        "view": view,
+                        "settle_ms": settle_ms,
+                        "trigger_mode": trigger_mode,
+                        "interval_ms": interval_ms,
+                    }
+                )
 
-            # reset strip statuses before nového cyklu
-            for vid in self.view_strip.view_ids():
-                self.view_strip.set_status(vid, None)
-                state = self._view_states.get(vid)
-                if isinstance(state, dict):
-                    state.pop("reports", None)
-                    state.pop("status", None)
-                    state.pop("cycle_time_ms", None)
-                    state.pop("combined_metrics", None)
-            self._update_metrics_panel()
+            manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
+            all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
+
+            if all_manual:
+                cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
+                index_in_cycle = cycle_position % len(manual_specs)
+                current_spec = manual_specs[index_in_cycle]
+                self._manual_trigger_positions[recipe_name] = (
+                    index_in_cycle + 1
+                ) % len(manual_specs)
+                if index_in_cycle == 0:
+                    self._manual_trigger_statuses[recipe_name] = {}
+                    self._reset_view_sequence_state()
+                    per_view_statuses: dict[str, str] = {}
+                else:
+                    per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
+                views_to_process = [current_spec]
+            else:
+                self._reset_view_sequence_state()
+                per_view_statuses = {}
+                views_to_process = view_specs
+                self._reset_manual_trigger_progress(recipe_name)
 
             last_preview_frame = base_frame
+            trigger_start_ts = time.monotonic()
 
-            for index, view in enumerate(recipe_cfg.views):
+            for spec in views_to_process:
+                view = spec["view"]
+                index = spec["index"]
                 view_id = getattr(view, "id", None) or f"view_{index+1}"
                 view_name = getattr(view, "name", view_id)
                 golden = self._load_view_golden_array(recipe_name, view)
 
-                if index == 0:
-                    view_frame = base_frame
+                settle_ms = spec["settle_ms"]
+                trigger_mode = spec["trigger_mode"]
+                interval_ms = spec["interval_ms"]
+
+                if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
+                    target_time = trigger_start_ts + (interval_ms / 1000.0)
+                    now = time.monotonic()
+                    if now < target_time:
+                        time.sleep(target_time - now)
+
+                if settle_ms is not None and settle_ms > 0:
+                    time.sleep(settle_ms / 1000.0)
+
+                latest_frame = self.cam.last_frame()
+                if latest_frame is not None:
+                    view_frame = latest_frame
                 else:
-                    latest_frame = self.cam.last_frame()
-                    view_frame = latest_frame if latest_frame is not None else base_frame
+                    view_frame = base_frame
 
                 view_frame_u8 = view_frame.copy()
 
@@ -515,6 +591,8 @@ class MainWindow(QMainWindow):
                         last_preview_frame = view_frame_u8.copy()
 
                 per_view_statuses[view_id] = status
+                if all_manual:
+                    self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
 
                 cycle_time_value = float(result.cycle_time_ms) if result is not None else None
 
@@ -643,6 +721,7 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self.recipes, self)
         dlg.resize(1200, 800)
         dlg.exec()
+        self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
         self.strip.reload()
         self._refresh_tool_selector()
@@ -1186,6 +1265,7 @@ class MainWindow(QMainWindow):
             self.recipes.load(name)
             self.tool = self.recipes.tool
             self._refresh_views()
+            self._reset_manual_trigger_progress(name)
             self.lbl_status.setText("Recipe loaded.")
             # refresh štatistík + strip
             st = self.stats.daily_for_recipe(name, view_id=self._active_view_id)
@@ -1208,6 +1288,7 @@ class MainWindow(QMainWindow):
         self.recipes.load(name)
         self.tool = self.recipes.tool
         self._refresh_views()
+        self._reset_manual_trigger_progress(name)
         self.strip.reload()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
@@ -1222,10 +1303,12 @@ class MainWindow(QMainWindow):
         new = new.strip()
         self.recipes.rename(old, new)
         self.gpio.rename_profile(old, new)
+        self._reset_manual_trigger_progress(old)
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
         self._refresh_views()
+        self._reset_manual_trigger_progress(new)
         self.strip.reload()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
@@ -1242,10 +1325,12 @@ class MainWindow(QMainWindow):
             return
         self.recipes.delete(name)
         self.gpio.delete_profile(name)
+        self._reset_manual_trigger_progress(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
         self._refresh_views()
+        self._reset_manual_trigger_progress("default")
         self.strip.reload()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)

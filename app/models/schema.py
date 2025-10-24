@@ -623,7 +623,7 @@ class RecipeView:
     golden_path: str = "golden.png"
     camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
-    trigger_mode: Literal["timed", "external"] = "timed"
+    trigger_mode: Literal["timed", "external", "manual"] = "timed"
     trigger_interval_ms: Optional[int] = None
     tools: List[Tool] = field(default_factory=list)
 
@@ -646,9 +646,9 @@ class RecipeView:
                 self.settle_ms = None
 
         mode = str(self.trigger_mode or "timed").strip().lower()
-        if mode not in {"timed", "external"}:
+        if mode not in {"timed", "external", "manual"}:
             mode = "timed"
-        self.trigger_mode = cast(Literal["timed", "external"], mode)
+        self.trigger_mode = cast(Literal["timed", "external", "manual"], mode)
 
         if self.trigger_interval_ms is not None:
             try:
