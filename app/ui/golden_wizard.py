@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
 import os
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Mapping, Optional, Sequence
 from functools import partial
 
 import numpy as np
@@ -42,6 +42,7 @@ import cv2
 from app.utils import overlay as overlay_utils
 
 from app.ui.draw_view import DrawView
+from app.ui.multi_view_panel import MultiViewPanel
 from app.ui.roi_mask_editor import (
     MASK_WARN_PIXELS,
     MAX_MASK_PIXELS,
@@ -2749,6 +2750,59 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live OFF
         self.view = DrawView(self)
+        self.view.set_view_only(True)
+
+        self._shape_toolbar = QWidget(self)
+        shape_layout = QHBoxLayout(self._shape_toolbar)
+        shape_layout.setContentsMargins(0, 0, 0, 0)
+        shape_layout.setSpacing(6)
+
+        self._shape_button_group = QButtonGroup(self)
+        self._shape_button_group.setExclusive(True)
+
+        self._shape_rect_button = QToolButton(self._shape_toolbar)
+        self._shape_rect_button.setText("Rectangle")
+        self._shape_rect_button.setCheckable(True)
+        self._shape_rect_button.setChecked(True)
+        self._shape_rect_button.toggled.connect(
+            lambda checked, mode="rect": self._on_shape_mode_changed(mode, checked)
+        )
+        self._shape_button_group.addButton(self._shape_rect_button)
+        shape_layout.addWidget(self._shape_rect_button)
+
+        self._shape_circle_button = QToolButton(self._shape_toolbar)
+        self._shape_circle_button.setText("Circle")
+        self._shape_circle_button.setCheckable(True)
+        self._shape_circle_button.toggled.connect(
+            lambda checked, mode="circle": self._on_shape_mode_changed(mode, checked)
+        )
+        self._shape_button_group.addButton(self._shape_circle_button)
+        shape_layout.addWidget(self._shape_circle_button)
+
+        self._shape_poly_button = QToolButton(self._shape_toolbar)
+        self._shape_poly_button.setText("Polygon")
+        self._shape_poly_button.setCheckable(True)
+        self._shape_poly_button.toggled.connect(
+            lambda checked, mode="poly": self._on_shape_mode_changed(mode, checked)
+        )
+        self._shape_button_group.addButton(self._shape_poly_button)
+        shape_layout.addWidget(self._shape_poly_button)
+
+        shape_layout.addStretch(1)
+
+        self._shape_clear_button = QPushButton("Clear pose", self._shape_toolbar)
+        self._shape_clear_button.clicked.connect(self._on_clear_pose_clicked)
+        shape_layout.addWidget(self._shape_clear_button)
+
+        self._shape_hint_label = QLabel(
+            "Draw the pose alignment ROI: use rectangle, circle or polygon tools.",
+            self,
+        )
+        self._shape_hint_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._shape_hint_label.setWordWrap(True)
+        self._shape_hint_label.setVisible(False)
+
+        self._shape_toolbar.setVisible(False)
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -2775,6 +2829,15 @@ class GoldenWizard(QDialog):
         self._tool_panel = ToolConfigPanel(self)
         self._tool_panel.setMinimumWidth(280)
         self._tool_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+
+        self._side_tabs = QTabWidget(self)
+        self._side_tabs.setDocumentMode(True)
+        self._side_tabs.addTab(self._tool_panel, "Tools")
+        self._multi_view_panel = MultiViewPanel(self)
+        self._multi_view_tab_index = self._side_tabs.addTab(
+            self._multi_view_panel, "Pohľady (Multi-View)"
+        )
+        self._side_tabs.setTabVisible(self._multi_view_tab_index, False)
 
         self.tools_table = ToolsTableWidget(0, 5, self)
         self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
@@ -2821,6 +2884,8 @@ class GoldenWizard(QDialog):
         left_layout.setSpacing(8)
         left_layout.addWidget(self.live_lbl, 1)
         left_layout.addWidget(self.view, 1)
+        left_layout.addWidget(self._shape_toolbar)
+        left_layout.addWidget(self._shape_hint_label)
         left_layout.addWidget(tools_label)
         left_layout.addWidget(self.tools_table)
         left_layout.addWidget(self.locator_hint_label)
@@ -2828,13 +2893,19 @@ class GoldenWizard(QDialog):
         left_layout.addLayout(buttons)
 
         content_layout.addLayout(left_layout, 3)
-        content_layout.addWidget(self._tool_panel, 2)
+        content_layout.addWidget(self._side_tabs, 2)
 
         layout = QVBoxLayout(self)
         layout.addLayout(top)
         layout.addLayout(content_layout, 1)
 
         self._tool_panel.clear()
+
+        self._multi_view_enabled = False
+        self._multi_view_config: dict[str, Any] = {"aggregation": "AND", "steps": []}
+        self._multi_view_assets: dict[str, dict[str, Any]] = {}
+        self._step_dirty: dict[str, bool] = {}
+        self._active_step_id: Optional[str] = None
 
         # signály
         btn_cap_golden.clicked.connect(self._capture_golden)
@@ -2855,6 +2926,21 @@ class GoldenWizard(QDialog):
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
+
+        self._multi_view_panel.stepSelected.connect(self._on_multi_view_step_selected)
+        self._multi_view_panel.addStepRequested.connect(self._on_multi_view_add_step)
+        self._multi_view_panel.removeStepRequested.connect(self._on_multi_view_remove_step)
+        self._multi_view_panel.captureGoldenRequested.connect(
+            self._on_multi_view_capture_golden
+        )
+        self._multi_view_panel.loadGoldenRequested.connect(
+            self._on_multi_view_load_golden
+        )
+        self._multi_view_panel.saveStepRequested.connect(self._on_multi_view_save_step)
+        self._multi_view_panel.sequenceTestRequested.connect(
+            self._on_multi_view_test_sequence
+        )
+        self._multi_view_panel.stepsReordered.connect(self._on_multi_view_reordered)
 
         self.btn_test_tool.setEnabled(self._tool_panel.is_test_enabled())
 
@@ -2880,6 +2966,346 @@ class GoldenWizard(QDialog):
         self._refresh_golden_background(self._last_recipe)
         self._on_tool_selection_changed()
         self._refresh_publish_state()
+        self._load_multi_view_config(self._last_recipe)
+
+    # ---------- Multi-view management ----------
+    def _on_shape_mode_changed(self, mode: str, checked: bool) -> None:
+        if not checked:
+            return
+        self.view.set_shape_type(mode)
+
+    def _on_clear_pose_clicked(self) -> None:
+        self.view.clear_regions()
+        if self._active_step_id:
+            self._step_dirty[self._active_step_id] = True
+
+    def _load_multi_view_config(self, recipe: str) -> None:
+        try:
+            config = self.recipes.load_multi_view_config(recipe)
+        except Exception as exc:
+            print(f"[GoldenWizard] load_multi_view_config failed for {recipe}: {exc}")
+            config = {"aggregation": "AND", "steps": []}
+
+        steps = list(config.get("steps", []))
+        self._multi_view_config = {"aggregation": config.get("aggregation", "AND"), "steps": steps}
+        self._multi_view_assets.clear()
+        self._step_dirty.clear()
+        self._active_step_id = None
+
+        enabled = bool(steps)
+        self._multi_view_enabled = enabled
+        self._side_tabs.setTabVisible(self._multi_view_tab_index, enabled)
+        self._shape_toolbar.setVisible(False)
+        self._shape_hint_label.setVisible(False)
+
+        if not enabled:
+            self._multi_view_panel.clear()
+            return
+
+        self._multi_view_panel.set_steps(steps)
+        first_id = steps[0].get("id") if steps else None
+        if first_id:
+            self._multi_view_panel.select_step(first_id)
+            self._activate_multi_view_step(first_id)
+
+    def _apply_multi_view_steps(
+        self, steps: Sequence[Mapping[str, Any]], *, select: Optional[str] = None
+    ) -> None:
+        steps_list = [dict(step) for step in steps]
+        self._multi_view_config["steps"] = steps_list
+        if not steps_list:
+            self._multi_view_enabled = False
+            self._side_tabs.setTabVisible(self._multi_view_tab_index, False)
+            self._multi_view_panel.clear()
+            self._shape_toolbar.setVisible(False)
+            self._shape_hint_label.setVisible(False)
+            self._active_step_id = None
+            return
+
+        self._multi_view_enabled = True
+        self._side_tabs.setTabVisible(self._multi_view_tab_index, True)
+        previous = select or self._active_step_id
+        if previous and any(step.get("id") == previous for step in steps_list):
+            target = previous
+        else:
+            target = steps_list[0].get("id")
+        self._multi_view_panel.set_steps(steps_list)
+        if target:
+            self._multi_view_panel.select_step(target)
+            self._activate_multi_view_step(target)
+
+    def _find_multi_view_step(self, step_id: str) -> Optional[dict[str, Any]]:
+        for step in self._multi_view_config.get("steps", []):
+            if step.get("id") == step_id:
+                return step
+        return None
+
+    def _snapshot_active_step(self) -> None:
+        step_id = self._active_step_id
+        if not step_id:
+            return
+        assets = self._multi_view_assets.setdefault(step_id, {})
+        if self.current_img is not None:
+            assets["golden"] = np.asarray(self.current_img).copy()
+        assets["regions"] = self.view.export_regions()
+        form_data = self._multi_view_panel.current_step_form()
+        if form_data and form_data.get("id") == step_id:
+            assets["limits"] = dict(form_data.get("limits", {}))
+        self._step_dirty[step_id] = True
+
+    def _activate_multi_view_step(self, step_id: str) -> None:
+        if step_id == self._active_step_id:
+            return
+
+        self._snapshot_active_step()
+        self._active_step_id = step_id
+
+        recipe = self._current_recipe_name()
+        assets = self._multi_view_assets.get(step_id)
+        if assets is None:
+            try:
+                assets = self.recipes.load_multi_view_step_assets(recipe, step_id)
+            except Exception as exc:
+                print(f"[GoldenWizard] load_multi_view_step_assets failed for {step_id}: {exc}")
+                assets = {"golden": None, "regions": [], "limits": {}}
+            self._multi_view_assets[step_id] = dict(assets)
+
+        image = assets.get("golden")
+        if image is None:
+            self.current_img = None
+            self.view.set_background(None)
+            self._multi_view_panel.set_golden_status(False)
+        else:
+            self.current_img = np.asarray(image).copy()
+            self._set_pixmap(self.current_img)
+            self._multi_view_panel.set_golden_status(True)
+
+        try:
+            self.view.import_regions(assets.get("regions", []))
+        except Exception:
+            self.view.clear_regions()
+
+        step_entry = self._find_multi_view_step(step_id) or {}
+        self._multi_view_panel.set_step_details(
+            step_id,
+            name=str(step_entry.get("name") or step_id),
+            pose_enabled=bool(step_entry.get("pose_enabled", True)),
+            settle_ms=step_entry.get("settle_ms"),
+            camera_profile=step_entry.get("camera_profile", {}),
+        )
+        self._multi_view_panel.set_limits(assets.get("limits", {}))
+
+        self.view.set_view_only(False)
+        self._shape_toolbar.setVisible(True)
+        self._shape_hint_label.setVisible(True)
+        # Ensure a default drawing mode is selected.
+        if not self._shape_rect_button.isChecked() and not (
+            self._shape_circle_button.isChecked() or self._shape_poly_button.isChecked()
+        ):
+            self._shape_rect_button.setChecked(True)
+
+    def _on_multi_view_step_selected(self, step_id: str) -> None:
+        if not step_id:
+            return
+        self._activate_multi_view_step(step_id)
+
+    def _on_multi_view_add_step(self) -> None:
+        recipe = self._current_recipe_name()
+        existing_ids = {step.get("id") for step in self._multi_view_config.get("steps", [])}
+        index = 1
+        while True:
+            candidate = f"step-{index:02d}"
+            if candidate not in existing_ids:
+                break
+            index += 1
+
+        new_step = {
+            "id": candidate,
+            "name": f"View {index}",
+            "order": len(existing_ids),
+            "pose_enabled": True,
+            "settle_ms": None,
+            "camera_profile": {},
+        }
+        steps = list(self._multi_view_config.get("steps", []))
+        steps.append(new_step)
+        try:
+            saved = self.recipes.save_multi_view_config(
+                recipe,
+                {
+                    "aggregation": self._multi_view_config.get("aggregation", "AND"),
+                    "steps": steps,
+                },
+            )
+        except Exception as exc:
+            self._err(f"Pridanie kroku zlyhalo: {exc}")
+            return
+        self._apply_multi_view_steps(saved.get("steps", []), select=candidate)
+        self._multi_view_config = saved
+        self._info(f"Pridaný nový krok {candidate}.")
+        self._update_dirty_state(recipe)
+
+    def _on_multi_view_remove_step(self, step_id: str) -> None:
+        recipe = self._current_recipe_name()
+        try:
+            self.recipes.delete_multi_view_step(recipe, step_id)
+        except Exception as exc:
+            self._err(f"Zmazanie kroku zlyhalo: {exc}")
+            return
+        self._multi_view_assets.pop(step_id, None)
+        self._step_dirty.pop(step_id, None)
+        updated = self.recipes.load_multi_view_config(recipe)
+        self._multi_view_config = updated
+        self._apply_multi_view_steps(updated.get("steps", []))
+        self._info(f"Krok {step_id} bol odstránený.")
+        self._update_dirty_state(recipe)
+
+    def _on_multi_view_capture_golden(self, step_id: str) -> None:
+        frame = None
+        if self._live_on:
+            try:
+                frame = self._lp.last_frame_u8()
+            except Exception as exc:
+                print(f"[GoldenWizard] live capture failed: {exc}")
+                frame = None
+        if frame is None:
+            try:
+                frame = self.cam.one_shot()
+            except Exception as exc:
+                self._err(f"Zachytenie zlyhalo: {exc}")
+                return
+        self.current_img = frame
+        self._set_pixmap(frame)
+        self.view.clear_regions()
+        self.view.set_view_only(False)
+        self._shape_toolbar.setVisible(True)
+        self._shape_hint_label.setVisible(True)
+        self._multi_view_assets.setdefault(step_id, {})["golden"] = np.asarray(frame).copy()
+        self._multi_view_panel.set_golden_status(True)
+        self._step_dirty[step_id] = True
+        self._info("Golden zachytený pre multi-view krok.")
+        self._update_dirty_state(self._current_recipe_name())
+
+    def _on_multi_view_load_golden(self, step_id: str) -> None:
+        fp, _ = QFileDialog.getOpenFileName(
+            self, "Načítaj obrázok", "", "Images (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if not fp:
+            return
+        try:
+            import imageio.v3 as iio
+
+            img = iio.imread(fp)
+            if img.ndim == 3:
+                img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.shape[2] == 3 else img[:, :, 0]
+            if img.dtype != np.uint8:
+                img = cv2.convertScaleAbs(img)
+        except Exception as exc:
+            self._err(f"Načítanie golden obrázka zlyhalo: {exc}")
+            return
+        self.current_img = img
+        self._set_pixmap(img)
+        self.view.clear_regions()
+        self.view.set_view_only(False)
+        self._shape_toolbar.setVisible(True)
+        self._shape_hint_label.setVisible(True)
+        self._multi_view_assets.setdefault(step_id, {})["golden"] = np.asarray(img).copy()
+        self._multi_view_panel.set_golden_status(True)
+        self._step_dirty[step_id] = True
+        self._info("Golden načítaný pre multi-view krok.")
+        self._update_dirty_state(self._current_recipe_name())
+
+    def _on_multi_view_save_step(self, step_id: str, data: dict[str, Any]) -> None:
+        recipe = self._current_recipe_name()
+        if self._active_step_id == step_id:
+            self._snapshot_active_step()
+        assets = self._multi_view_assets.get(step_id, {})
+        golden_image = assets.get("golden")
+        if self._active_step_id == step_id and self.current_img is not None:
+            golden_image = np.asarray(self.current_img).copy()
+        regions = assets.get("regions", [])
+        if self._active_step_id == step_id:
+            regions = self.view.export_regions()
+        limits = data.get("limits", assets.get("limits", {})) or {}
+
+        try:
+            persisted = self.recipes.save_multi_view_step_assets(
+                recipe,
+                step_id,
+                golden=golden_image,
+                regions=regions,
+                limits=limits,
+            )
+        except Exception as exc:
+            self._err(f"Uloženie krokových dát zlyhalo: {exc}")
+            return
+
+        self._multi_view_assets[step_id] = dict(persisted)
+        step_entry = self._find_multi_view_step(step_id)
+        if step_entry is not None:
+            step_entry.update(
+                {
+                    "name": data.get("name", step_id),
+                    "pose_enabled": bool(data.get("pose_enabled", True)),
+                    "settle_ms": data.get("settle_ms"),
+                    "camera_profile": dict(data.get("camera_profile", {})),
+                }
+            )
+        try:
+            saved_config = self.recipes.save_multi_view_config(
+                recipe,
+                {
+                    "aggregation": self._multi_view_config.get("aggregation", "AND"),
+                    "steps": self._multi_view_config.get("steps", []),
+                },
+            )
+        except Exception as exc:
+            self._err(f"Uloženie konfigurácie multi-view zlyhalo: {exc}")
+            return
+        self._multi_view_config = saved_config
+        self._apply_multi_view_steps(saved_config.get("steps", []), select=step_id)
+        self._info("Multi-view krok bol uložený.")
+        self._update_dirty_state(recipe)
+
+    def _on_multi_view_test_sequence(self) -> None:
+        steps = self._multi_view_config.get("steps", [])
+        if not steps:
+            self._warn("Multi-view recept nemá definované kroky.")
+            return
+        captured: list[str] = []
+        for step in steps:
+            try:
+                frame = self.cam.one_shot()
+                if frame is None:
+                    raise RuntimeError("Žiadny frame z kamery")
+            except Exception as exc:
+                self._warn(f"Test kroku {step.get('name') or step.get('id')} zlyhal: {exc}")
+                return
+            captured.append(step.get("name") or step.get("id"))
+        self._info("Sekvencia testu dokončená: " + ", ".join(captured))
+
+    def _on_multi_view_reordered(self, order: list[str]) -> None:
+        steps_map = {step.get("id"): step for step in self._multi_view_config.get("steps", [])}
+        if set(order) != set(steps_map.keys()):
+            return
+        reordered = [steps_map[step_id] for step_id in order if step_id in steps_map]
+        for idx, step in enumerate(reordered):
+            step["order"] = idx
+        recipe = self._current_recipe_name()
+        try:
+            saved = self.recipes.save_multi_view_config(
+                recipe,
+                {
+                    "aggregation": self._multi_view_config.get("aggregation", "AND"),
+                    "steps": reordered,
+                },
+            )
+        except Exception as exc:
+            self._err(f"Zmena poradia krokov zlyhala: {exc}")
+            return
+        self._multi_view_config = saved
+        self._apply_multi_view_steps(saved.get("steps", []))
+        self._update_dirty_state(recipe)
 
     # ---------- Live ----------
     def _toggle_live(self, checked: bool):
@@ -3287,6 +3713,7 @@ class GoldenWizard(QDialog):
         self._refresh_golden_background(recipe)
         self._on_tool_selection_changed()
         self._refresh_publish_state()
+        self._load_multi_view_config(recipe)
 
     def _open_tool_catalog(self):
         dialog = ToolCatalogDialog(self.recipes.tool, self)

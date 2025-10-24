@@ -1,12 +1,22 @@
 # app/services/recipe_service.py
 from pathlib import Path
 import json
-from typing import Iterable, List, Sequence
+from typing import Any, Iterable, List, Mapping, Sequence
+
+import numpy as np
 
 from app.models.schema import RecipeData, RecipeV2, Tool
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
-from app.services.storage_service import load_recipe_config, save_recipe_config
+from app.services.storage_service import (
+    delete_multi_view_step_assets,
+    load_multi_view_config,
+    load_multi_view_step_assets,
+    load_recipe_config,
+    save_multi_view_config,
+    save_multi_view_step_assets,
+    save_recipe_config,
+)
 
 class RecipeService:
     def __init__(self, base_dir="/data", db: DbService | None = None):
@@ -15,6 +25,7 @@ class RecipeService:
         self.tool = ToolService(base_dir=base_dir)
         self._draft_tools: dict[str, List[Tool]] = {}
         self._locator_autosort: dict[str, bool] = {}
+        self._multi_view_cache: dict[str, dict[str, Any]] = {}
 
     def list(self) -> list[str]:
         # DB je master
@@ -90,6 +101,57 @@ class RecipeService:
         self._save_recipe_config(name, recipe)
         self.db.mark_recipe_draft_updated(name)
         return normalized
+
+    # --- multi-view ---
+    def load_multi_view_config(self, name: str) -> dict[str, Any]:
+        config = load_multi_view_config(name, base_dir=self.base)
+        self._multi_view_cache[name] = config
+        return {"aggregation": config.get("aggregation", "AND"), "steps": list(config.get("steps", []))}
+
+    def save_multi_view_config(self, name: str, data: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = save_multi_view_config(name, data, base_dir=self.base)
+        self._multi_view_cache[name] = normalized
+        self.db.mark_recipe_draft_updated(name)
+        return {"aggregation": normalized.get("aggregation", "AND"), "steps": list(normalized.get("steps", []))}
+
+    def has_multi_view(self, name: str) -> bool:
+        cached = self._multi_view_cache.get(name)
+        if cached is None:
+            cached = load_multi_view_config(name, base_dir=self.base)
+            self._multi_view_cache[name] = cached
+        return bool(cached.get("steps"))
+
+    def load_multi_view_step_assets(self, name: str, step_id: str) -> dict[str, Any]:
+        return load_multi_view_step_assets(name, step_id, base_dir=self.base)
+
+    def save_multi_view_step_assets(
+        self,
+        name: str,
+        step_id: str,
+        *,
+        golden: np.ndarray | None = None,
+        regions: Sequence[Mapping[str, Any]] | None = None,
+        limits: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        assets = save_multi_view_step_assets(
+            name,
+            step_id,
+            golden=golden,
+            regions=regions,
+            limits=limits,
+            base_dir=self.base,
+        )
+        self.db.mark_recipe_draft_updated(name)
+        return assets
+
+    def delete_multi_view_step(self, name: str, step_id: str) -> None:
+        delete_multi_view_step_assets(name, step_id, base_dir=self.base)
+        config = load_multi_view_config(name, base_dir=self.base)
+        filtered = [step for step in config.get("steps", []) if step.get("id") != step_id]
+        config["steps"] = filtered
+        save_multi_view_config(name, config, base_dir=self.base)
+        self._multi_view_cache[name] = config
+        self.db.mark_recipe_draft_updated(name)
 
     # --- tools ---
     def load_tools(self, name: str, *, use_draft: bool = True) -> List[Tool]:

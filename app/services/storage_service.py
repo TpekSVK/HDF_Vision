@@ -1,10 +1,10 @@
 # app/services/storage_service.py
-import os, json, time, threading, queue, math, uuid
+import os, json, time, threading, queue, math, uuid, shutil
 from pathlib import Path
 from datetime import datetime
 import imageio.v3 as iio
 import numpy as np
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any, Dict, Mapping, Sequence, Optional
 
 from app.models.schema import RecipeV2
 
@@ -122,6 +122,15 @@ def _recipe_json_path(recipe: str, base_dir: str | Path = "/data") -> Path:
     return Path(base_dir) / "recipes" / recipe / "recipe.json"
 
 
+def _multi_view_config_path(recipe: str, base_dir: str | Path = "/data") -> Path:
+    return Path(base_dir) / "recipes" / recipe / "multi_view.json"
+
+
+def _step_dir(recipe: str, step_id: str, base_dir: str | Path = "/data") -> Path:
+    safe_id = str(step_id or "").strip() or "step"
+    return Path(base_dir) / "recipes" / recipe / "steps" / safe_id
+
+
 def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> RecipeV2:
     """Load recipe configuration including tool pipeline."""
 
@@ -142,6 +151,210 @@ def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data.to_dict(), f, ensure_ascii=False, indent=2)
     return path
+
+
+def load_multi_view_config(recipe: str, *, base_dir: str | Path = "/data") -> Dict[str, Any]:
+    """Load multi-view configuration for the given recipe."""
+
+    path = _multi_view_config_path(recipe, base_dir)
+    if not path.exists():
+        return {"aggregation": "AND", "steps": []}
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except Exception:
+        return {"aggregation": "AND", "steps": []}
+
+    aggregation = str(data.get("aggregation", "AND")).upper()
+    if aggregation not in {"AND", "OR", "WEIGHTED"}:
+        aggregation = "AND"
+
+    normalized_steps: list[Dict[str, Any]] = []
+    for index, raw in enumerate(data.get("steps", []) or []):
+        if not isinstance(raw, dict):
+            continue
+        step_id = str(raw.get("id") or raw.get("step_id") or f"step-{index + 1}").strip()
+        if not step_id:
+            step_id = f"step-{index + 1}"
+        name = str(raw.get("name") or step_id)
+        pose_enabled = bool(raw.get("pose_enabled", True))
+        settle_ms = raw.get("settle_ms")
+        try:
+            settle_ms = None if settle_ms is None else max(0, int(settle_ms))
+        except Exception:
+            settle_ms = None
+        camera_profile = raw.get("camera_profile") or {}
+        if not isinstance(camera_profile, dict):
+            camera_profile = {}
+        order = raw.get("order")
+        try:
+            order_val = int(order)
+        except Exception:
+            order_val = index
+        normalized_steps.append(
+            {
+                "id": step_id,
+                "name": name,
+                "order": order_val,
+                "pose_enabled": pose_enabled,
+                "settle_ms": settle_ms,
+                "camera_profile": camera_profile,
+            }
+        )
+
+    normalized_steps.sort(key=lambda entry: entry.get("order", 0))
+    for idx, step in enumerate(normalized_steps):
+        step["order"] = idx
+
+    return {"aggregation": aggregation, "steps": normalized_steps}
+
+
+def save_multi_view_config(
+    recipe: str,
+    data: Mapping[str, Any],
+    *,
+    base_dir: str | Path = "/data",
+) -> Dict[str, Any]:
+    """Persist the multi-view configuration and return the normalized payload."""
+
+    normalized = load_multi_view_config(recipe, base_dir=base_dir)
+    aggregation = str(data.get("aggregation", normalized.get("aggregation", "AND"))).upper()
+    if aggregation not in {"AND", "OR", "WEIGHTED"}:
+        aggregation = "AND"
+
+    raw_steps = list(data.get("steps", []))
+    steps: list[Dict[str, Any]] = []
+    for index, raw in enumerate(raw_steps):
+        if isinstance(raw, dict):
+            steps.append(dict(raw))
+
+    # Normalization ensures deterministic ordering and required fields.
+    normalized = {"aggregation": aggregation, "steps": []}
+    for idx, entry in enumerate(steps):
+        step_id = str(entry.get("id") or entry.get("step_id") or f"step-{idx + 1}").strip()
+        if not step_id:
+            step_id = f"step-{idx + 1}"
+        name = str(entry.get("name") or step_id)
+        pose_enabled = bool(entry.get("pose_enabled", True))
+        settle_ms = entry.get("settle_ms")
+        try:
+            settle_ms = None if settle_ms is None else max(0, int(settle_ms))
+        except Exception:
+            settle_ms = None
+        camera_profile = entry.get("camera_profile") or {}
+        if not isinstance(camera_profile, dict):
+            camera_profile = {}
+        normalized["steps"].append(
+            {
+                "id": step_id,
+                "name": name,
+                "order": idx,
+                "pose_enabled": pose_enabled,
+                "settle_ms": settle_ms,
+                "camera_profile": camera_profile,
+            }
+        )
+
+    path = _multi_view_config_path(recipe, base_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(normalized, fh, ensure_ascii=False, indent=2)
+    return normalized
+
+
+def load_multi_view_step_assets(
+    recipe: str,
+    step_id: str,
+    *,
+    base_dir: str | Path = "/data",
+) -> Dict[str, Any]:
+    """Load persisted assets for a multi-view step (golden, regions, limits)."""
+
+    step_path = _step_dir(recipe, step_id, base_dir)
+    assets: Dict[str, Any] = {"regions": [], "limits": {}}
+
+    golden_path = step_path / "golden.png"
+    if golden_path.exists():
+        try:
+            image = iio.imread(golden_path)
+            if image.ndim == 3:
+                image = image[:, :, 0]
+            if image.dtype != np.uint8:
+                image = np.clip(image, 0, 255).astype(np.uint8)
+            assets["golden"] = image
+        except Exception:
+            assets["golden"] = None
+    else:
+        assets["golden"] = None
+
+    regions_path = step_path / "regions.json"
+    if regions_path.exists():
+        try:
+            with open(regions_path, "r", encoding="utf-8") as fh:
+                assets["regions"] = list(json.load(fh) or [])
+        except Exception:
+            assets["regions"] = []
+
+    limits_path = step_path / "limits.json"
+    if limits_path.exists():
+        try:
+            with open(limits_path, "r", encoding="utf-8") as fh:
+                raw_limits = json.load(fh)
+            if isinstance(raw_limits, dict):
+                assets["limits"] = raw_limits
+            else:
+                assets["limits"] = {}
+        except Exception:
+            assets["limits"] = {}
+
+    return assets
+
+
+def save_multi_view_step_assets(
+    recipe: str,
+    step_id: str,
+    *,
+    golden: Optional[np.ndarray] = None,
+    regions: Optional[Sequence[Mapping[str, Any]]] = None,
+    limits: Optional[Mapping[str, Any]] = None,
+    base_dir: str | Path = "/data",
+) -> Dict[str, Any]:
+    """Persist assets for a multi-view step and return normalized payload."""
+
+    step_path = _step_dir(recipe, step_id, base_dir)
+    step_path.mkdir(parents=True, exist_ok=True)
+
+    if golden is not None:
+        try:
+            arr = _to_u8(np.asarray(golden))
+            iio.imwrite(step_path / "golden.png", arr)
+        except Exception:
+            pass
+
+    if regions is not None:
+        with open(step_path / "regions.json", "w", encoding="utf-8") as fh:
+            json.dump([dict(r) for r in regions], fh, ensure_ascii=False, indent=2)
+
+    if limits is not None:
+        with open(step_path / "limits.json", "w", encoding="utf-8") as fh:
+            json.dump(dict(limits), fh, ensure_ascii=False, indent=2)
+
+    return load_multi_view_step_assets(recipe, step_id, base_dir=base_dir)
+
+
+def delete_multi_view_step_assets(
+    recipe: str,
+    step_id: str,
+    *,
+    base_dir: str | Path = "/data",
+) -> None:
+    """Remove persisted assets for the selected step."""
+
+    step_path = _step_dir(recipe, step_id, base_dir)
+    if step_path.exists():
+        shutil.rmtree(step_path, ignore_errors=True)
+
 
 # --- Public API (zachovávame signatúry) ---
 def save_golden(frame_u8, recipe_name: str):
