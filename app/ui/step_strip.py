@@ -73,7 +73,13 @@ class _StepPreview(QWidget):
         layout.addWidget(status_label)
 
         if isinstance(frame, np.ndarray):
-            if not frame.flags.get("C_CONTIGUOUS"):
+            is_c_contiguous = getattr(frame.flags, "c_contiguous", None)
+            if is_c_contiguous is None:
+                try:
+                    is_c_contiguous = frame.flags["C_CONTIGUOUS"]
+                except (KeyError, TypeError, AttributeError):
+                    is_c_contiguous = True
+            if not is_c_contiguous:
                 frame = np.ascontiguousarray(frame)
             pixmap = _frame_to_pixmap(frame, preview_label.size())
             if not pixmap.isNull():
@@ -132,6 +138,13 @@ class StepStrip(QWidget):
             self._layout.removeWidget(self._placeholder)
         self._placeholder.hide()
 
+        def _extract_field(source: Any, attribute: str, default: Any = None) -> Any:
+            if hasattr(source, attribute):
+                return getattr(source, attribute)
+            if isinstance(source, Mapping):
+                return source.get(attribute, default)
+            return default
+
         for index, entry in enumerate(results, start=1):
             verdict = None
             frame = None
@@ -150,9 +163,11 @@ class StepStrip(QWidget):
                 frame = entry.get("frame")
 
             if verdict is not None:
-                name = str(getattr(verdict, "name", verdict.get("name", name)))
-                status = str(getattr(verdict, "status", verdict.get("status", status)))
-                metrics = getattr(verdict, "metrics", verdict.get("metrics"))
+                name = str(_extract_field(verdict, "name", name))
+                status = str(_extract_field(verdict, "status", status))
+                metrics_value = _extract_field(verdict, "metrics")
+                if isinstance(metrics_value, Mapping):
+                    metrics = metrics_value
             preview = _StepPreview(
                 index,
                 name,
