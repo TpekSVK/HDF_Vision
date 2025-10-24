@@ -7,6 +7,7 @@ from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import math
 from pathlib import Path
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from numbers import Integral, Real
@@ -453,17 +454,41 @@ class MainWindow(QMainWindow):
             self._update_metrics_panel()
 
             last_preview_frame = base_frame
+            trigger_start_ts = time.monotonic()
 
             for index, view in enumerate(recipe_cfg.views):
                 view_id = getattr(view, "id", None) or f"view_{index+1}"
                 view_name = getattr(view, "name", view_id)
                 golden = self._load_view_golden_array(recipe_name, view)
 
-                if index == 0:
-                    view_frame = base_frame
+                settle_ms = getattr(view, "settle_ms", None)
+                settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
+                if settle_ms is not None and settle_ms < 0:
+                    settle_ms = 0
+                trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").lower()
+                interval_ms = getattr(view, "trigger_interval_ms", None)
+                interval_ms = (
+                    int(interval_ms)
+                    if isinstance(interval_ms, Integral) and interval_ms is not None
+                    else None
+                )
+                if interval_ms is not None and interval_ms < 0:
+                    interval_ms = 0
+
+                if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
+                    target_time = trigger_start_ts + (interval_ms / 1000.0)
+                    now = time.monotonic()
+                    if now < target_time:
+                        time.sleep(target_time - now)
+
+                if settle_ms is not None and settle_ms > 0:
+                    time.sleep(settle_ms / 1000.0)
+
+                latest_frame = self.cam.last_frame()
+                if latest_frame is not None:
+                    view_frame = latest_frame
                 else:
-                    latest_frame = self.cam.last_frame()
-                    view_frame = latest_frame if latest_frame is not None else base_frame
+                    view_frame = base_frame
 
                 view_frame_u8 = view_frame.copy()
 
