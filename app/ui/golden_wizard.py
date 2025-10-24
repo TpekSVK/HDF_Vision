@@ -83,6 +83,21 @@ _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
 _LOCATOR_PREVIEW_MIN_HEIGHT = 280
 
+_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
+    (
+        "1920x1080@60 Y8",
+        {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
+    ),
+    (
+        "1280x720@60 Y8",
+        {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8"},
+    ),
+    (
+        "2592x1944@30 Y8 (len setup/pomalé)",
+        {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"},
+    ),
+)
+
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
