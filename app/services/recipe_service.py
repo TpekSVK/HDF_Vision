@@ -185,7 +185,7 @@ class RecipeService:
 
         target_settle = settle_ms if settle_ms is not None else source_settle
         target_trigger_mode = (trigger_mode or source_trigger_mode or "timed").strip().lower()
-        if target_trigger_mode not in {"timed", "external"}:
+        if target_trigger_mode not in {"timed", "external", "manual"}:
             target_trigger_mode = "timed"
         if target_trigger_mode != "timed":
             target_trigger_interval = None
@@ -255,7 +255,7 @@ class RecipeService:
             camera_payload = camera_profile
 
         normalized_mode = str(trigger_mode or "timed").strip().lower()
-        if normalized_mode not in {"timed", "external"}:
+        if normalized_mode not in {"timed", "external", "manual"}:
             normalized_mode = "timed"
         if normalized_mode != "timed":
             normalized_interval = None
