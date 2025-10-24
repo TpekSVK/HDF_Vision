@@ -2994,12 +2994,12 @@ class GoldenWizard(QDialog):
 
         enabled = bool(steps)
         self._multi_view_enabled = enabled
-        self._side_tabs.setTabVisible(self._multi_view_tab_index, enabled)
+        self._side_tabs.setTabVisible(self._multi_view_tab_index, True)
         self._shape_toolbar.setVisible(False)
         self._shape_hint_label.setVisible(False)
 
+        self._multi_view_panel.clear()
         if not enabled:
-            self._multi_view_panel.clear()
             return
 
         self._multi_view_panel.set_steps(steps)
@@ -3015,7 +3015,7 @@ class GoldenWizard(QDialog):
         self._multi_view_config["steps"] = steps_list
         if not steps_list:
             self._multi_view_enabled = False
-            self._side_tabs.setTabVisible(self._multi_view_tab_index, False)
+            self._side_tabs.setTabVisible(self._multi_view_tab_index, True)
             self._multi_view_panel.clear()
             self._shape_toolbar.setVisible(False)
             self._shape_hint_label.setVisible(False)
