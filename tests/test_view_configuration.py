@@ -24,6 +24,7 @@ if "app.services.compare_service" not in sys.modules:  # pragma: no cover - test
 from app.models.schema import RecipeView, ViewCameraProfile
 from app.services.recipe_service import RecipeService
 from app.ui.view_utils import view_uses_global_golden
+from app.ui.camera_profile_utils import resolve_view_camera_state
 
 
 def test_recipe_view_normalizes_camera_profile_and_trigger():
@@ -135,3 +136,58 @@ def test_view_uses_global_golden_recognizes_per_view_assets():
     assert view_uses_global_golden(custom_view) is False
     assert view_uses_global_golden(nested_view) is False
     assert view_uses_global_golden(empty_path_view) is True
+
+
+def test_resolve_camera_state_inherits_base_configuration():
+    base = {
+        "width": 1280,
+        "height": 720,
+        "fps": 60,
+        "pixel_format": "y8",
+        "exposure_us": 8500,
+        "gain_db": 3.25,
+    }
+
+    state = resolve_view_camera_state(base, None)
+
+    assert state["width"] == 1280
+    assert state["height"] == 720
+    assert state["fps"] == 60
+    assert state["pixel_format"] == "Y8"
+    assert state["exposure_us"] == 8500
+    assert state["gain_db"] == pytest.approx(3.25)
+
+
+def test_resolve_camera_state_applies_view_overrides():
+    base = {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8", "exposure_us": 8000}
+    profile = ViewCameraProfile(
+        width=1920,
+        height=1080,
+        fps=90,
+        pixel_format="y12",
+        exposure_us=9000,
+        gain_db=4.5,
+    )
+
+    state = resolve_view_camera_state(base, profile)
+
+    assert state["width"] == 1920
+    assert state["height"] == 1080
+    assert state["fps"] == 90
+    assert state["pixel_format"] == "Y12"
+    assert state["exposure_us"] == 9000
+    assert state["gain_db"] == pytest.approx(4.5)
+
+
+def test_resolve_camera_state_keeps_missing_overrides_from_base():
+    base = {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8", "gain_db": 2.0}
+    profile = ViewCameraProfile(exposure_us=5000)
+
+    state = resolve_view_camera_state(base, profile)
+
+    assert state["width"] == 1280
+    assert state["height"] == 720
+    assert state["fps"] == 60
+    assert state["pixel_format"] == "Y8"
+    assert state["exposure_us"] == 5000
+    assert state["gain_db"] == pytest.approx(2.0)

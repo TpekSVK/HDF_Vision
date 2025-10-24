@@ -75,6 +75,7 @@ from app.services.tool_service import (
     run_tool_test,
 )
 from app.ui.view_utils import view_uses_global_golden
+from app.ui.camera_profile_utils import resolve_view_camera_state
 
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
@@ -82,22 +83,6 @@ _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
 _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
 _LOCATOR_PREVIEW_MIN_HEIGHT = 280
-
-_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
-    (
-        "1920x1080@60 Y8",
-        {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "1280x720@60 Y8",
-        {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "2592x1944@30 Y8 (len setup/pomalé)",
-        {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"},
-    ),
-)
-
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
@@ -3033,6 +3018,7 @@ class GoldenWizard(QDialog):
         self.cam = camera
         self.recipes = recipes
         self.current_img = None
+        self._default_camera_state = self._snapshot_camera_state()
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._dirty_views: dict[str, dict[str, bool]] = {}
@@ -3414,6 +3400,9 @@ class GoldenWizard(QDialog):
         if view_id != self._active_view_id:
             self._store_view_state(self._active_view_id)
             self._active_view_id = view_id
+
+        view = self._view_by_id(view_id)
+        self._apply_view_camera_profile(view)
 
         recipe = self._current_recipe_name()
         try:
@@ -3858,6 +3847,105 @@ class GoldenWizard(QDialog):
                 "pixel_format": (pixel_format or "Y8").upper(),
             }
         return None
+
+    def _snapshot_camera_state(self) -> dict[str, Any]:
+        state: dict[str, Any] = {}
+        for key in ("width", "height", "fps"):
+            value = getattr(self.cam, key, None)
+            if value is None:
+                continue
+            try:
+                state[key] = int(value)
+            except Exception:
+                continue
+        pixel_format = getattr(self.cam, "pixel_format", None)
+        if pixel_format:
+            state["pixel_format"] = str(pixel_format).strip().upper()
+        exposure = getattr(self.cam, "exposure_us", None)
+        if exposure is not None:
+            try:
+                state["exposure_us"] = int(exposure)
+            except Exception:
+                pass
+        gain = getattr(self.cam, "gain_db", None)
+        if gain is not None:
+            try:
+                state["gain_db"] = float(gain)
+            except Exception:
+                pass
+        return state
+
+    def _apply_camera_state(self, state: dict[str, Any], *, show_warnings: bool = True) -> None:
+        if not state:
+            return
+
+        current = self._snapshot_camera_state()
+
+        have_resolution = all(key in state for key in ("width", "height", "fps"))
+        if have_resolution:
+            target_resolution = {
+                "width": int(state["width"]),
+                "height": int(state["height"]),
+                "fps": int(state["fps"]),
+                "pixel_format": str(
+                    state.get("pixel_format")
+                    or current.get("pixel_format")
+                    or "Y8"
+                ).upper(),
+            }
+            current_resolution = {
+                "width": int(current.get("width", 0) or 0),
+                "height": int(current.get("height", 0) or 0),
+                "fps": int(current.get("fps", 0) or 0),
+                "pixel_format": str(current.get("pixel_format") or "Y8").upper(),
+            }
+            if target_resolution != current_resolution:
+                try:
+                    self.cam.apply_resolution(**target_resolution)
+                except Exception as exc:
+                    if show_warnings:
+                        self._warn(f"Zmena rozlíšenia pre view zlyhala: {exc}")
+                else:
+                    current.update(target_resolution)
+
+        exposure_target = state.get("exposure_us")
+        if exposure_target is not None:
+            try:
+                exposure_value = int(exposure_target)
+            except Exception:
+                exposure_value = None
+            if (
+                exposure_value is not None
+                and current.get("exposure_us") != exposure_value
+            ):
+                try:
+                    self.cam.set_manual_exposure_us(exposure_value)
+                except Exception as exc:
+                    if show_warnings:
+                        self._warn(f"Nastavenie expozície zlyhalo: {exc}")
+                else:
+                    current["exposure_us"] = exposure_value
+
+        gain_target = state.get("gain_db")
+        if gain_target is not None:
+            try:
+                gain_value = int(round(float(gain_target)))
+            except Exception:
+                gain_value = None
+            if gain_value is not None and current.get("gain_db") != gain_value:
+                try:
+                    self.cam.set_gain_db(gain_value)
+                except Exception as exc:
+                    if show_warnings:
+                        self._warn(f"Nastavenie gainu zlyhalo: {exc}")
+                else:
+                    current["gain_db"] = gain_value
+
+    def _apply_view_camera_profile(self, view: Optional[RecipeView]) -> None:
+        base_state = getattr(self, "_default_camera_state", {})
+        profile = getattr(view, "camera_profile", None) if view else None
+        target_state = resolve_view_camera_state(base_state, profile)
+        self._apply_camera_state(target_state)
 
     @staticmethod
     def _suggest_view_id(existing: Sequence[RecipeView]) -> str:
@@ -4527,6 +4615,12 @@ class GoldenWizard(QDialog):
             if result != QMessageBox.Yes:
                 e.ignore()
                 return
+        try:
+            base_state = getattr(self, "_default_camera_state", None)
+            if isinstance(base_state, dict) and base_state:
+                self._apply_camera_state(base_state, show_warnings=False)
+        except Exception:
+            pass
         try:
             self._live_timer.stop()
             self._lp.stop()
