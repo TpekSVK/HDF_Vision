@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 
 from collections import deque
 import math
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -233,6 +233,70 @@ class DrawView(QGraphicsView):
             self._overlay_sources = list(overlay_items)
             self._overlay_items = self._coerce_overlay_items(self._overlay_sources)
         self._update_overlay_pixmap()
+
+    def clear_regions(self) -> None:
+        """Remove all pose region items from the scene."""
+
+        self._cancel_pending_drawing()
+        for item in list(self._scene.items()):
+            if item is self._bg or item is self._overlay_pixmap:
+                continue
+            if getattr(item, "reg_type", None) == "pose" or isinstance(
+                item, (RectItem, CircleItem, PolyItem)
+            ):
+                self._scene.removeItem(item)
+
+    def import_regions(self, regions: Sequence[Mapping[str, Any]]) -> None:
+        """Populate the scene with persisted pose regions."""
+
+        self.clear_regions()
+        if not regions:
+            return
+
+        for entry in regions:
+            if not isinstance(entry, Mapping):
+                continue
+            shape = str(entry.get("shape") or "").lower()
+            geom = entry.get("geom")
+            if shape == "rect" and isinstance(geom, Sequence) and len(geom) >= 4:
+                try:
+                    x, y, w, h = [float(value) for value in geom[:4]]
+                except Exception:
+                    continue
+                rect_item = RectItem(QRectF(x, y, w, h), COLOR_POSE)
+                rect_item.reg_type = "pose"
+                rect_item.finalize()
+                self._scene.addItem(rect_item)
+                break
+            if shape == "circle" and isinstance(geom, Sequence) and len(geom) >= 3:
+                try:
+                    cx, cy, radius = [float(value) for value in geom[:3]]
+                except Exception:
+                    continue
+                if radius <= 0:
+                    continue
+                circle_item = CircleItem(cx, cy, radius, COLOR_POSE)
+                circle_item.reg_type = "pose"
+                circle_item.finalize()
+                self._scene.addItem(circle_item)
+                break
+            if shape == "poly" and isinstance(geom, Sequence):
+                points: list[tuple[float, float]] = []
+                for point in geom:
+                    if isinstance(point, Sequence) and len(point) >= 2:
+                        try:
+                            px = float(point[0])
+                            py = float(point[1])
+                        except Exception:
+                            continue
+                        points.append((px, py))
+                if len(points) < 3:
+                    continue
+                poly_item = PolyItem(points, COLOR_POSE)
+                poly_item.reg_type = "pose"
+                poly_item.finalize()
+                self._scene.addItem(poly_item)
+                break
 
     def set_tool_overlay(
         self,
