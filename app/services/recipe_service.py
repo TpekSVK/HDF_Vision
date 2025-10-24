@@ -1,9 +1,9 @@
 # app/services/recipe_service.py
 from pathlib import Path
 import json
-from typing import Iterable, List, Sequence
+from typing import Iterable, List, Sequence, Optional
 
-from app.models.schema import RecipeData, RecipeV2, Tool
+from app.models.schema import RecipeData, RecipeV2, Tool, RecipeView
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
@@ -90,6 +90,116 @@ class RecipeService:
         self._save_recipe_config(name, recipe)
         self.db.mark_recipe_draft_updated(name)
         return normalized
+
+    # --- views ---
+    def list_views(self, name: str) -> List[RecipeView]:
+        recipe = self._load_recipe_config(name)
+        return [view.copy() for view in recipe.views]
+
+    def get_view(self, name: str, view_id: str | None = None) -> RecipeView:
+        recipe = self._load_recipe_config(name)
+        return recipe.get_view(view_id)
+
+    def add_view(
+        self,
+        name: str,
+        *,
+        source_view_id: str | None = None,
+    ) -> RecipeView:
+        import shutil
+
+        recipe = self._load_recipe_config(name)
+        existing_ids = {view.id for view in recipe.views}
+        new_index = 1
+        new_id = ""
+        while not new_id:
+            candidate = f"view_{new_index}"
+            if candidate not in existing_ids:
+                new_id = candidate
+            else:
+                new_index += 1
+
+        existing_names = {view.name for view in recipe.views}
+        new_name = f"View {new_index}"
+        while new_name in existing_names:
+            new_index += 1
+            new_name = f"View {new_index}"
+
+        source_tools: List[Tool] = []
+        source_camera: Optional[str] = None
+        source_settle: Optional[int] = None
+        source_golden: Optional[str] = None
+        if source_view_id:
+            try:
+                source_view = recipe.get_view(source_view_id)
+                source_camera = source_view.camera_profile
+                source_settle = source_view.settle_ms
+                source_golden = source_view.golden_path
+                draft_tools = self._ensure_draft_tools(name, source_view_id, recipe)
+                source_tools = [tool.copy() for tool in draft_tools]
+            except Exception:
+                source_tools = []
+
+        golden_filename = f"golden_{new_id}.png"
+        new_view = RecipeView(
+            id=new_id,
+            name=new_name,
+            golden_path=golden_filename,
+            camera_profile=source_camera,
+            settle_ms=source_settle,
+            tools=[],
+        )
+        if source_tools:
+            new_view.set_tools(source_tools)
+
+        recipe.views.append(new_view)
+        normalized = self._save_recipe_config(name, recipe)
+        normalized_view = normalized.get_view(new_id)
+
+        # copy golden file if available
+        if source_golden:
+            src_path = Path(self.base) / "recipes" / name / source_golden
+            dst_path = Path(self.base) / "recipes" / name / golden_filename
+            if src_path.exists() and not dst_path.exists():
+                try:
+                    dst_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(src_path, dst_path)
+                except Exception:
+                    pass
+
+        drafts = self._draft_tools.setdefault(name, {})
+        drafts[new_id] = [tool.copy() for tool in normalized_view.tools]
+        self.db.mark_recipe_draft_updated(name)
+        return normalized_view.copy()
+
+    def remove_view(self, name: str, view_id: str) -> List[RecipeView]:
+        recipe = self._load_recipe_config(name)
+        if len(recipe.views) <= 1:
+            raise ValueError("Recipe must contain at least one view")
+
+        remaining: List[RecipeView] = []
+        removed = False
+        for view in recipe.views:
+            if view.id == view_id:
+                removed = True
+                continue
+            remaining.append(view)
+
+        if not removed:
+            raise KeyError(f"View '{view_id}' not found")
+
+        recipe.views = [view.copy() for view in remaining]
+        normalized = self._save_recipe_config(name, recipe)
+        drafts = self._draft_tools.get(name)
+        if drafts and view_id in drafts:
+            drafts.pop(view_id, None)
+        self._locator_autosort = {
+            key: value
+            for key, value in self._locator_autosort.items()
+            if key[0] != name or key[1] != view_id
+        }
+        self.db.mark_recipe_draft_updated(name)
+        return [view.copy() for view in normalized.views]
 
     # --- tools ---
     def load_tools(

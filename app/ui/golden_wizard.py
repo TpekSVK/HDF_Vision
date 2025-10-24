@@ -57,6 +57,7 @@ from app.models.schema import (
     RecipeData,
     RecipeV2,
     Tool,
+    RecipeView,
     ToolDefinition,
     ToolMask,
     ToolMetricSpec,
@@ -2685,8 +2686,12 @@ class GoldenWizard(QDialog):
         self.recipes = recipes
         self.current_img = None
 
-        self._saved_snapshots: dict[str, list[dict[str, Any]]] = {}
-        self._dirty_recipes: dict[str, bool] = {}
+        self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
+        self._dirty_views: dict[str, dict[str, bool]] = {}
+        self._view_states: dict[str, dict[str, Any]] = {}
+        self._views: list[RecipeView] = []
+        self._active_view_id: Optional[str] = None
+        self._updating_view_selector = False
 
         # --- Live infra (len video label, bez kreslenia) ---
 
@@ -2704,6 +2709,13 @@ class GoldenWizard(QDialog):
         self.recipe_name = QLineEdit(current_recipe, self)
         self.chk_pose    = QCheckBox("Enable pose alignment")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
+
+        self._view_selector = QComboBox(self)
+        self._view_selector.currentIndexChanged.connect(self._on_view_changed)
+        self.btn_add_view = QPushButton("Add View", self)
+        self.btn_add_view.clicked.connect(self._on_add_view)
+        self.btn_remove_view = QPushButton("Remove View", self)
+        self.btn_remove_view.clicked.connect(self._on_remove_view)
 
         self._updating_policy_combo = False
         self._current_locator_failure_policy = "continue_without_alignment"
@@ -2732,6 +2744,10 @@ class GoldenWizard(QDialog):
 
         top = QHBoxLayout()
         top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
+        top.addWidget(QLabel("View:", self))
+        top.addWidget(self._view_selector)
+        top.addWidget(self.btn_add_view)
+        top.addWidget(self.btn_remove_view)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
         top.addWidget(QLabel("Zlyhanie locatora:", self))
@@ -2870,15 +2886,8 @@ class GoldenWizard(QDialog):
         self._shortcut_test_enter.activated.connect(self._trigger_test_shortcut)
 
         self._last_recipe = self._current_recipe_name()
-        try:
-            self.recipes.load_tools(self._last_recipe, use_draft=True)
-        except Exception as exc:
-            print(f"[GoldenWizard] load_tools failed for {self._last_recipe}: {exc}")
-        self._record_saved_snapshot(self._last_recipe)
+        self._refresh_view_list(recipe=self._last_recipe, reset_states=True)
         self._sync_locator_policy_ui(self._last_recipe)
-        self._refresh_tools_table()
-        self._refresh_golden_background(self._last_recipe)
-        self._on_tool_selection_changed()
         self._refresh_publish_state()
 
     # ---------- Live ----------
@@ -2933,9 +2942,149 @@ class GoldenWizard(QDialog):
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
 
-    def _load_saved_golden_image(self, recipe: Optional[str] = None) -> Optional[np.ndarray]:
+    def _view_by_id(self, view_id: Optional[str]) -> Optional[RecipeView]:
+        if not view_id:
+            return None
+        for view in self._views:
+            if view.id == view_id:
+                return view
+        return None
+
+    def _store_view_state(self, view_id: Optional[str] = None) -> None:
+        view_id = view_id or self._active_view_id
+        if not view_id:
+            return
+        if view_id not in {view.id for view in self._views}:
+            return
+        state = self._view_states.setdefault(view_id, {})
+        state["golden_image"] = None if self.current_img is None else np.asarray(self.current_img).copy()
+
+    def _refresh_view_list(
+        self,
+        *,
+        recipe: Optional[str] = None,
+        select_view_id: Optional[str] = None,
+        reset_states: bool = False,
+    ) -> None:
+        self._store_view_state()
         recipe = recipe or self._current_recipe_name()
-        path = Path("/data") / "recipes" / recipe / "golden.png"
+        if reset_states:
+            self._view_states = {}
+        try:
+            views = self.recipes.list_views(recipe)
+        except Exception as exc:
+            print(f"[GoldenWizard] list_views failed for {recipe}: {exc}")
+            views = []
+        if not views:
+            views = [RecipeView(id="view_1", name="View 1", golden_path="golden.png", tools=[])]
+
+        self._views = [view.copy() for view in views]
+        valid_ids = {view.id for view in self._views}
+
+        if reset_states:
+            self._saved_snapshots[recipe] = {}
+            self._dirty_views[recipe] = {}
+        else:
+            self._saved_snapshots.setdefault(recipe, {})
+            self._dirty_views.setdefault(recipe, {})
+            for stale in list(self._saved_snapshots[recipe].keys()):
+                if stale not in valid_ids:
+                    self._saved_snapshots[recipe].pop(stale, None)
+            for stale in list(self._dirty_views[recipe].keys()):
+                if stale not in valid_ids:
+                    self._dirty_views[recipe].pop(stale, None)
+            for stale in list(self._view_states.keys()):
+                if stale not in valid_ids:
+                    self._view_states.pop(stale, None)
+
+        for view in self._views:
+            self._view_states.setdefault(view.id, {})
+
+        self._updating_view_selector = True
+        self._view_selector.blockSignals(True)
+        self._view_selector.clear()
+        for view in self._views:
+            label = view.name or view.id or "View"
+            self._view_selector.addItem(label, view.id)
+        self._view_selector.blockSignals(False)
+        self._updating_view_selector = False
+
+        self.btn_remove_view.setEnabled(len(self._views) > 1)
+
+        target_view_id = select_view_id or self._active_view_id
+        if not target_view_id or target_view_id not in valid_ids:
+            target_view_id = self._views[0].id
+
+        index = self._view_selector.findData(target_view_id)
+        if index >= 0:
+            self._updating_view_selector = True
+            self._view_selector.setCurrentIndex(index)
+            self._updating_view_selector = False
+
+        recipe_snapshots = self._saved_snapshots.setdefault(recipe, {})
+        recipe_dirty = self._dirty_views.setdefault(recipe, {})
+
+        for view in self._views:
+            try:
+                self.recipes.load_tools(recipe, use_draft=True, view_id=view.id)
+            except Exception as exc:
+                print(f"[GoldenWizard] load_tools failed for {recipe}/{view.id}: {exc}")
+            if reset_states or view.id not in recipe_snapshots:
+                self._record_saved_snapshot(recipe, view.id)
+            else:
+                # Preserve existing dirty flag while ensuring entry exists.
+                recipe_dirty.setdefault(view.id, recipe_dirty.get(view.id, False))
+
+        self._switch_active_view(target_view_id, refresh_selector=False)
+        self._update_window_title_dirty()
+
+    def _on_view_changed(self) -> None:
+        if self._updating_view_selector:
+            return
+        view_id = self._view_selector.currentData()
+        if not isinstance(view_id, str) or not view_id:
+            return
+        if view_id == self._active_view_id:
+            return
+        self._switch_active_view(view_id, refresh_selector=False)
+
+    def _switch_active_view(self, view_id: Optional[str], *, refresh_selector: bool = True) -> None:
+        if not view_id:
+            return
+        if refresh_selector:
+            index = self._view_selector.findData(view_id)
+            if index >= 0:
+                self._updating_view_selector = True
+                self._view_selector.setCurrentIndex(index)
+                self._updating_view_selector = False
+
+        if view_id != self._active_view_id:
+            self._store_view_state(self._active_view_id)
+            self._active_view_id = view_id
+
+        recipe = self._current_recipe_name()
+        try:
+            self.recipes.load_tools(recipe, use_draft=True, view_id=view_id)
+        except Exception as exc:
+            print(f"[GoldenWizard] load_tools failed for {recipe}/{view_id}: {exc}")
+
+        self._selected_tool_row = -1
+        self.tools_table.clearSelection()
+        self._tool_panel.clear()
+        self._refresh_tools_table()
+        self._refresh_golden_background(recipe, view_id=view_id)
+        self._on_tool_selection_changed()
+        self._update_dirty_state(recipe, view_id)
+
+    def _load_saved_golden_image(
+        self,
+        recipe: Optional[str] = None,
+        view_id: Optional[str] = None,
+    ) -> Optional[np.ndarray]:
+        recipe = recipe or self._current_recipe_name()
+        view = self._view_by_id(view_id or self._active_view_id)
+        golden_name = view.golden_path if view else "golden.png"
+        path = Path("/data") / "recipes" / recipe / golden_name
         if not path.exists():
             return None
 
@@ -2952,30 +3101,55 @@ class GoldenWizard(QDialog):
             image = np.clip(image, 0, 255).astype(np.uint8)
         return image
 
-    def _refresh_golden_background(self, recipe: Optional[str] = None) -> None:
+    def _refresh_golden_background(
+        self,
+        recipe: Optional[str] = None,
+        view_id: Optional[str] = None,
+    ) -> None:
         recipe = recipe or self._current_recipe_name()
-        saved_golden: Optional[np.ndarray] = None
-        if recipe == getattr(self.recipes.tool, "recipe", None):
-            cached = getattr(self.recipes.tool, "golden", None)
-            if isinstance(cached, np.ndarray):
-                saved_golden = np.asarray(cached)
-        if saved_golden is None:
-            saved_golden = self._load_saved_golden_image(recipe)
-        if saved_golden is None:
-            if recipe == self._current_recipe_name():
-                self.current_img = None
+        view_id = view_id or self._active_view_id
+        if not view_id:
+            self.current_img = None
             self.view.set_background(None)
             self.view.set_tool_overlay(None)
             return
 
-        self.current_img = np.asarray(saved_golden).copy()
+        state = self._view_states.setdefault(view_id, {})
+        cached = state.get("golden_image")
+        if cached is not None:
+            self.current_img = np.asarray(cached).copy()
+            self._set_pixmap(self.current_img)
+            self._set_selected_tool_overlay()
+            return
+
+        saved_golden: Optional[np.ndarray] = None
+        if recipe == getattr(self.recipes.tool, "recipe", None):
+            cached_tool = getattr(self.recipes.tool, "golden", None)
+            if isinstance(cached_tool, np.ndarray):
+                saved_golden = np.asarray(cached_tool)
+        if saved_golden is None:
+            saved_golden = self._load_saved_golden_image(recipe, view_id)
+        if saved_golden is None:
+            self.current_img = None
+            self.view.set_background(None)
+            self.view.set_tool_overlay(None)
+            state["golden_image"] = None
+            return
+
+        saved_array = np.asarray(saved_golden)
+        self.current_img = saved_array.copy()
+        state["golden_image"] = self.current_img.copy()
         self._set_pixmap(self.current_img)
         self._set_selected_tool_overlay()
 
     def _set_selected_tool_overlay(self, tools: Optional[Sequence[Tool]] = None) -> None:
         if tools is None:
             recipe = self._current_recipe_name()
-            tools = self.recipes.get_draft_tools(recipe)
+            view_id = self._active_view_id
+            if not view_id:
+                tools = []
+            else:
+                tools = self.recipes.get_draft_tools(recipe, view_id)
 
         row = getattr(self, "_selected_tool_row", -1)
         if tools is not None and 0 <= row < len(tools):
@@ -2987,11 +3161,18 @@ class GoldenWizard(QDialog):
         if self.current_img is not None:
             return self.current_img
 
+        view_id = self._active_view_id
+        if view_id:
+            state = self._view_states.get(view_id, {})
+            cached = state.get("golden_image")
+            if cached is not None:
+                return np.asarray(cached).copy()
+
         golden = getattr(self.recipes.tool, "golden", None)
         if isinstance(golden, np.ndarray):
             return golden
 
-        return self._load_saved_golden_image()
+        return self._load_saved_golden_image(view_id=view_id)
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -3003,6 +3184,10 @@ class GoldenWizard(QDialog):
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()
+            if self._active_view_id:
+                self._view_states.setdefault(self._active_view_id, {})[
+                    "golden_image"
+                ] = np.asarray(frame).copy()
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
@@ -3030,6 +3215,10 @@ class GoldenWizard(QDialog):
         self.current_img = img
         self._set_pixmap(img)
         self._set_selected_tool_overlay()
+        if self._active_view_id:
+            self._view_states.setdefault(self._active_view_id, {})[
+                "golden_image"
+            ] = np.asarray(img).copy()
         self._info("Golden načítaný z disku.")
 
     def _persist_recipe_assets(self) -> tuple[bool, str]:
@@ -3055,7 +3244,17 @@ class GoldenWizard(QDialog):
         pose_enabled = self.chk_pose.isChecked()
 
         name = self.recipe_name.text().strip() or "default"
-        golden_path = save_golden(self.current_img, name)
+        view = self._view_by_id(self._active_view_id)
+        golden_filename = view.golden_path if view else "golden.png"
+        golden_path = save_golden(
+            self.current_img,
+            name,
+            golden_path=golden_filename,
+        )
+        if self._active_view_id:
+            self._view_states.setdefault(self._active_view_id, {})["golden_image"] = (
+                np.asarray(self.current_img).copy()
+            )
         recipe_dir = Path("/data") / "recipes" / name
         recipe_dir.mkdir(parents=True, exist_ok=True)
         recipe_data = RecipeData(pose_enabled=pose_enabled, regions=regs)
@@ -3076,7 +3275,7 @@ class GoldenWizard(QDialog):
         ok, autosorted = self._persist_tools(recipe)
         if not ok:
             return
-        self._record_saved_snapshot(recipe)
+        self._record_saved_snapshot(recipe, self._active_view_id)
         self._refresh_tools_table()
         message = "Nástroje uložené do draftu."
         if autosorted:
@@ -3094,13 +3293,15 @@ class GoldenWizard(QDialog):
         ok, autosorted_draft = self._persist_tools(recipe)
         if not ok:
             return
-        self._record_saved_snapshot(recipe)
+        self._record_saved_snapshot(recipe, self._active_view_id)
         try:
-            _, autosorted_publish = self.recipes.publish_recipe(recipe)
+            _, autosorted_publish = self.recipes.publish_recipe(
+                recipe, view_id=self._active_view_id
+            )
         except Exception as exc:
             self._err(f"Publikovanie receptu zlyhalo: {exc}")
             return
-        self._record_saved_snapshot(recipe)
+        self._record_saved_snapshot(recipe, self._active_view_id)
         self._refresh_tools_table()
         message = "Recept publikovaný."
         if autosorted_draft or autosorted_publish:
@@ -3147,41 +3348,52 @@ class GoldenWizard(QDialog):
         self._publish_state_label.setToolTip("\n".join(tooltip_parts) if tooltip_parts else "")
 
     # ---------- Draft state management ----------
-    def _snapshot_tools(self, recipe: str) -> list[dict[str, Any]]:
+    def _snapshot_tools(self, recipe: str, view_id: str) -> list[dict[str, Any]]:
         try:
-            tools = self.recipes.get_draft_tools(recipe)
+            tools = self.recipes.get_draft_tools(recipe, view_id)
         except Exception:
             return []
         return [tool.to_dict() for tool in tools]
 
-    def _record_saved_snapshot(self, recipe: str) -> None:
-        snapshot = self._snapshot_tools(recipe)
-        self._saved_snapshots[recipe] = snapshot
-        self._dirty_recipes[recipe] = False
-        self._update_dirty_state(recipe)
+    def _record_saved_snapshot(self, recipe: str, view_id: Optional[str] = None) -> None:
+        view_id = view_id or self._active_view_id
+        if not view_id:
+            return
+        snapshot = self._snapshot_tools(recipe, view_id)
+        recipe_snapshots = self._saved_snapshots.setdefault(recipe, {})
+        recipe_snapshots[view_id] = snapshot
+        self._dirty_views.setdefault(recipe, {})[view_id] = False
 
-    def _update_dirty_state(self, recipe: Optional[str] = None) -> None:
+    def _update_dirty_state(self, recipe: Optional[str] = None, view_id: Optional[str] = None) -> None:
         if not hasattr(self, "_saved_snapshots"):
             return
         recipe = recipe or self._current_recipe_name()
-        current = self._snapshot_tools(recipe)
-        saved = self._saved_snapshots.get(recipe)
+        if view_id is None:
+            if self._active_view_id:
+                self._update_dirty_state(recipe, self._active_view_id)
+            return
+        current = self._snapshot_tools(recipe, view_id)
+        saved = self._saved_snapshots.get(recipe, {}).get(view_id)
         dirty = saved is None or current != saved
-        self._dirty_recipes[recipe] = dirty
+        self._dirty_views.setdefault(recipe, {})[view_id] = dirty
         self._update_window_title_dirty()
 
     def _update_window_title_dirty(self) -> None:
         if not hasattr(self, "_base_title"):
             return
         current_recipe = self._current_recipe_name()
-        dirty = self._dirty_recipes.get(current_recipe, False)
+        dirty_map = self._dirty_views.get(current_recipe, {})
+        dirty = any(dirty_map.values())
         title = self._base_title + (" *" if dirty else "")
         self.setWindowTitle(title)
 
     def _has_unsaved_changes(self) -> bool:
-        if not hasattr(self, "_dirty_recipes"):
+        if not hasattr(self, "_dirty_views"):
             return False
-        return any(self._dirty_recipes.values())
+        for view_map in self._dirty_views.values():
+            if any(view_map.values()):
+                return True
+        return False
 
     def _trigger_test_shortcut(self) -> None:
         panel = getattr(self, "_tool_panel", None)
@@ -3276,16 +3488,39 @@ class GoldenWizard(QDialog):
         recipe = self._current_recipe_name()
         if recipe == getattr(self, "_last_recipe", None):
             return
-        try:
-            self.recipes.load_tools(recipe, use_draft=True)
-        except Exception as exc:
-            print(f"[GoldenWizard] load_tools failed for {recipe}: {exc}")
+        self._store_view_state()
         self._last_recipe = recipe
-        self._record_saved_snapshot(recipe)
+        self._refresh_view_list(recipe=recipe, reset_states=True)
         self._sync_locator_policy_ui(recipe)
-        self._refresh_tools_table()
-        self._refresh_golden_background(recipe)
-        self._on_tool_selection_changed()
+        self._refresh_publish_state()
+
+    def _on_add_view(self) -> None:
+        recipe = self._current_recipe_name()
+        try:
+            new_view = self.recipes.add_view(recipe, source_view_id=self._active_view_id)
+        except Exception as exc:
+            self._err(f"Pridanie view zlyhalo: {exc}")
+            return
+        self._view_states.setdefault(new_view.id, {})
+        self._refresh_view_list(recipe=recipe, select_view_id=new_view.id, reset_states=False)
+        self._refresh_publish_state()
+
+    def _on_remove_view(self) -> None:
+        recipe = self._current_recipe_name()
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        try:
+            remaining = self.recipes.remove_view(recipe, view_id)
+        except ValueError as exc:
+            self._warn(str(exc))
+            return
+        except Exception as exc:
+            self._err(f"Odstránenie view zlyhalo: {exc}")
+            return
+        self._view_states.pop(view_id, None)
+        next_view_id = remaining[0].id if remaining else None
+        self._refresh_view_list(recipe=recipe, select_view_id=next_view_id, reset_states=False)
         self._refresh_publish_state()
 
     def _open_tool_catalog(self):
@@ -3297,14 +3532,31 @@ class GoldenWizard(QDialog):
             return
         try:
             tool = self.recipes.tool.make_default_tool(tool_type)
-            self.recipes.add_tool(self._current_recipe_name(), tool)
+            recipe = self._current_recipe_name()
+            view_id = self._active_view_id
+            if not view_id:
+                self._err("Nie je vybraný žiadny view.")
+                return
+            self.recipes.add_tool(recipe, tool, view_id=view_id)
             self._refresh_tools_table()
+            self._update_dirty_state(recipe, view_id)
         except Exception as exc:
             self._err(f"Pridanie nástroja zlyhalo: {exc}")
 
     def _refresh_tools_table(self):
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            self.tools_table.blockSignals(True)
+            self.tools_table.setRowCount(0)
+            self.tools_table.clearSelection()
+            self.tools_table.blockSignals(False)
+            self._tool_panel.clear()
+            self._selected_tool_row = -1
+            self.view.set_tool_overlay(None)
+            return
+
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         previous_row = self._selected_tool_row if hasattr(self, "_selected_tool_row") else -1
         self.tools_table.blockSignals(True)
         self.tools_table.setRowCount(len(tools))
@@ -3389,19 +3641,26 @@ class GoldenWizard(QDialog):
 
         self._set_selected_tool_overlay(tools)
 
-        self._update_dirty_state(recipe)
+        self._update_dirty_state(recipe, view_id)
 
     def _delete_tool(self, index: int):
         recipe = self._current_recipe_name()
-        self.recipes.remove_tool(recipe, index)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        self.recipes.remove_tool(recipe, index, view_id=view_id)
         self._refresh_tools_table()
+        self._update_dirty_state(recipe, view_id)
 
     def _on_tool_enabled_toggled(self, index: int, enabled: bool) -> None:
         self._toggle_tool_enabled(index, enabled)
 
     def _toggle_tool_enabled(self, index: int, enabled: bool) -> None:
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         if not (0 <= index < len(tools)):
             return
 
@@ -3411,18 +3670,22 @@ class GoldenWizard(QDialog):
 
         tool.enabled = bool(enabled)
         try:
-            self.recipes.update_tool(recipe, index, tool)
+            self.recipes.update_tool(recipe, index, tool, view_id=view_id)
         except Exception as exc:
             self._err(f"Prepnutie nástroja zlyhalo: {exc}")
             self._refresh_tools_table()
             return
 
         self._selected_tool_row = index
+        self._update_dirty_state(recipe, view_id)
         self._refresh_tools_table()
 
     def _on_tools_reordered(self, new_order: list[int]) -> None:
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         if len(new_order) != len(tools):
             self._refresh_tools_table()
             return
@@ -3439,7 +3702,7 @@ class GoldenWizard(QDialog):
 
         previous_selection = getattr(self, "_selected_tool_row", -1)
         try:
-            self.recipes.reorder_tools(recipe, new_order)
+            self.recipes.reorder_tools(recipe, new_order, view_id=view_id)
         except Exception as exc:
             self._err(f"Zmena poradia zlyhala: {exc}")
             self._refresh_tools_table()
@@ -3452,6 +3715,7 @@ class GoldenWizard(QDialog):
                 self._selected_tool_row = -1
 
         self._refresh_tools_table()
+        self._update_dirty_state(recipe, view_id)
 
     def _is_locator_order_valid(self, tools: Sequence[Tool]) -> bool:
         analyzer_seen = False
@@ -3465,7 +3729,10 @@ class GoldenWizard(QDialog):
 
     def _on_tool_selection_changed(self) -> None:
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        tools = []
+        if view_id:
+            tools = self.recipes.get_draft_tools(recipe, view_id)
         row = self.tools_table.currentRow()
         if 0 <= row < len(tools):
             tool = tools[row]
@@ -3494,7 +3761,10 @@ class GoldenWizard(QDialog):
         if row < 0:
             return
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         if not (0 <= row < len(tools)):
             return
         tool = tools[row]
@@ -3502,20 +3772,23 @@ class GoldenWizard(QDialog):
         params[name] = value
         tool.params = ToolParams(params)
         try:
-            self.recipes.update_tool(recipe, row, tool)
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         except Exception as exc:
             self._err(f"Uloženie parametra zlyhalo: {exc}")
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
-        self._update_dirty_state(recipe)
+        self._update_dirty_state(recipe, view_id)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
         if row < 0:
             return
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         if not (0 <= row < len(tools)):
             return
         tool = tools[row]
@@ -3523,13 +3796,13 @@ class GoldenWizard(QDialog):
         thresholds[name] = value
         tool.thresholds = ToolThresholds(thresholds)
         try:
-            self.recipes.update_tool(recipe, row, tool)
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         except Exception as exc:
             self._err(f"Uloženie thresholdu zlyhalo: {exc}")
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
-        self._update_dirty_state(recipe)
+        self._update_dirty_state(recipe, view_id)
 
     def _on_tool_test_requested(self, params: dict[str, Any], thresholds: dict[str, Any]) -> None:
         try:
@@ -3539,7 +3812,11 @@ class GoldenWizard(QDialog):
                 return
 
             recipe = self._current_recipe_name()
-            tools = self.recipes.get_draft_tools(recipe)
+            view_id = self._active_view_id
+            if not view_id:
+                self._tool_panel.show_test_error("Nie je vybraný žiadny view.")
+                return
+            tools = self.recipes.get_draft_tools(recipe, view_id)
             if not (0 <= row < len(tools)):
                 self._tool_panel.show_test_error("Vybraný nástroj nie je dostupný.")
                 return
@@ -3714,7 +3991,10 @@ class GoldenWizard(QDialog):
 
     def _edit_tool(self, index: int):
         recipe = self._current_recipe_name()
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         if 0 <= index < len(tools):
             tool = tools[index]
             try:
@@ -3737,16 +4017,22 @@ class GoldenWizard(QDialog):
 
             updated_tool = dialog.result_tool()
             try:
-                self.recipes.update_tool(recipe, index, updated_tool)
+                self.recipes.update_tool(
+                    recipe, index, updated_tool, view_id=self._active_view_id
+                )
             except Exception as exc:
                 self._err(f"Uloženie nástroja zlyhalo: {exc}")
                 return
             self._refresh_tools_table()
 
     def _persist_tools(self, recipe: str) -> tuple[bool, bool]:
-        tools = self.recipes.get_draft_tools(recipe)
+        view_id = self._active_view_id
+        if not view_id:
+            self._err("Nie je vybraný žiadny view.")
+            return False, False
+        tools = self.recipes.get_draft_tools(recipe, view_id)
         try:
-            _, autosorted = self.recipes.save_tools(recipe, tools)
+            _, autosorted = self.recipes.save_tools(recipe, tools, view_id=view_id)
         except Exception as exc:
             self._err(f"Ukladanie nástrojov zlyhalo: {exc}")
             return False, False
