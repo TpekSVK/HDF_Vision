@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -196,8 +197,8 @@ class MultiViewPanel(QWidget):
         self._limits_table.setHorizontalHeaderLabels(["Key", "Value"])
         header = self._limits_table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(0, header.Stretch)
-        header.setSectionResizeMode(1, header.Stretch)
+        header.setSectionResizeMode(0, QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
         self._limits_table.verticalHeader().setVisible(False)
         self._limits_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._limits_table.setSelectionMode(QAbstractItemView.SingleSelection)
