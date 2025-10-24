@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,17 @@ from app.models.schema import (
     ToolParams,
     ToolThresholds,
 )
-from app.services.multi_view import aggregate_step_verdicts, StepVerdict
+from app.services.multi_view import (
+    MultiViewRuntime,
+    MultiViewStepConfig,
+    aggregate_step_verdicts,
+    load_multi_view_runtime,
+    run_multi_view_sequence,
+    StepVerdict,
+)
+
+import imageio.v3 as iio
+import numpy as np
 
 
 def test_recipe_step_from_dict_normalizes_fields() -> None:
@@ -149,3 +160,135 @@ def test_aggregate_step_verdicts_weighted_uses_weights() -> None:
     assert result.mode == "WEIGHTED"
     assert result.status == "warn"
     assert 0.0 <= (result.score or 0.0) <= 1.0
+
+
+def test_load_multi_view_runtime_loads_assets(tmp_path) -> None:
+    recipe_dir = tmp_path / "recipes" / "demo"
+    step_dir = recipe_dir / "steps" / "step-1"
+    step_dir.mkdir(parents=True)
+
+    multi_view_cfg = {
+        "aggregation": "OR",
+        "steps": [
+            {
+                "id": "step-1",
+                "name": "First",
+                "pose_enabled": True,
+                "settle_ms": 50,
+                "camera_profile": {"resolution": [8, 8], "fps": 10},
+            }
+        ],
+    }
+    (recipe_dir / "multi_view.json").write_text(json.dumps(multi_view_cfg), encoding="utf-8")
+
+    golden = np.full((8, 8), 128, dtype=np.uint8)
+    iio.imwrite(step_dir / "golden.png", golden)
+    (step_dir / "regions.json").write_text(json.dumps([{"x": 0, "y": 0, "w": 8, "h": 8}]), encoding="utf-8")
+    (step_dir / "limits.json").write_text(json.dumps({"ssim_min": 0.9}), encoding="utf-8")
+
+    runtime = load_multi_view_runtime("demo", RecipeV2(), base_dir=tmp_path)
+
+    assert not runtime.is_empty()
+    assert runtime.aggregation_mode == "OR"
+    assert runtime.fail_fast is False
+    step = runtime.steps[0]
+    assert step.step_id == "step-1"
+    assert step.settle_ms == 50
+    assert isinstance(step.golden, np.ndarray)
+    assert step.golden.shape == (8, 8)
+    assert step.limits["ssim_min"] == 0.9
+
+
+def test_run_multi_view_sequence_produces_ok_status() -> None:
+    golden = np.zeros((6, 6), dtype=np.uint8)
+    step_config = MultiViewStepConfig(
+        step_id="A",
+        name="A",
+        pose_enabled=True,
+        settle_ms=None,
+        camera_profile={},
+        golden=golden,
+        regions=[{"x": 0, "y": 0, "w": 6, "h": 6}],
+        limits={"ssim_min": 0.5},
+    )
+    runtime = MultiViewRuntime(steps=(step_config,), aggregation_mode="AND", weights={}, fail_fast=False)
+
+    result = run_multi_view_sequence(runtime, capture=lambda _cfg: np.zeros((6, 6), dtype=np.uint8))
+
+    assert result.aggregation.status == "ok"
+    assert result.steps
+    assert result.steps[0].verdict.status == "ok"
+
+
+def test_run_multi_view_sequence_fail_fast_triggers() -> None:
+    golden = np.zeros((4, 4), dtype=np.uint8)
+    step_ok = MultiViewStepConfig(
+        step_id="A",
+        name="A",
+        pose_enabled=True,
+        settle_ms=None,
+        camera_profile={},
+        golden=golden,
+        regions=[{"x": 0, "y": 0, "w": 4, "h": 4}],
+        limits={"ssim_min": 0.5},
+    )
+    step_nok = MultiViewStepConfig(
+        step_id="B",
+        name="B",
+        pose_enabled=True,
+        settle_ms=None,
+        camera_profile={},
+        golden=golden,
+        regions=[{"x": 0, "y": 0, "w": 4, "h": 4}],
+        limits={"ssim_min": 0.99},
+    )
+    runtime = MultiViewRuntime(steps=(step_ok, step_nok), aggregation_mode="AND", weights={}, fail_fast=True)
+
+    frames = [np.zeros((4, 4), dtype=np.uint8), np.full((4, 4), 255, dtype=np.uint8)]
+
+    def _capture(_cfg):
+        return frames.pop(0)
+
+    result = run_multi_view_sequence(runtime, capture=_capture)
+
+    assert result.fail_fast_triggered is True
+    assert result.aggregation.status == "nok"
+    assert len(result.steps) == 2
+    assert result.steps[-1].verdict.status == "nok"
+
+
+def test_run_multi_view_sequence_captures_diagnostics(monkeypatch) -> None:
+    golden = np.zeros((3, 3), dtype=np.uint8)
+    step = MultiViewStepConfig(
+        step_id="A",
+        name="A",
+        pose_enabled=True,
+        settle_ms=None,
+        camera_profile={},
+        golden=golden,
+        regions=[{"x": 0, "y": 0, "w": 3, "h": 3}],
+        limits={"ssim_min": 0.5},
+    )
+
+    runtime = MultiViewRuntime(
+        steps=(step,), aggregation_mode="WEIGHTED", weights={"A": 2.5}, fail_fast=False
+    )
+
+    def _fake_analyze(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "metrics": {"foo_score": 0.88},
+            "diagnostics": {"debug": "info"},
+            "score": 0.91,
+        }
+
+    monkeypatch.setattr("app.services.multi_view.analyze", _fake_analyze)
+
+    result = run_multi_view_sequence(runtime, capture=lambda _cfg: np.zeros_like(golden))
+
+    assert result.steps
+    step_result = result.steps[0]
+    assert step_result.diagnostics == {"debug": "info"}
+    assert pytest.approx(step_result.verdict.metrics["foo_score"], rel=1e-6) == 0.88
+    assert pytest.approx(step_result.verdict.metrics["score"], rel=1e-6) == 0.91
+    assert pytest.approx(step_result.verdict.weight or 0.0, rel=1e-6) == 2.5
