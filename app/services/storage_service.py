@@ -143,13 +143,14 @@ def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/
     return path
 
 # --- Public API (zachovávame signatúry) ---
-def save_golden(frame_u8, recipe_name: str):
+def save_golden(frame_u8, recipe_name: str, *, filename: str | None = None):
     recipe = recipe_name or "default"
     _ensure_dirs(recipe)
-    payload = {"frame": _to_u8(frame_u8), "recipe": recipe}
+    target_name = (filename or "golden.png").strip() or "golden.png"
+    payload = {"frame": _to_u8(frame_u8), "recipe": recipe, "filename": target_name}
     _SAVEQ.put(("golden", payload))
     # vrátime očakávanú cestu (asynchrónne sa zapíše)
-    path = Path("/data") / "recipes" / recipe / "golden.png"
+    path = Path("/data") / "recipes" / recipe / target_name
     return str(path)
 
 def save_validation_image(frame_u8, ok: bool, recipe_name: str):
@@ -193,9 +194,10 @@ def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_no
     return {"thumb": str(fthumb), "full": str(ffull) if do_full else None, "meta": str(fmeta)}
 
 # --- Skutočný zápis (worker) ---
-def _do_save_golden(frame, recipe):
+def _do_save_golden(frame, recipe, filename: str = "golden.png"):
     if frame is None: return
-    out = Path("/data") / "recipes" / recipe / "golden.png"
+    name = (filename or "golden.png").strip() or "golden.png"
+    out = Path("/data") / "recipes" / recipe / name
     out.parent.mkdir(parents=True, exist_ok=True)
     iio.imwrite(out, frame, extension=".png")
 
