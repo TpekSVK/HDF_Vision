@@ -7,7 +7,14 @@ from typing import Any, Mapping, Sequence
 import numpy as np
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QLabel, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QLabel,
+    QHBoxLayout,
+    QVBoxLayout,
+    QWidget,
+    QSpacerItem,
+    QSizePolicy,
+)
 
 _STATUS_COLORS = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
 
@@ -92,23 +99,38 @@ class StepStrip(QWidget):
         self._layout.setSpacing(6)
         self._placeholder = QLabel("Žiadne kroky")
         self._placeholder.setAlignment(Qt.AlignCenter)
+        self._spacer = QSpacerItem(0, 0, QSizePolicy.Expanding, QSizePolicy.Minimum)
         self._layout.addWidget(self._placeholder)
-        self._layout.addStretch(1)
+        self._layout.addItem(self._spacer)
+
+    def _clear_previews(self) -> None:
+        for index in reversed(range(self._layout.count())):
+            item = self._layout.itemAt(index)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is None or widget is self._placeholder:
+                continue
+            self._layout.takeAt(index)
+            widget.deleteLater()
 
     def clear(self) -> None:
-        while self._layout.count():
-            item = self._layout.takeAt(0)
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+        self._clear_previews()
+        if self._layout.indexOf(self._placeholder) == -1:
+            self._layout.insertWidget(0, self._placeholder)
+        self._placeholder.show()
 
     def set_results(self, results: Sequence[Any]) -> None:
-        self.clear()
+        self._clear_previews()
         if not results:
-            self._layout.addWidget(self._placeholder)
-            self._layout.addStretch(1)
+            if self._layout.indexOf(self._placeholder) == -1:
+                self._layout.insertWidget(0, self._placeholder)
             self._placeholder.show()
             return
+
+        if self._layout.indexOf(self._placeholder) != -1:
+            self._layout.removeWidget(self._placeholder)
+        self._placeholder.hide()
 
         for index, entry in enumerate(results, start=1):
             verdict = None
@@ -131,11 +153,15 @@ class StepStrip(QWidget):
                 name = str(getattr(verdict, "name", verdict.get("name", name)))
                 status = str(getattr(verdict, "status", verdict.get("status", status)))
                 metrics = getattr(verdict, "metrics", verdict.get("metrics"))
-            preview = _StepPreview(index, name, status, frame if isinstance(frame, np.ndarray) else None, metrics)
-            self._layout.addWidget(preview)
-
-        self._layout.addStretch(1)
-        self._placeholder.hide()
+            preview = _StepPreview(
+                index,
+                name,
+                status,
+                frame if isinstance(frame, np.ndarray) else None,
+                metrics,
+            )
+            insert_at = max(0, self._layout.count() - 1)
+            self._layout.insertWidget(insert_at, preview)
 
 
 __all__ = ["StepStrip"]
