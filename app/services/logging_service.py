@@ -20,6 +20,7 @@ from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     from app.services.tool_service import PipelineResult, PipelineToolReport
+    from app.services.multi_view import MultiViewRunResult
 
 
 _DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "pipeline_runs.jsonl"
@@ -293,5 +294,76 @@ def record_pipeline_run(
             run_entry["notes"] = (existing + "; " + extra).strip("; ")
     if artifacts:
         run_entry["artifacts"] = artifacts
+
+    _RUN_LOGGER.log(run_entry)
+
+
+def record_multi_view_run(
+    *,
+    recipe: RecipeV2,
+    result: "MultiViewRunResult",
+    recipe_name: Optional[str] = None,
+    notes: Optional[str] = None,
+) -> None:
+    """Record aggregated information about a multi-view run into the JSONL log."""
+
+    settings = get_session_settings()
+    if not settings.logging_enabled:
+        return
+
+    logging_path = getattr(settings, "logging_path", DEFAULT_LOG_DIR)
+    if not isinstance(logging_path, Path):
+        logging_path = Path(str(logging_path))
+
+    base_dir = logging_path
+    log_file = logging_path
+    if not log_file.suffix:
+        base_dir = logging_path
+        log_file = logging_path / "pipeline_runs.jsonl"
+    else:
+        base_dir = logging_path.parent or DEFAULT_LOG_DIR
+
+    if _RUN_LOGGER.path != log_file:
+        _RUN_LOGGER.flush()
+        _RUN_LOGGER.path = log_file
+
+    timestamp = _utc_now_iso()
+    final_status = result.aggregation.status
+
+    run_entry: Dict[str, Any] = {
+        "timestamp": timestamp,
+        "recipe_id": recipe_name or "unknown",
+        "recipe_name": recipe_name or "unknown",
+        "mode": "multi_view",
+        "ok": bool(final_status == "ok"),
+        "status": final_status,
+        "cycle_time_ms": float(result.cycle_time_ms),
+        "aggregation": result.aggregation.to_dict(),
+        "fail_fast_triggered": bool(result.fail_fast_triggered),
+    }
+
+    steps_payload: list[Dict[str, Any]] = []
+    for step_result in result.steps:
+        verdict = step_result.verdict
+        steps_payload.append(
+            {
+                "step_id": verdict.step_id,
+                "name": verdict.name,
+                "status": verdict.status,
+                "ok": bool(verdict.status == "ok"),
+                "latency_ms": float(step_result.latency_ms),
+                "metrics": _json_safe(dict(verdict.metrics or {})),
+                **({"weight": float(verdict.weight)} if verdict.weight is not None else {}),
+                **(
+                    {"diagnostics": _json_safe(step_result.diagnostics)}
+                    if step_result.diagnostics
+                    else {}
+                ),
+            }
+        )
+    run_entry["steps"] = steps_payload
+
+    if notes:
+        run_entry["notes"] = str(notes)
 
     _RUN_LOGGER.log(run_entry)

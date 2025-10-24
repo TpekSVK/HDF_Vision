@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap
 
 import math
+import time
 from collections.abc import Mapping, Sequence
 from numbers import Integral, Real
 from typing import Any
@@ -16,6 +17,7 @@ from threading import Thread
 from app.services.retention_service import RetentionService
 
 from app.ui.xu_panel import XUPanel
+from app.ui.step_strip import StepStrip
 
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
@@ -28,6 +30,119 @@ from app.ui.results_strip import ResultsStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
+from app.services.multi_view import load_multi_view_runtime, run_multi_view_sequence
+from app.services.logging_service import record_multi_view_run
+
+
+class _CameraProfileController:
+    """Manage camera profile changes across multi-view steps with restoration."""
+
+    def __init__(self, camera: CameraService):
+        self._camera = camera
+        self._original = self._snapshot()
+        self._current = dict(self._original)
+
+    def _snapshot(self) -> dict[str, Any]:
+        return {
+            "width": int(getattr(self._camera, "width", 0) or 0),
+            "height": int(getattr(self._camera, "height", 0) or 0),
+            "fps": int(getattr(self._camera, "fps", 0) or 0),
+            "pixel_format": str(getattr(self._camera, "pixel_format", "Y8") or "Y8"),
+            "exposure": getattr(self._camera, "exposure_us", None),
+            "gain": getattr(self._camera, "gain_db", None),
+        }
+
+    def apply_step(self, profile: Mapping[str, Any], settle_ms: int | None) -> None:
+        target = dict(self._current)
+
+        resolution = profile.get("resolution")
+        if isinstance(resolution, (list, tuple)) and len(resolution) >= 2:
+            try:
+                width = int(resolution[0])
+                height = int(resolution[1])
+            except Exception:
+                width = height = 0
+            if width > 0 and height > 0:
+                target["width"] = width
+                target["height"] = height
+
+        fps_value = profile.get("fps")
+        if fps_value not in (None, ""):
+            try:
+                fps = int(float(fps_value))
+            except Exception:
+                fps = None
+            if fps is not None and fps > 0:
+                target["fps"] = fps
+
+        pixel_format = profile.get("pixel_format")
+        if isinstance(pixel_format, str) and pixel_format.strip():
+            target["pixel_format"] = pixel_format.strip().upper()
+
+        exposure = profile.get("exposure")
+        if exposure not in (None, "", 0):
+            try:
+                exposure_val = int(float(exposure))
+            except Exception:
+                exposure_val = None
+            if exposure_val is not None and exposure_val > 0:
+                target["exposure"] = exposure_val
+
+        gain = profile.get("gain")
+        if gain not in (None, ""):
+            try:
+                gain_val = int(float(gain))
+            except Exception:
+                gain_val = None
+            if gain_val is not None:
+                target["gain"] = gain_val
+
+        self._apply(target, settle_ms=settle_ms)
+
+    def restore(self) -> None:
+        self._apply(self._original, settle_ms=None)
+
+    def _apply(self, target: Mapping[str, Any], *, settle_ms: int | None) -> None:
+        width = int(target.get("width") or 0)
+        height = int(target.get("height") or 0)
+        fps = int(target.get("fps") or 0)
+        pixel_format = str(target.get("pixel_format") or self._current.get("pixel_format") or "Y8")
+
+        if width > 0 and height > 0 and fps > 0:
+            if (
+                width != self._current.get("width")
+                or height != self._current.get("height")
+                or fps != self._current.get("fps")
+                or pixel_format != self._current.get("pixel_format")
+            ):
+                self._camera.apply_resolution(
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    pixel_format=pixel_format,
+                )
+                self._current.update(
+                    {"width": width, "height": height, "fps": fps, "pixel_format": pixel_format}
+                )
+
+        exposure = target.get("exposure")
+        if exposure is not None and exposure != self._current.get("exposure") and exposure > 0:
+            try:
+                self._camera.set_manual_exposure_us(int(exposure))
+                self._current["exposure"] = int(exposure)
+            except Exception:
+                pass
+
+        gain = target.get("gain")
+        if gain is not None and gain != self._current.get("gain"):
+            try:
+                self._camera.set_gain_db(int(gain))
+                self._current["gain"] = int(gain)
+            except Exception:
+                pass
+
+        if settle_ms and settle_ms > 0:
+            time.sleep(settle_ms / 1000.0)
 
 
 class MainWindow(QMainWindow):
@@ -177,6 +292,10 @@ class MainWindow(QMainWindow):
 
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
+
+        self.step_strip = StepStrip(self.panel_run)
+        self.step_strip.setVisible(False)
+        run.addWidget(self.step_strip)
 
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
@@ -407,6 +526,21 @@ class MainWindow(QMainWindow):
                 print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
                 recipe_cfg = None
 
+            if recipe_cfg is not None:
+                try:
+                    runtime = load_multi_view_runtime(
+                        recipe_name,
+                        recipe_cfg,
+                        base_dir=self.recipes.base,
+                    )
+                except Exception:
+                    runtime = None
+                if runtime and not runtime.is_empty():
+                    self._run_multi_view_inspection(recipe_name, recipe_cfg, runtime)
+                    return
+            self.step_strip.setVisible(False)
+            self.step_strip.set_results([])
+
             if golden is None or recipe_cfg is None or not getattr(recipe_cfg, "tools", []):
                 self._run_legacy_trigger(frame_u8, recipe_name)
                 return
@@ -531,6 +665,124 @@ class MainWindow(QMainWindow):
 
         self.strip.reload()
 
+        if not self.live_enabled and self._last_trigger_frame is not None:
+            img = self._last_trigger_frame
+            if self.chk_heatmap.isChecked():
+                try:
+                    img = self._make_heatmap_overlay(img)
+                except Exception:
+                    pass
+            self._show_gray_or_bgr(self.live_view, img)
+
+    def _run_multi_view_inspection(self, recipe_name: str, recipe_cfg, runtime) -> None:
+        controller = _CameraProfileController(self.cam)
+        step_frames: list[np.ndarray] = []
+        try:
+            def _capture(step_config):
+                controller.apply_step(step_config.camera_profile, step_config.settle_ms)
+                frame = self.cam.one_shot()
+                if frame is None:
+                    raise RuntimeError("Žiadny snímok z kamery")
+                return np.asarray(frame)
+
+            result = run_multi_view_sequence(runtime, capture=_capture)
+        finally:
+            controller.restore()
+
+        final_status = result.aggregation.status
+        color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
+        self.lbl_status.setText(final_status.upper())
+        self.lbl_status.setStyleSheet(f"color: {color_map.get(final_status, '#33dd66')};")
+        self.gpio.signal_result(final_status)
+
+        step_reports: list[dict[str, Any]] = []
+        per_step_meta: list[dict[str, Any]] = []
+        for step_result in result.steps:
+            verdict = step_result.verdict
+            metrics_map = {
+                str(k): self._simplify_value(v)
+                for k, v in dict(verdict.metrics or {}).items()
+            }
+            metrics_map.setdefault("latency_ms", float(step_result.latency_ms))
+            report_entry = {
+                "id": verdict.step_id,
+                "name": verdict.name,
+                "type": "multi_view_step",
+                "status": verdict.status,
+                "latency_ms": float(step_result.latency_ms),
+                "metrics": metrics_map,
+                "diagnostics": {},
+            }
+            step_reports.append(report_entry)
+            per_step_meta.append(
+                {
+                    "step_id": verdict.step_id,
+                    "name": verdict.name,
+                    "status": verdict.status,
+                    "metrics": metrics_map,
+                }
+            )
+            if isinstance(step_result.frame, np.ndarray):
+                step_frames.append(np.asarray(step_result.frame))
+
+        self._last_tool_reports = step_reports
+        self._last_pipeline_status = final_status
+        self._last_cycle_time_ms = float(result.cycle_time_ms)
+
+        st = self.stats.daily_for_recipe(recipe_name)
+        self._update_sidebar(st, step_reports, status=final_status, cycle_time_ms=float(result.cycle_time_ms))
+
+        self.step_strip.set_results(result.steps)
+        self.step_strip.setVisible(True)
+        if self.cmb_tool.count():
+            self.cmb_tool.setCurrentIndex(0)
+
+        aggregation_dict = result.aggregation.to_dict()
+        metrics_summary: dict[str, Any] = {}
+        if result.aggregation.score is not None:
+            metrics_summary["aggregation_score"] = float(result.aggregation.score)
+
+        meta_payload: dict[str, Any] = {
+            "mode": "manual",
+            "status": final_status,
+            "cycle_time_ms": float(result.cycle_time_ms),
+            "aggregation": aggregation_dict,
+            "per_step": per_step_meta,
+            "metrics": metrics_summary,
+        }
+        if result.fail_fast_triggered:
+            meta_payload["fail_fast_triggered"] = True
+
+        representative_frame: np.ndarray | None = step_frames[-1] if step_frames else None
+        if representative_frame is None:
+            fallback = self.cam.last_frame()
+            if isinstance(fallback, np.ndarray):
+                representative_frame = np.asarray(fallback)
+        if representative_frame is None:
+            representative_frame = np.zeros((8, 8), dtype=np.uint8)
+
+        save_production_result(
+            representative_frame,
+            meta_payload,
+            recipe_name,
+            store_full_nok=True,
+            nok=final_status != "ok",
+            step_frames=step_frames,
+            step_meta=per_step_meta,
+        )
+
+        try:
+            record_multi_view_run(
+                recipe=recipe_cfg,
+                result=result,
+                recipe_name=recipe_name,
+            )
+        except Exception:
+            pass
+
+        self.strip.reload()
+
+        self._last_trigger_frame = representative_frame.copy()
         if not self.live_enabled and self._last_trigger_frame is not None:
             img = self._last_trigger_frame
             if self.chk_heatmap.isChecked():
@@ -972,6 +1224,8 @@ class MainWindow(QMainWindow):
             self._update_sidebar(st, [])
             self._refresh_tool_selector()
             self.gpio.set_active_recipe(name)
+            self.step_strip.set_results([])
+            self.step_strip.setVisible(False)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
