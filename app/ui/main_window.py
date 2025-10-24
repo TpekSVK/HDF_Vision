@@ -33,6 +33,11 @@ from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.models.schema import RecipeV2
+from app.ui.camera_profile_utils import (
+    apply_camera_state,
+    apply_view_camera_profile,
+    snapshot_camera_state,
+)
 
 
 class MainWindow(QMainWindow):
@@ -489,6 +494,8 @@ class MainWindow(QMainWindow):
                     }
                 )
 
+            base_camera_state = snapshot_camera_state(self.cam)
+
             manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
             all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
 
@@ -515,121 +522,143 @@ class MainWindow(QMainWindow):
             last_preview_frame = base_frame
             trigger_start_ts = time.monotonic()
 
-            for spec in views_to_process:
-                view = spec["view"]
-                index = spec["index"]
-                view_id = getattr(view, "id", None) or f"view_{index+1}"
-                view_name = getattr(view, "name", view_id)
-                golden = self._load_view_golden_array(recipe_name, view)
+            try:
+                for spec in views_to_process:
+                    view = spec["view"]
+                    index = spec["index"]
+                    view_id = getattr(view, "id", None) or f"view_{index+1}"
+                    view_name = getattr(view, "name", view_id)
+                    golden = self._load_view_golden_array(recipe_name, view)
 
-                settle_ms = spec["settle_ms"]
-                trigger_mode = spec["trigger_mode"]
-                interval_ms = spec["interval_ms"]
+                    profile = getattr(view, "camera_profile", None)
+                    try:
+                        apply_view_camera_profile(
+                            self.cam,
+                            base_camera_state,
+                            profile,
+                        )
+                    except Exception as exc:
+                        self.lbl_status.setText(
+                            f"{view_name}: {exc}"
+                        )
+                        self._reset_manual_trigger_progress(recipe_name)
+                        return
 
-                if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
-                    target_time = trigger_start_ts + (interval_ms / 1000.0)
-                    now = time.monotonic()
-                    if now < target_time:
-                        time.sleep(target_time - now)
+                    settle_ms = spec["settle_ms"]
+                    trigger_mode = spec["trigger_mode"]
+                    interval_ms = spec["interval_ms"]
 
-                if settle_ms is not None and settle_ms > 0:
-                    time.sleep(settle_ms / 1000.0)
+                    if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
+                        target_time = trigger_start_ts + (interval_ms / 1000.0)
+                        now = time.monotonic()
+                        if now < target_time:
+                            time.sleep(target_time - now)
 
-                latest_frame = self.cam.last_frame()
-                if latest_frame is not None:
-                    view_frame = latest_frame
-                else:
-                    view_frame = base_frame
+                    if settle_ms is not None and settle_ms > 0:
+                        time.sleep(settle_ms / 1000.0)
 
-                view_frame_u8 = view_frame.copy()
-
-                if golden is None:
-                    status = "nok"
-                    reports: list[dict[str, Any]] = []
-                    diagnostics_payload = ["missing_golden"]
-                    combined_metrics: dict[str, Any] = {}
-                    policy_applied = None
-                    result = None
-                    last_preview_frame = view_frame_u8.copy()
-                else:
-                    view_recipe = RecipeV2(
-                        pose_enabled=recipe_cfg.pose_enabled,
-                        regions=[dict(r) for r in recipe_cfg.regions],
-                        tools=[tool.copy() for tool in getattr(view, "tools", [])],
-                        views=[view.copy()],
-                        aggregation=recipe_cfg.aggregation.copy(),
-                        on_locator_failure=recipe_cfg.on_locator_failure,
-                        export_artifacts=recipe_cfg.export_artifacts,
-                    )
-
-                    result = run_pipeline(
-                        golden,
-                        view_frame_u8,
-                        view_recipe,
-                        recipe_name=recipe_name,
-                        notes=f"manual_trigger::{view_id}",
-                    )
-
-                    status = (result.status or "ok").lower()
-                    diagnostics_payload = [
-                        self._simplify_value(diag)
-                        for diag in getattr(result, "diagnostics", []) or []
-                    ]
-                    reports = [
-                        self._serialize_tool_report(report)
-                        for report in result.per_tool
-                    ]
-                    combined_metrics = self._merge_pipeline_metrics(reports)
-                    policy_applied = getattr(result, "policy_applied", None)
-
-                    context_frame = getattr(result.context, "frame_aligned", None)
-                    if context_frame is None:
-                        context_frame = getattr(result.context, "frame", None)
-                    if isinstance(context_frame, np.ndarray):
-                        last_preview_frame = context_frame.copy()
+                    latest_frame = self.cam.last_frame()
+                    if latest_frame is not None:
+                        view_frame = latest_frame
+                        base_frame = view_frame.copy()
                     else:
+                        view_frame = base_frame
+
+                    view_frame_u8 = view_frame.copy()
+
+                    if golden is None:
+                        status = "nok"
+                        reports = []
+                        diagnostics_payload = ["missing_golden"]
+                        combined_metrics = {}
+                        policy_applied = None
+                        result = None
                         last_preview_frame = view_frame_u8.copy()
+                    else:
+                        view_recipe = RecipeV2(
+                            pose_enabled=recipe_cfg.pose_enabled,
+                            regions=[dict(r) for r in recipe_cfg.regions],
+                            tools=[tool.copy() for tool in getattr(view, "tools", [])],
+                            views=[view.copy()],
+                            aggregation=recipe_cfg.aggregation.copy(),
+                            on_locator_failure=recipe_cfg.on_locator_failure,
+                            export_artifacts=recipe_cfg.export_artifacts,
+                        )
 
-                per_view_statuses[view_id] = status
-                if all_manual:
-                    self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
+                        result = run_pipeline(
+                            golden,
+                            view_frame_u8,
+                            view_recipe,
+                            recipe_name=recipe_name,
+                            notes=f"manual_trigger::{view_id}",
+                        )
 
-                cycle_time_value = float(result.cycle_time_ms) if result is not None else None
+                        status = (result.status or "ok").lower()
+                        diagnostics_payload = [
+                            self._simplify_value(diag)
+                            for diag in getattr(result, "diagnostics", []) or []
+                        ]
+                        reports = [
+                            self._serialize_tool_report(report)
+                            for report in result.per_tool
+                        ]
+                        combined_metrics = self._merge_pipeline_metrics(reports)
+                        policy_applied = getattr(result, "policy_applied", None)
 
-                meta_payload = {
-                    "mode": "manual",
-                    "status": status,
-                    "view_id": view_id,
-                    "view_name": view_name,
-                    "cycle_time_ms": cycle_time_value,
-                    "per_tool": reports,
-                    "diagnostics": diagnostics_payload,
-                    "metrics": combined_metrics,
-                    "sequence_statuses": dict(per_view_statuses),
-                }
-                if policy_applied:
-                    meta_payload["policy_applied"] = policy_applied
+                        context_frame = getattr(result.context, "frame_aligned", None)
+                        if context_frame is None:
+                            context_frame = getattr(result.context, "frame", None)
+                        if isinstance(context_frame, np.ndarray):
+                            last_preview_frame = context_frame.copy()
+                        else:
+                            last_preview_frame = view_frame_u8.copy()
 
-                save_production_result(
-                    view_frame_u8,
-                    meta_payload,
-                    recipe_name,
-                    store_full_nok=True,
-                    nok=status != "ok",
-                    run_id=run_id,
-                    view_id=view_id,
-                )
+                    per_view_statuses[view_id] = status
+                    if all_manual:
+                        self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
 
-                self.view_strip.set_status(view_id, status)
-                self._update_sidebar(
-                    per_tool=reports,
-                    status=status,
-                    cycle_time_ms=cycle_time_value,
-                    view_id=view_id,
-                )
+                    cycle_time_value = float(result.cycle_time_ms) if result is not None else None
 
-                if fail_fast and status == "nok":
-                    break
+                    meta_payload = {
+                        "mode": "manual",
+                        "status": status,
+                        "view_id": view_id,
+                        "view_name": view_name,
+                        "cycle_time_ms": cycle_time_value,
+                        "per_tool": reports,
+                        "diagnostics": diagnostics_payload,
+                        "metrics": combined_metrics,
+                        "sequence_statuses": dict(per_view_statuses),
+                    }
+                    if policy_applied:
+                        meta_payload["policy_applied"] = policy_applied
+
+                    save_production_result(
+                        view_frame_u8,
+                        meta_payload,
+                        recipe_name,
+                        store_full_nok=True,
+                        nok=status != "ok",
+                        run_id=run_id,
+                        view_id=view_id,
+                    )
+
+                    self.view_strip.set_status(view_id, status)
+                    self._update_sidebar(
+                        per_tool=reports,
+                        status=status,
+                        cycle_time_ms=cycle_time_value,
+                        view_id=view_id,
+                    )
+
+                    if fail_fast and status == "nok":
+                        break
+            finally:
+                try:
+                    apply_camera_state(self.cam, base_camera_state)
+                except Exception as exc:
+                    print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
+                self._sync_resolution_combo()
 
             if self._active_view_id and self._active_view_id not in per_view_statuses:
                 self._update_sidebar(view_id=self._active_view_id)
