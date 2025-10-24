@@ -58,6 +58,7 @@ from app.models.schema import (
     RecipeV2,
     Tool,
     RecipeView,
+    ViewCameraProfile,
     ToolDefinition,
     ToolMask,
     ToolMetricSpec,
@@ -73,6 +74,7 @@ from app.services.tool_service import (
     run_locator_template_match,
     run_tool_test,
 )
+from app.ui.view_utils import view_uses_global_golden
 
 
 _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
@@ -80,6 +82,22 @@ _SUPPORTED_FORM_FIELD_TYPES = {"int", "float", "bool", "enum"}
 _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
 _LOCATOR_PREVIEW_MIN_HEIGHT = 280
+
+
+_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
+    (
+        "1920x1080@60 Y8",
+        {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
+    ),
+    (
+        "1280x720@60 Y8",
+        {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8"},
+    ),
+    (
+        "2592x1944@30 Y8 (len setup/pomalé)",
+        {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"},
+    ),
+)
 
 
 def _coerce_bool_value(value: Any) -> tuple[Optional[bool], Optional[str]]:
@@ -149,6 +167,320 @@ def _apply_numeric_constraints(value: float, spec: dict[str, Any], *, number_typ
         clamped = round(clamped, precision)
 
     return float(clamped), errors
+
+
+class ViewConfigDialog(QDialog):
+    def __init__(
+        self,
+        *,
+        parent: QWidget | None = None,
+        mode: str = "add",
+        view_id: str,
+        name: str,
+        available_resolutions: Sequence[tuple[str, dict[str, Any]]],
+        current_camera: Optional[dict[str, Any]] = None,
+        camera_profile: ViewCameraProfile | dict | str | None = None,
+        settle_ms: Optional[int] = None,
+        trigger_mode: str = "timed",
+        trigger_interval_ms: Optional[int] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._mode = mode
+        self._view_id = view_id
+        self._available_resolutions = list(available_resolutions)
+        self._result: Optional[dict[str, Any]] = None
+
+        title = "Add View" if mode == "add" else "Edit View"
+        self.setWindowTitle(title)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        basic_group = QGroupBox("Základné informácie", self)
+        basic_form = QFormLayout(basic_group)
+        basic_form.setSpacing(6)
+        self._name_edit = QLineEdit(name, basic_group)
+        self._name_edit.setPlaceholderText("Názov view (povinné)")
+        self._id_label = QLabel(view_id, basic_group)
+        self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        basic_form.addRow("Name:", self._name_edit)
+        basic_form.addRow("ID:", self._id_label)
+        layout.addWidget(basic_group)
+
+        camera_group = QGroupBox("Kamera profil (voliteľná)", self)
+        camera_form = QFormLayout(camera_group)
+        camera_form.setSpacing(6)
+
+        self._resolution_combo = QComboBox(camera_group)
+        self._populate_resolution_combo(current_camera, camera_profile)
+        camera_form.addRow("Resolution:", self._resolution_combo)
+
+        self._exposure_edit = QLineEdit(camera_group)
+        self._exposure_edit.setPlaceholderText("Leave blank to inherit")
+        self._gain_edit = QLineEdit(camera_group)
+        self._gain_edit.setPlaceholderText("Leave blank to inherit")
+        self._pixel_format_combo = QComboBox(camera_group)
+        self._pixel_format_combo.addItem("Inherit", None)
+        self._pixel_format_combo.addItem("Y8", "Y8")
+        self._pixel_format_combo.addItem("Y12", "Y12")
+        camera_form.addRow("Exposure [µs]:", self._exposure_edit)
+        camera_form.addRow("Gain [dB]:", self._gain_edit)
+        camera_form.addRow("Pixel Format:", self._pixel_format_combo)
+        layout.addWidget(camera_group)
+
+        timing_group = QGroupBox("Časovanie snímania", self)
+        timing_form = QFormLayout(timing_group)
+        timing_form.setSpacing(6)
+
+        self._settle_edit = QLineEdit(timing_group)
+        self._settle_edit.setPlaceholderText("Leave blank to inherit")
+        timing_form.addRow("Settle Time (ms):", self._settle_edit)
+
+        self._trigger_mode_combo = QComboBox(timing_group)
+        self._trigger_mode_combo.addItem("Timed", "timed")
+        self._trigger_mode_combo.addItem("External Trigger", "external")
+        self._trigger_mode_combo.currentIndexChanged.connect(
+            self._on_trigger_mode_changed
+        )
+        timing_form.addRow("Trigger Mode:", self._trigger_mode_combo)
+
+        self._interval_edit = QLineEdit(timing_group)
+        self._interval_edit.setPlaceholderText("Required for Timed mode")
+        timing_form.addRow("Interval (ms):", self._interval_edit)
+        layout.addWidget(timing_group)
+
+        button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
+        action_text = "Add View" if mode == "add" else "Save"
+        self._accept_button = button_box.addButton(
+            action_text, QDialogButtonBox.AcceptRole
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self._apply_initial_profile(camera_profile)
+        self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms)
+
+    def view_id(self) -> str:
+        return self._view_id
+
+    def values(self) -> dict[str, Any]:
+        return dict(self._result or {})
+
+    def accept(self) -> None:  # noqa: N802 - Qt API
+        name = self._name_edit.text().strip()
+        if not name:
+            QMessageBox.critical(self, "Invalid input", "Name is required.")
+            return
+
+        try:
+            settle_ms = self._parse_optional_int(self._settle_edit.text())
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Settle Time must be an integer value.",
+            )
+            return
+
+        try:
+            exposure_us = self._parse_optional_int(self._exposure_edit.text())
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Exposure must be an integer value.",
+            )
+            return
+
+        try:
+            gain_db = self._parse_optional_float(self._gain_edit.text())
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Gain must be a numeric value.",
+            )
+            return
+
+        trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
+        trigger_mode = "external" if trigger_mode == "external" else "timed"
+
+        try:
+            interval_ms = self._parse_optional_int(self._interval_edit.text())
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Interval must be an integer value.",
+            )
+            return
+
+        if trigger_mode == "timed" and interval_ms is None:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Interval is required in Timed trigger mode.",
+            )
+            return
+        if trigger_mode != "timed":
+            interval_ms = None
+
+        profile = self._build_camera_profile(exposure_us, gain_db)
+
+        self._result = {
+            "name": name,
+            "camera_profile": profile,
+            "settle_ms": settle_ms,
+            "trigger_mode": trigger_mode,
+            "trigger_interval_ms": interval_ms,
+        }
+        super().accept()
+
+    def _populate_resolution_combo(
+        self,
+        current_camera: Optional[dict[str, Any]],
+        camera_profile: ViewCameraProfile | dict | str | None,
+    ) -> None:
+        self._resolution_combo.clear()
+        self._resolution_combo.addItem("Inherit", None)
+
+        if current_camera:
+            label = self._format_resolution_label(current_camera, prefix="Current: ")
+            self._resolution_combo.addItem(label, dict(current_camera))
+
+        for label, data in self._available_resolutions:
+            self._resolution_combo.addItem(label, dict(data))
+
+        profile_obj = camera_profile
+        if isinstance(profile_obj, dict):
+            profile_obj = ViewCameraProfile.from_obj(profile_obj)
+
+        if isinstance(profile_obj, ViewCameraProfile):
+            if profile_obj.width and profile_obj.height and profile_obj.fps:
+                target = {
+                    "width": profile_obj.width,
+                    "height": profile_obj.height,
+                    "fps": profile_obj.fps,
+                    "pixel_format": profile_obj.pixel_format,
+                }
+                index = self._match_resolution_index(target)
+                if index is not None:
+                    self._resolution_combo.setCurrentIndex(index)
+                else:
+                    label = self._format_resolution_label(target, prefix="Custom: ")
+                    self._resolution_combo.addItem(label, target)
+                    self._resolution_combo.setCurrentIndex(self._resolution_combo.count() - 1)
+
+    def _match_resolution_index(self, target: dict[str, Any]) -> Optional[int]:
+        width = int(target.get("width", 0))
+        height = int(target.get("height", 0))
+        fps = int(target.get("fps", 0))
+        pix = str(target.get("pixel_format", "") or "").upper()
+        for idx in range(self._resolution_combo.count()):
+            data = self._resolution_combo.itemData(idx)
+            if not isinstance(data, dict):
+                continue
+            if (
+                int(data.get("width", 0)) == width
+                and int(data.get("height", 0)) == height
+                and int(data.get("fps", 0)) == fps
+                and str(data.get("pixel_format", "") or "").upper() == pix
+            ):
+                return idx
+        return None
+
+    @staticmethod
+    def _format_resolution_label(data: dict[str, Any], *, prefix: str = "") -> str:
+        width = data.get("width") or "?"
+        height = data.get("height") or "?"
+        fps = data.get("fps") or "?"
+        pix = (data.get("pixel_format") or "").upper() or "?"
+        return f"{prefix}{width}x{height}@{fps} {pix}"
+
+    def _apply_initial_profile(
+        self, camera_profile: ViewCameraProfile | dict | str | None
+    ) -> None:
+        profile_obj = camera_profile
+        if isinstance(profile_obj, dict):
+            profile_obj = ViewCameraProfile.from_obj(profile_obj)
+
+        if isinstance(profile_obj, ViewCameraProfile):
+            if profile_obj.exposure_us is not None:
+                self._exposure_edit.setText(str(int(profile_obj.exposure_us)))
+            if profile_obj.gain_db is not None:
+                self._gain_edit.setText(str(profile_obj.gain_db))
+            if profile_obj.pixel_format:
+                index = self._pixel_format_combo.findData(profile_obj.pixel_format)
+                if index >= 0:
+                    self._pixel_format_combo.setCurrentIndex(index)
+
+    def _apply_initial_timing(
+        self,
+        settle_ms: Optional[int],
+        trigger_mode: str,
+        trigger_interval_ms: Optional[int],
+    ) -> None:
+        if settle_ms is not None:
+            self._settle_edit.setText(str(int(settle_ms)))
+
+        normalized_mode = str(trigger_mode or "timed").strip().lower()
+        index = self._trigger_mode_combo.findData(
+            "external" if normalized_mode == "external" else "timed"
+        )
+        if index >= 0:
+            self._trigger_mode_combo.setCurrentIndex(index)
+
+        if trigger_interval_ms is not None:
+            self._interval_edit.setText(str(int(trigger_interval_ms)))
+        self._on_trigger_mode_changed()
+
+    def _on_trigger_mode_changed(self) -> None:
+        mode = str(self._trigger_mode_combo.currentData() or "timed")
+        self._interval_edit.setEnabled(mode == "timed")
+
+    def _build_camera_profile(
+        self,
+        exposure_us: Optional[int],
+        gain_db: Optional[float],
+    ) -> Optional[ViewCameraProfile]:
+        data: dict[str, Any] = {}
+        resolution_data = self._resolution_combo.currentData()
+        if isinstance(resolution_data, dict):
+            for key in ("width", "height", "fps", "pixel_format"):
+                value = resolution_data.get(key)
+                if value is not None and value != "":
+                    data[key] = value
+
+        pixel_format = self._pixel_format_combo.currentData()
+        if pixel_format:
+            data["pixel_format"] = pixel_format
+
+        if exposure_us is not None:
+            data["exposure_us"] = exposure_us
+        if gain_db is not None:
+            data["gain_db"] = gain_db
+
+        profile = ViewCameraProfile.from_obj(data)
+        if isinstance(profile, ViewCameraProfile) and not profile.is_empty():
+            return profile
+        return None
+
+    @staticmethod
+    def _parse_optional_int(text: str) -> Optional[int]:
+        stripped = text.strip()
+        if not stripped:
+            return None
+        return int(stripped)
+
+    @staticmethod
+    def _parse_optional_float(text: str) -> Optional[float]:
+        stripped = text.strip().replace(",", ".")
+        if not stripped:
+            return None
+        return float(stripped)
 
 
 def _normalize_field_value(value: Any, spec: dict[str, Any]) -> tuple[Any, list[str]]:
@@ -2714,6 +3046,9 @@ class GoldenWizard(QDialog):
         self._view_selector.currentIndexChanged.connect(self._on_view_changed)
         self.btn_add_view = QPushButton("Add View", self)
         self.btn_add_view.clicked.connect(self._on_add_view)
+        self.btn_edit_view = QPushButton("Edit View", self)
+        self.btn_edit_view.clicked.connect(self._on_edit_view)
+        self.btn_edit_view.setEnabled(False)
         self.btn_remove_view = QPushButton("Remove View", self)
         self.btn_remove_view.clicked.connect(self._on_remove_view)
 
@@ -2747,6 +3082,7 @@ class GoldenWizard(QDialog):
         top.addWidget(QLabel("View:", self))
         top.addWidget(self._view_selector)
         top.addWidget(self.btn_add_view)
+        top.addWidget(self.btn_edit_view)
         top.addWidget(self.btn_remove_view)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
@@ -3010,6 +3346,7 @@ class GoldenWizard(QDialog):
         self._updating_view_selector = False
 
         self.btn_remove_view.setEnabled(len(self._views) > 1)
+        self.btn_edit_view.setEnabled(bool(self._views))
 
         target_view_id = select_view_id or self._active_view_id
         if not target_view_id or target_view_id not in valid_ids:
@@ -3114,6 +3451,7 @@ class GoldenWizard(QDialog):
             self.view.set_tool_overlay(None)
             return
 
+        view = self._view_by_id(view_id)
         state = self._view_states.setdefault(view_id, {})
         cached = state.get("golden_image")
         if cached is not None:
@@ -3123,7 +3461,9 @@ class GoldenWizard(QDialog):
             return
 
         saved_golden: Optional[np.ndarray] = None
-        if recipe == getattr(self.recipes.tool, "recipe", None):
+        if view_uses_global_golden(view) and recipe == getattr(
+            self.recipes.tool, "recipe", None
+        ):
             cached_tool = getattr(self.recipes.tool, "golden", None)
             if isinstance(cached_tool, np.ndarray):
                 saved_golden = np.asarray(cached_tool)
@@ -3168,9 +3508,11 @@ class GoldenWizard(QDialog):
             if cached is not None:
                 return np.asarray(cached).copy()
 
-        golden = getattr(self.recipes.tool, "golden", None)
-        if isinstance(golden, np.ndarray):
-            return golden
+        view = self._view_by_id(view_id)
+        if view_uses_global_golden(view):
+            golden = getattr(self.recipes.tool, "golden", None)
+            if isinstance(golden, np.ndarray):
+                return np.asarray(golden).copy()
 
         return self._load_saved_golden_image(view_id=view_id)
 
@@ -3484,6 +3826,43 @@ class GoldenWizard(QDialog):
     def _current_recipe_name(self) -> str:
         return self.recipe_name.text().strip() or "default"
 
+    def _available_camera_resolutions(self) -> list[tuple[str, dict[str, Any]]]:
+        return [(label, dict(data)) for label, data in _DEFAULT_CAMERA_RESOLUTIONS]
+
+    def _current_camera_config(self) -> Optional[dict[str, Any]]:
+        width = getattr(self.cam, "width", None)
+        height = getattr(self.cam, "height", None)
+        fps = getattr(self.cam, "fps", None)
+        pixel_format = getattr(self.cam, "pixel_format", None)
+        if width and height and fps:
+            return {
+                "width": int(width),
+                "height": int(height),
+                "fps": int(fps),
+                "pixel_format": (pixel_format or "Y8").upper(),
+            }
+        return None
+
+    @staticmethod
+    def _suggest_view_id(existing: Sequence[RecipeView]) -> str:
+        existing_ids = {view.id for view in existing if getattr(view, "id", "")}
+        index = 1
+        while True:
+            candidate = f"view_{index}"
+            if candidate not in existing_ids:
+                return candidate
+            index += 1
+
+    @staticmethod
+    def _suggest_view_name(existing: Sequence[RecipeView]) -> str:
+        existing_names = {view.name for view in existing if getattr(view, "name", "")}
+        index = 1
+        candidate = f"View {index}"
+        while candidate in existing_names:
+            index += 1
+            candidate = f"View {index}"
+        return candidate
+
     def _on_recipe_changed(self):
         recipe = self._current_recipe_name()
         if recipe == getattr(self, "_last_recipe", None):
@@ -3497,12 +3876,93 @@ class GoldenWizard(QDialog):
     def _on_add_view(self) -> None:
         recipe = self._current_recipe_name()
         try:
-            new_view = self.recipes.add_view(recipe, source_view_id=self._active_view_id)
+            existing = self.recipes.list_views(recipe)
+        except Exception as exc:
+            self._err(f"Načítanie view zlyhalo: {exc}")
+            return
+
+        proposed_id = self._suggest_view_id(existing)
+        proposed_name = self._suggest_view_name(existing)
+        source_view = self._view_by_id(self._active_view_id)
+
+        dialog = ViewConfigDialog(
+            parent=self,
+            mode="add",
+            view_id=proposed_id,
+            name=proposed_name,
+            available_resolutions=self._available_camera_resolutions(),
+            current_camera=self._current_camera_config(),
+            camera_profile=source_view.camera_profile if source_view else None,
+            settle_ms=source_view.settle_ms if source_view else None,
+            trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
+            trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
+            if source_view
+            else None,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        data = dialog.values()
+        try:
+            new_view = self.recipes.add_view(
+                recipe,
+                source_view_id=self._active_view_id,
+                view_id=dialog.view_id(),
+                view_name=data.get("name"),
+                camera_profile=data.get("camera_profile"),
+                settle_ms=data.get("settle_ms"),
+                trigger_mode=data.get("trigger_mode"),
+                trigger_interval_ms=data.get("trigger_interval_ms"),
+            )
         except Exception as exc:
             self._err(f"Pridanie view zlyhalo: {exc}")
             return
+
         self._view_states.setdefault(new_view.id, {})
-        self._refresh_view_list(recipe=recipe, select_view_id=new_view.id, reset_states=False)
+        self._refresh_view_list(
+            recipe=recipe, select_view_id=new_view.id, reset_states=False
+        )
+        self._refresh_publish_state()
+
+    def _on_edit_view(self) -> None:
+        recipe = self._current_recipe_name()
+        view = self._view_by_id(self._active_view_id)
+        if not view:
+            return
+
+        dialog = ViewConfigDialog(
+            parent=self,
+            mode="edit",
+            view_id=view.id,
+            name=view.name or view.id,
+            available_resolutions=self._available_camera_resolutions(),
+            current_camera=self._current_camera_config(),
+            camera_profile=view.camera_profile,
+            settle_ms=view.settle_ms,
+            trigger_mode=getattr(view, "trigger_mode", "timed"),
+            trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        data = dialog.values()
+        try:
+            updated_view = self.recipes.update_view(
+                recipe,
+                view.id,
+                view_name=data.get("name"),
+                camera_profile=data.get("camera_profile"),
+                settle_ms=data.get("settle_ms"),
+                trigger_mode=data.get("trigger_mode"),
+                trigger_interval_ms=data.get("trigger_interval_ms"),
+            )
+        except Exception as exc:
+            self._err(f"Úprava view zlyhala: {exc}")
+            return
+
+        self._refresh_view_list(
+            recipe=recipe, select_view_id=updated_view.id, reset_states=False
+        )
         self._refresh_publish_state()
 
     def _on_remove_view(self) -> None:
