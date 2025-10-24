@@ -511,26 +511,152 @@ class RecipeAggregation:
 
 
 @dataclass(slots=True)
+class ViewCameraProfile:
+    """Optional per-view overrides for camera configuration."""
+
+    width: Optional[int] = None
+    height: Optional[int] = None
+    fps: Optional[int] = None
+    pixel_format: Optional[str] = None
+    exposure_us: Optional[int] = None
+    gain_db: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        self.width = self._coerce_int(self.width)
+        self.height = self._coerce_int(self.height)
+        self.fps = self._coerce_int(self.fps)
+        self.exposure_us = self._coerce_int(self.exposure_us)
+        self.gain_db = self._coerce_float(self.gain_db)
+        if isinstance(self.pixel_format, str):
+            text = self.pixel_format.strip().upper()
+            self.pixel_format = text or None
+        elif self.pixel_format is not None:
+            self.pixel_format = str(self.pixel_format).strip().upper() or None
+
+    @staticmethod
+    def _coerce_int(value: object) -> Optional[int]:
+        if value is None or value == "":
+            return None
+        try:
+            return int(value)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _coerce_float(value: object) -> Optional[float]:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except Exception:
+            return None
+
+    def is_empty(self) -> bool:
+        return not any(
+            value is not None
+            for value in (
+                self.width,
+                self.height,
+                self.fps,
+                self.pixel_format,
+                self.exposure_us,
+                self.gain_db,
+            )
+        )
+
+    def copy(self) -> "ViewCameraProfile":
+        return ViewCameraProfile(
+            width=self.width,
+            height=self.height,
+            fps=self.fps,
+            pixel_format=self.pixel_format,
+            exposure_us=self.exposure_us,
+            gain_db=self.gain_db,
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.width is not None:
+            data["width"] = int(self.width)
+        if self.height is not None:
+            data["height"] = int(self.height)
+        if self.fps is not None:
+            data["fps"] = int(self.fps)
+        if self.pixel_format:
+            data["pixel_format"] = self.pixel_format
+        if self.exposure_us is not None:
+            data["exposure_us"] = int(self.exposure_us)
+        if self.gain_db is not None:
+            data["gain_db"] = float(self.gain_db)
+        return data
+
+    @classmethod
+    def from_obj(
+        cls, value: object
+    ) -> ViewCameraProfile | str | None:
+        if value is None or value == "":
+            return None
+        if isinstance(value, cls):
+            return value.copy()
+        if isinstance(value, dict):
+            profile = cls(
+                width=value.get("width"),
+                height=value.get("height"),
+                fps=value.get("fps"),
+                pixel_format=value.get("pixel_format"),
+                exposure_us=value.get("exposure_us"),
+                gain_db=value.get("gain_db"),
+            )
+            return None if profile.is_empty() else profile
+        if isinstance(value, str):
+            text = value.strip()
+            return text or None
+        return None
+
+
+@dataclass(slots=True)
 class RecipeView:
     """Single viewpoint definition within a multi-view recipe."""
 
     id: str = ""
     name: str = ""
     golden_path: str = "golden.png"
-    camera_profile: Optional[str] = None
+    camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
+    trigger_mode: Literal["timed", "external"] = "timed"
+    trigger_interval_ms: Optional[int] = None
     tools: List[Tool] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.id = str(self.id or "").strip()
         self.name = str(self.name or "").strip()
         self.golden_path = str(self.golden_path or "golden.png")
-        self.camera_profile = (str(self.camera_profile) if self.camera_profile else None)
+        camera_profile = ViewCameraProfile.from_obj(self.camera_profile)
+        if isinstance(camera_profile, ViewCameraProfile):
+            self.camera_profile = camera_profile
+        elif isinstance(camera_profile, str):
+            self.camera_profile = camera_profile
+        else:
+            self.camera_profile = None
+
         if self.settle_ms is not None:
             try:
                 self.settle_ms = int(self.settle_ms)
             except Exception:
                 self.settle_ms = None
+
+        mode = str(self.trigger_mode or "timed").strip().lower()
+        if mode not in {"timed", "external"}:
+            mode = "timed"
+        self.trigger_mode = cast(Literal["timed", "external"], mode)
+
+        if self.trigger_interval_ms is not None:
+            try:
+                self.trigger_interval_ms = int(self.trigger_interval_ms)
+            except Exception:
+                self.trigger_interval_ms = None
+        if self.trigger_mode != "timed":
+            self.trigger_interval_ms = None
 
         converted: List[Tool] = []
         for tool in self.tools:
@@ -545,12 +671,18 @@ class RecipeView:
         self.tools = converted
 
     def to_dict(self) -> Dict[str, Any]:
+        if isinstance(self.camera_profile, ViewCameraProfile):
+            camera_profile: Optional[Dict[str, Any]] | str = self.camera_profile.to_dict()
+        else:
+            camera_profile = self.camera_profile
         return {
             "id": self.id,
             "name": self.name,
             "golden_path": self.golden_path,
-            "camera_profile": self.camera_profile,
+            "camera_profile": camera_profile,
             "settle_ms": self.settle_ms,
+            "trigger_mode": self.trigger_mode,
+            "trigger_interval_ms": self.trigger_interval_ms,
             "tools": [tool.to_dict() for tool in self.tools],
         }
 
@@ -566,16 +698,23 @@ class RecipeView:
             golden_path=data.get("golden_path", "golden.png"),
             camera_profile=data.get("camera_profile"),
             settle_ms=data.get("settle_ms"),
+            trigger_mode=data.get("trigger_mode", "timed"),
+            trigger_interval_ms=data.get("trigger_interval_ms"),
             tools=data.get("tools", []),
         )
 
     def copy(self) -> "RecipeView":
+        camera_profile = self.camera_profile
+        if isinstance(camera_profile, ViewCameraProfile):
+            camera_profile = camera_profile.copy()
         return RecipeView(
             id=self.id,
             name=self.name,
             golden_path=self.golden_path,
-            camera_profile=self.camera_profile,
+            camera_profile=camera_profile,
             settle_ms=self.settle_ms,
+            trigger_mode=self.trigger_mode,
+            trigger_interval_ms=self.trigger_interval_ms,
             tools=[tool.copy() for tool in self.tools],
         )
 
