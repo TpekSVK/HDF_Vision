@@ -256,6 +256,7 @@ class ViewConfigDialog(QDialog):
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Timed", "timed")
         self._trigger_mode_combo.addItem("External Trigger", "external")
+        self._trigger_mode_combo.addItem("Manual Trigger", "manual")
         self._trigger_mode_combo.currentIndexChanged.connect(
             self._on_trigger_mode_changed
         )
@@ -321,7 +322,7 @@ class ViewConfigDialog(QDialog):
             return
 
         trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
-        trigger_mode = "external" if trigger_mode == "external" else "timed"
+        trigger_mode = trigger_mode if trigger_mode in {"timed", "external", "manual"} else "timed"
 
         try:
             interval_ms = self._parse_optional_int(self._interval_edit.text())
@@ -442,9 +443,9 @@ class ViewConfigDialog(QDialog):
             self._settle_edit.setText(str(int(settle_ms)))
 
         normalized_mode = str(trigger_mode or "timed").strip().lower()
-        index = self._trigger_mode_combo.findData(
-            "external" if normalized_mode == "external" else "timed"
-        )
+        if normalized_mode not in {"timed", "external", "manual"}:
+            normalized_mode = "timed"
+        index = self._trigger_mode_combo.findData(normalized_mode)
         if index >= 0:
             self._trigger_mode_combo.setCurrentIndex(index)
 
