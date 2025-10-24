@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, 
 import imageio.v3 as iio
 import numpy as np
 
-from app.models.schema import RecipeV2, Tool
+from app.models.schema import RecipeAggregation, RecipeV2, Tool
 from app.services.settings_service import DEFAULT_LOG_DIR, get_session_settings
 from app.utils import overlay as overlay_utils
 
@@ -272,6 +272,42 @@ def record_pipeline_run(
         }
         tools_payload.append(tool_payload)
     run_entry["tools"] = tools_payload
+
+    per_view = getattr(result, "per_view", {}) or {}
+    view_lookup = {view.id: view for view in getattr(recipe, "views", [])}
+    aggregation = getattr(recipe, "aggregation", None)
+    if not isinstance(aggregation, RecipeAggregation):
+        raw_mode = str(getattr(aggregation, "mode", "AND") or "AND")
+        raw_weights = getattr(aggregation, "weights", {})
+        try:
+            weights_dict = dict(raw_weights)
+        except Exception:
+            weights_dict = {}
+        aggregation = RecipeAggregation(mode=raw_mode, weights=weights_dict)
+
+    if per_view:
+        views_payload: List[Dict[str, Any]] = []
+        for view_id, status in per_view.items():
+            payload: Dict[str, Any] = {
+                "id": view_id,
+                "status": status,
+                "ok": bool(status == "ok"),
+            }
+            view_info = view_lookup.get(view_id)
+            if view_info is not None:
+                payload["name"] = view_info.name
+                payload["golden_path"] = view_info.golden_path
+                if view_info.camera_profile is not None:
+                    payload["camera_profile"] = view_info.camera_profile
+                payload["settle_ms"] = int(view_info.settle_ms)
+            payload["weight"] = aggregation.weight_for(view_id, 1.0)
+            views_payload.append(payload)
+        run_entry["views"] = views_payload
+
+    run_entry["aggregation"] = {
+        "mode": aggregation.mode,
+        "weights": dict(aggregation.weights),
+    }
 
     if notes:
         run_entry["notes"] = str(notes)
