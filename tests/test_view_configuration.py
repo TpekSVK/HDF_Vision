@@ -23,6 +23,7 @@ if "app.services.compare_service" not in sys.modules:  # pragma: no cover - test
 
 from app.models.schema import RecipeView, ViewCameraProfile
 from app.services.recipe_service import RecipeService
+from app.ui.view_utils import view_uses_global_golden
 
 
 def test_recipe_view_normalizes_camera_profile_and_trigger():
@@ -121,3 +122,16 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     views = {view.id: view for view in service.list_views(recipe_name)}
     assert "view_custom" in views
     assert views["view_custom"].name == "Inspection Updated"
+
+
+def test_view_uses_global_golden_recognizes_per_view_assets():
+    default_view = RecipeView(id="view_1", name="Primary", golden_path="golden.png")
+    custom_view = RecipeView(id="view_2", name="Secondary", golden_path="golden_view_2.png")
+    nested_view = RecipeView(id="view_3", name="Nested", golden_path="images/custom.png")
+    empty_path_view = RecipeView(id="view_4", name="Fallback", golden_path="")
+
+    assert view_uses_global_golden(None) is True
+    assert view_uses_global_golden(default_view) is True
+    assert view_uses_global_golden(custom_view) is False
+    assert view_uses_global_golden(nested_view) is False
+    assert view_uses_global_golden(empty_path_view) is True
