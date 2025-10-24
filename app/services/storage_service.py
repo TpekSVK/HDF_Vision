@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime
 import imageio.v3 as iio
 import numpy as np
+from typing import Any, Dict, Mapping, Sequence
 
 from app.models.schema import RecipeV2
 
@@ -168,7 +169,16 @@ def save_validation_image(frame_u8, ok: bool, recipe_name: str):
     _SAVEQ.put(("validation", payload))
     return {"full": str(ffull), "thumb": str(fthumb)}
 
-def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_nok: bool, nok: bool):
+def save_production_result(
+    frame_u8,
+    meta: dict,
+    recipe_name: str,
+    store_full_nok: bool,
+    nok: bool,
+    *,
+    step_frames: Sequence[np.ndarray] | None = None,
+    step_meta: Sequence[Mapping[str, Any]] | None = None,
+):
     recipe = recipe_name or "default"
     run_dir = _ensure_dirs(recipe)
     ts = int(time.time() * 1000)
@@ -190,7 +200,46 @@ def save_production_result(frame_u8, meta: dict, recipe_name: str, store_full_no
         "do_full": do_full
     }
     _SAVEQ.put(("prod", payload))
-    return {"thumb": str(fthumb), "full": str(ffull) if do_full else None, "meta": str(fmeta)}
+    step_entries: list[dict[str, str | None]] = []
+    if step_frames or step_meta:
+        steps_dir = run_dir / "steps"
+        steps_dir.mkdir(parents=True, exist_ok=True)
+        frames_list = list(step_frames or [])
+        meta_list = list(step_meta or [])
+        step_count = max(len(frames_list), len(meta_list))
+        for index in range(step_count):
+            frame_entry = frames_list[index] if index < len(frames_list) else None
+            meta_entry: Mapping[str, Any] | None = meta_list[index] if index < len(meta_list) else None
+            step_label = f"step_{index + 1:02d}"
+            thumb_path = steps_dir / f"{step_label}.webp"
+            meta_path = steps_dir / f"{step_label}.json"
+            if frame_entry is not None:
+                img = _to_u8(frame_entry)
+                if img is not None:
+                    iio.imwrite(thumb_path, img, extension=".webp")
+            step_payload: Dict[str, Any] = {}
+            if meta_entry:
+                step_payload.update({
+                    "step_id": meta_entry.get("step_id"),
+                    "name": meta_entry.get("name"),
+                    "verdict": meta_entry.get("verdict") or meta_entry.get("status"),
+                    "metrics": meta_entry.get("metrics", {}),
+                })
+            if not step_payload:
+                step_payload = {
+                    "step_id": step_label,
+                    "name": step_label,
+                    "verdict": None,
+                    "metrics": {},
+                }
+            with open(meta_path, "w", encoding="utf-8") as fh:
+                json.dump(step_payload, fh, ensure_ascii=False, indent=2)
+            step_entries.append({"thumb": str(thumb_path), "meta": str(meta_path)})
+
+    result_payload = {"thumb": str(fthumb), "full": str(ffull) if do_full else None, "meta": str(fmeta)}
+    if step_entries:
+        result_payload["steps"] = step_entries
+    return result_payload
 
 # --- Skutočný zápis (worker) ---
 def _do_save_golden(frame, recipe):

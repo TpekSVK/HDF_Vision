@@ -390,6 +390,171 @@ class RecipeData:
         )
 
 
+RecipeAggregationMode = Literal["AND", "OR", "WEIGHTED"]
+
+
+@dataclass(slots=True)
+class CameraProfile:
+    """Camera profile applied to a specific recipe step."""
+
+    resolution: Optional[Tuple[int, int]] = None
+    fps: Optional[float] = None
+    exposure: Optional[float] = None
+    gain: Optional[float] = None
+    pixel_format: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.resolution is not None:
+            try:
+                width, height = self.resolution
+                self.resolution = (int(width), int(height))
+            except Exception:
+                self.resolution = None
+        self.fps = float(self.fps) if self.fps is not None else None
+        self.exposure = float(self.exposure) if self.exposure is not None else None
+        self.gain = float(self.gain) if self.gain is not None else None
+        if self.pixel_format is not None:
+            self.pixel_format = str(self.pixel_format)
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {}
+        if self.resolution is not None:
+            data["resolution"] = list(self.resolution)
+        if self.fps is not None:
+            data["fps"] = float(self.fps)
+        if self.exposure is not None:
+            data["exposure"] = float(self.exposure)
+        if self.gain is not None:
+            data["gain"] = float(self.gain)
+        if self.pixel_format:
+            data["pixel_format"] = self.pixel_format
+        return data
+
+    @classmethod
+    def from_obj(cls, obj: Any | None) -> "CameraProfile | None":
+        if obj is None:
+            return None
+        if isinstance(obj, CameraProfile):
+            return cls(
+                resolution=obj.resolution,
+                fps=obj.fps,
+                exposure=obj.exposure,
+                gain=obj.gain,
+                pixel_format=obj.pixel_format,
+            )
+        if isinstance(obj, dict):
+            return cls(
+                resolution=tuple(obj.get("resolution", [])) if obj.get("resolution") else None,
+                fps=obj.get("fps"),
+                exposure=obj.get("exposure"),
+                gain=obj.get("gain"),
+                pixel_format=obj.get("pixel_format"),
+            )
+        if isinstance(obj, (list, tuple)) and len(obj) >= 2:
+            try:
+                width, height = obj[:2]
+                return cls(resolution=(int(width), int(height)))
+            except Exception:
+                return cls()
+        return cls()
+
+    def copy(self) -> "CameraProfile":
+        return CameraProfile(
+            resolution=self.resolution,
+            fps=self.fps,
+            exposure=self.exposure,
+            gain=self.gain,
+            pixel_format=self.pixel_format,
+        )
+
+
+@dataclass(slots=True)
+class RecipeStep:
+    """Single inspection step used in a multi-view recipe."""
+
+    step_id: str
+    name: str
+    golden_image: Optional[str] = None
+    pose_enabled: bool = True
+    regions: List[Dict[str, Any]] = field(default_factory=list)
+    tools: List[Tool] = field(default_factory=list)
+    thresholds: ToolThresholds = field(default_factory=ToolThresholds)
+    camera_profile: Optional[CameraProfile] = None
+    settle_ms: Optional[int] = None
+
+    def __post_init__(self) -> None:
+        self.step_id = str(self.step_id or "").strip() or "default"
+        self.name = str(self.name or self.step_id)
+        self.golden_image = str(self.golden_image) if self.golden_image else None
+        self.pose_enabled = bool(self.pose_enabled)
+        self.regions = [dict(r) for r in self.regions]
+
+        converted: List[Tool] = []
+        for tool in self.tools:
+            if isinstance(tool, Tool):
+                converted.append(tool.copy())
+            else:
+                converted.append(Tool.from_dict(tool))
+        converted.sort(key=lambda t: t.order)
+        self.tools = converted
+
+        self.thresholds = ToolThresholds.from_obj(self.thresholds)
+        self.camera_profile = CameraProfile.from_obj(self.camera_profile)
+        if self.settle_ms is not None:
+            try:
+                self.settle_ms = max(0, int(self.settle_ms))
+            except Exception:
+                self.settle_ms = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        data: Dict[str, Any] = {
+            "id": self.step_id,
+            "name": self.name,
+            "pose_enabled": bool(self.pose_enabled),
+            "regions": [dict(r) for r in self.regions],
+            "tools": [tool.to_dict() for tool in self.tools],
+            "thresholds": self.thresholds.to_dict(),
+        }
+        if self.golden_image:
+            data["golden_image"] = self.golden_image
+        if self.camera_profile is not None:
+            data["camera_profile"] = self.camera_profile.to_dict()
+        if self.settle_ms is not None:
+            data["settle_ms"] = int(self.settle_ms)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "RecipeStep":
+        return cls(
+            step_id=data.get("id") or data.get("step_id") or "default",
+            name=data.get("name") or data.get("label") or "Step",
+            golden_image=data.get("golden_image"),
+            pose_enabled=data.get("pose_enabled", True),
+            regions=data.get("regions", []),
+            tools=data.get("tools", []),
+            thresholds=ToolThresholds.from_obj(data.get("thresholds")),
+            camera_profile=CameraProfile.from_obj(data.get("camera_profile")),
+            settle_ms=data.get("settle_ms"),
+        )
+
+    def copy(self) -> "RecipeStep":
+        return RecipeStep(
+            step_id=self.step_id,
+            name=self.name,
+            golden_image=self.golden_image,
+            pose_enabled=self.pose_enabled,
+            regions=[deepcopy(r) for r in self.regions],
+            tools=[tool.copy() for tool in self.tools],
+            thresholds=self.thresholds.copy(),
+            camera_profile=(
+                None
+                if self.camera_profile is None
+                else self.camera_profile.copy()
+            ),
+            settle_ms=self.settle_ms,
+        )
+
+
 @dataclass(slots=True)
 class RecipeV2:
     """Extended recipe structure including tool pipeline information."""
@@ -397,6 +562,9 @@ class RecipeV2:
     pose_enabled: bool = True
     regions: List[Dict[str, Any]] = field(default_factory=list)
     tools: List[Tool] = field(default_factory=list)
+    steps: List[RecipeStep] = field(default_factory=list)
+    aggregation: RecipeAggregationMode = "AND"
+    aggregation_weights: Dict[str, float] = field(default_factory=dict)
     on_locator_failure: Literal["fail", "continue_without_alignment"] = (
         "continue_without_alignment"
     )
@@ -414,6 +582,27 @@ class RecipeV2:
         converted.sort(key=lambda t: t.order)
         self.tools = converted
 
+        converted_steps: List[RecipeStep] = []
+        for step in self.steps:
+            if isinstance(step, RecipeStep):
+                converted_steps.append(step.copy())
+            elif isinstance(step, dict):
+                converted_steps.append(RecipeStep.from_dict(step))
+        self.steps = converted_steps
+
+        aggregation = str(self.aggregation or "AND").upper()
+        if aggregation not in {"AND", "OR", "WEIGHTED"}:
+            aggregation = "AND"
+        self.aggregation = aggregation  # type: ignore[assignment]
+
+        weights: Dict[str, float] = {}
+        for key, value in dict(self.aggregation_weights or {}).items():
+            try:
+                weights[str(key)] = float(value)
+            except (TypeError, ValueError):
+                continue
+        self.aggregation_weights = weights
+
         policy = str(self.on_locator_failure or "").lower()
         if policy not in {"fail", "continue_without_alignment"}:
             policy = "continue_without_alignment"
@@ -422,13 +611,21 @@ class RecipeV2:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        data: Dict[str, Any] = {
             "pose_enabled": bool(self.pose_enabled),
             "regions": [dict(r) for r in self.regions],
             "tools": [t.to_dict() for t in self.tools],
             "on_locator_failure": self.on_locator_failure,
             "export_artifacts": bool(self.export_artifacts),
         }
+        if self.steps:
+            data["steps"] = [step.to_dict() for step in self.steps]
+            data["aggregation"] = self.aggregation
+            if any(weight > 0 for weight in self.aggregation_weights.values()):
+                data["aggregation_weights"] = {
+                    key: float(value) for key, value in self.aggregation_weights.items()
+                }
+        return data
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any] | None) -> "RecipeV2":
@@ -438,6 +635,9 @@ class RecipeV2:
             pose_enabled=data.get("pose_enabled", True),
             regions=data.get("regions", []),
             tools=data.get("tools", []),
+            steps=data.get("steps", []),
+            aggregation=data.get("aggregation", "AND"),
+            aggregation_weights=data.get("aggregation_weights", {}),
             on_locator_failure=data.get(
                 "on_locator_failure", "continue_without_alignment"
             ),
@@ -450,6 +650,9 @@ class RecipeV2:
             pose_enabled=recipe.pose_enabled,
             regions=recipe.regions,
             tools=[],
+            steps=[],
+            aggregation="AND",
+            aggregation_weights={},
             on_locator_failure="continue_without_alignment",
             export_artifacts=False,
         )
@@ -459,6 +662,9 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=[tool.copy() for tool in self.tools],
+            steps=[step.copy() for step in self.steps],
+            aggregation=self.aggregation,
+            aggregation_weights=dict(self.aggregation_weights),
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
         )
@@ -469,6 +675,9 @@ class RecipeV2:
             pose_enabled=self.pose_enabled,
             regions=[deepcopy(r) for r in self.regions],
             tools=new_tools,
+            steps=[step.copy() for step in self.steps],
+            aggregation=self.aggregation,
+            aggregation_weights=dict(self.aggregation_weights),
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
         )
