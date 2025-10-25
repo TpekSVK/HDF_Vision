@@ -6,6 +6,9 @@ from typing import Optional, Dict, Any, List, Sequence
 
 DB_PATH = Path("/data/HDF_Vision.db")
 
+# SQL výraz na výpočet dnešného dňa podľa lokálneho času z primárneho timestampu ts_ms
+_TODAY_LOCALDATE_SQL = "date(datetime(ts_ms / 1000.0, 'unixepoch', 'localtime')) = date('now','localtime')"
+
 SCHEMA = """
 PRAGMA journal_mode=WAL;
 CREATE TABLE IF NOT EXISTS recipes (
@@ -215,7 +218,7 @@ class DbService:
             "    COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0) AS nok_count, "
             "    COALESCE(SUM(CAST(json_extract(meta_json, '$.total_cycle_time_ms') AS REAL)), 0.0) AS total_cycle_time_ms "
             "FROM results "
-            "WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
+            f"WHERE recipe_id=? AND {_TODAY_LOCALDATE_SQL}"
         )
         params: list[Any] = [recipe_id]
         if view_id:
@@ -229,7 +232,7 @@ class DbService:
             fallback_query = (
                 "SELECT COUNT(*) AS total, COALESCE(SUM(ok), 0) AS ok_count, "
                 "COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0) AS nok_count "
-                "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
+                f"FROM results WHERE recipe_id=? AND {_TODAY_LOCALDATE_SQL}"
             )
             if view_id:
                 fallback_query += " AND view_id=?"
@@ -256,7 +259,7 @@ class DbService:
         cur = self._conn.cursor()
         query = (
             "SELECT ts_ms, ok, thumb_path, full_path, ssim, blob_count, total_area, view_id, run_id "
-            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
+            f"FROM results WHERE recipe_id=? AND {_TODAY_LOCALDATE_SQL}"
         )
         params: list[Any] = [recipe_id]
         if view_id:
@@ -424,9 +427,9 @@ class DbService:
         cur = self._conn.cursor()
         cur.execute(
             "SELECT ts_ms, ok, ssim, blob_count, total_area, thumb_path, full_path, meta_json "
-            "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime') "
-            "ORDER BY id ASC",
-            (recipe_id,)
+            f"FROM results WHERE recipe_id=? AND {_TODAY_LOCALDATE_SQL} "
+            "ORDER BY ts_ms ASC",
+            (recipe_id,),
         )
         rows = cur.fetchall()
         # istota: vytvor priečinok
