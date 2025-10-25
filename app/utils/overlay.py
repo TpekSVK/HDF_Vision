@@ -298,12 +298,68 @@ def parse_display_items(
     return items
 
 
+def _rect_corners(rect: Tuple[float, float, float, float]) -> np.ndarray:
+    x, y, w, h = rect
+    return np.array(
+        [
+            [x, y],
+            [x + w, y],
+            [x + w, y + h],
+            [x, y + h],
+        ],
+        dtype=np.float32,
+    )
+
+
+def _apply_affine_to_points(
+    points: np.ndarray, affine: Any
+) -> Optional[np.ndarray]:
+    if affine is None:
+        return points.astype(np.float32, copy=True)
+
+    arr = np.asarray(affine, dtype=np.float32)
+    if arr.shape != (2, 3):
+        return None
+
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        return None
+
+    ones = np.ones((pts.shape[0], 1), dtype=np.float32)
+    pts_h = np.concatenate([pts, ones], axis=1)
+    transformed = pts_h @ arr.T
+    return transformed.astype(np.float32, copy=False)
+
+
+def _warp_mask(mask: np.ndarray, affine: Any) -> Optional[np.ndarray]:
+    if affine is None:
+        return mask
+
+    arr = np.asarray(affine, dtype=np.float32)
+    if arr.shape != (2, 3):
+        return mask
+
+    import cv2  # local import to avoid heavy dependency on module import
+
+    h, w = mask.shape[:2]
+    warped = cv2.warpAffine(
+        mask.astype(np.uint8, copy=False),
+        arr,
+        (w, h),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return warped.astype(bool)
+
+
 def tool_overlay_items(
     tool: "Tool",
     *,
     color: ColorBGR,
     display_items: Any = None,
     label: Optional[str] = None,
+    affine: Any = None,
 ) -> List[OverlayItem]:
     from app.models.schema import Tool  # Local import to avoid circular dependencies
 
@@ -317,22 +373,44 @@ def tool_overlay_items(
     if rect is not None:
         normalized = _normalize_rect(rect)
         if normalized is not None:
-            items.append(
-                OverlayItem.from_rect(
-                    normalized,
-                    color=color,
-                    thickness=3,
-                    alpha=255,
-                    fill_alpha=70,
-                    z_index=20,
-                    label=label_value,
+            if affine is not None:
+                corners = _rect_corners(normalized)
+                transformed = _apply_affine_to_points(corners, affine)
+                if transformed is not None:
+                    polygon = OverlayItem.polyline(
+                        transformed,
+                        color=color,
+                        thickness=3,
+                        alpha=255,
+                        closed=True,
+                        fill_alpha=70,
+                        z_index=20,
+                        label=label_value,
+                    )
+                    if polygon is not None:
+                        items.append(polygon)
+            else:
+                items.append(
+                    OverlayItem.from_rect(
+                        normalized,
+                        color=color,
+                        thickness=3,
+                        alpha=255,
+                        fill_alpha=70,
+                        z_index=20,
+                        label=label_value,
+                    )
                 )
-            )
 
         mask_value = getattr(tool.ignore_mask, "value", None)
         if mask_value is not None:
+            warped_mask = mask_value
+            if affine is not None:
+                warped = _warp_mask(np.asarray(mask_value), affine)
+                if warped is not None:
+                    warped_mask = warped
             mask_item = OverlayItem.from_mask(
-                mask_value,
+                warped_mask,
                 color=color,
                 alpha=100,
                 z_index=0,

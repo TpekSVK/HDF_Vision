@@ -53,6 +53,36 @@ def test_tool_overlay_items_include_roi_and_mask() -> None:
     assert "mask" in kinds
 
 
+def test_tool_overlay_items_apply_affine_rotation() -> None:
+    tool = Tool(
+        type="ssim",
+        name="ssim",
+        enabled=True,
+        order=0,
+        roi=ToolRoi({"x": 2, "y": 3, "w": 4, "h": 2}),
+        params=ToolParams({}),
+        thresholds=ToolThresholds({}),
+    )
+
+    angle_rad = np.deg2rad(90.0)
+    cos_t = np.cos(angle_rad)
+    sin_t = np.sin(angle_rad)
+    affine = np.array([[cos_t, -sin_t, 0.0], [sin_t, cos_t, 0.0]], dtype=np.float32)
+
+    items = overlay_utils.tool_overlay_items(
+        tool,
+        color=(0, 255, 0),
+        affine=affine,
+    )
+
+    assert items
+    polygon = next(item for item in items if item.kind in {"polygon", "polyline"})
+    assert polygon.kind == "polygon"
+    assert polygon.points is not None
+    assert polygon.points.shape == (4, 2)
+    # Top-left corner (2,3) rotated by 90° → (-3, 2)
+    np.testing.assert_allclose(polygon.points[0], np.array([-3.0, 2.0], dtype=np.float32))
+
 def test_render_overlay_draws_roi_on_top_of_mask() -> None:
     mask = np.ones((8, 8), dtype=np.uint8)
     mask_item = overlay_utils.OverlayItem.from_mask(mask, color=(0, 0, 255), alpha=80)

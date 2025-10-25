@@ -259,11 +259,58 @@ def warp_by_translation_u8(src: np.ndarray, dx: float, dy: float) -> np.ndarray:
     if is_gpu_enabled():
         try:
             g = _gpu_upload(src)
-            out = cv2.cuda.warpAffine(g, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+            out = cv2.cuda.warpAffine(
+                g,
+                M,
+                (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT101,
+            )
             return _gpu_download(out)
         except Exception:
             pass
     return cv2.warpAffine(src, M, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+
+def warp_by_affine_u8(src: np.ndarray, M: np.ndarray) -> np.ndarray:
+    """Všeobecná afinná transformácia (2×3), REFLECT101 okraje."""
+
+    ensure_initialized()
+
+    arr = np.asarray(M, dtype=np.float32)
+    if arr.shape != (2, 3):  # pragma: no cover - defensívne stráženie
+        raise ValueError("Affine matrix must have shape (2, 3)")
+
+    h, w = src.shape[:2]
+    if is_gpu_enabled():
+        try:
+            g = _gpu_upload(src)
+            out = cv2.cuda.warpAffine(
+                g,
+                arr,
+                (w, h),
+                flags=cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_REFLECT101,
+            )
+            return _gpu_download(out)
+        except Exception:
+            pass
+    return cv2.warpAffine(src, arr, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+
+def invert_affine(M: np.ndarray | None) -> np.ndarray:
+    """Invertuje 2×3 afinnú maticu. ``None`` → identita."""
+
+    ensure_initialized()
+
+    if M is None:
+        return np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+
+    arr = np.asarray(M, dtype=np.float32)
+    if arr.shape != (2, 3):  # pragma: no cover - defensívne stráženie
+        raise ValueError("Affine matrix must have shape (2, 3)")
+
+    return cv2.invertAffineTransform(arr)
 
 def minmax_u8(src: np.ndarray) -> Tuple[float, float]:
     """Min, max; ak je GPU, použije cv2.cuda.minMax (rýchlejší)."""

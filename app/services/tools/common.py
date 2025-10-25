@@ -29,6 +29,7 @@ class PreparedPair:
     valid_mask: Optional[np.ndarray]
     dx_total: float
     dy_total: float
+    theta_deg: float
     virtual_alignment: bool
 
     @property
@@ -99,6 +100,7 @@ class PairTool(BaseTool):
         roi_shape: Tuple[int, int],
         dx_total: float,
         dy_total: float,
+        theta_total: float,
     ) -> Optional[np.ndarray]:
         key = (
             int(mask_full.__array_interface__["data"][0]),
@@ -107,6 +109,7 @@ class PairTool(BaseTool):
             roi_rect,
             round(dx_total, 4),
             round(dy_total, 4),
+            round(theta_total, 4),
         )
         cached = self._roi_mask_cache_entry
         if cached and cached.get("key") == key:
@@ -137,10 +140,13 @@ class PairTool(BaseTool):
         frame_source = frame_in_u8
         dx_total = 0.0
         dy_total = 0.0
+        theta_total = 0.0
         virtual_alignment = False
 
         if runner_context is not None:
-            dx_total, dy_total = _extract_translation_from_affine(runner_context.T_total)
+            T_total = runner_context.T_total
+            dx_total, dy_total = _extract_translation_from_affine(T_total)
+            theta_total = _extract_rotation_from_affine(T_total)
             if runner_context.frame_is_aligned:
                 aligned = runner_context.frame_aligned
                 if aligned is not None:
@@ -151,15 +157,22 @@ class PairTool(BaseTool):
                 aligned = runner_context.frame_aligned
                 if aligned is not None:
                     frame_source = imaging.to_gray_u8(np.asarray(aligned))
-                elif (abs(dx_total) > self._EPS or abs(dy_total) > self._EPS) and runner_context.frame is not None:
-                    frame_source = imaging.warp_by_translation_u8(
-                        imaging.to_gray_u8(np.asarray(runner_context.frame)),
-                        -dx_total,
-                        -dy_total,
-                    )
-                    virtual_alignment = True
                 else:
-                    frame_source = frame_in_u8
+                    source_frame = runner_context.frame
+                    if source_frame is not None and T_total is not None:
+                        arr = np.asarray(T_total, dtype=np.float32)
+                        identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+                        if not np.allclose(arr, identity, atol=1e-3):
+                            base = imaging.to_gray_u8(np.asarray(source_frame))
+                            frame_source = imaging.warp_by_affine_u8(
+                                base,
+                                imaging.invert_affine(T_total),
+                            )
+                            virtual_alignment = True
+                        else:
+                            frame_source = frame_in_u8
+                    else:
+                        frame_source = frame_in_u8
 
         gh, gw = golden_u8.shape[:2]
         roi_candidate: Any = None
@@ -189,6 +202,7 @@ class PairTool(BaseTool):
                 (h, w),
                 dx_total,
                 dy_total,
+                theta_total,
             )
 
         return PreparedPair(
@@ -198,6 +212,7 @@ class PairTool(BaseTool):
             valid_mask=mask,
             dx_total=float(dx_total),
             dy_total=float(dy_total),
+            theta_deg=float(theta_total),
             virtual_alignment=virtual_alignment,
         )
 

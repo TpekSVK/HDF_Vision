@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import math
 import numpy as np
 import pytest
 
@@ -10,6 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 pytest.importorskip("cv2")
+import cv2
 
 from app.models.schema import RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
 from app.services.tool_service import run_pipeline
@@ -21,6 +23,9 @@ def _make_recipe(
     *,
     threshold_corr: float = 0.0,
     ssim_min: float = 0.0,
+    rotation_enabled: bool = False,
+    angle_range_deg: float = 15.0,
+    angle_step_deg: float = 1.0,
 ) -> RecipeV2:
     locator = Tool(
         type="locator.template_match",
@@ -33,6 +38,9 @@ def _make_recipe(
                 "use_golden_crop": True,
                 "coarse_cap": 64,
                 "apply_alignment": apply_alignment,
+                "rotation_enabled": rotation_enabled,
+                "angle_range_deg": angle_range_deg,
+                "angle_step_deg": angle_step_deg,
             }
         ),
         thresholds=ToolThresholds({"threshold_corr": threshold_corr}),
@@ -72,12 +80,14 @@ def test_locator_updates_context_with_alignment() -> None:
     locator_diag = diagnostics[0]
     dx = locator_diag["dx"]
     dy = locator_diag["dy"]
+    assert locator_diag["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     expected_T = locator_diag["T"]
 
     assert results
     assert results[0].status == "ok"
     assert results[0].metrics["dx"] == pytest.approx(dx)
     assert results[0].metrics["dy"] == pytest.approx(dy)
+    assert results[0].metrics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     assert "latency_ms" in results[0].metrics
     assert locator_diag["latency_ms"] >= 0.0
 
@@ -103,10 +113,12 @@ def test_locator_keeps_frame_when_alignment_disabled() -> None:
 
     locator_diag = diagnostics[0]
     expected_T = locator_diag["T"]
+    assert locator_diag["theta_deg"] == pytest.approx(0.0, abs=1e-3)
 
     assert results
     assert results[0].status == "ok"
     assert "latency_ms" in results[0].metrics
+    assert results[0].metrics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     assert locator_diag["latency_ms"] >= 0.0
 
     assert context.T_total is not None
@@ -158,6 +170,8 @@ def test_pipeline_alignment_modes_produce_consistent_ssim() -> None:
     assert locator_a.metrics["dy"] == pytest.approx(-2.0, abs=1.0)
     assert locator_b.metrics["dx"] == pytest.approx(3.0, abs=1.0)
     assert locator_b.metrics["dy"] == pytest.approx(-2.0, abs=1.0)
+    assert locator_a.metrics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
+    assert locator_b.metrics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     assert "latency_ms" in locator_a.metrics
     assert "latency_ms" in locator_b.metrics
 
@@ -197,6 +211,52 @@ def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     assert pipeline.policy_applied == "continue_without_alignment"
     assert diagnostics[0].get("policy_applied") == "continue_without_alignment"
     assert diagnostics[0].get("locator_failure") is True
+
+
+def test_pipeline_handles_locator_rotation() -> None:
+    golden = np.zeros((32, 32), dtype=np.uint8)
+    block = np.arange(64, dtype=np.uint8).reshape(8, 8)
+    golden[10:18, 12:20] = block
+
+    center = (golden.shape[1] / 2.0, golden.shape[0] / 2.0)
+    angle_deg = 9.0
+    rot = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    frame = cv2.warpAffine(
+        golden,
+        rot,
+        golden.shape[::-1],
+        flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REFLECT101,
+    )
+
+    recipe = _make_recipe(
+        apply_alignment=True,
+        rotation_enabled=True,
+        angle_range_deg=12.0,
+        angle_step_deg=1.0,
+        ssim_min=0.9,
+    )
+
+    pipeline = run_pipeline(golden, frame, recipe)
+    locator_report = pipeline.per_tool[0]
+    locator_diag = pipeline.diagnostics[0]
+
+    assert locator_report.metrics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
+    assert locator_diag["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
+    assert pipeline.context.frame_is_aligned is True
+    assert pipeline.context.frame_aligned is not None
+
+    cos_t = math.cos(math.radians(locator_diag["theta_deg"]))
+    sin_t = math.sin(math.radians(locator_diag["theta_deg"]))
+    expected_T = np.array(
+        [[cos_t, -sin_t, locator_report.metrics["dx"]], [sin_t, cos_t, locator_report.metrics["dy"]]],
+        dtype=np.float32,
+    )
+    assert pipeline.context.T_total is not None
+    assert np.allclose(pipeline.context.T_total, expected_T, atol=0.2)
+
+    ssim_metric = pipeline.per_tool[1].metrics["ssim"]
+    assert ssim_metric > 0.9
 
     assert len(results) == 2
     ssim_result = results[1]
