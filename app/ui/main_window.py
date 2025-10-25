@@ -244,7 +244,14 @@ class MainWindow(QMainWindow):
         self.sb_ok    = QLabel("OK: –")
         self.sb_nok   = QLabel("NOK: –")
         self.sb_yield = QLabel("Yield: –")
-        for w in (self.sb_total, self.sb_ok, self.sb_nok, self.sb_yield):
+        self.sb_total_test_time = QLabel("Čas testov (dnes): –")
+        for w in (
+            self.sb_total,
+            self.sb_ok,
+            self.sb_nok,
+            self.sb_yield,
+            self.sb_total_test_time,
+        ):
             side.addWidget(w)
 
         # Posledné meranie (TRIGGER)
@@ -907,6 +914,10 @@ class MainWindow(QMainWindow):
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
             self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
+            total_cycle_time = st.get("total_cycle_time_ms")
+            self.sb_total_test_time.setText(
+                f"Čas testov (dnes): {self._format_total_test_duration(total_cycle_time)}"
+            )
 
             if active_view:
                 state = self._view_states.setdefault(active_view, {})
@@ -1098,8 +1109,43 @@ class MainWindow(QMainWindow):
             if abs(val) >= 1000 or (0 < abs(val) < 0.001):
                 return f"{val:.3g}"
             text = f"{val:.4f}".rstrip("0").rstrip(".")
-            return text or "0"
+            return text or str(val)
         return str(value)
+
+    def _format_total_test_duration(self, value: Any) -> str:
+        if value is None:
+            return "–"
+        try:
+            total_ms = float(value)
+        except Exception:
+            return "–"
+
+        if not math.isfinite(total_ms) or total_ms < 0:
+            return "–"
+        if total_ms < 1.0:
+            return "0 ms"
+        if total_ms < 1000.0:
+            return f"{int(round(total_ms))} ms"
+
+        total_seconds = int(total_ms // 1000)
+        remainder_ms = int(round(total_ms - (total_seconds * 1000)))
+        if remainder_ms >= 1000:
+            total_seconds += 1
+            remainder_ms = 0
+
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours > 0:
+            return f"{hours:d}h {minutes:02d}m {seconds:02d}s"
+        if minutes > 0:
+            return f"{minutes:d}m {seconds:02d}s"
+
+        if remainder_ms:
+            fraction = f"{seconds}.{remainder_ms:03d}".rstrip("0").rstrip(".")
+            return f"{fraction}s"
+
+        return f"{seconds:d}s"
 
     def _simplify_value(self, value: Any) -> Any:
         if value is None:

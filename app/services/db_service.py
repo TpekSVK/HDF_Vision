@@ -209,20 +209,46 @@ class DbService:
     def daily_stats(self, recipe_id: int, view_id: str | None = None) -> Dict[str, Any]:
         cur = self._conn.cursor()
         query = (
-            "SELECT COUNT(*), SUM(ok), COUNT(*)-SUM(ok) FROM results "
+            "SELECT "
+            "    COUNT(*) AS total, "
+            "    COALESCE(SUM(ok), 0) AS ok_count, "
+            "    COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0) AS nok_count, "
+            "    COALESCE(SUM(CAST(json_extract(meta_json, '$.total_cycle_time_ms') AS REAL)), 0.0) AS total_cycle_time_ms "
+            "FROM results "
             "WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
         )
         params: list[Any] = [recipe_id]
         if view_id:
             query += " AND view_id=?"
             params.append(str(view_id))
-        cur.execute(query, params)
-        row = cur.fetchone()
-        total = row[0] or 0
-        ok = row[1] or 0
-        nok = row[2] or 0
+        total_cycle_time_ms = 0.0
+        try:
+            cur.execute(query, params)
+            row = cur.fetchone() or (0, 0, 0, 0.0)
+        except sqlite3.OperationalError:
+            fallback_query = (
+                "SELECT COUNT(*) AS total, COALESCE(SUM(ok), 0) AS ok_count, "
+                "COALESCE(SUM(CASE WHEN ok THEN 0 ELSE 1 END), 0) AS nok_count "
+                "FROM results WHERE recipe_id=? AND date(created_at)=date('now','localtime')"
+            )
+            if view_id:
+                fallback_query += " AND view_id=?"
+            cur.execute(fallback_query, params)
+            row = cur.fetchone() or (0, 0, 0)
+        else:
+            total_cycle_time_ms = float(row[3] or 0.0)
+
+        total = int(row[0] or 0)
+        ok = int(row[1] or 0)
+        nok = int(row[2] or 0)
         yield_pct = (ok / total * 100.0) if total else 0.0
-        return {"total": total, "ok": ok, "nok": nok, "yield": round(yield_pct, 2)}
+        return {
+            "total": total,
+            "ok": ok,
+            "nok": nok,
+            "yield": round(yield_pct, 2),
+            "total_cycle_time_ms": total_cycle_time_ms,
+        }
    
     def recent_results(
         self, recipe_id: int, limit: int = 12, *, view_id: str | None = None
