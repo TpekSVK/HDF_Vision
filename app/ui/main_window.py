@@ -161,15 +161,15 @@ class MainWindow(QMainWindow):
         actions_container = QWidget()
         actions_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         actions = QHBoxLayout(actions_container); actions.setSpacing(8)
-        self.btn_trigger = QPushButton("⏻ TRIGGER")  # berie posledný kontinuálny frame
+        self.btn_trigger = QPushButton("TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.clicked.connect(self.manual_trigger)
         actions.addWidget(self.btn_trigger)
 
-        self.btn_export = QPushButton("📊 Export CSV (dnes)")
+        self.btn_export = QPushButton("Export CSV (dnes)")
         self.btn_export.clicked.connect(self.export_csv_today)
         actions.addWidget(self.btn_export)
 
-        self.btn_wizard_quick = QPushButton("📷 Golden WIZARD")
+        self.btn_wizard_quick = QPushButton("Golden WIZARD")
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
 
