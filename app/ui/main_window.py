@@ -219,7 +219,7 @@ class MainWindow(QMainWindow):
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
         self.live_view.setMinimumSize(640, 360)
-        self.live_view.setMaximumHeight(540)
+        self.live_view.setMaximumHeight(720)
         self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
         self.live_view.setContentsMargins(0,0,0,0)
@@ -227,7 +227,7 @@ class MainWindow(QMainWindow):
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
-        self.side_panel.setMaximumHeight(540)
+        self.side_panel.setMaximumHeight(720)
         self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
         self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
