@@ -44,7 +44,7 @@ from app.ui.camera_profile_utils import (
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("HDF_Vision")
+        self.setWindowTitle("HDF Vision")
         self.mode = "RUN"  # RUN alebo SETUP
 
         # Live režim (RUN):
@@ -92,7 +92,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout(root); root_layout.setContentsMargins(10, 10, 10, 10); root_layout.setSpacing(8)
 
         top = QHBoxLayout(); top.setSpacing(8)
-        title = QLabel("HDF_Vision")
+        title = QLabel("HDF Vision")
         tf = QFont(); tf.setPointSize(14); tf.setBold(True)
         title.setFont(tf)
         top.addWidget(title)
