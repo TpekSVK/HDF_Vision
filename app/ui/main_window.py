@@ -239,6 +239,8 @@ class MainWindow(QMainWindow):
         side.addWidget(self.sb_recipe)
         self.sb_pose = QLabel("Pose alignment: –")
         side.addWidget(self.sb_pose)
+        self.sb_recipe_duration = QLabel("Čas receptu: –")
+        side.addWidget(self.sb_recipe_duration)
 
         # Denné štatistiky
         side.addWidget(QLabel("— Dnes —"))
@@ -511,6 +513,8 @@ class MainWindow(QMainWindow):
                 self._reset_manual_trigger_progress(recipe_name)
 
             last_preview_frame = base_frame
+            self._last_total_cycle_time_ms = None
+            self.sb_recipe_duration.setText("Čas receptu: –")
             trigger_start_ts = time.monotonic()
 
             last_view_id: str | None = None
@@ -940,6 +944,23 @@ class MainWindow(QMainWindow):
             else:
                 state = self._view_states.setdefault("", {})
 
+            if total_cycle_time_ms is not None:
+                state["total_cycle_time_ms"] = total_cycle_time_ms
+                if active_view == self._active_view_id:
+                    self._last_total_cycle_time_ms = total_cycle_time_ms
+
+            recipe_cycle_ms = state.get("total_cycle_time_ms")
+            if recipe_cycle_ms is None and active_view != self._active_view_id:
+                current_state = self._view_states.get(self._active_view_id or "", {})
+                if isinstance(current_state, Mapping):
+                    recipe_cycle_ms = current_state.get("total_cycle_time_ms")
+            if recipe_cycle_ms is None:
+                recipe_cycle_ms = self._last_total_cycle_time_ms
+
+            self.sb_recipe_duration.setText(
+                f"Čas receptu: {self._format_total_test_duration(recipe_cycle_ms)}"
+            )
+
             if per_tool is not None:
                 reports = [dict(entry) for entry in per_tool]
                 state["reports"] = reports
@@ -953,10 +974,6 @@ class MainWindow(QMainWindow):
                 state["cycle_time_ms"] = cycle_time_ms
                 if active_view == self._active_view_id:
                     self._last_cycle_time_ms = cycle_time_ms
-            if total_cycle_time_ms is not None:
-                state["total_cycle_time_ms"] = total_cycle_time_ms
-                if active_view == self._active_view_id:
-                    self._last_total_cycle_time_ms = total_cycle_time_ms
 
             if per_tool is not None:
                 state["combined_metrics"] = self._merge_pipeline_metrics(per_tool)
