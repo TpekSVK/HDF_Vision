@@ -293,11 +293,11 @@ class MainWindow(QMainWindow):
         s = QVBoxLayout(self.panel_setup); s.setSpacing(8)
 
         row1 = QHBoxLayout();
-        self.btn_wizard = QPushButton("🔧 Golden Wizard", self)
+        self.btn_wizard = QPushButton("Golden Wizard", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
-        self.btn_gpio_wizard = QPushButton("🧰 GPIO Wizard", self)
+        self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
         row1.addWidget(self.btn_gpio_wizard)
 
