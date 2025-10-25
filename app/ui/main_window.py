@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
+        self._last_total_cycle_time_ms: float | None = None
         self._last_pipeline_status: str | None = None
         self._tool_selector_items: list[dict[str, Any]] = []
         self._view_states: dict[str, dict[str, Any]] = {}
@@ -416,6 +417,7 @@ class MainWindow(QMainWindow):
                 state.pop("reports", None)
                 state.pop("status", None)
                 state.pop("cycle_time_ms", None)
+                state.pop("total_cycle_time_ms", None)
                 state.pop("combined_metrics", None)
         self._update_metrics_panel()
 
@@ -600,6 +602,7 @@ class MainWindow(QMainWindow):
                         self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
 
                     cycle_time_value = float(result.cycle_time_ms) if result is not None else None
+                    total_cycle_time_value = (time.monotonic() - trigger_start_ts) * 1000.0
 
                     meta_payload = {
                         "mode": "manual",
@@ -607,6 +610,7 @@ class MainWindow(QMainWindow):
                         "view_id": view_id,
                         "view_name": view_name,
                         "cycle_time_ms": cycle_time_value,
+                        "total_cycle_time_ms": total_cycle_time_value,
                         "per_tool": reports,
                         "diagnostics": diagnostics_payload,
                         "metrics": combined_metrics,
@@ -633,6 +637,7 @@ class MainWindow(QMainWindow):
                         per_tool=reports,
                         status=status,
                         cycle_time_ms=cycle_time_value,
+                        total_cycle_time_ms=total_cycle_time_value,
                         view_id=view_id,
                     )
 
@@ -709,6 +714,7 @@ class MainWindow(QMainWindow):
         }]
 
         self._last_cycle_time_ms = None
+        self._last_total_cycle_time_ms = None
         st = self.stats.daily_for_recipe(recipe_name)
         self._update_sidebar(st, legacy_report, status=status)
 
@@ -885,6 +891,7 @@ class MainWindow(QMainWindow):
         *,
         status: str | None = None,
         cycle_time_ms: float | None = None,
+        total_cycle_time_ms: float | None = None,
         view_id: str | None = None,
     ):
         """Naplní pravý panel dennými štatistikami a poslednými metrikami."""
@@ -919,6 +926,10 @@ class MainWindow(QMainWindow):
                 state["cycle_time_ms"] = cycle_time_ms
                 if active_view == self._active_view_id:
                     self._last_cycle_time_ms = cycle_time_ms
+            if total_cycle_time_ms is not None:
+                state["total_cycle_time_ms"] = total_cycle_time_ms
+                if active_view == self._active_view_id:
+                    self._last_total_cycle_time_ms = total_cycle_time_ms
 
             if per_tool is not None:
                 state["combined_metrics"] = self._merge_pipeline_metrics(per_tool)
@@ -966,19 +977,32 @@ class MainWindow(QMainWindow):
             reports = list(state.get("reports", []) or [])
             status = state.get("status")
             cycle_time = state.get("cycle_time_ms")
+            total_cycle_time = state.get("total_cycle_time_ms")
 
             if active_view == self._active_view_id:
                 self._last_tool_reports = reports
                 self._last_pipeline_status = status
-                self._last_cycle_time_ms = cycle_time
+                if cycle_time is not None:
+                    self._last_cycle_time_ms = cycle_time
+                if total_cycle_time is not None:
+                    self._last_total_cycle_time_ms = total_cycle_time
+
+            if not reports:
+                reports = list(self._last_tool_reports or [])
+            if status is None:
+                status = self._last_pipeline_status
+            if cycle_time is None:
+                cycle_time = self._last_cycle_time_ms
+            if total_cycle_time is None:
+                total_cycle_time = self._last_total_cycle_time_ms
 
             selection = self.cmb_tool.currentData()
-            if not reports:
+            if not reports and status is None and cycle_time is None and total_cycle_time is None:
                 self._set_metrics_rows([])
                 return
 
             if selection is None:
-                rows = self._build_summary_rows(reports, status, cycle_time)
+                rows = self._build_summary_rows(reports, status, cycle_time, total_cycle_time)
             else:
                 rows = self._build_tool_metric_rows(selection, reports)
             self._set_metrics_rows(rows)
@@ -990,12 +1014,15 @@ class MainWindow(QMainWindow):
         reports: Sequence[Mapping[str, Any]],
         status: str | None,
         cycle_time_ms: float | None,
+        total_cycle_time_ms: float | None,
     ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         if status:
             rows.append(("Celkový status", str(status).upper()))
         if cycle_time_ms is not None:
             rows.append(("Cyklus [ms]", self._format_metric_value(cycle_time_ms)))
+        if total_cycle_time_ms is not None:
+            rows.append(("Celkový čas testu [ms]", self._format_metric_value(total_cycle_time_ms)))
         for report in reports:
             name = str(report.get("name") or report.get("id") or "Tool")
             status = str(report.get("status") or "").upper() or "—"
