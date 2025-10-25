@@ -1050,6 +1050,62 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             print(f"[Run][DB] Failed to record run result: {exc}")
 
+    def _record_run_result(
+        self,
+        recipe_name: str,
+        *,
+        status: str,
+        metrics: Mapping[str, Any] | None,
+        artifacts: Mapping[str, Any] | None,
+    ) -> None:
+        if not isinstance(artifacts, Mapping):
+            return
+
+        try:
+            rid = self.db.recipe_id(recipe_name)
+            if rid is None:
+                rid = self.db.ensure_recipe(recipe_name)
+        except Exception as exc:
+            print(f"[Run][DB] Failed to resolve recipe '{recipe_name}': {exc}")
+            return
+
+        try:
+            view_id = artifacts.get("view_id")
+            run_id = artifacts.get("run_id")
+            ts_ms = artifacts.get("ts_ms")
+            meta_payload = artifacts.get("meta_payload")
+            if not isinstance(meta_payload, Mapping):
+                meta_payload = {}
+
+            meta_dict = {str(k): v for k, v in dict(meta_payload).items()}
+            if ts_ms is None:
+                ts_ms = int(time.time() * 1000)
+            meta_dict.setdefault("ts_ms", ts_ms)
+            meta_dict.setdefault("status", status)
+            meta_dict.setdefault("recipe", recipe_name)
+            meta_dict.setdefault("nok", status != "ok")
+            if view_id is not None:
+                meta_dict.setdefault("view_id", view_id)
+            if run_id is not None:
+                meta_dict.setdefault("run_id", run_id)
+
+            thumb_path = artifacts.get("thumb") or ""
+            full_path = artifacts.get("full")
+
+            self.db.insert_result(
+                ts_ms=int(ts_ms),
+                recipe_id=int(rid),
+                ok=str(status).lower() == "ok",
+                metrics=dict(metrics or {}),
+                thumb_path=str(thumb_path),
+                full_path=str(full_path) if full_path else None,
+                meta_json=json.dumps(meta_dict, ensure_ascii=False),
+                view_id=view_id,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            print(f"[Run][DB] Failed to record run result: {exc}")
+
     def _update_metrics_panel(self):
         try:
             active_view = self._active_view_id or ""
