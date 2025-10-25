@@ -234,6 +234,8 @@ def save_production_result(
         "thumb": str(fthumb),
         "full": str(ffull) if do_full else None,
         "meta": str(fmeta),
+        "meta_payload": meta_payload,
+        "ts_ms": ts,
         "view_id": view_key,
         "run_id": str(run_id) if run_id else None,
     }
