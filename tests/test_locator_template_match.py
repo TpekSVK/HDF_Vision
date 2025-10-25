@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 
+import math
 import numpy as np
 import pytest
 
@@ -48,9 +49,11 @@ def test_run_locator_template_match_returns_expected_translation():
     assert run_result.status == "ok"
     assert run_result.metrics["dx"] == pytest.approx(2.0, abs=1e-3)
     assert run_result.metrics["dy"] == pytest.approx(3.0, abs=1e-3)
+    assert run_result.metrics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     assert "latency_ms" in run_result.metrics
     assert run_result.metrics["latency_ms"] >= 0.0
     assert diagnostics["latency_ms"] >= 0.0
+    assert diagnostics["theta_deg"] == pytest.approx(0.0, abs=1e-3)
     expected_T = np.array([[1.0, 0.0, 2.0], [0.0, 1.0, 3.0]], dtype=np.float32)
     assert np.allclose(diagnostics["T"], expected_T)
 
@@ -69,6 +72,7 @@ def test_run_locator_template_match_clamps_out_of_bounds_roi():
 
     assert run_result.metrics["dx"] == pytest.approx(0.0)
     assert run_result.metrics["dy"] == pytest.approx(0.0)
+    assert run_result.metrics["theta_deg"] == pytest.approx(0.0)
     assert run_result.status == "warn"
     assert "latency_ms" in run_result.metrics
     assert run_result.metrics["latency_ms"] >= 0.0
@@ -104,6 +108,40 @@ def test_locator_status_respects_threshold(threshold: float, expected_status: st
     assert "latency_ms" in run_result.metrics
     assert diagnostics["latency_ms"] >= 0.0
 
+
+def test_locator_template_match_detects_rotation() -> None:
+    golden = np.zeros((40, 40), dtype=np.uint8)
+    block = np.arange(64, dtype=np.uint8).reshape(8, 8)
+    golden[12:20, 16:24] = block
+
+    center = (golden.shape[1] / 2.0, golden.shape[0] / 2.0)
+    angle_deg = 12.0
+    rot = cv2.getRotationMatrix2D(center, angle_deg, 1.0)
+    frame = cv2.warpAffine(golden, rot, golden.shape[::-1], flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
+
+    params = {
+        "use_golden_crop": True,
+        "coarse_cap": 64,
+        "rotation_enabled": True,
+        "angle_range_deg": 15.0,
+        "angle_step_deg": 1.0,
+    }
+    thresholds = {"threshold_corr": 0.1}
+    search_roi = {"x": 0, "y": 0, "w": 40, "h": 40}
+
+    run_result, diagnostics = run_locator_template_match(
+        golden, frame, params, thresholds, search_roi
+    )
+
+    assert run_result.status == "ok"
+    assert run_result.metrics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
+    assert diagnostics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
+    assert run_result.metrics["dx"] == pytest.approx(0.0, abs=2.0)
+    assert run_result.metrics["dy"] == pytest.approx(0.0, abs=2.0)
+    cos_t = math.cos(math.radians(diagnostics["theta_deg"]))
+    sin_t = math.sin(math.radians(diagnostics["theta_deg"]))
+    expected_T = np.array([[cos_t, -sin_t, run_result.metrics["dx"]], [sin_t, cos_t, run_result.metrics["dy"]]])
+    assert np.allclose(diagnostics["T"], expected_T, atol=1e-1)
 
 def test_locator_template_cache_reuses_downsample(monkeypatch) -> None:
     tool = LocatorTemplateMatchTool()
