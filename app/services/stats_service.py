@@ -60,9 +60,9 @@ class StatsService:
         if not isinstance(raw, dict):
             return StatsService._default_summary()
 
-        total = _as_int(raw.get("total", 0))
-        ok = _as_int(raw.get("ok", raw.get("pass", 0)))
-        nok = _as_int(raw.get("nok", raw.get("fail", 0)))
+        total = _as_int(raw.get("total", raw.get("total_count", 0)))
+        ok = _as_int(raw.get("ok", raw.get("pass", raw.get("ok_count", 0))))
+        nok = _as_int(raw.get("nok", raw.get("fail", raw.get("nok_count", 0))))
         total_cycle_time_ms = _as_float(
             raw.get("total_cycle_time_ms", raw.get("total_test_duration_ms", 0.0))
         )
