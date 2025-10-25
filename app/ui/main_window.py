@@ -48,6 +48,8 @@ class MainWindow(QMainWindow):
         # Live režim (RUN):
         self.live_enabled = False
         self._last_trigger_frame = None
+        self._last_trigger_view_id: str | None = None
+        self._last_trigger_frames: dict[str, Any] = {}
 
         # Kamera
         self.cam = CameraService()
@@ -500,6 +502,8 @@ class MainWindow(QMainWindow):
             last_preview_frame = base_frame
             trigger_start_ts = time.monotonic()
 
+            last_view_id: str | None = None
+
             try:
                 for spec in views_to_process:
                     view = spec["view"]
@@ -621,6 +625,9 @@ class MainWindow(QMainWindow):
                         view_id=view_id,
                     )
 
+                    self._set_last_view_frame(view_id, last_preview_frame)
+                    last_view_id = view_id
+
                     self.view_strip.set_status(view_id, status)
                     self._update_sidebar(
                         per_tool=reports,
@@ -649,18 +656,18 @@ class MainWindow(QMainWindow):
             )
             self.gpio.signal_result(aggregated_status)
 
-            self._last_trigger_frame = last_preview_frame.copy()
+            active_frame = self._get_last_frame_for_view(self._active_view_id)
+            if active_frame is not None:
+                self._last_trigger_frame = self._clone_frame(active_frame)
+                self._last_trigger_view_id = self._active_view_id
+            else:
+                self._last_trigger_frame = self._clone_frame(last_preview_frame)
+                self._last_trigger_view_id = last_view_id
 
             self._reload_results_strip()
 
-            if not self.live_enabled and self._last_trigger_frame is not None:
-                img = self._last_trigger_frame
-                if self.chk_heatmap.isChecked():
-                    try:
-                        img = self._make_heatmap_overlay(img)
-                    except Exception:
-                        pass
-                self._show_gray_or_bgr(self.live_view, img)
+            if not self.live_enabled:
+                self._update_live_view()
 
         except Exception:
             self.gpio.signal_result("nok")
@@ -677,7 +684,14 @@ class MainWindow(QMainWindow):
             metrics = {}
             status = "nok"
 
-        self._last_trigger_frame = frame_u8.copy() if isinstance(frame_u8, np.ndarray) else frame_u8
+        self._set_last_view_frame(None, frame_u8)
+        active_frame = self._get_last_frame_for_view(self._active_view_id)
+        if active_frame is not None:
+            self._last_trigger_frame = self._clone_frame(active_frame)
+            self._last_trigger_view_id = self._active_view_id
+        else:
+            self._last_trigger_frame = self._clone_frame(frame_u8)
+            self._last_trigger_view_id = None
 
         color = "#33dd66" if status == "ok" else "#ff3366"
         self.lbl_status.setText(status.upper())
@@ -715,14 +729,8 @@ class MainWindow(QMainWindow):
 
         self._reload_results_strip()
 
-        if not self.live_enabled and self._last_trigger_frame is not None:
-            img = self._last_trigger_frame
-            if self.chk_heatmap.isChecked():
-                try:
-                    img = self._make_heatmap_overlay(img)
-                except Exception:
-                    pass
-            self._show_gray_or_bgr(self.live_view, img)
+        if not self.live_enabled:
+            self._update_live_view()
 
     def open_wizard(self):
         dlg = GoldenWizard(self.cam, self.recipes, self)
@@ -756,15 +764,7 @@ class MainWindow(QMainWindow):
             self._run_timer.start()
         else:
             self._run_timer.stop()
-            # po vypnutí live zobraz posledný manuálny trigger, ak existuje
-            if self._last_trigger_frame is not None:
-                img = self._last_trigger_frame
-                if self.chk_heatmap.isChecked():
-                    try:
-                        img = self._make_heatmap_overlay(img)
-                    except Exception:
-                        pass
-                self._show_gray_or_bgr(self.live_view, img)
+            self._update_live_view()
 
     def _handle_gpio_trigger(self):
         QTimer.singleShot(0, self.manual_trigger)
@@ -775,8 +775,17 @@ class MainWindow(QMainWindow):
             if self.live_enabled:
                 src = self.cam.last_frame()
             else:
-                src = self._last_trigger_frame
+                src = self._get_last_frame_for_view(self._active_view_id)
+                if (
+                    src is None
+                    and self._last_trigger_frame is not None
+                    and self._view_storage_key(self._last_trigger_view_id)
+                    == self._view_storage_key(self._active_view_id)
+                ):
+                    src = self._last_trigger_frame
             if src is None:
+                self.live_view.clear()
+                self.live_view.setText("— aktuálny záber —")
                 return
             img = src
             if self.chk_heatmap.isChecked():
@@ -843,6 +852,31 @@ class MainWindow(QMainWindow):
         base = cv2.cvtColor(frame_u8, cv2.COLOR_GRAY2BGR)
         out = cv2.addWeighted(base, 0.55, heat, 0.45, 0.0)
         return out
+
+    def _view_storage_key(self, view_id: str | None) -> str:
+        return view_id or ""
+
+    def _set_last_view_frame(self, view_id: str | None, frame: Any) -> None:
+        if frame is None:
+            return
+        stored = frame.copy() if isinstance(frame, np.ndarray) else frame
+        key = self._view_storage_key(view_id)
+        self._last_trigger_frames[key] = stored
+        if view_id == self._active_view_id:
+            self._last_trigger_frame = stored
+            self._last_trigger_view_id = view_id
+
+    def _get_last_frame_for_view(self, view_id: str | None):
+        key = self._view_storage_key(view_id)
+        frame = self._last_trigger_frames.get(key)
+        if frame is None and key and "" in self._last_trigger_frames:
+            frame = self._last_trigger_frames.get("")
+        return frame
+
+    def _clone_frame(self, frame: Any):
+        if frame is None:
+            return None
+        return frame.copy() if isinstance(frame, np.ndarray) else frame
 
     def _update_sidebar(
         self,
@@ -1180,6 +1214,14 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
         self._update_sidebar(view_id=view_id)
         self._reload_results_strip()
+        frame = self._get_last_frame_for_view(view_id)
+        if frame is not None:
+            self._last_trigger_frame = self._clone_frame(frame)
+            self._last_trigger_view_id = view_id
+        else:
+            self._last_trigger_view_id = None
+        if not self.live_enabled:
+            self._update_live_view()
 
     def _refresh_tool_selector(self):
         try:
