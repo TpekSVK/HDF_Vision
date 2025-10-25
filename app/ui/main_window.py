@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
+import json
 import math
 from pathlib import Path
 import time
@@ -626,7 +627,7 @@ class MainWindow(QMainWindow):
                     if policy_applied:
                         meta_payload["policy_applied"] = policy_applied
 
-                    save_production_result(
+                    artifacts = save_production_result(
                         view_frame_u8,
                         meta_payload,
                         recipe_name,
@@ -634,6 +635,13 @@ class MainWindow(QMainWindow):
                         nok=status != "ok",
                         run_id=run_id,
                         view_id=view_id,
+                    )
+
+                    self._record_run_result(
+                        recipe_name,
+                        status=status,
+                        metrics=combined_metrics,
+                        artifacts=artifacts,
                     )
 
                     self._set_last_view_frame(view_id, last_preview_frame)
@@ -732,12 +740,19 @@ class MainWindow(QMainWindow):
             "per_tool": legacy_report,
         }
 
-        save_production_result(
+        artifacts = save_production_result(
             frame_u8,
             meta_payload,
             recipe_name,
             store_full_nok=True,
             nok=status != "ok",
+        )
+
+        self._record_run_result(
+            recipe_name,
+            status=status,
+            metrics=metrics,
+            artifacts=artifacts,
         )
 
         self._reload_results_strip()
@@ -978,8 +993,62 @@ class MainWindow(QMainWindow):
                 self.metrics_layout.addWidget(name_label, row_index, 0)
                 self.metrics_layout.addWidget(value_label, row_index, 1)
                 self._metrics_widgets.extend([name_label, value_label])
-        except Exception:
-            pass
+
+    def _record_run_result(
+        self,
+        recipe_name: str,
+        *,
+        status: str,
+        metrics: Mapping[str, Any] | None,
+        artifacts: Mapping[str, Any] | None,
+    ) -> None:
+        if not isinstance(artifacts, Mapping):
+            return
+
+        try:
+            rid = self.db.recipe_id(recipe_name)
+            if rid is None:
+                rid = self.db.ensure_recipe(recipe_name)
+        except Exception as exc:
+            print(f"[Run][DB] Failed to resolve recipe '{recipe_name}': {exc}")
+            return
+
+        try:
+            view_id = artifacts.get("view_id")
+            run_id = artifacts.get("run_id")
+            ts_ms = artifacts.get("ts_ms")
+            meta_payload = artifacts.get("meta_payload")
+            if not isinstance(meta_payload, Mapping):
+                meta_payload = {}
+
+            meta_dict = {str(k): v for k, v in dict(meta_payload).items()}
+            if ts_ms is None:
+                ts_ms = int(time.time() * 1000)
+            meta_dict.setdefault("ts_ms", ts_ms)
+            meta_dict.setdefault("status", status)
+            meta_dict.setdefault("recipe", recipe_name)
+            meta_dict.setdefault("nok", status != "ok")
+            if view_id is not None:
+                meta_dict.setdefault("view_id", view_id)
+            if run_id is not None:
+                meta_dict.setdefault("run_id", run_id)
+
+            thumb_path = artifacts.get("thumb") or ""
+            full_path = artifacts.get("full")
+
+            self.db.insert_result(
+                ts_ms=int(ts_ms),
+                recipe_id=int(rid),
+                ok=str(status).lower() == "ok",
+                metrics=dict(metrics or {}),
+                thumb_path=str(thumb_path),
+                full_path=str(full_path) if full_path else None,
+                meta_json=json.dumps(meta_dict, ensure_ascii=False),
+                view_id=view_id,
+                run_id=run_id,
+            )
+        except Exception as exc:
+            print(f"[Run][DB] Failed to record run result: {exc}")
 
     def _update_metrics_panel(self):
         try:
