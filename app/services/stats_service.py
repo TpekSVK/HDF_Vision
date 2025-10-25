@@ -14,6 +14,7 @@ class StatsService:
             "ok": int,
             "nok": int,
             "yield": float,   # 0.0..1.0
+            "total_cycle_time_ms": float,
         }
     """
 
@@ -48,7 +49,7 @@ class StatsService:
 
     @staticmethod
     def _default_summary() -> Dict[str, Any]:
-        return {"total": 0, "ok": 0, "nok": 0, "yield": 0.0}
+        return {"total": 0, "ok": 0, "nok": 0, "yield": 0.0, "total_cycle_time_ms": 0.0}
 
     @staticmethod
     def _normalize_summary(raw: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -62,6 +63,9 @@ class StatsService:
         total = _as_int(raw.get("total", 0))
         ok = _as_int(raw.get("ok", raw.get("pass", 0)))
         nok = _as_int(raw.get("nok", raw.get("fail", 0)))
+        total_cycle_time_ms = _as_float(
+            raw.get("total_cycle_time_ms", raw.get("total_test_duration_ms", 0.0))
+        )
 
         # Ak DB nepočítala total, spočítame ho z ok+nok (ale neprepíšeme nenulové total z DB)
         if total <= 0:
@@ -82,6 +86,7 @@ class StatsService:
             "ok": int(ok),
             "nok": int(nok),
             "yield": round(float(y), 4),
+            "total_cycle_time_ms": max(0.0, float(total_cycle_time_ms)),
         }
 
 
@@ -90,6 +95,13 @@ class StatsService:
 def _as_int(x: Any, default: int = 0) -> int:
     try:
         return int(x)
+    except Exception:
+        return default
+
+
+def _as_float(x: Any, default: float = 0.0) -> float:
+    try:
+        return float(x)
     except Exception:
         return default
 
