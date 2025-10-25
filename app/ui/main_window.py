@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
-    QStackedWidget, QFrame, QScrollArea, QCheckBox, QToolButton, QSizePolicy, QGridLayout
+    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
@@ -27,7 +27,6 @@ from app.ui.gpio_wizard import GPIOWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
-from app.ui.results_strip import ResultsStrip
 from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
@@ -203,6 +202,7 @@ class MainWindow(QMainWindow):
         self.view_strip = ViewStrip(on_view_selected=self._on_view_selected_view)
         view_strip_layout.addWidget(self.view_strip)
         run.addWidget(view_strip_container)
+        self.strip = None
 
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
@@ -261,28 +261,6 @@ class MainWindow(QMainWindow):
         preview_row.addWidget(self.side_panel, 1)
 
         run.addWidget(preview_container)
-
-        # deliaca čiara
-        line2 = QFrame(); line2.setFrameShape(QFrame.HLine); line2.setFrameShadow(QFrame.Sunken)
-        run.addWidget(line2)
-
-        # Strip v scroll area (minimalistické okraje)
-        strip_header = QHBoxLayout()
-        self.btn_strip_toggle = QToolButton()
-        self.btn_strip_toggle.setText("▾ Posledné snímky")
-        self.btn_strip_toggle.clicked.connect(self._toggle_strip)
-        strip_header.addWidget(self.btn_strip_toggle)
-        strip_header.addStretch(1)
-        run.addLayout(strip_header)
-
-        self.scroll = QScrollArea(); self.scroll.setWidgetResizable(True)
-        self.scroll.setStyleSheet("QScrollArea{background-color:#181818; border: none;} ")
-        strip_wrap = QWidget(); strip_layout = QVBoxLayout(strip_wrap); strip_layout.setContentsMargins(6,6,6,6)
-        self.strip = ResultsStrip(self, limit=12)
-        self.strip.setStyleSheet("QLabel{border:1px solid #333; border-radius:4px;} ")
-        strip_layout.addWidget(self.strip)
-        self.scroll.setWidget(strip_wrap)
-        run.addWidget(self.scroll, 1)
 
         # timer pre RUN live view refresh
         self._run_timer = QTimer(self)
@@ -673,7 +651,7 @@ class MainWindow(QMainWindow):
 
             self._last_trigger_frame = last_preview_frame.copy()
 
-            self.strip.reload()
+            self._reload_results_strip()
 
             if not self.live_enabled and self._last_trigger_frame is not None:
                 img = self._last_trigger_frame
@@ -735,7 +713,7 @@ class MainWindow(QMainWindow):
             nok=status != "ok",
         )
 
-        self.strip.reload()
+        self._reload_results_strip()
 
         if not self.live_enabled and self._last_trigger_frame is not None:
             img = self._last_trigger_frame
@@ -752,7 +730,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
-        self.strip.reload()
+        self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
 
@@ -762,11 +740,14 @@ class MainWindow(QMainWindow):
         dlg.resize(720, 520)
         dlg.exec()
 
-    def _toggle_strip(self):
-        # minimalizácia / rozbalenie výsledkového stripu
-        is_visible = self.scroll.isVisible()
-        self.scroll.setVisible(not is_visible)
-        self.btn_strip_toggle.setText("▾ Posledné snímky" if not is_visible else "▸ Posledné snímky")
+    def _reload_results_strip(self) -> None:
+        strip = getattr(self, "strip", None)
+        if strip is None:
+            return
+        try:
+            strip.reload()
+        except Exception:
+            pass
 
     def _toggle_live(self):
         self.live_enabled = self.btn_live.isChecked()
@@ -1198,10 +1179,7 @@ class MainWindow(QMainWindow):
         self.view_strip.set_active(view_id)
         self._refresh_tool_selector()
         self._update_sidebar(view_id=view_id)
-        try:
-            self.strip.reload()
-        except Exception:
-            pass
+        self._reload_results_strip()
 
     def _refresh_tool_selector(self):
         try:
@@ -1257,10 +1235,7 @@ class MainWindow(QMainWindow):
 
     def _on_tool_selection_changed(self):
         self._update_metrics_panel()
-        try:
-            self.strip.reload()
-        except Exception:
-            pass
+        self._reload_results_strip()
 
     def _maximize_and_lock(self):
         try:
@@ -1298,7 +1273,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("Recipe loaded.")
             # refresh štatistík + strip
             st = self.stats.daily_for_recipe(name, view_id=self._active_view_id)
-            self.strip.reload()
+            self._reload_results_strip()
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
@@ -1318,7 +1293,7 @@ class MainWindow(QMainWindow):
         self.tool = self.recipes.tool
         self._refresh_views()
         self._reset_manual_trigger_progress(name)
-        self.strip.reload()
+        self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe(name)
@@ -1338,7 +1313,7 @@ class MainWindow(QMainWindow):
         self.tool = self.recipes.tool
         self._refresh_views()
         self._reset_manual_trigger_progress(new)
-        self.strip.reload()
+        self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe(new)
@@ -1360,7 +1335,7 @@ class MainWindow(QMainWindow):
         self.tool = self.recipes.tool
         self._refresh_views()
         self._reset_manual_trigger_progress("default")
-        self.strip.reload()
+        self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
         self.gpio.set_active_recipe("default")
