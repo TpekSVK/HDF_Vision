@@ -254,7 +254,7 @@ def _register_default_tools() -> None:
                 "params": {
                     "use_golden_crop": {
                         "type": "bool",
-                        "default": True,
+                        "default": False,
                         "description": "Použiť golden snapshot ako šablónu bez manuálneho výrezu.",
                     },
                     "coarse_to_fine": {
