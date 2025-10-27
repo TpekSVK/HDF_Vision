@@ -210,7 +210,23 @@ class ViewConfigDialog(QDialog):
         self._id_label = QLabel(view_id, basic_group)
         self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         basic_form.addRow("Name:", self._name_edit)
+        name_hint = self._create_description_label(
+            "Názov view-u, ktorý sa zobrazí v prehľade Golden Wizardu aj v multi-view."
+            " Uľahčuje prepínanie medzi náhľadmi, preto by mal byť v rámci receptu"
+            " jedinečný.",
+            basic_group,
+        )
+        self._name_edit.setToolTip(name_hint.text())
+        basic_form.addRow(name_hint)
+
         basic_form.addRow("ID:", self._id_label)
+        id_hint = self._create_description_label(
+            "Nemenné systémové ID view-u. Používa sa pri ukladaní golden dát a"
+            " synchronizácii v multi-view, preto sa nemení ani pri premenovaní.",
+            basic_group,
+        )
+        self._id_label.setToolTip(id_hint.text())
+        basic_form.addRow(id_hint)
         layout.addWidget(basic_group)
 
         camera_group = QGroupBox("Kamera profil (voliteľná)", self)
@@ -220,6 +236,14 @@ class ViewConfigDialog(QDialog):
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
         camera_form.addRow("Resolution:", self._resolution_combo)
+        resolution_hint = self._create_description_label(
+            "Rozlíšenie, snímková frekvencia a pixel formát pre tento view."
+            " Voľba „Inherit“ ponechá parametre z globálnej kamery alebo z"
+            " multi-view profilu; konkrétna voľba ovplyvní iba aktuálny view.",
+            camera_group,
+        )
+        self._resolution_combo.setToolTip(resolution_hint.text())
+        camera_form.addRow(resolution_hint)
 
         self._exposure_edit = QLineEdit(camera_group)
         self._exposure_edit.setPlaceholderText("Leave blank to inherit")
@@ -230,8 +254,34 @@ class ViewConfigDialog(QDialog):
         self._pixel_format_combo.addItem("Y8", "Y8")
         self._pixel_format_combo.addItem("Y12", "Y12")
         camera_form.addRow("Exposure [µs]:", self._exposure_edit)
+        exposure_hint = self._create_description_label(
+            "Prepíše expozičný čas kamery len pre tento view. Prázdna hodnota"
+            " znamená zdedenie aktuálneho nastavenia; v multi-view sa použije"
+            " vždy pri aktivácii tohto view.",
+            camera_group,
+        )
+        self._exposure_edit.setToolTip(exposure_hint.text())
+        camera_form.addRow(exposure_hint)
+
         camera_form.addRow("Gain [dB]:", self._gain_edit)
+        gain_hint = self._create_description_label(
+            "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
+            " hodnotu z kamery; v multi-view má každé view vlastnú uloženú"
+            " kombináciu.",
+            camera_group,
+        )
+        self._gain_edit.setToolTip(gain_hint.text())
+        camera_form.addRow(gain_hint)
+
         camera_form.addRow("Pixel Format:", self._pixel_format_combo)
+        pixel_hint = self._create_description_label(
+            "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
+            " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
+            " ovplyvní iba aktuálny view.",
+            camera_group,
+        )
+        self._pixel_format_combo.setToolTip(pixel_hint.text())
+        camera_form.addRow(pixel_hint)
         layout.addWidget(camera_group)
 
         timing_group = QGroupBox("Časovanie snímania", self)
@@ -241,6 +291,14 @@ class ViewConfigDialog(QDialog):
         self._settle_edit = QLineEdit(timing_group)
         self._settle_edit.setPlaceholderText("Leave blank to inherit")
         timing_form.addRow("Settle Time (ms):", self._settle_edit)
+        settle_hint = self._create_description_label(
+            "Čas na ustálenie kamery po prepnutí do view pred zachytením"
+            " snímky. Prázdne = zdedená hodnota; v multi-view sa dodrží pri"
+            " každom cykle, keď sa view aktivuje.",
+            timing_group,
+        )
+        self._settle_edit.setToolTip(settle_hint.text())
+        timing_form.addRow(settle_hint)
 
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Timed", "timed")
@@ -250,10 +308,26 @@ class ViewConfigDialog(QDialog):
             self._on_trigger_mode_changed
         )
         timing_form.addRow("Trigger Mode:", self._trigger_mode_combo)
+        trigger_hint = self._create_description_label(
+            "Určuje, ako sa spúšťa snímanie: Timed používa interný časovač"
+            " (v multi-view beží v cykle), External čaká na hardvérový impulz"
+            " a Manual vyžaduje ručné spustenie cez test/Golden.",
+            timing_group,
+        )
+        self._trigger_mode_combo.setToolTip(trigger_hint.text())
+        timing_form.addRow(trigger_hint)
 
         self._interval_edit = QLineEdit(timing_group)
         self._interval_edit.setPlaceholderText("Required for Timed mode")
         timing_form.addRow("Interval (ms):", self._interval_edit)
+        interval_hint = self._create_description_label(
+            "Interval medzi snímkami v režime Timed. V multi-view určuje, ako"
+            " často sa tento view sníma; ostatné view pokračujú podľa svojich"
+            " nastavení.",
+            timing_group,
+        )
+        self._interval_edit.setToolTip(interval_hint.text())
+        timing_form.addRow(interval_hint)
         layout.addWidget(timing_group)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
@@ -267,6 +341,14 @@ class ViewConfigDialog(QDialog):
 
         self._apply_initial_profile(camera_profile)
         self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms)
+
+    @staticmethod
+    def _create_description_label(text: str, parent: QWidget) -> QLabel:
+        label = QLabel(text, parent)
+        label.setWordWrap(True)
+        label.setStyleSheet("color: #5b5b5b; font-size: 11px;")
+        label.setContentsMargins(0, 0, 0, 6)
+        return label
 
     def view_id(self) -> str:
         return self._view_id
