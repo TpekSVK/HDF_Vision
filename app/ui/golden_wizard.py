@@ -321,8 +321,8 @@ class ViewConfigDialog(QDialog):
         self._interval_edit.setPlaceholderText("Required for Timed mode")
         timing_form.addRow("Interval (ms):", self._interval_edit)
         interval_hint = self._create_description_label(
-            "Interval medzi snímkami v režime Timed. V multi-view určuje, ako"
-            " často sa tento view sníma; ostatné view pokračujú podľa svojich"
+            "Interval po dokončení snímky v režime Timed. V multi-view určuje, ako"
+            " o koľko neskôr sa spustí ďalší view; ostatné view pokračujú podľa svojich"
             " nastavení.",
             timing_group,
         )

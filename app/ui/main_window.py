@@ -545,12 +545,6 @@ class MainWindow(QMainWindow):
                     trigger_mode = spec["trigger_mode"]
                     interval_ms = spec["interval_ms"]
 
-                    if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
-                        target_time = trigger_start_ts + (interval_ms / 1000.0)
-                        now = time.monotonic()
-                        if now < target_time:
-                            time.sleep(target_time - now)
-
                     if settle_ms is not None and settle_ms > 0:
                         time.sleep(settle_ms / 1000.0)
 
@@ -661,7 +655,12 @@ class MainWindow(QMainWindow):
                         view_id=view_id,
                     )
 
-                    if fail_fast and status == "nok":
+                    should_break = bool(fail_fast and status == "nok")
+
+                    if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
+                        time.sleep(interval_ms / 1000.0)
+
+                    if should_break:
                         break
             finally:
                 try:
