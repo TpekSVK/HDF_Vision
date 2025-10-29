@@ -129,6 +129,9 @@ class ToolEditDialog(QDialog):
         self._roi_editor: Optional[ROIEditor] = ROIEditor(self) if self._supports_roi else None
         self._mask_editor: Optional[MaskEditor] = MaskEditor(self) if self._supports_mask else None
 
+        if self._roi_editor is not None and self._mask_editor is not None:
+            self._roi_editor.roiChanged.connect(self._mask_editor.set_roi_overlay)
+
         if self._roi_editor is not None:
             self._roi_editor.setMinimumSize(
                 _ROI_MASK_SECTION_MIN_WIDTH, _ROI_MASK_SECTION_MIN_HEIGHT
@@ -290,6 +293,9 @@ class ToolEditDialog(QDialog):
                 initial_mask = None
         elif self._tool.ignore_mask.value is not None:
             initial_mask = np.asarray(self._tool.ignore_mask.value)
+
+        if self._mask_editor is not None:
+            self._mask_editor.set_roi_overlay(initial_roi)
 
         if self._golden_pixmap is not None:
             if self._roi_editor is not None:
