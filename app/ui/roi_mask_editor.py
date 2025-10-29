@@ -377,7 +377,7 @@ class _MaskView(_ImageView):
     MODE_BRUSH_ERASE = "brush_erase"
     MODE_POLYGON = "polygon"
     MODE_SHAPE_CIRCLE = "shape_circle"
-    MODE_SHAPE_SQUARE = "shape_square"
+    MODE_SHAPE_RECTANGLE = "shape_rectangle"
 
     FILL_INSIDE = "inside"
     FILL_AROUND = "around"
@@ -432,7 +432,7 @@ class _MaskView(_ImageView):
             self.MODE_BRUSH_ERASE,
             self.MODE_POLYGON,
             self.MODE_SHAPE_CIRCLE,
-            self.MODE_SHAPE_SQUARE,
+            self.MODE_SHAPE_RECTANGLE,
         }
         if mode not in allowed:
             return
@@ -445,7 +445,7 @@ class _MaskView(_ImageView):
         if self._mode == self.MODE_SHAPE_CIRCLE:
             self._circle_points.clear()
             self._remove_shape_preview()
-        if self._mode == self.MODE_SHAPE_SQUARE:
+        if self._mode == self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
             self._remove_shape_preview()
 
@@ -458,9 +458,9 @@ class _MaskView(_ImageView):
             self._remove_polygon_item()
         if self._mode != self.MODE_SHAPE_CIRCLE:
             self._circle_points.clear()
-        if self._mode != self.MODE_SHAPE_SQUARE:
+        if self._mode != self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
-        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_RECTANGLE):
             self._remove_shape_preview()
 
     def set_fill_mode(self, fill_mode: str) -> None:
@@ -580,7 +580,7 @@ class _MaskView(_ImageView):
                     self._update_shape_preview(None)
                 event.accept()
                 return
-            if self._mode == self.MODE_SHAPE_SQUARE:
+            if self._mode == self.MODE_SHAPE_RECTANGLE:
                 self._shape_start = scene_pos
                 self._update_shape_preview(scene_pos)
                 event.accept()
@@ -611,7 +611,7 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
-        if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_SQUARE:
+        if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
             self._remove_shape_preview()
             event.accept()
@@ -632,7 +632,7 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
-        if self._mode == self.MODE_SHAPE_SQUARE and self._shape_start is not None:
+        if self._mode == self.MODE_SHAPE_RECTANGLE and self._shape_start is not None:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
             self._update_shape_preview(scene_pos)
             event.accept()
@@ -648,7 +648,7 @@ class _MaskView(_ImageView):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
         if (
-            self._mode == self.MODE_SHAPE_SQUARE
+            self._mode == self.MODE_SHAPE_RECTANGLE
             and self._shape_start is not None
             and event.button() == Qt.LeftButton
         ):
@@ -656,7 +656,7 @@ class _MaskView(_ImageView):
             start = self._shape_start
             self._shape_start = None
             self._remove_shape_preview()
-            self._apply_square(start, scene_pos)
+            self._apply_rectangle(start, scene_pos)
             event.accept()
             return
 
@@ -755,15 +755,8 @@ class _MaskView(_ImageView):
             self.scene().removeItem(self._shape_preview_item)
             self._shape_preview_item = None
 
-    def _square_rect_from_points(self, start: QPointF, end: QPointF) -> QRectF:
-        dx = end.x() - start.x()
-        dy = end.y() - start.y()
-        side = max(abs(dx), abs(dy))
-        if side <= 0:
-            return QRectF()
-        x0 = start.x() - side if dx < 0 else start.x()
-        y0 = start.y() - side if dy < 0 else start.y()
-        rect = QRectF(QPointF(x0, y0), QPointF(x0 + side, y0 + side))
+    def _rectangle_rect_from_points(self, start: QPointF, end: QPointF) -> QRectF:
+        rect = QRectF(start, end)
         return rect.normalized()
 
     def _update_shape_preview(self, current: Optional[QPointF]) -> None:
@@ -772,10 +765,10 @@ class _MaskView(_ImageView):
         if self._mode == self.MODE_SHAPE_CIRCLE:
             self._update_circle_preview(current)
             return
-        if self._mode != self.MODE_SHAPE_SQUARE or self._shape_start is None or current is None:
+        if self._mode != self.MODE_SHAPE_RECTANGLE or self._shape_start is None or current is None:
             self._remove_shape_preview()
             return
-        rect = self._square_rect_from_points(self._shape_start, current)
+        rect = self._rectangle_rect_from_points(self._shape_start, current)
         if rect.isNull() or rect.width() < 1 or rect.height() < 1:
             self._remove_shape_preview()
             return
@@ -842,10 +835,10 @@ class _MaskView(_ImageView):
             self._shape_preview_item.setPath(path)
         self._shape_preview_item.setVisible(True)
 
-    def _apply_square(self, start: QPointF, end: QPointF) -> None:
+    def _apply_rectangle(self, start: QPointF, end: QPointF) -> None:
         if self._mask is None:
             return
-        rect = self._square_rect_from_points(start, end)
+        rect = self._rectangle_rect_from_points(start, end)
         if rect.isNull() or rect.width() < 1 or rect.height() < 1:
             return
 
@@ -1198,11 +1191,11 @@ class MaskEditor(QWidget):
         self._btn_circle.setToolTip("Click three points to define a circle")
         self._mode_group.addButton(self._btn_circle)
 
-        self._btn_square = QToolButton(self)
-        self._btn_square.setText("Square")
-        self._btn_square.setCheckable(True)
-        self._btn_square.setToolTip("Click and drag to draw a square")
-        self._mode_group.addButton(self._btn_square)
+        self._btn_rectangle = QToolButton(self)
+        self._btn_rectangle.setText("Rectangle")
+        self._btn_rectangle.setCheckable(True)
+        self._btn_rectangle.setToolTip("Click and drag to draw a rectangle")
+        self._mode_group.addButton(self._btn_rectangle)
 
         self._btn_brush_add.setChecked(True)
 
@@ -1255,7 +1248,7 @@ class MaskEditor(QWidget):
         toolbar_top.addWidget(self._btn_brush_erase)
         toolbar_top.addWidget(self._btn_polygon)
         toolbar_top.addWidget(self._btn_circle)
-        toolbar_top.addWidget(self._btn_square)
+        toolbar_top.addWidget(self._btn_rectangle)
         toolbar_top.addSpacing(12)
         toolbar_top.addWidget(self._fill_label)
         toolbar_top.addWidget(self._fill_combo)
@@ -1339,7 +1332,7 @@ class MaskEditor(QWidget):
         elif self._btn_circle.isChecked():
             mode = self._view.MODE_SHAPE_CIRCLE
         else:
-            mode = self._view.MODE_SHAPE_SQUARE
+            mode = self._view.MODE_SHAPE_RECTANGLE
         return MaskEditorState(
             mode=mode,
             brush_radius=self._brush_slider.value(),
@@ -1356,8 +1349,8 @@ class MaskEditor(QWidget):
             self._btn_polygon.setChecked(True)
         elif state.mode == self._view.MODE_SHAPE_CIRCLE:
             self._btn_circle.setChecked(True)
-        elif state.mode == self._view.MODE_SHAPE_SQUARE:
-            self._btn_square.setChecked(True)
+        elif state.mode == self._view.MODE_SHAPE_RECTANGLE:
+            self._btn_rectangle.setChecked(True)
         else:
             self._btn_brush_add.setChecked(True)
         self._on_mode_changed()
@@ -1384,8 +1377,8 @@ class MaskEditor(QWidget):
         elif self._btn_circle.isChecked():
             self._view.set_mode(self._view.MODE_SHAPE_CIRCLE)
         else:
-            self._view.set_mode(self._view.MODE_SHAPE_SQUARE)
-        shape_mode = self._btn_circle.isChecked() or self._btn_square.isChecked()
+            self._view.set_mode(self._view.MODE_SHAPE_RECTANGLE)
+        shape_mode = self._btn_circle.isChecked() or self._btn_rectangle.isChecked()
         self._fill_label.setEnabled(shape_mode)
         self._fill_combo.setEnabled(shape_mode)
         if shape_mode:
@@ -1423,7 +1416,7 @@ class MaskEditor(QWidget):
             self._brush_label.setEnabled(False)
             self._brush_label.setText("Brush: —")
             return
-        if self._btn_circle.isChecked() or self._btn_square.isChecked():
+        if self._btn_circle.isChecked() or self._btn_rectangle.isChecked():
             fill_mode = self._fill_combo.currentData()
             if fill_mode == self._view.FILL_AROUND:
                 self._brush_slider.setEnabled(True)
