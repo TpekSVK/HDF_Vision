@@ -851,18 +851,24 @@ class _MaskView(_ImageView):
             return
 
         shape_mask = np.zeros_like(self._mask)
-        cv2.rectangle(shape_mask, (x0, y0), (x1, y1), 255, -1)
 
         if self._shape_fill_mode == self.FILL_AROUND:
             thickness = max(1, int(self._brush_radius))
+            outer_x0 = max(0, x0 - thickness)
+            outer_y0 = max(0, y0 - thickness)
+            outer_x1 = min(width - 1, x1 + thickness)
+            outer_y1 = min(height - 1, y1 + thickness)
+
+            if outer_x1 <= outer_x0 or outer_y1 <= outer_y0:
+                return
+
+            cv2.rectangle(shape_mask, (outer_x0, outer_y0), (outer_x1, outer_y1), 255, -1)
+
             inner = np.zeros_like(shape_mask)
-            inner_x0 = x0 + thickness
-            inner_y0 = y0 + thickness
-            inner_x1 = x1 - thickness
-            inner_y1 = y1 - thickness
-            if inner_x1 > inner_x0 and inner_y1 > inner_y0:
-                cv2.rectangle(inner, (inner_x0, inner_y0), (inner_x1, inner_y1), 255, -1)
-                cv2.subtract(shape_mask, inner, shape_mask)
+            cv2.rectangle(inner, (x0, y0), (x1, y1), 255, -1)
+            cv2.subtract(shape_mask, inner, shape_mask)
+        else:
+            cv2.rectangle(shape_mask, (x0, y0), (x1, y1), 255, -1)
 
         if not np.any(shape_mask):
             return
@@ -893,15 +899,17 @@ class _MaskView(_ImageView):
             int(round(center.y())),
         )
         shape_mask = np.zeros_like(self._mask)
-        cv2.circle(shape_mask, center_tuple, radius_int, 255, -1)
 
         if self._shape_fill_mode == self.FILL_AROUND:
             thickness = max(1, int(self._brush_radius))
-            inner_radius = radius_int - thickness
-            if inner_radius > 0:
-                inner = np.zeros_like(shape_mask)
-                cv2.circle(inner, center_tuple, inner_radius, 255, -1)
-                cv2.subtract(shape_mask, inner, shape_mask)
+            outer_radius = radius_int + thickness
+            cv2.circle(shape_mask, center_tuple, outer_radius, 255, -1)
+
+            inner = np.zeros_like(shape_mask)
+            cv2.circle(inner, center_tuple, radius_int, 255, -1)
+            cv2.subtract(shape_mask, inner, shape_mask)
+        else:
+            cv2.circle(shape_mask, center_tuple, radius_int, 255, -1)
 
         if not np.any(shape_mask):
             return
