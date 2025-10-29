@@ -19,6 +19,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
+    QComboBox,
     QFrame,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
@@ -373,6 +375,11 @@ class _MaskView(_ImageView):
     MODE_BRUSH_ADD = "brush_add"
     MODE_BRUSH_ERASE = "brush_erase"
     MODE_POLYGON = "polygon"
+    MODE_SHAPE_CIRCLE = "shape_circle"
+    MODE_SHAPE_SQUARE = "shape_square"
+
+    FILL_INSIDE = "inside"
+    FILL_AROUND = "around"
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -387,6 +394,12 @@ class _MaskView(_ImageView):
         self._polygon_item: Optional[QGraphicsPathItem] = None
         self._undo_stack: List[np.ndarray] = []
         self._redo_stack: List[np.ndarray] = []
+        self._shape_start: Optional[QPointF] = None
+        self._shape_preview_item: Optional[QGraphicsPathItem] = None
+        self._shape_fill_mode = self.FILL_INSIDE
+        self._roi_overlay_rect: Optional[Tuple[int, int, int, int]] = None
+        self._roi_overlay_item: Optional[QGraphicsRectItem] = None
+        self._show_roi_overlay = False
 
     # ------------------------------------------------------------------
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
@@ -403,18 +416,64 @@ class _MaskView(_ImageView):
         self._redo_stack.clear()
         self._polygon_points.clear()
         self._remove_polygon_item()
+        self._shape_start = None
+        self._remove_shape_preview()
+        self._roi_overlay_item = None
         self._update_mask_item()
+        self._update_roi_overlay()
         self.historyChanged.emit()
 
     def set_mode(self, mode: str) -> None:
-        if mode not in (self.MODE_BRUSH_ADD, self.MODE_BRUSH_ERASE, self.MODE_POLYGON):
+        allowed = {
+            self.MODE_BRUSH_ADD,
+            self.MODE_BRUSH_ERASE,
+            self.MODE_POLYGON,
+            self.MODE_SHAPE_CIRCLE,
+            self.MODE_SHAPE_SQUARE,
+        }
+        if mode not in allowed:
             return
         if self._mode == mode:
             return
+
+        if self._mode == self.MODE_POLYGON:
+            self._polygon_points.clear()
+            self._remove_polygon_item()
+        if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+            self._shape_start = None
+            self._remove_shape_preview()
+
         self._mode = mode
+        self._painting = False
+        self._last_point = None
+
         if self._mode != self.MODE_POLYGON:
             self._polygon_points.clear()
             self._remove_polygon_item()
+        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+            self._shape_start = None
+            self._remove_shape_preview()
+
+    def set_fill_mode(self, fill_mode: str) -> None:
+        if fill_mode not in (self.FILL_INSIDE, self.FILL_AROUND):
+            return
+        if self._shape_fill_mode == fill_mode:
+            return
+        self._shape_fill_mode = fill_mode
+
+    def fill_mode(self) -> str:
+        return self._shape_fill_mode
+
+    def set_show_roi_overlay(self, show: bool) -> None:
+        self._show_roi_overlay = bool(show)
+        self._update_roi_overlay()
+
+    def show_roi_overlay(self) -> bool:
+        return self._show_roi_overlay
+
+    def set_roi_overlay(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        self._roi_overlay_rect = tuple(map(int, rect)) if rect is not None else None
+        self._update_roi_overlay()
 
     def set_brush_radius(self, radius: int) -> None:
         self._brush_radius = max(1, int(radius))
@@ -431,6 +490,7 @@ class _MaskView(_ImageView):
             self._undo_stack.clear()
             self._redo_stack.clear()
             self._update_mask_item()
+            self._update_roi_overlay()
             self.maskChanged.emit(self.mask())
             self.historyChanged.emit()
             return
@@ -449,6 +509,7 @@ class _MaskView(_ImageView):
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._update_mask_item()
+        self._update_roi_overlay()
         self.maskChanged.emit(self.mask())
         self.historyChanged.emit()
 
@@ -500,6 +561,11 @@ class _MaskView(_ImageView):
 
         if event.button() == Qt.LeftButton:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+                self._shape_start = scene_pos
+                self._update_shape_preview(scene_pos)
+                event.accept()
+                return
             if self._mode == self.MODE_POLYGON:
                 self._polygon_points.append(scene_pos)
                 self._update_polygon_preview(scene_pos)
@@ -520,12 +586,27 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
+        if event.button() == Qt.RightButton and self._mode in (
+            self.MODE_SHAPE_CIRCLE,
+            self.MODE_SHAPE_SQUARE,
+        ):
+            self._shape_start = None
+            self._remove_shape_preview()
+            event.accept()
+            return
+
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._painting and self._mask is not None:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
             self._apply_brush_segment(scene_pos)
+            event.accept()
+            return
+
+        if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE) and self._shape_start is not None:
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            self._update_shape_preview(scene_pos)
             event.accept()
             return
 
@@ -538,6 +619,19 @@ class _MaskView(_ImageView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if (
+            self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE)
+            and self._shape_start is not None
+            and event.button() == Qt.LeftButton
+        ):
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            start = self._shape_start
+            self._shape_start = None
+            self._remove_shape_preview()
+            self._apply_shape(start, scene_pos)
+            event.accept()
+            return
+
         if self._painting and event.button() == Qt.LeftButton:
             self._painting = False
             self._last_point = None
@@ -627,6 +721,166 @@ class _MaskView(_ImageView):
             self.scene().addItem(self._polygon_item)
         else:
             self._polygon_item.setPath(path)
+
+    def _remove_shape_preview(self) -> None:
+        if self._shape_preview_item is not None:
+            self.scene().removeItem(self._shape_preview_item)
+            self._shape_preview_item = None
+
+    def _square_rect_from_points(self, start: QPointF, end: QPointF) -> QRectF:
+        dx = end.x() - start.x()
+        dy = end.y() - start.y()
+        side = max(abs(dx), abs(dy))
+        if side <= 0:
+            return QRectF()
+        x0 = start.x() - side if dx < 0 else start.x()
+        y0 = start.y() - side if dy < 0 else start.y()
+        rect = QRectF(QPointF(x0, y0), QPointF(x0 + side, y0 + side))
+        return rect.normalized()
+
+    def _update_shape_preview(self, current: QPointF) -> None:
+        if self._shape_start is None:
+            return
+        if self.scene_rect().isNull():
+            return
+        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+            self._remove_shape_preview()
+            return
+        rect = self._square_rect_from_points(self._shape_start, current)
+        if rect.isNull() or rect.width() < 1 or rect.height() < 1:
+            self._remove_shape_preview()
+            return
+        path = QPainterPath()
+        if self._mode == self.MODE_SHAPE_CIRCLE:
+            path.addEllipse(rect)
+        else:
+            path.addRect(rect)
+        if self._shape_preview_item is None:
+            pen = QPen(QColor(_MASK_COLOR))
+            pen.setWidthF(1.5)
+            preview = QGraphicsPathItem(path)
+            preview.setPen(pen)
+            fill_color = QColor(_MASK_COLOR)
+            fill_color.setAlpha(60)
+            preview.setBrush(fill_color)
+            preview.setZValue(90)
+            preview.setAcceptedMouseButtons(Qt.NoButton)
+            self.scene().addItem(preview)
+            self._shape_preview_item = preview
+        else:
+            self._shape_preview_item.setPath(path)
+        self._shape_preview_item.setVisible(True)
+
+    def _apply_shape(self, start: QPointF, end: QPointF) -> None:
+        if self._mask is None:
+            return
+        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+            return
+        rect = self._square_rect_from_points(start, end)
+        if rect.isNull() or rect.width() < 1 or rect.height() < 1:
+            return
+
+        height, width = self._mask.shape
+        x0 = max(0, min(int(np.floor(rect.left())), width - 1))
+        y0 = max(0, min(int(np.floor(rect.top())), height - 1))
+        x1 = max(0, min(int(np.ceil(rect.right())) - 1, width - 1))
+        y1 = max(0, min(int(np.ceil(rect.bottom())) - 1, height - 1))
+        if x1 <= x0 or y1 <= y0:
+            return
+
+        shape_mask = np.zeros_like(self._mask)
+        if self._mode == self.MODE_SHAPE_SQUARE:
+            cv2.rectangle(shape_mask, (x0, y0), (x1, y1), 255, -1)
+        else:
+            center = (
+                int(round(rect.center().x())),
+                int(round(rect.center().y())),
+            )
+            radius = int(round(rect.width() / 2.0))
+            if radius <= 0:
+                return
+            cv2.circle(shape_mask, center, radius, 255, -1)
+
+        if self._shape_fill_mode == self.FILL_AROUND:
+            thickness = max(1, int(self._brush_radius))
+            if self._mode == self.MODE_SHAPE_SQUARE:
+                inner = np.zeros_like(shape_mask)
+                inner_x0 = x0 + thickness
+                inner_y0 = y0 + thickness
+                inner_x1 = x1 - thickness
+                inner_y1 = y1 - thickness
+                if inner_x1 > inner_x0 and inner_y1 > inner_y0:
+                    cv2.rectangle(inner, (inner_x0, inner_y0), (inner_x1, inner_y1), 255, -1)
+                    cv2.subtract(shape_mask, inner, shape_mask)
+            else:
+                inner = np.zeros_like(shape_mask)
+                radius = int(round(rect.width() / 2.0))
+                inner_radius = radius - thickness
+                if inner_radius > 0:
+                    center = (
+                        int(round(rect.center().x())),
+                        int(round(rect.center().y())),
+                    )
+                    cv2.circle(inner, center, inner_radius, 255, -1)
+                    cv2.subtract(shape_mask, inner, shape_mask)
+
+        if not np.any(shape_mask):
+            return
+
+        self._push_undo()
+        self._redo_stack.clear()
+        self._mask = np.maximum(self._mask, shape_mask)
+        self._update_mask_item()
+        self.maskChanged.emit(self.mask())
+        self.historyChanged.emit()
+
+    def _update_roi_overlay(self) -> None:
+        if self.scene() is None:
+            return
+        if self._roi_overlay_item is not None and self._roi_overlay_item.scene() is not self.scene():
+            self._roi_overlay_item = None
+
+        if not self._show_roi_overlay or self._roi_overlay_rect is None:
+            if self._roi_overlay_item is not None:
+                self._roi_overlay_item.setVisible(False)
+            return
+
+        left, top, width, height = self._roi_overlay_rect
+        if width <= 0 or height <= 0:
+            if self._roi_overlay_item is not None:
+                self._roi_overlay_item.setVisible(False)
+            return
+
+        rect = QRectF(float(left), float(top), float(width), float(height))
+        if rect.isNull():
+            if self._roi_overlay_item is not None:
+                self._roi_overlay_item.setVisible(False)
+            return
+
+        if self.scene_rect().isNull():
+            return
+
+        fill_color = QColor(_ROI_COLOR)
+        fill_color.setAlpha(60)
+        pen = QPen(QColor(_ROI_COLOR))
+        pen.setWidthF(1.5)
+        pen.setCosmetic(True)
+
+        if self._roi_overlay_item is None:
+            item = QGraphicsRectItem(rect)
+            item.setPen(pen)
+            item.setBrush(fill_color)
+            item.setZValue(85)
+            item.setAcceptedMouseButtons(Qt.NoButton)
+            self.scene().addItem(item)
+            self._roi_overlay_item = item
+        else:
+            self._roi_overlay_item.setRect(rect)
+            self._roi_overlay_item.setPen(pen)
+            self._roi_overlay_item.setBrush(fill_color)
+            self._roi_overlay_item.setVisible(True)
+        if self._roi_overlay_item is not None:
+            self._roi_overlay_item.setVisible(True)
 
     def _update_mask_item(self) -> None:
         if self._mask is None:
@@ -778,6 +1032,8 @@ class ROIEditor(QWidget):
 class MaskEditorState:
     mode: str
     brush_radius: int
+    fill_mode: str = _MaskView.FILL_INSIDE
+    show_roi_overlay: bool = False
 
 
 class MaskEditor(QWidget):
@@ -790,6 +1046,7 @@ class MaskEditor(QWidget):
         self._view = _MaskView(self)
         self._view.maskChanged.connect(self._on_mask_changed)
         self._view.historyChanged.connect(self._update_history_buttons)
+        self._roi_overlay_rect: Optional[Tuple[int, int, int, int]] = None
 
         self._mode_group = QButtonGroup(self)
         self._btn_brush_add = QToolButton(self)
@@ -810,16 +1067,37 @@ class MaskEditor(QWidget):
         self._btn_polygon.setToolTip("Double click to finish polygon fill")
         self._mode_group.addButton(self._btn_polygon)
 
+        self._btn_circle = QToolButton(self)
+        self._btn_circle.setText("Circle")
+        self._btn_circle.setCheckable(True)
+        self._btn_circle.setToolTip("Click and drag to draw a circle")
+        self._mode_group.addButton(self._btn_circle)
+
+        self._btn_square = QToolButton(self)
+        self._btn_square.setText("Square")
+        self._btn_square.setCheckable(True)
+        self._btn_square.setToolTip("Click and drag to draw a square")
+        self._mode_group.addButton(self._btn_square)
+
         self._btn_brush_add.setChecked(True)
 
         self._mode_group.buttonClicked.connect(self._on_mode_changed)
+
+        self._fill_label = QLabel("Fill:", self)
+        self._fill_label.setStyleSheet("color: #666;")
+        self._fill_combo = QComboBox(self)
+        self._fill_combo.addItem("Inside", self._view.FILL_INSIDE)
+        self._fill_combo.addItem("Around", self._view.FILL_AROUND)
+        self._fill_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
+        self._fill_label.setEnabled(False)
+        self._fill_combo.setEnabled(False)
 
         self._brush_slider = QSlider(Qt.Horizontal, self)
         self._brush_slider.setRange(3, 160)
         self._brush_slider.setValue(24)
         self._brush_slider.valueChanged.connect(self._on_brush_radius_changed)
 
-        self._brush_label = QLabel("Brush: 24 px", self)
+        self._brush_label = QLabel("", self)
         self._brush_label.setStyleSheet("color: #666;")
 
         self._btn_undo = QPushButton("Undo", self)
@@ -835,6 +1113,11 @@ class MaskEditor(QWidget):
         self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
         self._hint_label.setVisible(False)
 
+        self._show_roi_checkbox = QCheckBox("Show ROI overlay", self)
+        self._show_roi_checkbox.setChecked(False)
+        self._show_roi_checkbox.toggled.connect(self._on_show_roi_toggled)
+        self._show_roi_checkbox.setEnabled(False)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
@@ -846,6 +1129,11 @@ class MaskEditor(QWidget):
         toolbar_top.addWidget(self._btn_brush_add)
         toolbar_top.addWidget(self._btn_brush_erase)
         toolbar_top.addWidget(self._btn_polygon)
+        toolbar_top.addWidget(self._btn_circle)
+        toolbar_top.addWidget(self._btn_square)
+        toolbar_top.addSpacing(12)
+        toolbar_top.addWidget(self._fill_label)
+        toolbar_top.addWidget(self._fill_combo)
         toolbar_top.addSpacing(12)
         toolbar_top.addWidget(self._brush_label)
         toolbar_top.addWidget(self._brush_slider, 1)
@@ -857,6 +1145,8 @@ class MaskEditor(QWidget):
         toolbar_bottom.addWidget(self._btn_undo)
         toolbar_bottom.addWidget(self._btn_redo)
         toolbar_bottom.addWidget(self._btn_clear)
+        toolbar_bottom.addSpacing(12)
+        toolbar_bottom.addWidget(self._show_roi_checkbox)
         toolbar_bottom.addStretch(1)
         info_box = QVBoxLayout()
         info_box.setContentsMargins(0, 0, 0, 0)
@@ -868,10 +1158,15 @@ class MaskEditor(QWidget):
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._update_history_buttons()
+        self._on_mode_changed()
+        self._on_fill_mode_changed()
+        self._on_brush_radius_changed(self._brush_slider.value())
+        self._sync_roi_overlay_visibility()
 
     # ------------------------------------------------------------------
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._view.set_pixmap(pixmap)
+        self._sync_roi_overlay_visibility()
         self._update_history_buttons()
         self._update_info_label()
 
@@ -883,6 +1178,23 @@ class MaskEditor(QWidget):
     def mask(self) -> Optional[np.ndarray]:
         return self._view.mask()
 
+    def set_roi_overlay(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        self._roi_overlay_rect = tuple(map(int, rect)) if rect is not None else None
+        self._sync_roi_overlay_visibility()
+
+    def set_show_roi_overlay(self, show: bool) -> None:
+        show = bool(show)
+        if self._roi_overlay_rect is None:
+            show = False
+        if self._show_roi_checkbox.isChecked() != show:
+            self._show_roi_checkbox.blockSignals(True)
+            self._show_roi_checkbox.setChecked(show)
+            self._show_roi_checkbox.blockSignals(False)
+        self._sync_roi_overlay_visibility()
+
+    def show_roi_overlay(self) -> bool:
+        return self._view.show_roi_overlay()
+
     def undo(self) -> None:
         self._view.undo()
 
@@ -893,24 +1205,48 @@ class MaskEditor(QWidget):
         self._view.clear_mask()
 
     def state(self) -> MaskEditorState:
-        mode = (
-            self._view.MODE_BRUSH_ADD
-            if self._btn_brush_add.isChecked()
-            else self._view.MODE_BRUSH_ERASE
-            if self._btn_brush_erase.isChecked()
-            else self._view.MODE_POLYGON
+        if self._btn_brush_add.isChecked():
+            mode = self._view.MODE_BRUSH_ADD
+        elif self._btn_brush_erase.isChecked():
+            mode = self._view.MODE_BRUSH_ERASE
+        elif self._btn_polygon.isChecked():
+            mode = self._view.MODE_POLYGON
+        elif self._btn_circle.isChecked():
+            mode = self._view.MODE_SHAPE_CIRCLE
+        else:
+            mode = self._view.MODE_SHAPE_SQUARE
+        return MaskEditorState(
+            mode=mode,
+            brush_radius=self._brush_slider.value(),
+            fill_mode=self._view.fill_mode(),
+            show_roi_overlay=self._view.show_roi_overlay(),
         )
-        return MaskEditorState(mode=mode, brush_radius=self._brush_slider.value())
 
     def restore_state(self, state: MaskEditorState) -> None:
         if state.mode == self._view.MODE_BRUSH_ADD:
             self._btn_brush_add.setChecked(True)
         elif state.mode == self._view.MODE_BRUSH_ERASE:
             self._btn_brush_erase.setChecked(True)
-        else:
+        elif state.mode == self._view.MODE_POLYGON:
             self._btn_polygon.setChecked(True)
+        elif state.mode == self._view.MODE_SHAPE_CIRCLE:
+            self._btn_circle.setChecked(True)
+        elif state.mode == self._view.MODE_SHAPE_SQUARE:
+            self._btn_square.setChecked(True)
+        else:
+            self._btn_brush_add.setChecked(True)
         self._on_mode_changed()
         self._brush_slider.setValue(state.brush_radius)
+        index = self._fill_combo.findData(state.fill_mode)
+        if index < 0:
+            index = self._fill_combo.findData(self._view.FILL_INSIDE)
+        if index >= 0:
+            self._fill_combo.blockSignals(True)
+            self._fill_combo.setCurrentIndex(index)
+            self._fill_combo.blockSignals(False)
+        self._on_fill_mode_changed()
+        self.set_show_roi_overlay(state.show_roi_overlay)
+        self._update_size_controls()
 
     # ------------------------------------------------------------------
     def _on_mode_changed(self) -> None:
@@ -918,15 +1254,33 @@ class MaskEditor(QWidget):
             self._view.set_mode(self._view.MODE_BRUSH_ADD)
         elif self._btn_brush_erase.isChecked():
             self._view.set_mode(self._view.MODE_BRUSH_ERASE)
-        else:
+        elif self._btn_polygon.isChecked():
             self._view.set_mode(self._view.MODE_POLYGON)
-        polygon_mode = self._btn_polygon.isChecked()
-        self._brush_slider.setEnabled(not polygon_mode)
-        self._brush_label.setEnabled(not polygon_mode)
+        elif self._btn_circle.isChecked():
+            self._view.set_mode(self._view.MODE_SHAPE_CIRCLE)
+        else:
+            self._view.set_mode(self._view.MODE_SHAPE_SQUARE)
+        shape_mode = self._btn_circle.isChecked() or self._btn_square.isChecked()
+        self._fill_label.setEnabled(shape_mode)
+        self._fill_combo.setEnabled(shape_mode)
+        if shape_mode:
+            data = self._fill_combo.currentData()
+            if isinstance(data, str):
+                self._view.set_fill_mode(data)
+        self._update_size_controls()
 
     def _on_brush_radius_changed(self, value: int) -> None:
         self._view.set_brush_radius(value)
-        self._brush_label.setText(f"Brush: {int(value)} px")
+        self._update_size_controls()
+
+    def _on_fill_mode_changed(self) -> None:
+        data = self._fill_combo.currentData()
+        if isinstance(data, str):
+            self._view.set_fill_mode(data)
+        self._update_size_controls()
+
+    def _on_show_roi_toggled(self, checked: bool) -> None:  # noqa: FBT001
+        self._sync_roi_overlay_visibility()
 
     def _on_mask_changed(self, mask: Optional[np.ndarray]) -> None:
         self._update_info_label()
@@ -936,6 +1290,28 @@ class MaskEditor(QWidget):
     def _update_history_buttons(self) -> None:
         self._btn_undo.setEnabled(self._view.can_undo())
         self._btn_redo.setEnabled(self._view.can_redo())
+
+    def _update_size_controls(self) -> None:
+        value = int(self._brush_slider.value())
+        if self._btn_polygon.isChecked():
+            self._brush_slider.setEnabled(False)
+            self._brush_label.setEnabled(False)
+            self._brush_label.setText("Brush: —")
+            return
+        if self._btn_circle.isChecked() or self._btn_square.isChecked():
+            fill_mode = self._fill_combo.currentData()
+            if fill_mode == self._view.FILL_AROUND:
+                self._brush_slider.setEnabled(True)
+                self._brush_label.setEnabled(True)
+                self._brush_label.setText(f"Ring width: {value} px")
+            else:
+                self._brush_slider.setEnabled(False)
+                self._brush_label.setEnabled(False)
+                self._brush_label.setText("Ring width: —")
+            return
+        self._brush_slider.setEnabled(True)
+        self._brush_label.setEnabled(True)
+        self._brush_label.setText(f"Brush: {value} px")
 
     def _update_info_label(self) -> None:
         mask = self._view.mask()
@@ -954,6 +1330,16 @@ class MaskEditor(QWidget):
             self._hint_label.setVisible(True)
         else:
             self._hint_label.setVisible(False)
+
+    def _sync_roi_overlay_visibility(self) -> None:
+        has_roi = self._roi_overlay_rect is not None
+        if not has_roi and self._show_roi_checkbox.isChecked():
+            self._show_roi_checkbox.blockSignals(True)
+            self._show_roi_checkbox.setChecked(False)
+            self._show_roi_checkbox.blockSignals(False)
+        self._show_roi_checkbox.setEnabled(has_roi)
+        self._view.set_roi_overlay(self._roi_overlay_rect)
+        self._view.set_show_roi_overlay(has_roi and self._show_roi_checkbox.isChecked())
 
 
 __all__ = [
