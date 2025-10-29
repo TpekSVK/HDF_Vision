@@ -52,6 +52,7 @@ class MainWindow(QMainWindow):
         self._last_trigger_frame = None
         self._last_trigger_view_id: str | None = None
         self._last_trigger_frames: dict[str, Any] = {}
+        self._golden_cache: dict[tuple[str, str], tuple[int, np.ndarray]] = {}
 
         # Kamera
         self.cam = CameraService()
@@ -1296,6 +1297,7 @@ class MainWindow(QMainWindow):
         return combined
 
     def _refresh_views(self):
+        self._golden_cache.clear()
         try:
             recipe_name = self.current_recipe_name()
         except Exception:
@@ -1335,19 +1337,36 @@ class MainWindow(QMainWindow):
 
     def _load_view_golden_array(self, recipe_name: str, view: object):
         import imageio.v3 as iio
-        import numpy as np
 
         golden_name = getattr(view, "golden_path", "golden.png") or "golden.png"
         path = Path("/data") / "recipes" / recipe_name / golden_name
-        if not path.exists():
+        cache_key = (recipe_name, golden_name)
+
+        try:
+            stat = path.stat()
+        except OSError:
+            self._golden_cache.pop(cache_key, None)
             return None
+
+        mtime_ns = getattr(stat, "st_mtime_ns", None)
+        if mtime_ns is None:
+            mtime_ns = int(stat.st_mtime * 1_000_000_000)
+
+        cached = self._golden_cache.get(cache_key)
+        if cached and cached[0] == mtime_ns:
+            return cached[1]
+
         try:
             arr = iio.imread(path)
         except Exception as exc:
             print(f"[Run] Golden read failed for {golden_name}: {exc}")
+            self._golden_cache.pop(cache_key, None)
             return None
+
         if arr is None:
+            self._golden_cache.pop(cache_key, None)
             return None
+
         arr = np.asarray(arr)
         if arr.ndim == 3:
             try:
@@ -1359,8 +1378,14 @@ class MainWindow(QMainWindow):
                     arr = arr[:, :, 0]
             except Exception:
                 arr = arr[:, :, 0]
+
         if arr.dtype != np.uint8:
             arr = arr.astype(np.uint8)
+        if not arr.flags["C_CONTIGUOUS"]:
+            arr = np.ascontiguousarray(arr)
+
+        arr.setflags(write=False)
+        self._golden_cache[cache_key] = (mtime_ns, arr)
         return arr
 
     def _on_view_selected_view(self, view_id: str):
