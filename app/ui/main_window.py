@@ -291,9 +291,6 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
 
-        # maximalizovať a uzamknúť veľkosť okna po zobrazení
-        QTimer.singleShot(0, self._maximize_and_lock)
-
         # ---------- SETUP panel ----------
         self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
         s = QVBoxLayout(self.panel_setup); s.setSpacing(8)
@@ -1554,14 +1551,6 @@ class MainWindow(QMainWindow):
     def _on_tool_selection_changed(self):
         self._update_metrics_panel()
         self._reload_results_strip()
-
-    def _maximize_and_lock(self):
-        try:
-            # maximalizuj a uzamkni veľkosť (žiadne manuálne resize)
-            self.showMaximized()
-            self.setFixedSize(self.size())
-        except Exception:
-            pass
 
     def closeEvent(self, e):
         try:
