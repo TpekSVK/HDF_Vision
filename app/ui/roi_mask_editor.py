@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -395,6 +396,7 @@ class _MaskView(_ImageView):
         self._undo_stack: List[np.ndarray] = []
         self._redo_stack: List[np.ndarray] = []
         self._shape_start: Optional[QPointF] = None
+        self._circle_points: List[QPointF] = []
         self._shape_preview_item: Optional[QGraphicsPathItem] = None
         self._shape_fill_mode = self.FILL_INSIDE
         self._roi_overlay_rect: Optional[Tuple[int, int, int, int]] = None
@@ -417,6 +419,7 @@ class _MaskView(_ImageView):
         self._polygon_points.clear()
         self._remove_polygon_item()
         self._shape_start = None
+        self._circle_points.clear()
         self._remove_shape_preview()
         self._roi_overlay_item = None
         self._update_mask_item()
@@ -439,7 +442,10 @@ class _MaskView(_ImageView):
         if self._mode == self.MODE_POLYGON:
             self._polygon_points.clear()
             self._remove_polygon_item()
-        if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+        if self._mode == self.MODE_SHAPE_CIRCLE:
+            self._circle_points.clear()
+            self._remove_shape_preview()
+        if self._mode == self.MODE_SHAPE_SQUARE:
             self._shape_start = None
             self._remove_shape_preview()
 
@@ -450,8 +456,11 @@ class _MaskView(_ImageView):
         if self._mode != self.MODE_POLYGON:
             self._polygon_points.clear()
             self._remove_polygon_item()
-        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+        if self._mode != self.MODE_SHAPE_CIRCLE:
+            self._circle_points.clear()
+        if self._mode != self.MODE_SHAPE_SQUARE:
             self._shape_start = None
+        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
             self._remove_shape_preview()
 
     def set_fill_mode(self, fill_mode: str) -> None:
@@ -561,7 +570,17 @@ class _MaskView(_ImageView):
 
         if event.button() == Qt.LeftButton:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
-            if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+            if self._mode == self.MODE_SHAPE_CIRCLE:
+                self._circle_points.append(scene_pos)
+                if len(self._circle_points) >= 3:
+                    self._apply_three_point_circle()
+                    self._circle_points.clear()
+                    self._remove_shape_preview()
+                else:
+                    self._update_shape_preview(None)
+                event.accept()
+                return
+            if self._mode == self.MODE_SHAPE_SQUARE:
                 self._shape_start = scene_pos
                 self._update_shape_preview(scene_pos)
                 event.accept()
@@ -586,10 +605,13 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
-        if event.button() == Qt.RightButton and self._mode in (
-            self.MODE_SHAPE_CIRCLE,
-            self.MODE_SHAPE_SQUARE,
-        ):
+        if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_CIRCLE:
+            self._circle_points.clear()
+            self._remove_shape_preview()
+            event.accept()
+            return
+
+        if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_SQUARE:
             self._shape_start = None
             self._remove_shape_preview()
             event.accept()
@@ -604,7 +626,13 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
-        if self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE) and self._shape_start is not None:
+        if self._mode == self.MODE_SHAPE_CIRCLE and self._circle_points:
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            self._update_shape_preview(scene_pos)
+            event.accept()
+            return
+
+        if self._mode == self.MODE_SHAPE_SQUARE and self._shape_start is not None:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
             self._update_shape_preview(scene_pos)
             event.accept()
@@ -620,7 +648,7 @@ class _MaskView(_ImageView):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
         if (
-            self._mode in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE)
+            self._mode == self.MODE_SHAPE_SQUARE
             and self._shape_start is not None
             and event.button() == Qt.LeftButton
         ):
@@ -628,7 +656,7 @@ class _MaskView(_ImageView):
             start = self._shape_start
             self._shape_start = None
             self._remove_shape_preview()
-            self._apply_shape(start, scene_pos)
+            self._apply_square(start, scene_pos)
             event.accept()
             return
 
@@ -738,12 +766,13 @@ class _MaskView(_ImageView):
         rect = QRectF(QPointF(x0, y0), QPointF(x0 + side, y0 + side))
         return rect.normalized()
 
-    def _update_shape_preview(self, current: QPointF) -> None:
-        if self._shape_start is None:
-            return
+    def _update_shape_preview(self, current: Optional[QPointF]) -> None:
         if self.scene_rect().isNull():
             return
-        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+        if self._mode == self.MODE_SHAPE_CIRCLE:
+            self._update_circle_preview(current)
+            return
+        if self._mode != self.MODE_SHAPE_SQUARE or self._shape_start is None or current is None:
             self._remove_shape_preview()
             return
         rect = self._square_rect_from_points(self._shape_start, current)
@@ -751,10 +780,7 @@ class _MaskView(_ImageView):
             self._remove_shape_preview()
             return
         path = QPainterPath()
-        if self._mode == self.MODE_SHAPE_CIRCLE:
-            path.addEllipse(rect)
-        else:
-            path.addRect(rect)
+        path.addRect(rect)
         if self._shape_preview_item is None:
             pen = QPen(QColor(_MASK_COLOR))
             pen.setWidthF(1.5)
@@ -771,10 +797,53 @@ class _MaskView(_ImageView):
             self._shape_preview_item.setPath(path)
         self._shape_preview_item.setVisible(True)
 
-    def _apply_shape(self, start: QPointF, end: QPointF) -> None:
-        if self._mask is None:
+    def _update_circle_preview(self, current: Optional[QPointF]) -> None:
+        if len(self._circle_points) < 2:
+            self._remove_shape_preview()
             return
-        if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_SQUARE):
+        points = self._circle_points[:]
+        if current is not None and len(points) == 2:
+            points.append(current)
+        if len(points) < 3:
+            self._remove_shape_preview()
+            return
+        circle = self._circle_from_points(points[0], points[1], points[2])
+        if circle is None:
+            self._remove_shape_preview()
+            return
+        center, radius = circle
+        if radius <= 0:
+            self._remove_shape_preview()
+            return
+        rect = QRectF(
+            center.x() - radius,
+            center.y() - radius,
+            radius * 2.0,
+            radius * 2.0,
+        ).normalized()
+        if rect.isNull():
+            self._remove_shape_preview()
+            return
+        path = QPainterPath()
+        path.addEllipse(rect)
+        if self._shape_preview_item is None:
+            pen = QPen(QColor(_MASK_COLOR))
+            pen.setWidthF(1.5)
+            preview = QGraphicsPathItem(path)
+            preview.setPen(pen)
+            fill_color = QColor(_MASK_COLOR)
+            fill_color.setAlpha(60)
+            preview.setBrush(fill_color)
+            preview.setZValue(90)
+            preview.setAcceptedMouseButtons(Qt.NoButton)
+            self.scene().addItem(preview)
+            self._shape_preview_item = preview
+        else:
+            self._shape_preview_item.setPath(path)
+        self._shape_preview_item.setVisible(True)
+
+    def _apply_square(self, start: QPointF, end: QPointF) -> None:
+        if self._mask is None:
             return
         rect = self._square_rect_from_points(start, end)
         if rect.isNull() or rect.width() < 1 or rect.height() < 1:
@@ -789,40 +858,18 @@ class _MaskView(_ImageView):
             return
 
         shape_mask = np.zeros_like(self._mask)
-        if self._mode == self.MODE_SHAPE_SQUARE:
-            cv2.rectangle(shape_mask, (x0, y0), (x1, y1), 255, -1)
-        else:
-            center = (
-                int(round(rect.center().x())),
-                int(round(rect.center().y())),
-            )
-            radius = int(round(rect.width() / 2.0))
-            if radius <= 0:
-                return
-            cv2.circle(shape_mask, center, radius, 255, -1)
+        cv2.rectangle(shape_mask, (x0, y0), (x1, y1), 255, -1)
 
         if self._shape_fill_mode == self.FILL_AROUND:
             thickness = max(1, int(self._brush_radius))
-            if self._mode == self.MODE_SHAPE_SQUARE:
-                inner = np.zeros_like(shape_mask)
-                inner_x0 = x0 + thickness
-                inner_y0 = y0 + thickness
-                inner_x1 = x1 - thickness
-                inner_y1 = y1 - thickness
-                if inner_x1 > inner_x0 and inner_y1 > inner_y0:
-                    cv2.rectangle(inner, (inner_x0, inner_y0), (inner_x1, inner_y1), 255, -1)
-                    cv2.subtract(shape_mask, inner, shape_mask)
-            else:
-                inner = np.zeros_like(shape_mask)
-                radius = int(round(rect.width() / 2.0))
-                inner_radius = radius - thickness
-                if inner_radius > 0:
-                    center = (
-                        int(round(rect.center().x())),
-                        int(round(rect.center().y())),
-                    )
-                    cv2.circle(inner, center, inner_radius, 255, -1)
-                    cv2.subtract(shape_mask, inner, shape_mask)
+            inner = np.zeros_like(shape_mask)
+            inner_x0 = x0 + thickness
+            inner_y0 = y0 + thickness
+            inner_x1 = x1 - thickness
+            inner_y1 = y1 - thickness
+            if inner_x1 > inner_x0 and inner_y1 > inner_y0:
+                cv2.rectangle(inner, (inner_x0, inner_y0), (inner_x1, inner_y1), 255, -1)
+                cv2.subtract(shape_mask, inner, shape_mask)
 
         if not np.any(shape_mask):
             return
@@ -833,6 +880,84 @@ class _MaskView(_ImageView):
         self._update_mask_item()
         self.maskChanged.emit(self.mask())
         self.historyChanged.emit()
+
+    def _apply_three_point_circle(self) -> None:
+        if self._mask is None or len(self._circle_points) < 3:
+            return
+        circle = self._circle_from_points(
+            self._circle_points[0],
+            self._circle_points[1],
+            self._circle_points[2],
+        )
+        if circle is None:
+            return
+        center, radius = circle
+        radius_int = int(round(radius))
+        if radius_int <= 0:
+            return
+        center_tuple = (
+            int(round(center.x())),
+            int(round(center.y())),
+        )
+        shape_mask = np.zeros_like(self._mask)
+        cv2.circle(shape_mask, center_tuple, radius_int, 255, -1)
+
+        if self._shape_fill_mode == self.FILL_AROUND:
+            thickness = max(1, int(self._brush_radius))
+            inner_radius = radius_int - thickness
+            if inner_radius > 0:
+                inner = np.zeros_like(shape_mask)
+                cv2.circle(inner, center_tuple, inner_radius, 255, -1)
+                cv2.subtract(shape_mask, inner, shape_mask)
+
+        if not np.any(shape_mask):
+            return
+
+        self._push_undo()
+        self._redo_stack.clear()
+        self._mask = np.maximum(self._mask, shape_mask)
+        self._update_mask_item()
+        self.maskChanged.emit(self.mask())
+        self.historyChanged.emit()
+
+    def _circle_from_points(
+        self, p1: QPointF, p2: QPointF, p3: QPointF
+    ) -> Optional[Tuple[QPointF, float]]:
+        x1, y1 = p1.x(), p1.y()
+        x2, y2 = p2.x(), p2.y()
+        x3, y3 = p3.x(), p3.y()
+
+        denom = 2.0 * (
+            x1 * (y2 - y3)
+            + x2 * (y3 - y1)
+            + x3 * (y1 - y2)
+        )
+        if abs(denom) < 1e-6:
+            return None
+
+        x1_sq = x1 * x1 + y1 * y1
+        x2_sq = x2 * x2 + y2 * y2
+        x3_sq = x3 * x3 + y3 * y3
+
+        cx = (
+            x1_sq * (y2 - y3)
+            + x2_sq * (y3 - y1)
+            + x3_sq * (y1 - y2)
+        ) / denom
+        cy = (
+            x1_sq * (x3 - x2)
+            + x2_sq * (x1 - x3)
+            + x3_sq * (x2 - x1)
+        ) / denom
+
+        if not math.isfinite(cx) or not math.isfinite(cy):
+            return None
+
+        radius = math.hypot(cx - x1, cy - y1)
+        if not math.isfinite(radius):
+            return None
+
+        return QPointF(cx, cy), radius
 
     def _update_roi_overlay(self) -> None:
         if self.scene() is None:
@@ -1070,7 +1195,7 @@ class MaskEditor(QWidget):
         self._btn_circle = QToolButton(self)
         self._btn_circle.setText("Circle")
         self._btn_circle.setCheckable(True)
-        self._btn_circle.setToolTip("Click and drag to draw a circle")
+        self._btn_circle.setToolTip("Click three points to define a circle")
         self._mode_group.addButton(self._btn_circle)
 
         self._btn_square = QToolButton(self)
