@@ -72,9 +72,12 @@ class MainWindow(QMainWindow):
         self._last_pipeline_status: str | None = None
         self._tool_selector_items: list[dict[str, Any]] = []
         self._view_states: dict[str, dict[str, Any]] = {}
+        self._views_by_id: dict[str, Any] = {}
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
+        self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
+        self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
 
         # Tool/Recipe
         try:
@@ -351,9 +354,15 @@ class MainWindow(QMainWindow):
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
         else:
+            try:
+                self._setup_camera_state = snapshot_camera_state(self.cam)
+            except Exception:
+                pass
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
+            if not self.live_enabled:
+                self._apply_run_camera_profile()
 
     def _match_resolution_index(self, width: int, height: int, fps: int, pixel_format: str | None) -> int | None:
         pix_fmt = (pixel_format or "Y8").upper()
@@ -411,6 +420,14 @@ class MainWindow(QMainWindow):
             if was_live:
                 self._run_timer.start()
         if success:
+            try:
+                state = snapshot_camera_state(self.cam)
+            except Exception:
+                pass
+            else:
+                self._setup_camera_state = state
+                if self.mode == "RUN" and not self.live_enabled:
+                    self._run_idle_camera_state = dict(state)
             self._update_live_view()
 
     def _reset_manual_trigger_progress(self, recipe_name: str | None = None) -> None:
@@ -794,9 +811,29 @@ class MainWindow(QMainWindow):
         self.live_enabled = self.btn_live.isChecked()
         self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
         if self.live_enabled:
+            try:
+                self._run_idle_camera_state = snapshot_camera_state(self.cam)
+            except Exception:
+                self._run_idle_camera_state = None
+            base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else None
+            if base_state:
+                try:
+                    apply_camera_state(self.cam, base_state)
+                except Exception as exc:
+                    self.lbl_status.setText(f"Live kamera: {exc}")
             self._run_timer.start()
         else:
             self._run_timer.stop()
+            restored = False
+            if isinstance(self._run_idle_camera_state, Mapping) and self._run_idle_camera_state:
+                try:
+                    apply_camera_state(self.cam, self._run_idle_camera_state)
+                except Exception as exc:
+                    self.lbl_status.setText(f"Obnovenie kamery zlyhalo: {exc}")
+                else:
+                    restored = True
+            if not restored:
+                self._apply_run_camera_profile()
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
@@ -1296,6 +1333,55 @@ class MainWindow(QMainWindow):
                     combined[key] = value
         return combined
 
+    def _apply_run_camera_profile(self, view_id: str | None = None) -> None:
+        """Apply the camera profile for the active recipe view when in RUN mode."""
+
+        if self.mode != "RUN" or self.live_enabled:
+            return
+
+        try:
+            recipe_name = self.current_recipe_name()
+        except Exception:
+            return
+
+        target_view_id = view_id or self._active_view_id
+        view_obj: Any | None = None
+
+        if target_view_id:
+            view_obj = self._views_by_id.get(target_view_id)
+            if view_obj is None:
+                with suppress(Exception):
+                    view_obj = self.recipes.get_view(recipe_name, target_view_id)
+
+        if view_obj is None:
+            views: list[Any] = []
+            with suppress(Exception):
+                views = self.recipes.list_views(recipe_name)
+            if views:
+                view_obj = views[0]
+                resolved_id = getattr(view_obj, "id", None)
+                if resolved_id:
+                    target_view_id = resolved_id
+                    self._active_view_id = resolved_id
+                    self.view_strip.set_active(resolved_id)
+
+        if view_obj is None:
+            return
+
+        profile = getattr(view_obj, "camera_profile", None)
+        base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else None
+
+        try:
+            apply_view_camera_profile(self.cam, base_state, profile)
+        except Exception as exc:
+            self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
+            return
+
+        try:
+            self._run_idle_camera_state = snapshot_camera_state(self.cam)
+        except Exception:
+            self._run_idle_camera_state = None
+
     def _refresh_views(self):
         self._golden_cache.clear()
         try:
@@ -1313,11 +1399,15 @@ class MainWindow(QMainWindow):
             entries = views
 
         self._view_states = {getattr(view, "id", ""): {} for view in entries if getattr(view, "id", "")}
-        default_view_id = entries[0].id if entries else None
+        self._views_by_id = {getattr(view, "id", ""): view for view in entries if getattr(view, "id", "")}
+        default_view = entries[0] if entries else None
+        default_view_id = getattr(default_view, "id", None) if default_view is not None else None
         self._active_view_id = default_view_id
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
+        if self.mode == "RUN" and not self.live_enabled:
+            self._apply_run_camera_profile(self._active_view_id)
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -1404,6 +1494,8 @@ class MainWindow(QMainWindow):
             self._last_trigger_view_id = view_id
         else:
             self._last_trigger_view_id = None
+        if self.mode == "RUN" and not self.live_enabled:
+            self._apply_run_camera_profile(view_id)
         if not self.live_enabled:
             self._update_live_view()
 
