@@ -543,6 +543,9 @@ class ToolRunnerContext:
     frame_aligned: np.ndarray | None = None
     T_total: np.ndarray | None = None
     frame_is_aligned: bool = False
+    frame_gray: np.ndarray | None = None
+    frame_aligned_gray: np.ndarray | None = None
+    golden_gray: np.ndarray | None = None
 
 
 @dataclass(slots=True)
@@ -687,17 +690,23 @@ class PipelineOrchestrator:
 
         import numpy as np
         from app.services.tool_registry import ToolRegistry
+        from app.utils import imaging
 
         start_time = time.perf_counter()
 
         golden_array = np.asarray(golden)
         frame_array = np.asarray(frame)
+        golden_gray = imaging.to_gray_u8(golden_array)
+        frame_gray = imaging.to_gray_u8(frame_array)
 
         context = ToolRunnerContext(
             frame=frame_array,
             frame_aligned=frame_array,
             T_total=_identity_affine(),
             frame_is_aligned=False,
+            frame_gray=frame_gray,
+            frame_aligned_gray=frame_gray,
+            golden_gray=golden_gray,
         )
 
         diagnostics: List[Dict[str, Any]] = []
@@ -895,17 +904,23 @@ class PipelineOrchestrator:
 
         import numpy as np
         from app.services.tool_registry import ToolRegistry
+        from app.utils import imaging
 
         start_time = time.perf_counter()
 
         golden_array = np.asarray(golden)
         frame_array = np.asarray(frame)
+        golden_gray = imaging.to_gray_u8(golden_array)
+        frame_gray = imaging.to_gray_u8(frame_array)
 
         context = ToolRunnerContext(
             frame=frame_array,
             frame_aligned=frame_array,
             T_total=_identity_affine(),
             frame_is_aligned=False,
+            frame_gray=frame_gray,
+            frame_aligned_gray=frame_gray,
+            golden_gray=golden_gray,
         )
 
         diagnostics: List[Dict[str, Any]] = []
@@ -1121,19 +1136,29 @@ class PipelineOrchestrator:
             )
             if source is None:
                 raise ValueError("Source frame missing for locator alignment")
+            if context.frame_is_aligned and context.frame_aligned_gray is not None:
+                source_gray = context.frame_aligned_gray
+            elif source is context.frame and context.frame_gray is not None:
+                source_gray = context.frame_gray
+            else:
+                source_gray = imaging.to_gray_u8(source)
             if T_new is None:
                 context.frame_aligned = source
+                context.frame_aligned_gray = source_gray
             else:
                 T_inv = imaging.invert_affine(T_new)
                 context.frame_aligned = imaging.warp_by_affine_u8(source, T_inv)
+                context.frame_aligned_gray = imaging.warp_by_affine_u8(source_gray, T_inv)
             context.frame_is_aligned = True
         else:
             context.frame_aligned = context.frame
+            context.frame_aligned_gray = context.frame_gray
             context.frame_is_aligned = False
 
     def _reset_alignment(self, context: ToolRunnerContext) -> None:
         context.T_total = _identity_affine()
         context.frame_aligned = context.frame
+        context.frame_aligned_gray = context.frame_gray
         context.frame_is_aligned = False
 
     @staticmethod
