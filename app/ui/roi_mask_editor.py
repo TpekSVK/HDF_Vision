@@ -402,6 +402,10 @@ class _MaskView(_ImageView):
         self._roi_overlay_rect: Optional[Tuple[int, int, int, int]] = None
         self._roi_overlay_item: Optional[QGraphicsRectItem] = None
         self._show_roi_overlay = False
+        self._rectangle_preview_rect: Optional[QRectF] = None
+        self._circle_preview: Optional[Tuple[QPointF, float]] = None
+        self._shape_dragging = False
+        self._shape_drag_last_pos: Optional[QPointF] = None
 
     # ------------------------------------------------------------------
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
@@ -421,6 +425,10 @@ class _MaskView(_ImageView):
         self._shape_start = None
         self._circle_points.clear()
         self._remove_shape_preview()
+        self._rectangle_preview_rect = None
+        self._circle_preview = None
+        self._shape_dragging = False
+        self._shape_drag_last_pos = None
         self._roi_overlay_item = None
         self._update_mask_item()
         self._update_roi_overlay()
@@ -445,21 +453,27 @@ class _MaskView(_ImageView):
         if self._mode == self.MODE_SHAPE_CIRCLE:
             self._circle_points.clear()
             self._remove_shape_preview()
+            self._circle_preview = None
         if self._mode == self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
             self._remove_shape_preview()
+            self._rectangle_preview_rect = None
 
         self._mode = mode
         self._painting = False
         self._last_point = None
+        self._shape_dragging = False
+        self._shape_drag_last_pos = None
 
         if self._mode != self.MODE_POLYGON:
             self._polygon_points.clear()
             self._remove_polygon_item()
         if self._mode != self.MODE_SHAPE_CIRCLE:
             self._circle_points.clear()
+            self._circle_preview = None
         if self._mode != self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
+            self._rectangle_preview_rect = None
         if self._mode not in (self.MODE_SHAPE_CIRCLE, self.MODE_SHAPE_RECTANGLE):
             self._remove_shape_preview()
 
@@ -498,6 +512,12 @@ class _MaskView(_ImageView):
                 self._mask.fill(0)
             self._undo_stack.clear()
             self._redo_stack.clear()
+            self._shape_start = None
+            self._circle_points.clear()
+            self._rectangle_preview_rect = None
+            self._circle_preview = None
+            self._shape_dragging = False
+            self._shape_drag_last_pos = None
             self._update_mask_item()
             self._update_roi_overlay()
             self.maskChanged.emit(self.mask())
@@ -517,6 +537,13 @@ class _MaskView(_ImageView):
             self._mask = mask.copy()
         self._undo_stack.clear()
         self._redo_stack.clear()
+        self._shape_start = None
+        self._circle_points.clear()
+        self._rectangle_preview_rect = None
+        self._circle_preview = None
+        self._shape_dragging = False
+        self._shape_drag_last_pos = None
+        self._remove_shape_preview()
         self._update_mask_item()
         self._update_roi_overlay()
         self.maskChanged.emit(self.mask())
@@ -571,16 +598,40 @@ class _MaskView(_ImageView):
         if event.button() == Qt.LeftButton:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
             if self._mode == self.MODE_SHAPE_CIRCLE:
+                if self._circle_preview is not None:
+                    center, radius = self._circle_preview
+                    dx = scene_pos.x() - center.x()
+                    dy = scene_pos.y() - center.y()
+                    if radius > 0 and math.hypot(dx, dy) <= radius:
+                        self._shape_dragging = True
+                        self._shape_drag_last_pos = scene_pos
+                        event.accept()
+                        return
+                    self._circle_preview = None
+                    self._remove_shape_preview()
+                    self._shape_dragging = False
+                    self._shape_drag_last_pos = None
+                self._circle_points.clear()
                 self._circle_points.append(scene_pos)
                 if len(self._circle_points) >= 3:
                     self._apply_three_point_circle()
-                    self._circle_points.clear()
-                    self._remove_shape_preview()
                 else:
                     self._update_shape_preview(None)
                 event.accept()
                 return
             if self._mode == self.MODE_SHAPE_RECTANGLE:
+                if (
+                    self._rectangle_preview_rect is not None
+                    and self._rectangle_preview_rect.contains(scene_pos)
+                ):
+                    self._shape_dragging = True
+                    self._shape_drag_last_pos = scene_pos
+                    event.accept()
+                    return
+                self._rectangle_preview_rect = None
+                self._remove_shape_preview()
+                self._shape_dragging = False
+                self._shape_drag_last_pos = None
                 self._shape_start = scene_pos
                 self._update_shape_preview(scene_pos)
                 event.accept()
@@ -608,12 +659,16 @@ class _MaskView(_ImageView):
         if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_CIRCLE:
             self._circle_points.clear()
             self._remove_shape_preview()
+            self._shape_dragging = False
+            self._shape_drag_last_pos = None
             event.accept()
             return
 
         if event.button() == Qt.RightButton and self._mode == self.MODE_SHAPE_RECTANGLE:
             self._shape_start = None
             self._remove_shape_preview()
+            self._shape_dragging = False
+            self._shape_drag_last_pos = None
             event.accept()
             return
 
@@ -626,17 +681,41 @@ class _MaskView(_ImageView):
             event.accept()
             return
 
-        if self._mode == self.MODE_SHAPE_CIRCLE and self._circle_points:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
-            self._update_shape_preview(scene_pos)
-            event.accept()
-            return
+        scene_pos: Optional[QPointF] = None
 
-        if self._mode == self.MODE_SHAPE_RECTANGLE and self._shape_start is not None:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
-            self._update_shape_preview(scene_pos)
-            event.accept()
-            return
+        if self._mode == self.MODE_SHAPE_CIRCLE:
+            if (
+                self._shape_dragging
+                and self._circle_preview is not None
+                and event.buttons() & Qt.LeftButton
+            ):
+                scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+                self._move_circle_preview(scene_pos)
+                event.accept()
+                return
+            if self._circle_points:
+                if scene_pos is None:
+                    scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+                self._update_shape_preview(scene_pos)
+                event.accept()
+                return
+
+        if self._mode == self.MODE_SHAPE_RECTANGLE:
+            if (
+                self._shape_dragging
+                and self._rectangle_preview_rect is not None
+                and event.buttons() & Qt.LeftButton
+            ):
+                scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+                self._move_rectangle_preview(scene_pos)
+                event.accept()
+                return
+            if self._shape_start is not None:
+                if scene_pos is None:
+                    scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+                self._update_shape_preview(scene_pos)
+                event.accept()
+                return
 
         if self._mode == self.MODE_POLYGON and self._polygon_points:
             scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
@@ -647,18 +726,20 @@ class _MaskView(_ImageView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if (
-            self._mode == self.MODE_SHAPE_RECTANGLE
-            and self._shape_start is not None
-            and event.button() == Qt.LeftButton
-        ):
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
-            start = self._shape_start
-            self._shape_start = None
-            self._remove_shape_preview()
-            self._apply_rectangle(start, scene_pos)
-            event.accept()
-            return
+        if event.button() == Qt.LeftButton:
+            if self._shape_dragging:
+                self._shape_dragging = False
+                self._shape_drag_last_pos = None
+                event.accept()
+                return
+            if self._mode == self.MODE_SHAPE_RECTANGLE and self._shape_start is not None:
+                scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+                start = self._shape_start
+                self._shape_start = None
+                rect = self._rectangle_rect_from_points(start, scene_pos)
+                self._set_rectangle_preview_rect(rect)
+                event.accept()
+                return
 
         if self._painting and event.button() == Qt.LeftButton:
             self._painting = False
@@ -670,6 +751,18 @@ class _MaskView(_ImageView):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() == Qt.LeftButton:
+            if (
+                self._mode == self.MODE_SHAPE_RECTANGLE
+                and self._rectangle_preview_rect is not None
+            ):
+                self._commit_rectangle_preview()
+                event.accept()
+                return
+            if self._mode == self.MODE_SHAPE_CIRCLE and self._circle_preview is not None:
+                self._commit_circle_preview()
+                event.accept()
+                return
         if self._mode == self.MODE_POLYGON and self._polygon_points and event.button() == Qt.LeftButton:
             if len(self._polygon_points) >= 3:
                 self._push_undo()
@@ -689,6 +782,40 @@ class _MaskView(_ImageView):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            if (
+                self._mode == self.MODE_SHAPE_RECTANGLE
+                and self._rectangle_preview_rect is not None
+            ):
+                self._commit_rectangle_preview()
+                event.accept()
+                return
+            if self._mode == self.MODE_SHAPE_CIRCLE and self._circle_preview is not None:
+                self._commit_circle_preview()
+                event.accept()
+                return
+        if event.key() == Qt.Key_Escape:
+            if self._mode == self.MODE_SHAPE_RECTANGLE and (
+                self._shape_start is not None or self._rectangle_preview_rect is not None
+            ):
+                self._shape_start = None
+                self._remove_shape_preview()
+                self._shape_dragging = False
+                self._shape_drag_last_pos = None
+                event.accept()
+                return
+            if self._mode == self.MODE_SHAPE_CIRCLE and (
+                self._circle_points or self._circle_preview is not None
+            ):
+                self._circle_points.clear()
+                self._remove_shape_preview()
+                self._shape_dragging = False
+                self._shape_drag_last_pos = None
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     def _push_undo(self) -> None:
@@ -754,6 +881,10 @@ class _MaskView(_ImageView):
         if self._shape_preview_item is not None:
             self.scene().removeItem(self._shape_preview_item)
             self._shape_preview_item = None
+        self._rectangle_preview_rect = None
+        self._circle_preview = None
+        self._shape_dragging = False
+        self._shape_drag_last_pos = None
 
     def _rectangle_rect_from_points(self, start: QPointF, end: QPointF) -> QRectF:
         rect = QRectF(start, end)
@@ -769,6 +900,23 @@ class _MaskView(_ImageView):
             self._remove_shape_preview()
             return
         rect = self._rectangle_rect_from_points(self._shape_start, current)
+        if rect.isNull() or rect.width() < 1 or rect.height() < 1:
+            self._remove_shape_preview()
+            return
+        self._render_rectangle_preview(rect)
+
+    def _set_rectangle_preview_rect(self, rect: Optional[QRectF]) -> None:
+        if rect is None:
+            self._remove_shape_preview()
+            return
+        rect = rect.normalized()
+        if rect.isNull() or rect.width() < 1 or rect.height() < 1:
+            self._remove_shape_preview()
+            return
+        self._rectangle_preview_rect = rect
+        self._render_rectangle_preview(rect)
+
+    def _render_rectangle_preview(self, rect: QRectF) -> None:
         if rect.isNull() or rect.width() < 1 or rect.height() < 1:
             self._remove_shape_preview()
             return
@@ -791,6 +939,10 @@ class _MaskView(_ImageView):
         self._shape_preview_item.setVisible(True)
 
     def _update_circle_preview(self, current: Optional[QPointF]) -> None:
+        if self._circle_preview is not None:
+            center, radius = self._circle_preview
+            self._render_circle_preview(center, radius)
+            return
         if len(self._circle_points) < 2:
             self._remove_shape_preview()
             return
@@ -805,6 +957,20 @@ class _MaskView(_ImageView):
             self._remove_shape_preview()
             return
         center, radius = circle
+        self._render_circle_preview(center, radius)
+
+    def _set_circle_preview(self, circle: Optional[Tuple[QPointF, float]]) -> None:
+        if circle is None:
+            self._remove_shape_preview()
+            return
+        center, radius = circle
+        if radius <= 0:
+            self._remove_shape_preview()
+            return
+        self._circle_preview = (center, radius)
+        self._render_circle_preview(center, radius)
+
+    def _render_circle_preview(self, center: QPointF, radius: float) -> None:
         if radius <= 0:
             self._remove_shape_preview()
             return
@@ -836,9 +1002,13 @@ class _MaskView(_ImageView):
         self._shape_preview_item.setVisible(True)
 
     def _apply_rectangle(self, start: QPointF, end: QPointF) -> None:
+        rect = self._rectangle_rect_from_points(start, end)
+        self._apply_rectangle_rect(rect)
+
+    def _apply_rectangle_rect(self, rect: QRectF) -> None:
         if self._mask is None:
             return
-        rect = self._rectangle_rect_from_points(start, end)
+        rect = rect.normalized()
         if rect.isNull() or rect.width() < 1 or rect.height() < 1:
             return
 
@@ -881,7 +1051,7 @@ class _MaskView(_ImageView):
         self.historyChanged.emit()
 
     def _apply_three_point_circle(self) -> None:
-        if self._mask is None or len(self._circle_points) < 3:
+        if len(self._circle_points) < 3:
             return
         circle = self._circle_from_points(
             self._circle_points[0],
@@ -890,36 +1060,8 @@ class _MaskView(_ImageView):
         )
         if circle is None:
             return
-        center, radius = circle
-        radius_int = int(round(radius))
-        if radius_int <= 0:
-            return
-        center_tuple = (
-            int(round(center.x())),
-            int(round(center.y())),
-        )
-        shape_mask = np.zeros_like(self._mask)
-
-        if self._shape_fill_mode == self.FILL_AROUND:
-            thickness = max(1, int(self._brush_radius))
-            outer_radius = radius_int + thickness
-            cv2.circle(shape_mask, center_tuple, outer_radius, 255, -1)
-
-            inner = np.zeros_like(shape_mask)
-            cv2.circle(inner, center_tuple, radius_int, 255, -1)
-            cv2.subtract(shape_mask, inner, shape_mask)
-        else:
-            cv2.circle(shape_mask, center_tuple, radius_int, 255, -1)
-
-        if not np.any(shape_mask):
-            return
-
-        self._push_undo()
-        self._redo_stack.clear()
-        self._mask = np.maximum(self._mask, shape_mask)
-        self._update_mask_item()
-        self.maskChanged.emit(self.mask())
-        self.historyChanged.emit()
+        self._set_circle_preview(circle)
+        self._circle_points.clear()
 
     def _circle_from_points(
         self, p1: QPointF, p2: QPointF, p3: QPointF
@@ -959,6 +1101,102 @@ class _MaskView(_ImageView):
             return None
 
         return QPointF(cx, cy), radius
+
+    def _move_rectangle_preview(self, scene_pos: QPointF) -> None:
+        if self._rectangle_preview_rect is None or self._shape_drag_last_pos is None:
+            return
+        delta = scene_pos - self._shape_drag_last_pos
+        if delta.isNull():
+            return
+        rect = self._rectangle_preview_rect
+        new_left = rect.left() + delta.x()
+        new_top = rect.top() + delta.y()
+        scene_rect = self.scene_rect()
+        if not scene_rect.isNull():
+            max_left = scene_rect.right() - rect.width()
+            max_top = scene_rect.bottom() - rect.height()
+            if max_left < scene_rect.left():
+                max_left = scene_rect.left()
+            if max_top < scene_rect.top():
+                max_top = scene_rect.top()
+            new_left = min(max(new_left, scene_rect.left()), max_left)
+            new_top = min(max(new_top, scene_rect.top()), max_top)
+        new_rect = QRectF(new_left, new_top, rect.width(), rect.height())
+        self._shape_drag_last_pos = scene_pos
+        self._set_rectangle_preview_rect(new_rect)
+
+    def _move_circle_preview(self, scene_pos: QPointF) -> None:
+        if self._circle_preview is None or self._shape_drag_last_pos is None:
+            return
+        delta = scene_pos - self._shape_drag_last_pos
+        if delta.isNull():
+            return
+        center, radius = self._circle_preview
+        new_center = QPointF(center.x() + delta.x(), center.y() + delta.y())
+        scene_rect = self.scene_rect()
+        if not scene_rect.isNull():
+            min_x = scene_rect.left() + radius
+            max_x = scene_rect.right() - radius
+            if max_x < min_x:
+                min_x = max_x = scene_rect.center().x()
+            min_y = scene_rect.top() + radius
+            max_y = scene_rect.bottom() - radius
+            if max_y < min_y:
+                min_y = max_y = scene_rect.center().y()
+            new_center.setX(min(max(new_center.x(), min_x), max_x))
+            new_center.setY(min(max(new_center.y(), min_y), max_y))
+        self._shape_drag_last_pos = scene_pos
+        self._set_circle_preview((new_center, radius))
+
+    def _commit_rectangle_preview(self) -> None:
+        if self._rectangle_preview_rect is None:
+            return
+        rect = self._rectangle_preview_rect
+        self._rectangle_preview_rect = None
+        self._remove_shape_preview()
+        self._apply_rectangle_rect(rect)
+
+    def _commit_circle_preview(self) -> None:
+        if self._circle_preview is None:
+            return
+        circle = self._circle_preview
+        self._circle_preview = None
+        self._remove_shape_preview()
+        center, radius = circle
+        self._apply_circle(center, radius)
+
+    def _apply_circle(self, center: QPointF, radius: float) -> None:
+        if self._mask is None:
+            return
+        radius_int = int(round(radius))
+        if radius_int <= 0:
+            return
+        center_tuple = (
+            int(round(center.x())),
+            int(round(center.y())),
+        )
+        shape_mask = np.zeros_like(self._mask)
+
+        if self._shape_fill_mode == self.FILL_AROUND:
+            thickness = max(1, int(self._brush_radius))
+            outer_radius = radius_int + thickness
+            cv2.circle(shape_mask, center_tuple, outer_radius, 255, -1)
+
+            inner = np.zeros_like(shape_mask)
+            cv2.circle(inner, center_tuple, radius_int, 255, -1)
+            cv2.subtract(shape_mask, inner, shape_mask)
+        else:
+            cv2.circle(shape_mask, center_tuple, radius_int, 255, -1)
+
+        if not np.any(shape_mask):
+            return
+
+        self._push_undo()
+        self._redo_stack.clear()
+        self._mask = np.maximum(self._mask, shape_mask)
+        self._update_mask_item()
+        self.maskChanged.emit(self.mask())
+        self.historyChanged.emit()
 
     def _update_roi_overlay(self) -> None:
         if self.scene() is None:
@@ -1196,13 +1434,17 @@ class MaskEditor(QWidget):
         self._btn_circle = QToolButton(self)
         self._btn_circle.setText("Circle")
         self._btn_circle.setCheckable(True)
-        self._btn_circle.setToolTip("Click three points to define a circle")
+        self._btn_circle.setToolTip(
+            "Click three points to define a circle, drag to reposition, double-click to apply"
+        )
         self._mode_group.addButton(self._btn_circle)
 
         self._btn_rectangle = QToolButton(self)
         self._btn_rectangle.setText("Rectangle")
         self._btn_rectangle.setCheckable(True)
-        self._btn_rectangle.setToolTip("Click and drag to draw a rectangle")
+        self._btn_rectangle.setToolTip(
+            "Click and drag to draw a rectangle, drag to reposition, double-click to apply"
+        )
         self._mode_group.addButton(self._btn_rectangle)
 
         self._btn_brush_add.setChecked(True)
