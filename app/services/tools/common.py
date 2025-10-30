@@ -10,6 +10,7 @@ from app.models.schema import Tool, ToolParams, ToolThresholds
 from app.services.tool_service import BaseTool, ToolRunResult
 from app.services.tool_service import (
     _clamp_rect,
+    _extract_rotation_from_affine,
     _extract_translation_from_affine,
     _freeze_dict,
     _rect_from_any,
