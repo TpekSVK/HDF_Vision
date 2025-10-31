@@ -817,7 +817,7 @@ class ToolConfigPanel(QWidget):
         if isinstance(value, (float, np.floating)):
             if math.isnan(value) or math.isinf(value):
                 return str(value)
-            if abs(value) >= 1000 or (0 < abs(value) < 0.01):
+            if abs(value) >= 1e6 or (0 < abs(value) < 0.01):
                 return f"{value:.3g}"
             return f"{value:.4f}".rstrip("0").rstrip(".")
         if value is None:

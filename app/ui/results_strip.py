@@ -673,7 +673,7 @@ class ResultsStrip(QWidget):
                 return str(val)
             if abs(val - round(val)) < 1e-6:
                 return str(int(round(val)))
-            if abs(val) >= 1000 or 0 < abs(val) < 0.001:
+            if abs(val) >= 1e6 or 0 < abs(val) < 0.001:
                 return f"{val:.3g}"
             text = f"{val:.4f}".rstrip("0").rstrip(".")
             return text or "0"
