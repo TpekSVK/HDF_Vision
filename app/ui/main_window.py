@@ -34,6 +34,7 @@ from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.models.schema import RecipeV2
+from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
@@ -1167,8 +1168,35 @@ class MainWindow(QMainWindow):
         reports: Sequence[Mapping[str, Any]],
     ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
-        tool_id = str(selection.get("id")) if isinstance(selection, Mapping) else str(selection or "")
+        if isinstance(selection, Mapping):
+            selection_map: Mapping[str, Any] = selection
+        else:
+            selection_map = {}
+
+        tool_id = str(selection_map.get("id") or "")
+
+        def _as_int(value: Any) -> int | None:
+            try:
+                return int(value)
+            except Exception:
+                return None
+
         report = next((r for r in reports if str(r.get("id")) == tool_id), None)
+        if report is None:
+            selection_order = _as_int(selection_map.get("order"))
+            if selection_order is not None:
+                report = next(
+                    (
+                        r
+                        for r in reports
+                        if _as_int(r.get("order")) == selection_order
+                    ),
+                    None,
+                )
+        if report is None:
+            selection_index = _as_int(selection_map.get("index"))
+            if selection_index is not None and 0 <= selection_index < len(reports):
+                report = reports[selection_index]
         if report is None:
             return [("Info", "Žiadne dáta")]
 
@@ -1313,6 +1341,7 @@ class MainWindow(QMainWindow):
             "id": tool_id,
             "name": tool_name or tool_id or "Tool",
             "type": tool_type or diagnostics.get("type"),
+            "order": getattr(report, "order", tool_order),
             "status": getattr(report, "status", None),
             "latency_ms": latency_value,
             "metrics": metrics,
@@ -1507,21 +1536,29 @@ class MainWindow(QMainWindow):
         except Exception:
             tools = []
 
+        ordered_tools = sorted(
+            [(tool, idx) for idx, tool in enumerate(tools)],
+            key=lambda item: int(getattr(item[0], "order", item[1])),
+        )
+
         entries: list[dict[str, Any]] = []
-        for tool in tools:
-            tool_id = tool.name or f"tool_{tool.order}"
-            display_name = tool.name or tool.type or tool_id
+        used_ids: set[str] = set()
+        for position, (tool, _) in enumerate(ordered_tools):
+            tool_id, display_name, tool_order = compute_tool_identity(
+                tool,
+                fallback_index=position,
+                used_ids=used_ids,
+            )
             tool_type = tool.type or ""
             entries.append(
                 {
                     "id": tool_id,
                     "name": display_name,
                     "type": tool_type,
-                    "order": getattr(tool, "order", 0),
+                    "order": tool_order,
+                    "index": position,
                 }
             )
-
-        entries.sort(key=lambda item: int(item.get("order", 0)))
         self._tool_selector_items = entries
 
         self.cmb_tool.blockSignals(True)
