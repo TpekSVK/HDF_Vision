@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLineEdit,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -102,8 +103,8 @@ class ToolEditDialog(QDialog):
     ):
         super().__init__(parent)
 
-        self.setWindowTitle(f"Edit Tool – {tool.name}")
         self._tool = tool.copy()
+        self.setWindowTitle(self._format_window_title(self._tool.name))
         self._meta = meta
         self._meta_caps = getattr(meta, "meta", meta)
         self._camera_service = camera_service
@@ -159,9 +160,21 @@ class ToolEditDialog(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        header = QLabel(f"{tool.name} ({tool.type})", self)
-        header.setStyleSheet("font-weight: 600; font-size: 14px;")
-        layout.addWidget(header)
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(6)
+        name_label = QLabel("Názov nástroja:", self)
+        self._name_input = QLineEdit(self)
+        self._name_input.setPlaceholderText("napr. Kontrola kvality")
+        self._name_input.setText(self._tool.name or "")
+        self._name_input.textChanged.connect(self._on_name_changed)
+        name_row.addWidget(name_label)
+        name_row.addWidget(self._name_input, 1)
+        layout.addLayout(name_row)
+
+        self._header_label = QLabel(self._format_header_text(self._tool.name), self)
+        self._header_label.setStyleSheet("font-weight: 600; font-size: 14px;")
+        layout.addWidget(self._header_label)
 
         self._tabs = QTabWidget(self)
         self._tabs.setDocumentMode(True)
@@ -327,6 +340,25 @@ class ToolEditDialog(QDialog):
             self._init_locator_template_panel()
 
         self.resize(900, 640)
+
+    def _format_window_title(self, name: Optional[str]) -> str:
+        tool_obj = getattr(self, "_tool", None)
+        tool_type = getattr(tool_obj, "type", "") if tool_obj is not None else ""
+        display_name = (name or "").strip() or tool_type or "Tool"
+        return f"Edit Tool – {display_name}"
+
+    def _format_header_text(self, name: Optional[str]) -> str:
+        tool_type = getattr(self._tool, "type", "")
+        display_name = (name or "").strip()
+        if not display_name:
+            display_name = tool_type or "Tool"
+        if tool_type and display_name != tool_type:
+            return f"{display_name} ({tool_type})"
+        return display_name
+
+    def _on_name_changed(self, text: str) -> None:
+        self._header_label.setText(self._format_header_text(text))
+        self.setWindowTitle(self._format_window_title(text))
 
     def _init_locator_template_panel(self) -> None:
         if getattr(self, "_roi_sections_layout", None) is None:
@@ -641,6 +673,7 @@ class ToolEditDialog(QDialog):
         supports_roi = bool(getattr(self._meta_caps, "supports_roi", True))
         supports_mask = bool(getattr(self._meta_caps, "supports_ignore_mask", False))
 
+        self._tool.name = self._name_input.text().strip()
         params_values = dict(self._tool.params.values)
 
         if supports_roi:

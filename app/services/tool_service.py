@@ -26,6 +26,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.utils import overlay as overlay_utils
+from app.utils.tool_identity import compute_tool_identity
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
     import numpy as np
@@ -554,6 +555,7 @@ class PipelineToolReport:
 
     tool: Tool
     tool_id: str
+    order: int
     status: Literal["ok", "nok", "warn"]
     metrics: Dict[str, Any]
     latency_ms: float
@@ -728,7 +730,9 @@ class PipelineOrchestrator:
         )
         tools = self._order_tools(recipe.tools)
 
-        for tool in tools:
+        used_tool_ids: set[str] = set()
+
+        for index, tool in enumerate(tools):
             definition = ToolRegistry.get_tool_definition(tool.type)
             if definition is None:
                 raise ValueError(f"Tool type '{tool.type}' is not registered")
@@ -738,10 +742,16 @@ class PipelineOrchestrator:
             _validate_ignore_mask(tool, definition)
             _validate_params(tool)
 
-            tool_id = tool.name or f"tool_{tool.order}"
+            tool_id, tool_label, tool_order = compute_tool_identity(
+                tool,
+                fallback_index=index,
+                used_ids=used_tool_ids,
+            )
             diag_entry: Dict[str, Any] = {
                 "tool_id": tool_id,
+                "tool": tool_label,
                 "type": tool.type,
+                "order": tool_order,
                 "status": "skipped",
             }
 
@@ -814,7 +824,7 @@ class PipelineOrchestrator:
                     tool,
                     color=tool_color,
                     display_items=display_sources,
-                    label=str(tool_id),
+                    label=str(tool_label),
                     affine=overlay_affine,
                 )
                 pipeline_overlay_items.extend(tool_overlay_items)
@@ -826,6 +836,7 @@ class PipelineOrchestrator:
                 PipelineToolReport(
                     tool=tool.copy(),
                     tool_id=str(tool_id),
+                    order=int(tool_order),
                     status=result.status,
                     metrics=metrics,
                     latency_ms=float(result.latency_ms),
@@ -942,6 +953,8 @@ class PipelineOrchestrator:
         target_result: ToolRunResult | None = None
         target_report: PipelineToolReport | None = None
 
+        used_tool_ids: set[str] = set()
+
         for index, tool in enumerate(tools):
             definition = ToolRegistry.get_tool_definition(tool.type)
             if definition is None:
@@ -952,10 +965,16 @@ class PipelineOrchestrator:
             _validate_ignore_mask(tool, definition)
             _validate_params(tool)
 
-            tool_id = tool.name or f"tool_{tool.order}"
+            tool_id, tool_label, tool_order = compute_tool_identity(
+                tool,
+                fallback_index=index,
+                used_ids=used_tool_ids,
+            )
             diag_entry: Dict[str, Any] = {
                 "tool_id": tool_id,
+                "tool": tool_label,
                 "type": tool.type,
+                "order": tool_order,
                 "status": "skipped",
             }
 
@@ -1026,7 +1045,7 @@ class PipelineOrchestrator:
                     tool,
                     color=tool_color,
                     display_items=display_sources,
-                    label=str(tool_id),
+                    label=str(tool_label),
                     affine=overlay_affine,
                 )
                 pipeline_overlay_items.extend(tool_overlay_items)
@@ -1037,6 +1056,7 @@ class PipelineOrchestrator:
             report = PipelineToolReport(
                 tool=tool.copy(),
                 tool_id=str(tool_id),
+                order=int(tool_order),
                 status=result.status,
                 metrics=dict(metrics),
                 latency_ms=float(result.latency_ms),
