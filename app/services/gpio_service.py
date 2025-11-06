@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Tuple
@@ -316,6 +317,10 @@ class GPIOService:
         self._driver, self._is_hw = _load_driver()
         self._lock = threading.RLock()
         self._trigger_callbacks: list[Callable[[], None]] = []
+        self._trigger_monitor_stop = threading.Event()
+        self._trigger_monitor_thread: threading.Thread | None = None
+        self._last_trigger_levels: dict[int, bool] = {}
+        self._last_trigger_edge_ts: dict[int, float] = {}
         self._outputs: dict[str, list[int]] = {role: [] for role in _OUTPUT_ROLES}
         self._inputs: dict[str, list[int]] = {role: [] for role in _INPUT_ROLES}
         self._heartbeat_state = False
@@ -506,6 +511,7 @@ class GPIOService:
 
     # ------------------------------------------------------------------
     def close(self) -> None:
+        self._stop_trigger_monitor()
         try:
             self._driver.cleanup()
         except Exception:
@@ -610,6 +616,8 @@ class GPIOService:
                         self._driver.setup(board_pin, self._driver.IN, pull_up_down=pud)
                     except TypeError:
                         self._driver.setup(board_pin, self._driver.IN)
+                    except Exception:
+                        self._driver.setup(board_pin, self._driver.IN)
                     self._inputs.setdefault(role, []).append(board_pin)
 
             # register trigger callbacks last
@@ -617,11 +625,57 @@ class GPIOService:
                 for pin in pins:
                     self._driver.add_event_detect(pin, "rising", self._handle_trigger_event)
 
+            trigger_pins = tuple(self._inputs.get("trigger", []))
+
+        self._restart_trigger_monitor(trigger_pins)
+
     def _handle_trigger_event(self, pin: int) -> None:
+        self._last_trigger_edge_ts[pin] = time.monotonic()
         callbacks = list(self._trigger_callbacks)
         for callback in callbacks:
             try:
                 callback()
             except Exception:
                 pass
+
+    def _restart_trigger_monitor(self, trigger_pins: tuple[int, ...]) -> None:
+        self._stop_trigger_monitor()
+        if not trigger_pins:
+            return
+        self._trigger_monitor_stop = threading.Event()
+        self._trigger_monitor_thread = threading.Thread(
+            target=self._poll_trigger_inputs,
+            daemon=True,
+        )
+        self._trigger_monitor_thread.start()
+
+    def _stop_trigger_monitor(self) -> None:
+        self._trigger_monitor_stop.set()
+        thread = self._trigger_monitor_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._trigger_monitor_thread = None
+        self._last_trigger_levels.clear()
+
+    def _poll_trigger_inputs(self) -> None:
+        debounce_seconds = 0.02
+        while not self._trigger_monitor_stop.wait(0.01):
+            with self._lock:
+                pins = tuple(self._inputs.get("trigger", ()))
+            now = time.monotonic()
+            for pin in pins:
+                try:
+                    level = bool(self._driver.input(pin))
+                except Exception:
+                    level = False
+                last_level = self._last_trigger_levels.get(pin, False)
+                if level and not last_level:
+                    last_edge = self._last_trigger_edge_ts.get(pin, 0.0)
+                    if now - last_edge >= debounce_seconds:
+                        self._last_trigger_edge_ts[pin] = now
+                        self._handle_trigger_event(pin)
+                self._last_trigger_levels[pin] = level
+            for pin in list(self._last_trigger_levels.keys()):
+                if pin not in pins:
+                    self._last_trigger_levels.pop(pin, None)
 
