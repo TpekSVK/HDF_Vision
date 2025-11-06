@@ -37,6 +37,12 @@ class _TestPinRow:
     status_label: QLabel
 
 
+@dataclass
+class _MonitorRow:
+    definition: PinDefinition
+    checkbox: QCheckBox
+
+
 class GPIOWizard(QDialog):
     """Modal dialog used to configure Jetson GPIO input/output roles."""
 
@@ -46,6 +52,7 @@ class GPIOWizard(QDialog):
         self._gpio = gpio
         self._rows: list[_PinRow] = []
         self._test_rows: list[_TestPinRow] = []
+        self._monitor_rows: list[_MonitorRow] = []
         self._role_labels = gpio.available_roles()
         self._pins: List[PinDefinition] = gpio.list_pins()
         self._pin_lookup: dict[int, PinDefinition] = {pin.physical: pin for pin in self._pins}
@@ -71,7 +78,7 @@ class GPIOWizard(QDialog):
         self._init_ui()
         self._load_assignments()
         self._update_pin_statuses()
-        if self._test_rows:
+        if self._test_rows or self._monitor_rows:
             self._status_timer.start()
 
     # ------------------------------------------------------------------
@@ -83,6 +90,7 @@ class GPIOWizard(QDialog):
         tabs = QTabWidget(self)
         tabs.addTab(self._create_config_tab(tabs), "Konfigurácia")
         tabs.addTab(self._create_test_tab(tabs), "Test výstupov")
+        tabs.addTab(self._create_monitor_tab(tabs), "I/O monitor")
         layout.addWidget(tabs, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self)
@@ -329,6 +337,72 @@ class GPIOWizard(QDialog):
 
         return widget
 
+    def _create_monitor_tab(self, parent: QWidget) -> QWidget:
+        widget = QWidget(parent)
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        info = QLabel(
+            "Sledujte aktuálne logické úrovne na všetkých GPIO pinoch."
+            " Stav je zobrazovaný ako zaškrtávacie políčko (HIGH = zaškrtnuté)."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        gpio_pins = [definition for definition in self._pins if definition.is_gpio]
+        if not gpio_pins:
+            empty = QLabel("Nie sú dostupné žiadne GPIO piny na monitorovanie.")
+            empty.setAlignment(Qt.AlignCenter)
+            layout.addWidget(empty, 1)
+            return widget
+
+        scroll = QScrollArea(widget)
+        scroll.setWidgetResizable(True)
+        layout.addWidget(scroll, 1)
+
+        container = QWidget(scroll)
+        scroll.setWidget(container)
+
+        grid = QGridLayout(container)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
+
+        header_font = self.font()
+        header_font.setBold(True)
+
+        headers = ("Pin", "Signál", "Popis", "Stav")
+        for col, text in enumerate(headers):
+            label = QLabel(text, container)
+            label.setFont(header_font)
+            if col in (0, 3):
+                label.setAlignment(Qt.AlignCenter)
+            grid.addWidget(label, 0, col)
+
+        for row_index, definition in enumerate(gpio_pins, start=1):
+            lbl_pin = QLabel(str(definition.physical), container)
+            lbl_pin.setAlignment(Qt.AlignCenter)
+            grid.addWidget(lbl_pin, row_index, 0)
+
+            grid.addWidget(QLabel(definition.label, container), row_index, 1)
+
+            lbl_desc = QLabel(definition.description, container)
+            lbl_desc.setWordWrap(True)
+            grid.addWidget(lbl_desc, row_index, 2)
+
+            checkbox = QCheckBox(container)
+            checkbox.setFocusPolicy(Qt.NoFocus)
+            checkbox.setAttribute(Qt.WA_TransparentForMouseEvents)
+            checkbox.setToolTip("Aktuálny stav pinu (iba na čítanie)")
+            grid.addWidget(checkbox, row_index, 3, alignment=Qt.AlignCenter)
+
+            self._monitor_rows.append(_MonitorRow(definition=definition, checkbox=checkbox))
+
+        grid.setColumnStretch(2, 1)
+
+        return widget
+
     def _populate_combo(self, combo: QComboBox, roles: Iterable[str]) -> None:
         combo.clear()
         for role in roles:
@@ -368,13 +442,21 @@ class GPIOWizard(QDialog):
         QTimer.singleShot(200, self._update_pin_statuses)
 
     def _update_pin_statuses(self) -> None:
-        if not self._test_rows:
+        if not (self._test_rows or self._monitor_rows):
             return
-        pins = [row.definition.physical for row in self._test_rows]
+        pins = {row.definition.physical for row in self._test_rows}
+        pins.update(row.definition.physical for row in self._monitor_rows)
+        if not pins:
+            return
         states = self._gpio.read_pin_states(pins)
         for row in self._test_rows:
             state = states.get(row.definition.physical, False)
             row.status_label.setText("HIGH" if state else "LOW")
+        for row in self._monitor_rows:
+            state = states.get(row.definition.physical, False)
+            block = row.checkbox.blockSignals(True)
+            row.checkbox.setChecked(state)
+            row.checkbox.blockSignals(block)
 
     def _selected_test_pins(self) -> list[int]:
         return [row.definition.physical for row in self._test_rows if row.checkbox.isChecked()]
