@@ -449,8 +449,16 @@ class MainWindow(QMainWindow):
         self._update_metrics_panel()
 
     def manual_trigger(self):
+        if self.mode != "RUN":
+            self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
+            return
         try:
             frame = self.cam.last_frame()
+            if frame is None:
+                try:
+                    frame = self.cam.one_shot()
+                except Exception:
+                    frame = None
             if frame is None:
                 self.lbl_status.setText("Žiadny snímok z kamery.")
                 return
@@ -835,6 +843,8 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
+        if self.mode != "RUN":
+            return
         QTimer.singleShot(0, self.manual_trigger)
 
     def _update_live_view(self):
