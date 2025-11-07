@@ -635,7 +635,8 @@ class GPIOService:
         for callback in callbacks:
             try:
                 callback()
-            except Exception:
+            except Exception as exc:
+                print(f"[GPIO] Trigger callback error: {exc}")
                 pass
 
     def _restart_trigger_monitor(self, trigger_pins: tuple[int, ...]) -> None:
