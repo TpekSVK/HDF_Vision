@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
@@ -43,6 +43,7 @@ from app.ui.camera_profile_utils import (
 
 
 class MainWindow(QMainWindow):
+    gpio_triggered = Signal()
     def __init__(self):
         super().__init__()
         self.setWindowTitle("HDF Vision")
@@ -66,6 +67,7 @@ class MainWindow(QMainWindow):
 
         self.gpio = GPIOService()
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
+        self.gpio_triggered.connect(self.manual_trigger)
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
@@ -846,7 +848,8 @@ class MainWindow(QMainWindow):
         print(f"[RUN] GPIO trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
-        QTimer.singleShot(0, self.manual_trigger)
+        #QTimer.singleShot(0, self.manual_trigger)
+        self.gpio_triggered.emit()
 
     def _update_live_view(self):
         try:
