@@ -843,6 +843,7 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
+        print(f"[RUN] GPIO trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
         QTimer.singleShot(0, self.manual_trigger)
