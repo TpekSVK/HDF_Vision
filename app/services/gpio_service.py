@@ -214,7 +214,7 @@ class _JetsonDriver(_BaseDriver):
         edge: str,
         callback: Callable[[int], None],
         *,
-        bouncetime: int = 200,
+        bouncetime: int = 50,
     ) -> None:
         GPIO = self._gpio
         mode = GPIO.RISING if edge == "rising" else GPIO.FALLING if edge == "falling" else GPIO.BOTH
@@ -283,7 +283,7 @@ class _StubDriver(_BaseDriver):
         edge: str,
         callback: Callable[[int], None],
         *,
-        bouncetime: int = 200,
+        bouncetime: int = 50,
     ) -> None:
         self._events[pin] = callback
 
@@ -623,7 +623,12 @@ class GPIOService:
             # register trigger callbacks last
             for pins in self._inputs.values():
                 for pin in pins:
-                    self._driver.add_event_detect(pin, "rising", self._handle_trigger_event)
+                    self._driver.add_event_detect(
+                        pin,
+                        "rising",
+                        self._handle_trigger_event,
+                        bouncetime=50,
+                    )
 
             trigger_pins = tuple(self._inputs.get("trigger", []))
 
@@ -659,7 +664,7 @@ class GPIOService:
         self._last_trigger_levels.clear()
 
     def _poll_trigger_inputs(self) -> None:
-        debounce_seconds = 0.02
+        debounce_seconds = 0.05
         while not self._trigger_monitor_stop.wait(0.01):
             with self._lock:
                 pins = tuple(self._inputs.get("trigger", ()))
