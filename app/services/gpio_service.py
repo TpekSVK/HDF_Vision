@@ -625,7 +625,7 @@ class GPIOService:
                 for pin in pins:
                     self._driver.add_event_detect(
                         pin,
-                        "rising",
+                        "falling",
                         self._handle_trigger_event,
                         bouncetime=50,
                     )
@@ -675,7 +675,7 @@ class GPIOService:
                 except Exception:
                     level = False
                 last_level = self._last_trigger_levels.get(pin, False)
-                if level and not last_level:
+                if not level and last_level:
                     last_edge = self._last_trigger_edge_ts.get(pin, 0.0)
                     if now - last_edge >= debounce_seconds:
                         self._last_trigger_edge_ts[pin] = now
