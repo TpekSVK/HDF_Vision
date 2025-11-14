@@ -177,6 +177,7 @@ class _JetsonDriver(_BaseDriver):
         self.IN = GPIO.IN
         self.HIGH = GPIO.HIGH
         self.LOW = GPIO.LOW
+        # Na Orin-e Jetson.GPIO ignoruje pull_up_down, necháme ich ako None
         self.PUD_DOWN = getattr(GPIO, "PUD_DOWN", None)
         self.PUD_UP = getattr(GPIO, "PUD_UP", None)
         self._callbacks: dict[int, Callable[[int], None]] = {}
@@ -611,9 +612,17 @@ class GPIOService:
                     self._driver.setup(board_pin, self._driver.OUT, initial=self._driver.LOW)
                     self._outputs.setdefault(role, []).append(board_pin)
                 elif role in _INPUT_ROLES:
-                    pud = self._driver.PUD_DOWN if self._driver.PUD_DOWN is not None else None
+                    # Na Jetson HW riešime pull-up/down v HW (device-tree / externý odpor),
+                    # preto tu už nič nesetujeme. V stub režime necháme PUD_DOWN.
+                    if not self._is_hw and self._driver.PUD_DOWN is not None:
+                        pud = self._driver.PUD_DOWN
+                    else:
+                        pud = None
                     try:
-                        self._driver.setup(board_pin, self._driver.IN, pull_up_down=pud)
+                        if pud is not None:
+                            self._driver.setup(board_pin, self._driver.IN, pull_up_down=pud)
+                        else:
+                            self._driver.setup(board_pin, self._driver.IN)
                     except TypeError:
                         self._driver.setup(board_pin, self._driver.IN)
                     except Exception:
@@ -646,7 +655,8 @@ class GPIOService:
 
     def _restart_trigger_monitor(self, trigger_pins: tuple[int, ...]) -> None:
         self._stop_trigger_monitor()
-        if not trigger_pins:
+        # Na reálnom Jetson HW používame iba add_event_detect a nepúšťame pollovací thread.
+        if not trigger_pins or self._is_hw:
             return
         self._trigger_monitor_stop = threading.Event()
         self._trigger_monitor_thread = threading.Thread(
@@ -684,4 +694,3 @@ class GPIOService:
             for pin in list(self._last_trigger_levels.keys()):
                 if pin not in pins:
                     self._last_trigger_levels.pop(pin, None)
-
