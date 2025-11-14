@@ -664,7 +664,7 @@ class GPIOService:
         self._last_trigger_levels.clear()
 
     def _poll_trigger_inputs(self) -> None:
-        debounce_seconds = 0.05
+        debounce_seconds = 0.2
         while not self._trigger_monitor_stop.wait(0.01):
             with self._lock:
                 pins = tuple(self._inputs.get("trigger", ()))
