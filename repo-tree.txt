@@ -10,15 +10,16 @@ Folder PATH listing
 |   |   main.py
 |   |
 |   +---models
-|   |       __init__.py
-|   |       regions.py
-|   |       schema.py
+|   |   |   __init__.py
+|   |   |   regions.py
+|   |   |   schema.py
 |   |
 |   +---services
 |   |   |   __init__.py
 |   |   |   camera_service.py
 |   |   |   compare_service.py
 |   |   |   db_service.py
+|   |   |   golden_wizard_logic.py
 |   |   |   gpio_service.py
 |   |   |   live_preview_service.py
 |   |   |   logging_service.py
@@ -33,41 +34,65 @@ Folder PATH listing
 |   |   |   xu_stub.py
 |   |   |
 |   |   \---tools
-|   |           __init__.py
-|   |           common.py
-|   |           edge.py
-|   |           mse.py
-|   |           ncc.py
-|   |           ssd.py
+|   |       |   __init__.py
+|   |       |   common.py
+|   |       |   edge.py
+|   |       |   light_presence.py
+|   |       |   light_transmission.py
+|   |       |   mse.py
+|   |       |   ncc.py
+|   |       |   ssd.py
+|   |
+|   +---tools
+|   |   |   __init__.py
+|   |   |   light_presence.py
+|   |   |   light_transmission.py
 |   |
 |   +---ui
-|   |       __init__.py
-|   |       draw_view.py
-|   |       golden_wizard.py
-|   |       gpio_wizard.py
-|   |       main_window.py
-|   |       results_strip.py
-|   |       roi_mask_editor.py
-|   |       theme.py
-|   |       thresholds_panel.py
-|   |       xu_panel.py
+|   |   |   __init__.py
+|   |   |   camera_profile_utils.py
+|   |   |   draw_view.py
+|   |   |   gpio_wizard.py
+|   |   |   main_window.py
+|   |   |   results_strip.py
+|   |   |   roi_mask_editor.py
+|   |   |   theme.py
+|   |   |   thresholds_panel.py
+|   |   |   view_strip.py
+|   |   |   view_utils.py
+|   |   |   xu_panel.py
+|   |   |
+|   |   \---golden_wizard
+|   |       |   __init__.py
+|   |       |   form_widgets.py
+|   |       |   golden_wizard.py
+|   |       |   session_settings_dialog.py
+|   |       |   tool_catalog_dialog.py
+|   |       |   tool_edit_dialog.py
+|   |       |   view_config_dialog.py
 |   |
 |   \---utils
-|           __init__.py
-|           imaging.py
-|           overlay.py
+|       |   __init__.py
+|       |   imaging.py
+|       |   overlay.py
+|       |   tool_identity.py
 |
 +---data
-|       config.json
+|   |   config.json
 |
 +---docker
-|       99-hdf-uvc.rules
-|       Dockerfile
-|       build.sh
-|       run.sh
+|   |   99-hdf-uvc.rules
+|   |   Dockerfile
+|   |   build.sh
+|   |   run.sh
 |
 \---tests
-        test_locator_template_match.py
-        test_overlay_utils.py
-        test_pair_tool_cache.py
-        test_tool_pipeline.py
+    |   test_camera_profile_utils.py
+    |   test_db_service_today_filters.py
+    |   test_light_presence.py
+    |   test_locator_template_match.py
+    |   test_overlay_utils.py
+    |   test_pair_tool_cache.py
+    |   test_recipe_aggregation.py
+    |   test_tool_pipeline.py
+    |   test_view_configuration.py
