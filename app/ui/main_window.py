@@ -3,7 +3,7 @@ from PySide6.QtWidgets import (
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
 )
 from PySide6.QtConcurrent import QtConcurrent
-from PySide6.QtCore import Qt, QTimer, Signal, QFutureWatcher
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
