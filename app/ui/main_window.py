@@ -15,6 +15,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from numbers import Integral, Real
 from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 
@@ -69,8 +70,9 @@ class MainWindow(QMainWindow):
 
         self.modbus = ModbusService()
         self.modbus_settings: dict[str, object] = {}
-        self._modbus_connect_watcher: QFutureWatcher | None = None
-        self._modbus_trigger_watcher: QFutureWatcher | None = None
+        self._executor = ThreadPoolExecutor(max_workers=4)
+        self._modbus_connect_future: Future | None = None
+        self._modbus_trigger_future: Future | None = None
         self._modbus_last_trigger_level: bool = False
         self._modbus_heartbeat_state: bool = False
         self._modbus_connecting: bool = False
@@ -918,25 +920,26 @@ class MainWindow(QMainWindow):
             "retries": int(self.modbus_settings.get("retry") or 1),
         }
         self._modbus_connecting = True
-        watcher = QFutureWatcher(self)
-        future = QtConcurrent.run(self.modbus.connect, **params)
-        watcher.setFuture(future)
-        watcher.finished.connect(lambda: self._on_modbus_connect_finished(watcher))
-        self._modbus_connect_watcher = watcher
+        future = self._executor.submit(self.modbus.connect, **params)
+        self._modbus_connect_future = future
 
-    def _on_modbus_connect_finished(self, watcher: QFutureWatcher) -> None:
+        def handle_future(fut: Future) -> None:
+            QTimer.singleShot(0, lambda: self._on_modbus_connect_finished(fut))
+
+        future.add_done_callback(handle_future)
+
+    def _on_modbus_connect_finished(self, future: Future) -> None:
         self._modbus_connecting = False
         try:
-            watcher.result()
+            future.result()
         except Exception:
             pass
-        watcher.deleteLater()
-        self._modbus_connect_watcher = None
+        self._modbus_connect_future = None
 
     def _modbus_pulse(self, address: int | None, duration_ms: int) -> None:
         if address is None or not self._modbus_enabled():
             return
-        QtConcurrent.run(self._modbus_pulse_task, int(address), max(0, int(duration_ms)))
+        self._executor.submit(self._modbus_pulse_task, int(address), max(0, int(duration_ms)))
 
     def _modbus_pulse_task(self, address: int, duration_ms: int) -> None:
         try:
@@ -963,29 +966,30 @@ class MainWindow(QMainWindow):
         if addr is None:
             return
         self._modbus_heartbeat_state = not self._modbus_heartbeat_state
-        QtConcurrent.run(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
+        self._executor.submit(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
 
     def _poll_modbus_trigger(self) -> None:
         if not self._modbus_enabled():
             return
-        if self._modbus_trigger_watcher is not None and self._modbus_trigger_watcher.isRunning():
+        if self._modbus_trigger_future is not None and not self._modbus_trigger_future.done():
             return
         addr = self._modbus_coil_value("di_trigger")
         if addr is None:
             return
-        watcher = QFutureWatcher(self)
-        future = QtConcurrent.run(self.modbus.read_discrete_inputs, addr, 1)
-        watcher.setFuture(future)
-        watcher.finished.connect(lambda: self._on_modbus_trigger_read(watcher))
-        self._modbus_trigger_watcher = watcher
+        future = self._executor.submit(self.modbus.read_discrete_inputs, addr, 1)
+        self._modbus_trigger_future = future
 
-    def _on_modbus_trigger_read(self, watcher: QFutureWatcher) -> None:
+        def handle_future(fut: Future) -> None:
+            QTimer.singleShot(0, lambda: self._on_modbus_trigger_read(fut))
+
+        future.add_done_callback(handle_future)
+
+    def _on_modbus_trigger_read(self, future: Future) -> None:
         try:
-            result = watcher.result()
+            result = future.result()
         except Exception:
             result = []
-        watcher.deleteLater()
-        self._modbus_trigger_watcher = None
+        self._modbus_trigger_future = None
         level = bool(result[0]) if result else False
         if level and not self._modbus_last_trigger_level and self.mode == "RUN":
             self.manual_trigger()
@@ -1755,6 +1759,7 @@ class MainWindow(QMainWindow):
             self.cam.stop()
             self.gpio.close()
             self.modbus.disconnect()
+            self._executor.shutdown(wait=False, cancel_futures=True)
         finally:
             e.accept()
 

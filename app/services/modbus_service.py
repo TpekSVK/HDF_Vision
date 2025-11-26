@@ -18,7 +18,7 @@ class ModbusService:
     """Thread-safe wrapper around ``ModbusTcpClient``.
 
     The methods are synchronous; callers are expected to execute them via
-    ``QtConcurrent``/``QThread`` to avoid blocking the UI thread.
+    background threads to avoid blocking the UI thread.
     """
 
     def __init__(self) -> None:

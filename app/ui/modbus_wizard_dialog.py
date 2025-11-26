@@ -3,9 +3,9 @@ from __future__ import annotations
 import time
 from datetime import datetime
 from typing import Callable
+from concurrent.futures import Future, ThreadPoolExecutor
 
-from PySide6.QtConcurrent import QtConcurrent
-from PySide6.QtCore import Qt, QTimer, Signal, QFutureWatcher
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -36,8 +36,9 @@ class ModbusWizardDialog(QDialog):
         self._modbus = modbus
         self._db = db
         self._settings = db.get_modbus_settings()
-        self._watchers: list[QFutureWatcher] = []
+        self._futures: list[Future] = []
         self._trigger_refresh_running = False
+        self._executor = ThreadPoolExecutor(max_workers=4)
 
         self._init_ui()
         self._load_settings()
@@ -234,21 +235,27 @@ class ModbusWizardDialog(QDialog):
         }
 
     # ------------------------------------------------------------------
-    def _run_async(self, func: Callable, *args, callback: Callable[[QFutureWatcher], None] | None = None) -> None:
-        watcher = QFutureWatcher(self)
-        future = QtConcurrent.run(func, *args)
-        watcher.setFuture(future)
-        if callback:
-            watcher.finished.connect(lambda: callback(watcher))
-        watcher.finished.connect(lambda: self._cleanup_watcher(watcher))
-        self._watchers.append(watcher)
+    def _run_async(self, func: Callable, *args, callback: Callable[[Future], None] | None = None) -> None:
+        future = self._executor.submit(func, *args)
+        self._futures.append(future)
 
-    def _cleanup_watcher(self, watcher: QFutureWatcher) -> None:
+        def handle_future(fut: Future) -> None:
+            def deliver() -> None:
+                try:
+                    if callback:
+                        callback(fut)
+                finally:
+                    self._cleanup_future(fut)
+
+            QTimer.singleShot(0, deliver)
+
+        future.add_done_callback(handle_future)
+
+    def _cleanup_future(self, future: Future) -> None:
         try:
-            self._watchers.remove(watcher)
+            self._futures.remove(future)
         except ValueError:
             pass
-        watcher.deleteLater()
         self._update_status_bar()
 
     # ------------------------------------------------------------------
@@ -265,9 +272,9 @@ class ModbusWizardDialog(QDialog):
             callback=self._on_test_connect_finished,
         )
 
-    def _on_test_connect_finished(self, watcher: QFutureWatcher) -> None:
+    def _on_test_connect_finished(self, future: Future) -> None:
         try:
-            ok = bool(watcher.result())
+            ok = bool(future.result())
         except Exception as exc:  # pragma: no cover - defensive
             ok = False
             self.lbl_connect_status.setText(f"Error: {exc}")
@@ -329,10 +336,10 @@ class ModbusWizardDialog(QDialog):
     def _read_trigger_task(self, address: int):
         return self._modbus.read_discrete_inputs(address, 1)
 
-    def _on_trigger_value(self, watcher: QFutureWatcher) -> None:
+    def _on_trigger_value(self, future: Future) -> None:
         self._trigger_refresh_running = False
         try:
-            result = watcher.result()
+            result = future.result()
         except Exception:
             result = []
         level = bool(result[0]) if result else False
@@ -372,11 +379,11 @@ class ModbusWizardDialog(QDialog):
         self.settings_applied.emit(stored)
         self.accept()
 
-    # ------------------------------------------------------------------
-    def closeEvent(self, event) -> None:  # pragma: no cover - UI cleanup
+    def closeEvent(self, event) -> None:
         try:
             self._trigger_timer.stop()
             self._status_timer.stop()
-        except Exception:
-            pass
-        super().closeEvent(event)
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        finally:
+            super().closeEvent(event)
+
