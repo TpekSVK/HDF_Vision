@@ -41,7 +41,41 @@ CREATE TABLE IF NOT EXISTS results (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS settings_modbus (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER DEFAULT 0,
+  host TEXT DEFAULT '',
+  port INTEGER DEFAULT 502,
+  unit_id INTEGER DEFAULT 1,
+  timeout_ms INTEGER DEFAULT 1500,
+  retry INTEGER DEFAULT 1,
+  coil_ok INTEGER DEFAULT 0,
+  coil_nok INTEGER DEFAULT 1,
+  coil_heartbeat INTEGER DEFAULT 2,
+  coil_flash1 INTEGER,
+  coil_flash2 INTEGER,
+  pulse_ms INTEGER DEFAULT 200,
+  heartbeat_period_ms INTEGER DEFAULT 1000,
+  di_trigger INTEGER DEFAULT 0
+);
 """
+
+_MODBUS_COLUMNS: dict[str, tuple[str, str | None]] = {
+    "enabled": ("INTEGER", "0"),
+    "host": ("TEXT", "''"),
+    "port": ("INTEGER", "502"),
+    "unit_id": ("INTEGER", "1"),
+    "timeout_ms": ("INTEGER", "1500"),
+    "retry": ("INTEGER", "1"),
+    "coil_ok": ("INTEGER", "0"),
+    "coil_nok": ("INTEGER", "1"),
+    "coil_heartbeat": ("INTEGER", "2"),
+    "coil_flash1": ("INTEGER", None),
+    "coil_flash2": ("INTEGER", None),
+    "pulse_ms": ("INTEGER", "200"),
+    "heartbeat_period_ms": ("INTEGER", "1000"),
+    "di_trigger": ("INTEGER", "0"),
+}
 
 class DbService:
     def __init__(self, db_path: Path = DB_PATH):
@@ -69,6 +103,44 @@ class DbService:
             cur.execute("ALTER TABLE results ADD COLUMN view_id TEXT")
         if "run_id" not in result_columns:
             cur.execute("ALTER TABLE results ADD COLUMN run_id TEXT")
+        self._conn.commit()
+        self._init_modbus_settings()
+
+    def _init_modbus_settings(self) -> None:
+        cur = self._conn.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS settings_modbus (id INTEGER PRIMARY KEY CHECK (id = 1))")
+        cur.execute("PRAGMA table_info(settings_modbus)")
+        modbus_columns = {row[1] for row in cur.fetchall()}
+        for name, (ctype, default) in _MODBUS_COLUMNS.items():
+            if name not in modbus_columns:
+                default_clause = f" DEFAULT {default}" if default is not None else ""
+                cur.execute(
+                    f"ALTER TABLE settings_modbus ADD COLUMN {name} {ctype}{default_clause}"
+                )
+        cur.execute("SELECT COUNT(*) FROM settings_modbus")
+        count = cur.fetchone()[0]
+        if count == 0:
+            placeholders = ", ".join(_MODBUS_COLUMNS.keys())
+            values = [
+                0,  # enabled
+                "",
+                502,
+                1,
+                1500,
+                1,
+                0,
+                1,
+                2,
+                None,
+                None,
+                200,
+                1000,
+                0,
+            ]
+            cur.execute(
+                f"INSERT INTO settings_modbus(id, {placeholders}) VALUES(1, {', '.join(['?'] * len(values))})",
+                values,
+            )
         self._conn.commit()
 
     def conn(self):
@@ -460,3 +532,68 @@ class DbService:
             self._conn.commit()
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    # Modbus settings
+    def _default_modbus_settings(self) -> dict[str, object]:
+        return {
+            "enabled": False,
+            "host": "",
+            "port": 502,
+            "unit_id": 1,
+            "timeout_ms": 1500,
+            "retry": 1,
+            "coil_ok": 0,
+            "coil_nok": 1,
+            "coil_heartbeat": 2,
+            "coil_flash1": None,
+            "coil_flash2": None,
+            "pulse_ms": 200,
+            "heartbeat_period_ms": 1000,
+            "di_trigger": 0,
+        }
+
+    def get_modbus_settings(self) -> dict[str, object]:
+        cur = self._conn.cursor()
+        columns = list(_MODBUS_COLUMNS.keys())
+        cur.execute(
+            f"SELECT {', '.join(columns)} FROM settings_modbus WHERE id=1"
+        )
+        row = cur.fetchone()
+        if row is None:
+            return self._default_modbus_settings()
+        values = dict(zip(columns, row))
+        values["enabled"] = bool(values.get("enabled"))
+        return values
+
+    def save_modbus_settings(self, settings: dict[str, object]) -> dict[str, object]:
+        current = self._default_modbus_settings()
+        normalized: dict[str, object] = {}
+        for key, default_value in current.items():
+            value = settings.get(key, default_value)
+            if key == "enabled":
+                normalized[key] = bool(value)
+            elif key in {"host"}:
+                normalized[key] = str(value or "")
+            elif key in {"coil_flash1", "coil_flash2"}:
+                try:
+                    number = int(value)
+                except Exception:
+                    number = -1
+                normalized[key] = None if number < 0 else number
+            else:
+                try:
+                    normalized[key] = int(value)
+                except Exception:
+                    normalized[key] = default_value
+
+        cur = self._conn.cursor()
+        placeholders = ", ".join([f"{key}=?" for key in normalized.keys()])
+        cur.execute(
+            f"INSERT INTO settings_modbus(id, {', '.join(normalized.keys())}) "
+            f"VALUES(1, {', '.join(['?'] * len(normalized))}) "
+            f"ON CONFLICT(id) DO UPDATE SET {placeholders}",
+            list(normalized.values()) * 2,
+        )
+        self._conn.commit()
+        return self.get_modbus_settings()
