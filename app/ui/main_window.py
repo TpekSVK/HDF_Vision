@@ -14,6 +14,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from numbers import Integral, Real
 from typing import Any
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import numpy as np
 
@@ -25,7 +26,7 @@ from app.ui.xu_panel import XUPanel
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
-from app.ui.gpio_wizard import GPIOWizard
+from app.ui.modbus_wizard_dialog import ModbusWizardDialog
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
@@ -33,6 +34,7 @@ from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
+from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
@@ -64,6 +66,15 @@ class MainWindow(QMainWindow):
         self.db = DbService()
         self.recipes = RecipeService(db=self.db)
         self.stats = StatsService(db=self.db)
+
+        self.modbus = ModbusService()
+        self.modbus_settings: dict[str, object] = {}
+        self._executor = ThreadPoolExecutor(max_workers=4)
+        self._modbus_connect_future: Future | None = None
+        self._modbus_trigger_future: Future | None = None
+        self._modbus_last_trigger_level: bool = False
+        self._modbus_heartbeat_state: bool = False
+        self._modbus_connecting: bool = False
 
         self.gpio = GPIOService()
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
@@ -289,6 +300,12 @@ class MainWindow(QMainWindow):
         self._run_timer.timeout.connect(self._update_live_view)
         # spúšťa sa až pri Live ON v _toggle_live()
 
+        self._modbus_heartbeat_timer = QTimer(self)
+        self._modbus_heartbeat_timer.timeout.connect(self._send_modbus_heartbeat)
+        self._modbus_di_timer = QTimer(self)
+        self._modbus_di_timer.setInterval(200)
+        self._modbus_di_timer.timeout.connect(self._poll_modbus_trigger)
+
         # inicializuj pohľady a pravý panel
         self._refresh_views()
         self._refresh_tool_selector()
@@ -303,9 +320,9 @@ class MainWindow(QMainWindow):
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
-        self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
-        self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
-        row1.addWidget(self.btn_gpio_wizard)
+        self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
+        self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
+        row1.addWidget(self.btn_modbus_wizard)
 
         row1.addStretch(1)
         s.addLayout(row1)
@@ -335,6 +352,11 @@ class MainWindow(QMainWindow):
 
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
+
+        try:
+            self._apply_modbus_settings(self.db.get_modbus_settings())
+        except Exception as exc:
+            print(f"[Modbus] Failed to load settings: {exc}")
 
         # Spusť retenciu na pozadí (jednorazovo pri štarte)
         Thread(target=lambda: RetentionService().run_once(verbose=False), daemon=True).start()
@@ -705,6 +727,7 @@ class MainWindow(QMainWindow):
                 f"color: {color_map.get(aggregated_status, '#33dd66')};"
             )
             self.gpio.signal_result(aggregated_status)
+            self._modbus_signal_result(aggregated_status)
 
             active_frame = self._get_last_frame_for_view(self._active_view_id)
             if active_frame is not None:
@@ -721,6 +744,7 @@ class MainWindow(QMainWindow):
 
         except Exception:
             self.gpio.signal_result("nok")
+            self._modbus_signal_result("nok")
             import traceback; traceback.print_exc()
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
@@ -747,6 +771,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(status.upper())
         self.lbl_status.setStyleSheet(f"color: {color};")
         self.gpio.signal_result(status)
+        self._modbus_signal_result(status)
 
         legacy_report = [{
             "id": "legacy",
@@ -800,10 +825,10 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
 
-    def open_gpio_wizard(self):
-        self.gpio.set_active_recipe(self.current_recipe_name())
-        dlg = GPIOWizard(self.gpio, self)
-        dlg.resize(720, 520)
+    def open_modbus_wizard(self):
+        dlg = ModbusWizardDialog(self.modbus, self.db, parent=self)
+        dlg.settings_applied.connect(self._apply_modbus_settings)
+        dlg.resize(720, 640)
         dlg.exec()
 
     def _reload_results_strip(self) -> None:
@@ -843,6 +868,131 @@ class MainWindow(QMainWindow):
             if not restored:
                 self._apply_run_camera_profile()
             self._update_live_view()
+
+    # ------------------------------------------------------------------
+    # Modbus helpers
+    def _apply_modbus_settings(self, settings: dict[str, object]) -> None:
+        self.modbus_settings = settings
+        self._modbus_heartbeat_timer.stop()
+        self._modbus_di_timer.stop()
+        if not self._modbus_enabled():
+            self.modbus.disconnect()
+            return
+
+        heartbeat_period = int(settings.get("heartbeat_period_ms", 1000) or 1000)
+        heartbeat_addr = self._modbus_coil_value("coil_heartbeat")
+        if heartbeat_addr is not None:
+            self._modbus_heartbeat_timer.setInterval(max(50, heartbeat_period))
+            self._modbus_heartbeat_timer.start()
+
+        trigger_addr = self._modbus_coil_value("di_trigger")
+        self._modbus_last_trigger_level = False
+        if trigger_addr is not None:
+            self._modbus_di_timer.start()
+
+        self._connect_modbus()
+
+    def _modbus_enabled(self) -> bool:
+        return bool(self.modbus_settings.get("enabled"))
+
+    def _modbus_coil_value(self, key: str) -> int | None:
+        try:
+            value = self.modbus_settings.get(key)
+        except Exception:
+            return None
+        if value is None:
+            return None
+        try:
+            number = int(value)
+        except Exception:
+            return None
+        return number if number >= 0 else None
+
+    def _connect_modbus(self) -> None:
+        if self._modbus_connecting:
+            return
+        params = {
+            "host": str(self.modbus_settings.get("host") or ""),
+            "port": int(self.modbus_settings.get("port") or 502),
+            "unit_id": int(self.modbus_settings.get("unit_id") or 1),
+            "timeout_ms": int(self.modbus_settings.get("timeout_ms") or 1500),
+            "retries": int(self.modbus_settings.get("retry") or 1),
+        }
+        self._modbus_connecting = True
+        future = self._executor.submit(self.modbus.connect, **params)
+        self._modbus_connect_future = future
+
+        def handle_future(fut: Future) -> None:
+            QTimer.singleShot(0, lambda: self._on_modbus_connect_finished(fut))
+
+        future.add_done_callback(handle_future)
+
+    def _on_modbus_connect_finished(self, future: Future) -> None:
+        self._modbus_connecting = False
+        try:
+            future.result()
+        except Exception:
+            pass
+        self._modbus_connect_future = None
+
+    def _modbus_pulse(self, address: int | None, duration_ms: int) -> None:
+        if address is None or not self._modbus_enabled():
+            return
+        self._executor.submit(self._modbus_pulse_task, int(address), max(0, int(duration_ms)))
+
+    def _modbus_pulse_task(self, address: int, duration_ms: int) -> None:
+        try:
+            if not self.modbus.write_coil(address, True):
+                return
+            time.sleep(max(0, duration_ms) / 1000.0)
+        finally:
+            try:
+                self.modbus.write_coil(address, False)
+            except Exception:
+                pass
+
+    def _modbus_signal_result(self, status: str) -> None:
+        if not self._modbus_enabled():
+            return
+        pulse_ms = int(self.modbus_settings.get("pulse_ms") or 0)
+        target = "coil_ok" if (status or "").lower() == "ok" else "coil_nok"
+        self._modbus_pulse(self._modbus_coil_value(target), pulse_ms)
+
+    def _send_modbus_heartbeat(self) -> None:
+        if not self._modbus_enabled():
+            return
+        addr = self._modbus_coil_value("coil_heartbeat")
+        if addr is None:
+            return
+        self._modbus_heartbeat_state = not self._modbus_heartbeat_state
+        self._executor.submit(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
+
+    def _poll_modbus_trigger(self) -> None:
+        if not self._modbus_enabled():
+            return
+        if self._modbus_trigger_future is not None and not self._modbus_trigger_future.done():
+            return
+        addr = self._modbus_coil_value("di_trigger")
+        if addr is None:
+            return
+        future = self._executor.submit(self.modbus.read_discrete_inputs, addr, 1)
+        self._modbus_trigger_future = future
+
+        def handle_future(fut: Future) -> None:
+            QTimer.singleShot(0, lambda: self._on_modbus_trigger_read(fut))
+
+        future.add_done_callback(handle_future)
+
+    def _on_modbus_trigger_read(self, future: Future) -> None:
+        try:
+            result = future.result()
+        except Exception:
+            result = []
+        self._modbus_trigger_future = None
+        level = bool(result[0]) if result else False
+        if level and not self._modbus_last_trigger_level and self.mode == "RUN":
+            self.manual_trigger()
+        self._modbus_last_trigger_level = level
 
     def _handle_gpio_trigger(self):
         print(f"[RUN] GPIO trigger received, mode={self.mode}")
@@ -1607,6 +1757,8 @@ class MainWindow(QMainWindow):
         try:
             self.cam.stop()
             self.gpio.close()
+            self.modbus.disconnect()
+            self._executor.shutdown(wait=False, cancel_futures=True)
         finally:
             e.accept()
 
