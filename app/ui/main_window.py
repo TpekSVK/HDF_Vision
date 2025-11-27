@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 from app.utils.qt_concurrent import run as qt_run
 
@@ -26,7 +26,6 @@ from app.ui.xu_panel import XUPanel
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
-from app.ui.gpio_wizard import GPIOWizard
 from app.ui.modbus_wizard import ModbusWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
@@ -34,7 +33,6 @@ from app.services.stats_service import StatsService
 from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
-from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
 from app.utils.tool_identity import compute_tool_identity
@@ -46,7 +44,6 @@ from app.ui.camera_profile_utils import (
 
 
 class MainWindow(QMainWindow):
-    gpio_triggered = Signal()
     def __init__(self):
         super().__init__()
         self.setWindowTitle("HDF Vision")
@@ -68,20 +65,19 @@ class MainWindow(QMainWindow):
         self.recipes = RecipeService(db=self.db)
         self.stats = StatsService(db=self.db)
 
-        self.gpio = GPIOService()
-        self.gpio.register_trigger_callback(self._handle_gpio_trigger)
-        self.gpio_triggered.connect(self.manual_trigger)
-
         self.modbus = ModbusService()
         self._modbus_settings = self.db.get_modbus_settings()
         self._modbus_heartbeat_timer = QTimer(self)
         self._modbus_heartbeat_timer.timeout.connect(self._send_modbus_heartbeat)
         self._modbus_trigger_timer = QTimer(self)
-        self._modbus_trigger_timer.setInterval(200)
+        self._modbus_trigger_timer.setInterval(20)
         self._modbus_trigger_timer.timeout.connect(self._poll_modbus_trigger)
         self._modbus_heartbeat_state = False
         self._modbus_trigger_latched = False
         self._modbus_trigger_reading = False
+
+        # Start Modbus connectivity if it is already configured
+        self._apply_modbus_settings(self._modbus_settings, reconnect=True)
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
@@ -106,8 +102,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
-        self.gpio.set_active_recipe(self.current_recipe_name())
-
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
         root_layout = QVBoxLayout(root); root_layout.setContentsMargins(10, 10, 10, 10); root_layout.setSpacing(8)
@@ -317,10 +311,6 @@ class MainWindow(QMainWindow):
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
-        self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
-        self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
-        row1.addWidget(self.btn_gpio_wizard)
-
         self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
         row1.addWidget(self.btn_modbus_wizard)
@@ -469,7 +459,6 @@ class MainWindow(QMainWindow):
         self._update_metrics_panel()
 
     def _signal_outputs(self, status: str) -> None:
-        self.gpio.signal_result(status)
         self._modbus_signal_result(status)
 
     def manual_trigger(self):
@@ -488,7 +477,6 @@ class MainWindow(QMainWindow):
                 return
 
             base_frame = frame.copy()
-            self.gpio.emit_heartbeat()
             recipe_name = self.current_recipe_name()
 
             try:
@@ -822,12 +810,6 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
 
-    def open_gpio_wizard(self):
-        self.gpio.set_active_recipe(self.current_recipe_name())
-        dlg = GPIOWizard(self.gpio, self)
-        dlg.resize(720, 520)
-        dlg.exec()
-
     def open_modbus_wizard(self):
         dlg = ModbusWizard(self.modbus, self._modbus_settings, self._on_modbus_settings_changed, self)
         dlg.resize(640, 640)
@@ -843,6 +825,7 @@ class MainWindow(QMainWindow):
         self._modbus_trigger_timer.stop()
         self._modbus_heartbeat_timer.stop()
         if not enabled:
+            print("[DEBUG] Modbus disabled via settings – timers stopped")
             self.modbus.disconnect()
             return
 
@@ -877,9 +860,13 @@ class MainWindow(QMainWindow):
         if heartbeat_addr >= 0 and heartbeat_period > 0 and self.modbus.is_connected():
             self._modbus_heartbeat_timer.setInterval(heartbeat_period)
             self._modbus_heartbeat_timer.start()
+            print(f"[DEBUG] Modbus heartbeat enabled @ {heartbeat_period} ms (addr={heartbeat_addr})")
         di_addr = int(self._modbus_settings.get("di_trigger") or -1)
         if di_addr >= 0 and self.modbus.is_connected():
+            if self._modbus_trigger_timer.interval() != 20:
+                self._modbus_trigger_timer.setInterval(20)
             self._modbus_trigger_timer.start()
+            print(f"[DEBUG] Modbus trigger polling enabled for DI {di_addr}")
 
     def _send_modbus_heartbeat(self) -> None:
         if not self._modbus_settings.get("enabled"):
@@ -911,6 +898,7 @@ class MainWindow(QMainWindow):
         level = bool(values[0]) if values else False
         if level and not self._modbus_trigger_latched:
             self._modbus_trigger_latched = True
+            print("[DEBUG] Modbus trigger edge detected")
             QTimer.singleShot(0, self.manual_trigger)
         elif not level:
             self._modbus_trigger_latched = False
@@ -974,13 +962,6 @@ class MainWindow(QMainWindow):
             if not restored:
                 self._apply_run_camera_profile()
             self._update_live_view()
-
-    def _handle_gpio_trigger(self):
-        print(f"[RUN] GPIO trigger received, mode={self.mode}")
-        if self.mode != "RUN":
-            return
-        #QTimer.singleShot(0, self.manual_trigger)
-        self.gpio_triggered.emit()
 
     def _update_live_view(self):
         try:
@@ -1737,7 +1718,6 @@ class MainWindow(QMainWindow):
     def closeEvent(self, e):
         try:
             self.cam.stop()
-            self.gpio.close()
         finally:
             e.accept()
 
@@ -1766,7 +1746,6 @@ class MainWindow(QMainWindow):
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
-            self.gpio.set_active_recipe(name)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -1785,7 +1764,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -1795,7 +1773,6 @@ class MainWindow(QMainWindow):
             return
         new = new.strip()
         self.recipes.rename(old, new)
-        self.gpio.rename_profile(old, new)
         self._reset_manual_trigger_progress(old)
         self._refresh_recipe_list()
         self.recipes.load(new)
@@ -1805,7 +1782,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -1817,7 +1793,6 @@ class MainWindow(QMainWindow):
         if r != QMessageBox.Yes:
             return
         self.recipes.delete(name)
-        self.gpio.delete_profile(name)
         self._reset_manual_trigger_progress(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
@@ -1827,7 +1802,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
