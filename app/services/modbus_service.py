@@ -132,6 +132,9 @@ class ModbusService:
     # ------------------------------------------------------------------
 
     def read_coils(self, address: int, count: int = 1) -> List[bool]:
+        if not self.is_connected():
+            self._last_error = "Not connected"
+            return []
         with self._lock:
             client = self._ensure_client()
             if client is None:
@@ -149,6 +152,9 @@ class ModbusService:
                 return []
 
     def read_discrete_inputs(self, address: int, count: int = 1) -> List[bool]:
+        if not self.is_connected():
+            self._last_error = "Not connected"
+            return []
         with self._lock:
             client = self._ensure_client()
             if client is None:
@@ -166,6 +172,9 @@ class ModbusService:
                 return []
 
     def write_coil(self, address: int, value: bool) -> bool:
+        if not self.is_connected():
+            self._last_error = "Not connected"
+            return False
         with self._lock:
             client = self._ensure_client()
             if client is None:
