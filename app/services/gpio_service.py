@@ -630,17 +630,21 @@ class GPIOService:
                     self._inputs.setdefault(role, []).append(board_pin)
 
             # register trigger callbacks last
-            for pins in self._inputs.values():
-                for pin in pins:
-                    self._driver.add_event_detect(
-                        pin,
-                        "falling",
-                        self._handle_trigger_event,
-                        bouncetime=50,
-                    )
-
             trigger_pins = tuple(self._inputs.get("trigger", []))
 
+            # Na reálnom Jetson HW JE známy problém so segfaultami v Jetson.GPIO
+            # pri edge callbackoch, preto add_event_detect používame len v STUB režime.
+            if not self._is_hw:
+                for pins in self._inputs.values():
+                    for pin in pins:
+                        self._driver.add_event_detect(
+                            pin,
+                            "falling",
+                            self._handle_trigger_event,
+                            bouncetime=50,
+                        )
+
+        # Na Jetson HW aj v stub režime používame pollovací thread nad read_pin_states.
         self._restart_trigger_monitor(trigger_pins)
 
     def _handle_trigger_event(self, pin: int) -> None:
@@ -655,9 +659,10 @@ class GPIOService:
 
     def _restart_trigger_monitor(self, trigger_pins: tuple[int, ...]) -> None:
         self._stop_trigger_monitor()
-        # Na reálnom Jetson HW používame iba add_event_detect a nepúšťame pollovací thread.
-        if not trigger_pins or self._is_hw:
+        # Ak nie sú žiadne trigger piny, nie je čo monitorovať.
+        if not trigger_pins:
             return
+        # Vždy používame pollovací thread – aj na Jetson HW.
         self._trigger_monitor_stop = threading.Event()
         self._trigger_monitor_thread = threading.Thread(
             target=self._poll_trigger_inputs,
