@@ -1,6 +1,6 @@
 """
 Simple Modbus TCP helper focused on coil/DI access for UI triggers.
-Compatible with pymodbus 3.x (Jetson / Python3).
+Compatible s tvojou verziou pymodbus (Jetson / Python3).
 """
 
 from __future__ import annotations
@@ -23,15 +23,15 @@ __all__ = [
 class ModbusConnectionParams:
     host: str = ""
     port: int = 502
-    unit_id: int = 1      # not used directly by pymodbus 3.x TCP client
+    unit_id: int = 1      # TCP ho reálne nepotrebuje, ale nechávame kvôli UI
     timeout_ms: int = 1500
-    retries: int = 1
+    retries: int = 1      # uchovávame len v štruktúre, nepoužívame v klientovi
 
 
 class ModbusService:
     """
     Thread-safe synchronous Modbus TCP wrapper for coils + discrete inputs.
-    Used by ModbusWizard in UI and by SignalingService in RUN mode.
+    Používané ModbusWizard-om a SignalingService.
     """
 
     def __init__(self) -> None:
@@ -72,8 +72,7 @@ class ModbusService:
     ) -> bool:
         """Establish Modbus TCP connection (blocking, thread-safe)."""
         with self._lock:
-            # 🔴 Pozor: NESMIEME tu volať self.disconnect() (deadlock),
-            # preto spravíme interný cleanup ručne:
+            # cleanup bez volania self.disconnect() (aby nebol deadlock)
             if self._client is not None:
                 try:
                     self._client.close()
@@ -84,12 +83,12 @@ class ModbusService:
             self._last_read_ts = None
 
             try:
+                # ⚠️ DÔLEŽITÉ: žiadne retries ani retry_on_empty,
+                # tvoja verzia pymodbus to nemá.
                 client = ModbusTcpClient(
                     host=host,
                     port=int(port),
                     timeout=float(timeout_ms) / 1000.0,
-                    retries=int(retries),
-                    retry_on_empty=True,
                 )
                 ok = bool(client.connect())
                 if not ok:
@@ -129,7 +128,7 @@ class ModbusService:
         return client
 
     # ------------------------------------------------------------------
-    # API pre pymodbus 3.x → address=, count=, value=
+    # API pre tvoju verziu pymodbus → address=, count=, value=
     # ------------------------------------------------------------------
 
     def read_coils(self, address: int, count: int = 1) -> List[bool]:
@@ -184,11 +183,9 @@ class ModbusService:
 
 
 if __name__ == "__main__":
-    # Rýchly self-test, môžeš spustiť: python3 -m app.services.modbus_service
+    # Rýchly self-test: spustíš python3 -m app.services.modbus_service
     svc = ModbusService()
     print("Connect:", svc.connect("192.168.0.50", 502))
     print("last_error:", svc.last_error)
     print("coils:", svc.read_coils(0, 8))
-    print("write coil 0:", svc.write_coil(0, True))
-    print("coils after:", svc.read_coils(0, 8))
     svc.disconnect()
