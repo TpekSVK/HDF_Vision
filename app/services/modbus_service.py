@@ -353,7 +353,7 @@ class ModbusService:
                 continue
             now = time.monotonic()
             last_level = self._last_trigger_level if self._last_trigger_level is not None else level
-            if last_level and not level:
+            if not last_level and level:
                 if now - self._last_trigger_edge_ts >= debounce_seconds:
                     self._last_trigger_edge_ts = now
                     self._fire_trigger_callbacks()
