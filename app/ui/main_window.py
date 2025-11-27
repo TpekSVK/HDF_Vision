@@ -4,6 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
+from PySide6.QtConcurrent import QtConcurrent
 
 import json
 import math
@@ -26,6 +27,7 @@ from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
 from app.ui.gpio_wizard import GPIOWizard
+from app.ui.modbus_wizard import ModbusWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
@@ -33,6 +35,7 @@ from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
+from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
@@ -69,6 +72,17 @@ class MainWindow(QMainWindow):
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
         self.gpio_triggered.connect(self.manual_trigger)
 
+        self.modbus = ModbusService()
+        self._modbus_settings = self.db.get_modbus_settings()
+        self._modbus_heartbeat_timer = QTimer(self)
+        self._modbus_heartbeat_timer.timeout.connect(self._send_modbus_heartbeat)
+        self._modbus_trigger_timer = QTimer(self)
+        self._modbus_trigger_timer.setInterval(200)
+        self._modbus_trigger_timer.timeout.connect(self._poll_modbus_trigger)
+        self._modbus_heartbeat_state = False
+        self._modbus_trigger_latched = False
+        self._modbus_trigger_reading = False
+
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
         self._last_total_cycle_time_ms: float | None = None
@@ -93,6 +107,7 @@ class MainWindow(QMainWindow):
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
         self.gpio.set_active_recipe(self.current_recipe_name())
+        self._apply_modbus_settings(self._modbus_settings, reconnect=True)
 
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
@@ -307,6 +322,10 @@ class MainWindow(QMainWindow):
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
         row1.addWidget(self.btn_gpio_wizard)
 
+        self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
+        self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
+        row1.addWidget(self.btn_modbus_wizard)
+
         row1.addStretch(1)
         s.addLayout(row1)
 
@@ -449,6 +468,10 @@ class MainWindow(QMainWindow):
                 state.pop("total_cycle_time_ms", None)
                 state.pop("combined_metrics", None)
         self._update_metrics_panel()
+
+    def _signal_outputs(self, status: str) -> None:
+        self.gpio.signal_result(status)
+        self._modbus_signal_result(status)
 
     def manual_trigger(self):
         if self.mode != "RUN":
@@ -704,7 +727,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setStyleSheet(
                 f"color: {color_map.get(aggregated_status, '#33dd66')};"
             )
-            self.gpio.signal_result(aggregated_status)
+            self._signal_outputs(aggregated_status)
 
             active_frame = self._get_last_frame_for_view(self._active_view_id)
             if active_frame is not None:
@@ -720,7 +743,7 @@ class MainWindow(QMainWindow):
                 self._update_live_view()
 
         except Exception:
-            self.gpio.signal_result("nok")
+            self._signal_outputs("nok")
             import traceback; traceback.print_exc()
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
@@ -746,7 +769,7 @@ class MainWindow(QMainWindow):
         color = "#33dd66" if status == "ok" else "#ff3366"
         self.lbl_status.setText(status.upper())
         self.lbl_status.setStyleSheet(f"color: {color};")
-        self.gpio.signal_result(status)
+        self._signal_outputs(status)
 
         legacy_report = [{
             "id": "legacy",
@@ -805,6 +828,113 @@ class MainWindow(QMainWindow):
         dlg = GPIOWizard(self.gpio, self)
         dlg.resize(720, 520)
         dlg.exec()
+
+    def open_modbus_wizard(self):
+        dlg = ModbusWizard(self.modbus, self._modbus_settings, self._on_modbus_settings_changed, self)
+        dlg.resize(640, 640)
+        dlg.exec()
+
+    def _on_modbus_settings_changed(self, settings: dict[str, Any]) -> None:
+        self._modbus_settings = self.db.save_modbus_settings(settings)
+        self._apply_modbus_settings(self._modbus_settings, reconnect=True)
+
+    def _apply_modbus_settings(self, settings: dict[str, Any], *, reconnect: bool = False) -> None:
+        self._modbus_settings = dict(settings or {})
+        enabled = bool(self._modbus_settings.get("enabled"))
+        self._modbus_trigger_timer.stop()
+        self._modbus_heartbeat_timer.stop()
+        if not enabled:
+            self.modbus.disconnect()
+            return
+
+        if reconnect:
+            self._connect_modbus(self._modbus_settings)
+        else:
+            self._configure_modbus_timers()
+
+    def _connect_modbus(self, settings: dict[str, Any]) -> None:
+        future = QtConcurrent.run(
+            self.modbus.connect,
+            str(settings.get("host", "")),
+            int(settings.get("port") or 502),
+            int(settings.get("unit_id") or 1),
+            int(settings.get("timeout_ms") or 1500),
+            int(settings.get("retry") or 1),
+        )
+        future.finished.connect(lambda f=future: self._on_modbus_connect_finished(f))
+
+    def _on_modbus_connect_finished(self, future) -> None:
+        try:
+            ok = bool(future.result())
+        except Exception as exc:
+            ok = False
+            self.modbus._last_error = str(exc)
+        if ok:
+            self._configure_modbus_timers()
+
+    def _configure_modbus_timers(self) -> None:
+        heartbeat_period = max(50, int(self._modbus_settings.get("heartbeat_period_ms") or 1000))
+        heartbeat_addr = int(self._modbus_settings.get("coil_heartbeat") or -1)
+        if heartbeat_addr >= 0 and heartbeat_period > 0 and self.modbus.is_connected():
+            self._modbus_heartbeat_timer.setInterval(heartbeat_period)
+            self._modbus_heartbeat_timer.start()
+        di_addr = int(self._modbus_settings.get("di_trigger") or -1)
+        if di_addr >= 0 and self.modbus.is_connected():
+            self._modbus_trigger_timer.start()
+
+    def _send_modbus_heartbeat(self) -> None:
+        if not self._modbus_settings.get("enabled"):
+            return
+        addr = int(self._modbus_settings.get("coil_heartbeat") or -1)
+        if addr < 0 or not self.modbus.is_connected():
+            return
+        self._modbus_heartbeat_state = not self._modbus_heartbeat_state
+        QtConcurrent.run(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
+
+    def _poll_modbus_trigger(self) -> None:
+        if self._modbus_trigger_reading or self.mode != "RUN":
+            return
+        if not self._modbus_settings.get("enabled"):
+            return
+        addr = int(self._modbus_settings.get("di_trigger") or -1)
+        if addr < 0 or not self.modbus.is_connected():
+            return
+        self._modbus_trigger_reading = True
+        future = QtConcurrent.run(self.modbus.read_discrete_inputs, addr, 1)
+        future.finished.connect(lambda f=future: self._on_modbus_trigger_read(f))
+
+    def _on_modbus_trigger_read(self, future) -> None:
+        try:
+            values = future.result()
+        except Exception:
+            values = []
+        self._modbus_trigger_reading = False
+        level = bool(values[0]) if values else False
+        if level and not self._modbus_trigger_latched:
+            self._modbus_trigger_latched = True
+            QTimer.singleShot(0, self.manual_trigger)
+        elif not level:
+            self._modbus_trigger_latched = False
+
+    def _modbus_signal_result(self, status: str) -> None:
+        if not self._modbus_settings.get("enabled"):
+            return
+        pulse_ms = max(10, int(self._modbus_settings.get("pulse_ms") or 200))
+        raw_addr = self._modbus_settings.get("coil_ok") if (status or "").lower() == "ok" else self._modbus_settings.get("coil_nok")
+        try:
+            addr = int(raw_addr if raw_addr is not None else -1)
+        except Exception:
+            addr = -1
+        if addr < 0:
+            return
+        QtConcurrent.run(self._pulse_modbus_coil, addr, pulse_ms)
+
+    def _pulse_modbus_coil(self, address: int, pulse_ms: int) -> None:
+        if not self.modbus.is_connected():
+            return
+        self.modbus.write_coil(address, True)
+        time.sleep(pulse_ms / 1000.0)
+        self.modbus.write_coil(address, False)
 
     def _reload_results_strip(self) -> None:
         strip = getattr(self, "strip", None)

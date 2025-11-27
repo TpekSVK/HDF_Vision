@@ -3,4 +3,5 @@ numpy==1.26.4
 imageio==2.35.1
 Pillow==10.4.0
 Jetson.GPIO; platform_system == "Linux" and platform_machine == "aarch64"
+pymodbus==3.5.0
 
