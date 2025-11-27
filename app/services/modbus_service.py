@@ -62,6 +62,8 @@ class ModbusService:
 
         with self._lock:
             self.disconnect()
+            self._last_error = None
+            self._last_read_ts = None
             try:
                 client = ModbusTcpClient(
                     host=host,

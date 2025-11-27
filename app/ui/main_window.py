@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
-from PySide6.QtConcurrent import QtConcurrent
+from PySide6.QtConcurrent import run as qt_run
 
 import json
 import math
@@ -841,31 +841,19 @@ class MainWindow(QMainWindow):
     def _apply_modbus_settings(self, settings: dict[str, Any], *, reconnect: bool = False) -> None:
         self._modbus_settings = dict(settings or {})
         enabled = bool(self._modbus_settings.get("enabled"))
+        self._modbus_trigger_timer.stop()
+        self._modbus_heartbeat_timer.stop()
         if not enabled:
-            self._modbus_trigger_timer.stop()
-            self._modbus_heartbeat_timer.stop()
             self.modbus.disconnect()
             return
 
-        heartbeat_period = max(50, int(self._modbus_settings.get("heartbeat_period_ms") or 1000))
-        heartbeat_addr = int(self._modbus_settings.get("coil_heartbeat") or -1)
-        if heartbeat_addr >= 0 and heartbeat_period > 0:
-            self._modbus_heartbeat_timer.setInterval(heartbeat_period)
-            self._modbus_heartbeat_timer.start()
-        else:
-            self._modbus_heartbeat_timer.stop()
-
-        di_addr = int(self._modbus_settings.get("di_trigger") or -1)
-        if di_addr >= 0:
-            self._modbus_trigger_timer.start()
-        else:
-            self._modbus_trigger_timer.stop()
-
         if reconnect:
             self._connect_modbus(self._modbus_settings)
+        else:
+            self._configure_modbus_timers()
 
     def _connect_modbus(self, settings: dict[str, Any]) -> None:
-        QtConcurrent.run(
+        future = qt_run(
             self.modbus.connect,
             str(settings.get("host", "")),
             int(settings.get("port") or 502),
@@ -873,6 +861,26 @@ class MainWindow(QMainWindow):
             int(settings.get("timeout_ms") or 1500),
             int(settings.get("retry") or 1),
         )
+        future.finished.connect(lambda f=future: self._on_modbus_connect_finished(f))
+
+    def _on_modbus_connect_finished(self, future) -> None:
+        try:
+            ok = bool(future.result())
+        except Exception as exc:
+            ok = False
+            self.modbus._last_error = str(exc)
+        if ok:
+            self._configure_modbus_timers()
+
+    def _configure_modbus_timers(self) -> None:
+        heartbeat_period = max(50, int(self._modbus_settings.get("heartbeat_period_ms") or 1000))
+        heartbeat_addr = int(self._modbus_settings.get("coil_heartbeat") or -1)
+        if heartbeat_addr >= 0 and heartbeat_period > 0 and self.modbus.is_connected():
+            self._modbus_heartbeat_timer.setInterval(heartbeat_period)
+            self._modbus_heartbeat_timer.start()
+        di_addr = int(self._modbus_settings.get("di_trigger") or -1)
+        if di_addr >= 0 and self.modbus.is_connected():
+            self._modbus_trigger_timer.start()
 
     def _send_modbus_heartbeat(self) -> None:
         if not self._modbus_settings.get("enabled"):
@@ -881,7 +889,7 @@ class MainWindow(QMainWindow):
         if addr < 0 or not self.modbus.is_connected():
             return
         self._modbus_heartbeat_state = not self._modbus_heartbeat_state
-        QtConcurrent.run(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
+        qt_run(self.modbus.write_coil, addr, self._modbus_heartbeat_state)
 
     def _poll_modbus_trigger(self) -> None:
         if self._modbus_trigger_reading or self.mode != "RUN":
@@ -892,7 +900,7 @@ class MainWindow(QMainWindow):
         if addr < 0 or not self.modbus.is_connected():
             return
         self._modbus_trigger_reading = True
-        future = QtConcurrent.run(self.modbus.read_discrete_inputs, addr, 1)
+        future = qt_run(self.modbus.read_discrete_inputs, addr, 1)
         future.finished.connect(lambda f=future: self._on_modbus_trigger_read(f))
 
     def _on_modbus_trigger_read(self, future) -> None:
@@ -919,7 +927,7 @@ class MainWindow(QMainWindow):
             addr = -1
         if addr < 0:
             return
-        QtConcurrent.run(self._pulse_modbus_coil, addr, pulse_ms)
+        qt_run(self._pulse_modbus_coil, addr, pulse_ms)
 
     def _pulse_modbus_coil(self, address: int, pulse_ms: int) -> None:
         if not self.modbus.is_connected():

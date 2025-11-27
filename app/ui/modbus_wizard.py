@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
 )
-from PySide6.QtConcurrent import QtConcurrent
+from PySide6.QtConcurrent import run as qt_run
 
 from app.services.modbus_service import ModbusService
 
@@ -216,7 +216,7 @@ class ModbusWizard(QDialog):
 
     # ----------------------- interactions -----------------------
     def _run_async(self, func: Callable[[], Any], callback: Callable[[Any], None] | None = None) -> None:
-        future = QtConcurrent.run(func)
+        future = qt_run(func)
         self._futures.append(future)
         if callback is not None:
             future.finished.connect(lambda f=future: callback(f.result()))
