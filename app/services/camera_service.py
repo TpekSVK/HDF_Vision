@@ -376,19 +376,57 @@ class CameraService:
         return last
 
     def _shutdown_gst(self, *, from_loop: bool = False):
-        if self._pipeline is not None:
+        """Tear down the GStreamer pipeline safely.
+
+        GLib ``MainLoop.quit`` must run in the same context that owns the loop;
+        calling it from another thread can sporadically crash the interpreter
+        (observed as a segmentation fault when toggling Modbus in the UI).  When
+        we're outside the loop thread, schedule the teardown via
+        ``GLib.idle_add`` on the loop's context and wait briefly for it to
+        complete.
+        """
+
+        def _do_teardown():
             try:
-                self._pipeline.set_state(Gst.State.NULL)
+                if self._pipeline is not None:
+                    try:
+                        self._pipeline.set_state(Gst.State.NULL)
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    if self._loop is not None:
+                        self._loop.quit()
+                except Exception:
+                    pass
+                return False  # stop idle handler
+
+        if from_loop:
+            _do_teardown()
+        else:
+            # Run teardown inside the GLib context to avoid cross-thread calls.
+            quit_done = threading.Event()
+
+            def _wrapper():
+                try:
+                    _do_teardown()
+                finally:
+                    quit_done.set()
+                return False
+
+            try:
+                if self._gst_context is not None:
+                    GLib.idle_add(_wrapper, context=self._gst_context)
+                else:
+                    GLib.idle_add(_wrapper)
+                quit_done.wait(timeout=1.0)
             except Exception:
                 pass
-            self._pipeline = None
-        if self._loop is not None:
-            try:
-                self._loop.quit()
-            except Exception:
-                pass
-            self._loop = None
+
+        self._pipeline = None
+        self._loop = None
         self._gst_context = None
+
         if not from_loop and self._t is not None and self._t.is_alive():
             self._t.join(timeout=1.0)
         self._t = None
