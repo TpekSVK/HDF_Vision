@@ -45,7 +45,7 @@ from app.ui.camera_profile_utils import (
 
 
 class MainWindow(QMainWindow):
-    gpio_triggered = Signal()
+    external_triggered = Signal()
     def __init__(self):
         super().__init__()
         self.setWindowTitle("HDF Vision")
@@ -69,9 +69,9 @@ class MainWindow(QMainWindow):
 
         self.gpio = GPIOService()
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
-        self.gpio_triggered.connect(self.manual_trigger)
-
         self.modbus = ModbusService()
+        self.modbus.register_trigger_callback(self._handle_modbus_trigger)
+        self.external_triggered.connect(self.manual_trigger)
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
@@ -475,6 +475,7 @@ class MainWindow(QMainWindow):
 
             base_frame = frame.copy()
             self.gpio.emit_heartbeat()
+            self.modbus.emit_heartbeat()
             recipe_name = self.current_recipe_name()
 
             try:
@@ -713,6 +714,7 @@ class MainWindow(QMainWindow):
                 f"color: {color_map.get(aggregated_status, '#33dd66')};"
             )
             self.gpio.signal_result(aggregated_status)
+            self.modbus.signal_result(aggregated_status)
 
             active_frame = self._get_last_frame_for_view(self._active_view_id)
             if active_frame is not None:
@@ -729,6 +731,7 @@ class MainWindow(QMainWindow):
 
         except Exception:
             self.gpio.signal_result("nok")
+            self.modbus.signal_result("nok")
             import traceback; traceback.print_exc()
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
@@ -755,6 +758,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(status.upper())
         self.lbl_status.setStyleSheet(f"color: {color};")
         self.gpio.signal_result(status)
+        self.modbus.signal_result(status)
 
         legacy_report = [{
             "id": "legacy",
@@ -858,11 +862,16 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
-        print(f"[RUN] GPIO trigger received, mode={self.mode}")
+        self._handle_external_trigger("GPIO")
+
+    def _handle_modbus_trigger(self):
+        self._handle_external_trigger("Modbus")
+
+    def _handle_external_trigger(self, source: str) -> None:
+        print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
-        #QTimer.singleShot(0, self.manual_trigger)
-        self.gpio_triggered.emit()
+        self.external_triggered.emit()
 
     def _update_live_view(self):
         try:
@@ -1620,6 +1629,7 @@ class MainWindow(QMainWindow):
         try:
             self.cam.stop()
             self.gpio.close()
+            self.modbus.close()
         finally:
             e.accept()
 

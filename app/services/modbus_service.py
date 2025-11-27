@@ -12,7 +12,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
@@ -90,6 +90,13 @@ class ModbusService:
         self._client: Optional[ModbusTcpClient] = None
         self._client_config_key: Optional[Tuple[str, int, float, int]] = None
         self.last_error: str = ""
+        self._trigger_callbacks: list[Callable[[], None]] = []
+        self._trigger_monitor_stop = threading.Event()
+        self._trigger_monitor_thread: threading.Thread | None = None
+        self._last_trigger_level: Optional[bool] = None
+        self._last_trigger_edge_ts: float = 0.0
+
+        self._restart_trigger_monitor()
 
     # ------------------------------------------------------------------
     def _load_config(self) -> ModbusConfig:
@@ -121,6 +128,7 @@ class ModbusService:
             self._close_client()
             if persist:
                 self._save_config(config)
+        self._restart_trigger_monitor()
 
     # ------------------------------------------------------------------
     def _close_client(self) -> None:
@@ -185,6 +193,45 @@ class ModbusService:
         if client is None:
             return False, self.last_error or "Connection failed"
         return True, "Connected"
+
+    # High-level helpers mirroring GPIO pipeline hooks -----------------
+    def emit_heartbeat(self) -> None:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return
+        self.pulse_coil(cfg.heartbeat_coil, pulse_ms=cfg.pulse_length_ms, config=cfg)
+
+    def signal_result(self, status: str, *, pulse_ms: Optional[int] = None) -> None:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return
+        normalized = (status or "").strip().lower()
+        if normalized == "ok":
+            target, other = cfg.ok_coil, cfg.nok_coil
+        else:
+            target, other = cfg.nok_coil, cfg.ok_coil
+
+        duration = pulse_ms if pulse_ms is not None else cfg.pulse_length_ms
+        if other is not None and int(other) >= 0:
+            self._write_coil(other, False, cfg)
+        self.pulse_coil(target, pulse_ms=duration, config=cfg)
+
+    def set_flash(self, channel: int, enabled: bool) -> None:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return
+        coil = cfg.flash1_coil if int(channel) == 1 else cfg.flash2_coil
+        if coil is None or int(coil) < 0:
+            self.last_error = "Invalid flash coil"
+            return
+        self._write_coil(coil, bool(enabled), cfg)
+
+    def pulse_flash(self, channel: int, *, pulse_ms: Optional[int] = None) -> None:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return
+        coil = cfg.flash1_coil if int(channel) == 1 else cfg.flash2_coil
+        self.pulse_coil(coil, pulse_ms=pulse_ms or cfg.pulse_length_ms, config=cfg)
 
     def _write_coil(self, address: int, value: bool, config: ModbusConfig) -> bool:
         client = self._ensure_client(config)
@@ -263,6 +310,64 @@ class ModbusService:
         except Exception:
             return None
 
+    # Trigger monitoring ------------------------------------------------
+    def register_trigger_callback(self, callback: Callable[[], None]) -> None:
+        if callback not in self._trigger_callbacks:
+            self._trigger_callbacks.append(callback)
+
+    def unregister_trigger_callback(self, callback: Callable[[], None]) -> None:
+        try:
+            self._trigger_callbacks.remove(callback)
+        except ValueError:
+            pass
+
+    def _restart_trigger_monitor(self) -> None:
+        self._stop_trigger_monitor()
+        cfg = self.get_config()
+        if not cfg.enabled or cfg.trigger_di is None or int(cfg.trigger_di) < 0:
+            return
+        self._trigger_monitor_stop = threading.Event()
+        self._trigger_monitor_thread = threading.Thread(
+            target=self._poll_trigger_input,
+            daemon=True,
+        )
+        self._trigger_monitor_thread.start()
+
+    def _stop_trigger_monitor(self) -> None:
+        self._trigger_monitor_stop.set()
+        thread = self._trigger_monitor_thread
+        if thread and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._trigger_monitor_thread = None
+        self._last_trigger_level = None
+        self._last_trigger_edge_ts = 0.0
+
+    def _poll_trigger_input(self) -> None:
+        debounce_seconds = 0.2
+        while not self._trigger_monitor_stop.wait(0.05):
+            cfg = self.get_config()
+            if not cfg.enabled or cfg.trigger_di is None or int(cfg.trigger_di) < 0:
+                continue
+            level = self.read_discrete_input(cfg.trigger_di, config=cfg)
+            if level is None:
+                continue
+            now = time.monotonic()
+            last_level = self._last_trigger_level if self._last_trigger_level is not None else level
+            if last_level and not level:
+                if now - self._last_trigger_edge_ts >= debounce_seconds:
+                    self._last_trigger_edge_ts = now
+                    self._fire_trigger_callbacks()
+            self._last_trigger_level = level
+
+    def _fire_trigger_callbacks(self) -> None:
+        callbacks = list(self._trigger_callbacks)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+
     def close(self) -> None:
+        self._stop_trigger_monitor()
         self._close_client()
 
