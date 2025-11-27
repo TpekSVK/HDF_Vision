@@ -143,12 +143,22 @@ class CameraService:
         if t == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
             print(f"[GST][ERROR] {err} debug:{dbg}")
+            GLib.idle_add(self._gst_teardown_from_loop)
         elif t == Gst.MessageType.WARNING:
             err, dbg = msg.parse_warning()
             print(f"[GST][WARN] {err} debug:{dbg}")
         elif t == Gst.MessageType.EOS:
             print("[GST] EOS")
-            self.stop()
+            GLib.idle_add(self._gst_teardown_from_loop)
+
+    def _gst_teardown_from_loop(self):
+        # Called inside the GLib main context; avoid joining the loop thread from itself.
+        self._stop.set()
+        self._shutdown_gst(from_loop=True)
+        self._mode = None
+        self._reset_buffers()
+        self.stop_continuous()
+        return False
 
     def _start_gst(self, dev):
         if not _GST_OK:
@@ -207,6 +217,7 @@ class CameraService:
             self._pipeline = pipeline
             self._loop = loop
             self._mode = "gst"
+            self._stop.clear()
 
             def _loop_run():
                 try:
@@ -350,16 +361,7 @@ class CameraService:
             raise RuntimeError("No frame available for one-shot.")
         return last
 
-    def stop(self):
-        self._stop.set()
-        # V4L2
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
-            self._cap = None
-        # GST
+    def _shutdown_gst(self, *, from_loop: bool = False):
         if self._pipeline is not None:
             try:
                 self._pipeline.set_state(Gst.State.NULL)
@@ -372,9 +374,21 @@ class CameraService:
             except Exception:
                 pass
             self._loop = None
-        if self._t is not None and self._t.is_alive():
+        if not from_loop and self._t is not None and self._t.is_alive():
             self._t.join(timeout=1.0)
         self._t = None
+
+    def stop(self):
+        self._stop.set()
+        # V4L2
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+            self._cap = None
+        # GST
+        self._shutdown_gst(from_loop=False)
         self._mode = None
         self._reset_buffers()
         self.stop_continuous()
