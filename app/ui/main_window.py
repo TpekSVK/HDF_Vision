@@ -107,7 +107,6 @@ class MainWindow(QMainWindow):
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
         self.gpio.set_active_recipe(self.current_recipe_name())
-        self._apply_modbus_settings(self._modbus_settings, reconnect=True)
 
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
@@ -918,6 +917,8 @@ class MainWindow(QMainWindow):
 
     def _modbus_signal_result(self, status: str) -> None:
         if not self._modbus_settings.get("enabled"):
+            return
+        if not self.modbus.is_connected():
             return
         pulse_ms = max(10, int(self._modbus_settings.get("pulse_ms") or 200))
         raw_addr = self._modbus_settings.get("coil_ok") if (status or "").lower() == "ok" else self._modbus_settings.get("coil_nok")

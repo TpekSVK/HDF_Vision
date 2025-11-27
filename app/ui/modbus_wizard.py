@@ -279,6 +279,9 @@ class ModbusWizard(QDialog):
         if addr is None or int(addr) < 0:
             self._lbl_connect_status.setText("Coil disabled")
             return
+        if not self._modbus.is_connected():
+            self._lbl_connect_status.setText("Not connected")
+            return
 
         pulse_ms = int(settings.get("pulse_ms", 200))
         self._run_async(lambda: self._pulse_coil(int(addr), pulse_ms))
@@ -288,6 +291,9 @@ class ModbusWizard(QDialog):
         addr = settings.get("coil_heartbeat")
         if addr is None or int(addr) < 0:
             self._lbl_connect_status.setText("Heartbeat disabled")
+            return
+        if not self._modbus.is_connected():
+            self._lbl_connect_status.setText("Not connected")
             return
 
         period = max(50, int(settings.get("heartbeat_period_ms", 1000)))
