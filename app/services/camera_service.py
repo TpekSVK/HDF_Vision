@@ -55,6 +55,7 @@ class CameraService:
         # GStreamer objekty
         self._pipeline = None
         self._loop = None
+        self._gst_context = None
 
         # zásobník kandidátov zariadení
         self.devices = [self.device, "/dev/video0", "/dev/video1"]
@@ -189,11 +190,19 @@ class CameraService:
                 continue
             sink.connect("new-sample", self._on_new_sample)
 
-            bus = pipeline.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message", self._gst_bus_cb)
+            context = GLib.MainContext()
 
-            loop = GLib.MainLoop()
+            # zaregistruj bus signál watch v samostatnom GLib kontexte, aby sa
+            # nehádal s Qt event loop-om alebo inými GLib slučkami
+            bus = pipeline.get_bus()
+            context.push_thread_default()
+            try:
+                bus.add_signal_watch()
+                bus.connect("message", self._gst_bus_cb)
+            finally:
+                context.pop_thread_default()
+
+            loop = GLib.MainLoop(context=context)
 
             ret = pipeline.set_state(Gst.State.PLAYING)
             if ret == Gst.StateChangeReturn.FAILURE:
@@ -216,12 +225,17 @@ class CameraService:
             # uložiť runtime objekty a spustiť loop v thread-e
             self._pipeline = pipeline
             self._loop = loop
+            self._gst_context = context
             self._mode = "gst"
             self._stop.clear()
 
             def _loop_run():
                 try:
-                    loop.run()
+                    context.push_thread_default()
+                    try:
+                        loop.run()
+                    finally:
+                        context.pop_thread_default()
                 except Exception as e:
                     print("[GST] MainLoop exception:", e)
 
@@ -374,6 +388,7 @@ class CameraService:
             except Exception:
                 pass
             self._loop = None
+        self._gst_context = None
         if not from_loop and self._t is not None and self._t.is_alive():
             self._t.join(timeout=1.0)
         self._t = None
