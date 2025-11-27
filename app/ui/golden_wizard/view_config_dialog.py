@@ -169,7 +169,7 @@ class ViewConfigDialog(QDialog):
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Timed", "timed")
         self._trigger_mode_combo.addItem("External Trigger", "external")
-        self._trigger_mode_combo.addItem("Manual Trigger (GPIO)", "manual")
+        self._trigger_mode_combo.addItem("Manual Trigger (UI)", "manual")
         self._trigger_mode_combo.currentIndexChanged.connect(
             self._on_trigger_mode_changed
         )
@@ -177,7 +177,7 @@ class ViewConfigDialog(QDialog):
         trigger_hint = self._create_description_label(
             "Určuje, ako sa spúšťa snímanie: Timed používa interný časovač"
             " (v multi-view beží v cykle), External čaká na hardvérový impulz"
-            " a Manual reaguje na TRIGGER tlačidlo alebo GPIO vstup v RUN režime.",
+            " a Manual reaguje len na TRIGGER tlačidlo v RUN režime.",
             timing_group,
         )
         self._trigger_mode_combo.setToolTip(trigger_hint.text())
