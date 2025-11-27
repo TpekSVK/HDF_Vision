@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
-from PySide6.QtConcurrent import run as qt_run
+from app.utils.qt_concurrent import run as qt_run
 
 import json
 import math

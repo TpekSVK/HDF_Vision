@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
 )
-from PySide6.QtConcurrent import run as qt_run
+from app.utils.qt_concurrent import run as qt_run
 
 from app.services.modbus_service import ModbusService
 
