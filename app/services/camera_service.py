@@ -113,6 +113,22 @@ class CameraService:
         self._q = queue.Queue(maxsize=5)
         self._ring = deque(maxlen=5)
 
+    def _recover_from_empty_queue(self):
+        """Best-effort recovery when capture produces no frames.
+
+        When the underlying pipeline stalls (for example because the device is
+        busy) the queue may never receive a frame. Shutting down the active
+        backend releases the device handle so a subsequent ``start`` call can
+        retry cleanly instead of leaving a PLAYING pipeline behind.
+        """
+
+        try:
+            self.stop()
+        except Exception:
+            # Recovery should never raise – callers only care about releasing
+            # the device and clearing stale buffers so they can retry.
+            pass
+
     def _on_new_sample(self, sink):
         sample = sink.emit("pull-sample")
         if sample is None:
@@ -372,6 +388,7 @@ class CameraService:
                 continue
             tries += 1
         if last is None:
+            self._recover_from_empty_queue()
             raise RuntimeError("No frame available for one-shot.")
         return last
 
