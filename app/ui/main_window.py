@@ -458,6 +458,12 @@ class MainWindow(QMainWindow):
                 state.pop("combined_metrics", None)
         self._update_metrics_panel()
 
+    def _signal_outputs(self, status: str) -> None:
+        self.gpio.emit_heartbeat()
+        self.modbus.emit_heartbeat()
+        self.gpio.signal_result(status)
+        self.modbus.signal_result(status)
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
@@ -474,8 +480,6 @@ class MainWindow(QMainWindow):
                 return
 
             base_frame = frame.copy()
-            self.gpio.emit_heartbeat()
-            self.modbus.emit_heartbeat()
             recipe_name = self.current_recipe_name()
 
             try:
@@ -713,8 +717,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setStyleSheet(
                 f"color: {color_map.get(aggregated_status, '#33dd66')};"
             )
-            self.gpio.signal_result(aggregated_status)
-            self.modbus.signal_result(aggregated_status)
+            self._signal_outputs(aggregated_status)
 
             active_frame = self._get_last_frame_for_view(self._active_view_id)
             if active_frame is not None:
@@ -730,8 +733,7 @@ class MainWindow(QMainWindow):
                 self._update_live_view()
 
         except Exception:
-            self.gpio.signal_result("nok")
-            self.modbus.signal_result("nok")
+            self._signal_outputs("nok")
             import traceback; traceback.print_exc()
 
     def _run_legacy_trigger(self, frame_u8, recipe_name: str):
@@ -757,8 +759,7 @@ class MainWindow(QMainWindow):
         color = "#33dd66" if status == "ok" else "#ff3366"
         self.lbl_status.setText(status.upper())
         self.lbl_status.setStyleSheet(f"color: {color};")
-        self.gpio.signal_result(status)
-        self.modbus.signal_result(status)
+        self._signal_outputs(status)
 
         legacy_report = [{
             "id": "legacy",
