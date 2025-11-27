@@ -41,7 +41,41 @@ CREATE TABLE IF NOT EXISTS results (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS settings_modbus (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER DEFAULT 0,
+  host TEXT,
+  port INTEGER DEFAULT 502,
+  unit_id INTEGER DEFAULT 1,
+  timeout_ms INTEGER DEFAULT 1500,
+  retry INTEGER DEFAULT 1,
+  coil_ok INTEGER DEFAULT 0,
+  coil_nok INTEGER DEFAULT 1,
+  coil_heartbeat INTEGER DEFAULT 2,
+  coil_flash1 INTEGER,
+  coil_flash2 INTEGER,
+  pulse_ms INTEGER DEFAULT 200,
+  heartbeat_period_ms INTEGER DEFAULT 1000,
+  di_trigger INTEGER DEFAULT 0
+);
 """
+
+_DEFAULT_MODBUS_SETTINGS: Dict[str, Any] = {
+    "enabled": False,
+    "host": "",
+    "port": 502,
+    "unit_id": 1,
+    "timeout_ms": 1500,
+    "retry": 1,
+    "coil_ok": 0,
+    "coil_nok": 1,
+    "coil_heartbeat": 2,
+    "coil_flash1": -1,
+    "coil_flash2": -1,
+    "pulse_ms": 200,
+    "heartbeat_period_ms": 1000,
+    "di_trigger": 0,
+}
 
 class DbService:
     def __init__(self, db_path: Path = DB_PATH):
@@ -69,6 +103,59 @@ class DbService:
             cur.execute("ALTER TABLE results ADD COLUMN view_id TEXT")
         if "run_id" not in result_columns:
             cur.execute("ALTER TABLE results ADD COLUMN run_id TEXT")
+        cur.execute("PRAGMA table_info(settings_modbus)")
+        modbus_columns = {row[1] for row in cur.fetchall()}
+        if not modbus_columns:
+            cur.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS settings_modbus (
+                  id INTEGER PRIMARY KEY CHECK (id = 1),
+                  enabled INTEGER DEFAULT 0,
+                  host TEXT,
+                  port INTEGER DEFAULT 502,
+                  unit_id INTEGER DEFAULT 1,
+                  timeout_ms INTEGER DEFAULT 1500,
+                  retry INTEGER DEFAULT 1,
+                  coil_ok INTEGER DEFAULT 0,
+                  coil_nok INTEGER DEFAULT 1,
+                  coil_heartbeat INTEGER DEFAULT 2,
+                  coil_flash1 INTEGER,
+                  coil_flash2 INTEGER,
+                  pulse_ms INTEGER DEFAULT 200,
+                  heartbeat_period_ms INTEGER DEFAULT 1000,
+                  di_trigger INTEGER DEFAULT 0
+                );
+                """
+            )
+            cur.execute(
+                "INSERT OR IGNORE INTO settings_modbus(id) VALUES (1)"
+            )
+        else:
+            expected_columns = {
+                "enabled",
+                "host",
+                "port",
+                "unit_id",
+                "timeout_ms",
+                "retry",
+                "coil_ok",
+                "coil_nok",
+                "coil_heartbeat",
+                "coil_flash1",
+                "coil_flash2",
+                "pulse_ms",
+                "heartbeat_period_ms",
+                "di_trigger",
+            }
+            missing = [col for col in expected_columns if col not in modbus_columns]
+            for col in missing:
+                default_expr = "INTEGER"
+                if col == "host":
+                    default_expr = "TEXT"
+                cur.execute(f"ALTER TABLE settings_modbus ADD COLUMN {col} {default_expr}")
+            cur.execute(
+                "INSERT OR IGNORE INTO settings_modbus(id) VALUES (1)"
+            )
         self._conn.commit()
 
     def conn(self):
@@ -460,3 +547,92 @@ class DbService:
             self._conn.commit()
         except Exception:
             pass
+
+    # -------- modbus settings --------
+    def get_modbus_settings(self) -> Dict[str, Any]:
+        cur = self._conn.cursor()
+        keys = [
+            "enabled",
+            "host",
+            "port",
+            "unit_id",
+            "timeout_ms",
+            "retry",
+            "coil_ok",
+            "coil_nok",
+            "coil_heartbeat",
+            "coil_flash1",
+            "coil_flash2",
+            "pulse_ms",
+            "heartbeat_period_ms",
+            "di_trigger",
+        ]
+        cur.execute(
+            f"SELECT {', '.join(keys)} FROM settings_modbus WHERE id=1 LIMIT 1"
+        )
+        row = cur.fetchone()
+        settings = dict(_DEFAULT_MODBUS_SETTINGS)
+        if row is None:
+            cur.execute("INSERT OR IGNORE INTO settings_modbus(id) VALUES (1)")
+            self._conn.commit()
+            return settings
+
+        for key, value in zip(keys, row):
+            if value is None:
+                continue
+            if key == "enabled":
+                settings[key] = bool(value)
+            else:
+                try:
+                    settings[key] = int(value)
+                except Exception:
+                    settings[key] = value
+        return settings
+
+    def save_modbus_settings(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(_DEFAULT_MODBUS_SETTINGS)
+        merged.update(settings)
+        cur = self._conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO settings_modbus (
+              id, enabled, host, port, unit_id, timeout_ms, retry,
+              coil_ok, coil_nok, coil_heartbeat, coil_flash1, coil_flash2,
+              pulse_ms, heartbeat_period_ms, di_trigger
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              enabled=excluded.enabled,
+              host=excluded.host,
+              port=excluded.port,
+              unit_id=excluded.unit_id,
+              timeout_ms=excluded.timeout_ms,
+              retry=excluded.retry,
+              coil_ok=excluded.coil_ok,
+              coil_nok=excluded.coil_nok,
+              coil_heartbeat=excluded.coil_heartbeat,
+              coil_flash1=excluded.coil_flash1,
+              coil_flash2=excluded.coil_flash2,
+              pulse_ms=excluded.pulse_ms,
+              heartbeat_period_ms=excluded.heartbeat_period_ms,
+              di_trigger=excluded.di_trigger
+            """,
+            (
+                1,
+                1 if merged.get("enabled") else 0,
+                str(merged.get("host", "")),
+                int(merged.get("port", 502)),
+                int(merged.get("unit_id", 1)),
+                int(merged.get("timeout_ms", 1500)),
+                int(merged.get("retry", 1)),
+                int(merged.get("coil_ok", 0)),
+                int(merged.get("coil_nok", 1)),
+                int(merged.get("coil_heartbeat", 2)),
+                int(merged.get("coil_flash1", -1)) if merged.get("coil_flash1") is not None else None,
+                int(merged.get("coil_flash2", -1)) if merged.get("coil_flash2") is not None else None,
+                int(merged.get("pulse_ms", 200)),
+                int(merged.get("heartbeat_period_ms", 1000)),
+                int(merged.get("di_trigger", 0)),
+            ),
+        )
+        self._conn.commit()
+        return self.get_modbus_settings()
