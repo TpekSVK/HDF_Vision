@@ -108,56 +108,56 @@ class ModbusService:
             return None
         return client
 
-def read_coils(self, address: int, count: int = 1) -> List[bool]:
-    with self._lock:
-        client = self._ensure_client()
-        if client is None:
-            return []
-        try:
-            result = client.read_coils(address=address, count=count)
-            if result.isError():
-                self._last_error = str(result)
+    def read_coils(self, address: int, count: int = 1) -> List[bool]:
+        with self._lock:
+            client = self._ensure_client()
+            if client is None:
                 return []
-            self._last_read_ts = time.time()
-            self._last_error = None
-            return [bool(x) for x in (result.bits or [])][:count]
-        except Exception as exc:
-            self._last_error = str(exc)
-            return []
-
-
-def read_discrete_inputs(self, address: int, count: int = 1) -> List[bool]:
-    with self._lock:
-        client = self._ensure_client()
-        if client is None:
-            return []
-        try:
-            result = client.read_discrete_inputs(address=address, count=count)
-            if result.isError():
-                self._last_error = str(result)
+            try:
+                result = client.read_coils(address=address, count=count)
+                if result.isError():
+                    self._last_error = str(result)
+                    return []
+                self._last_read_ts = time.time()
+                self._last_error = None
+                return [bool(x) for x in (result.bits or [])][:count]
+            except Exception as exc:
+                self._last_error = str(exc)
                 return []
-            self._last_read_ts = time.time()
-            self._last_error = None
-            return [bool(x) for x in (result.bits or [])][:count]
-        except Exception as exc:
-            self._last_error = str(exc)
-            return []
-
-
-def write_coil(self, address: int, value: bool) -> bool:
-    with self._lock:
-        client = self._ensure_client()
-        if client is None:
-            return False
-        try:
-            result = client.write_coil(address=address, value=bool(value))
-            if result.isError():
-                self._last_error = str(result)
+    
+    
+    def read_discrete_inputs(self, address: int, count: int = 1) -> List[bool]:
+        with self._lock:
+            client = self._ensure_client()
+            if client is None:
+                return []
+            try:
+                result = client.read_discrete_inputs(address=address, count=count)
+                if result.isError():
+                    self._last_error = str(result)
+                    return []
+                self._last_read_ts = time.time()
+                self._last_error = None
+                return [bool(x) for x in (result.bits or [])][:count]
+            except Exception as exc:
+                self._last_error = str(exc)
+                return []
+    
+    
+    def write_coil(self, address: int, value: bool) -> bool:
+        with self._lock:
+            client = self._ensure_client()
+            if client is None:
                 return False
-            self._last_error = None
-            return True
-        except Exception as exc:
-            self._last_error = str(exc)
-            return False
+            try:
+                result = client.write_coil(address=address, value=bool(value))
+                if result.isError():
+                    self._last_error = str(result)
+                    return False
+                self._last_error = None
+                return True
+            except Exception as exc:
+                self._last_error = str(exc)
+                return False
 
 
