@@ -191,6 +191,18 @@ class CameraService:
                 pipeline.set_state(Gst.State.NULL)
                 continue
 
+            # uisti sa, že pipeline naozaj prešla do PLAYING (napr. ak je /dev/video* busy)
+            change_ret, state, _pending = pipeline.get_state(2 * Gst.SECOND)
+            if change_ret == Gst.StateChangeReturn.FAILURE or state != Gst.State.PLAYING:
+                err_msg = ""
+                msg = bus.pop_filtered(Gst.MessageType.ERROR)
+                if msg is not None:
+                    err, _dbg = msg.parse_error()
+                    err_msg = str(err)
+                tried.append(("PLAYING_fail", err_msg, pipe))
+                pipeline.set_state(Gst.State.NULL)
+                continue
+
             # uložiť runtime objekty a spustiť loop v thread-e
             self._pipeline = pipeline
             self._loop = loop
