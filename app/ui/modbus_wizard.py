@@ -44,12 +44,16 @@ class ModbusWizard(QDialog):
         self._reading_trigger = False
         self._heartbeat_state = False
 
+        # build UI
         self._init_ui(settings)
 
+        # trigger timer (BUT NOT STARTED NOW!)
         self._trigger_timer = QTimer(self)
         self._trigger_timer.setInterval(200)
         self._trigger_timer.timeout.connect(self._refresh_trigger)
-        self._trigger_timer.start()
+        self._trigger_timer.stop()  # prevent poll-before-connect
+
+        self._update_status_bar()
 
     # ------------------------------------------------------------------
     def _init_ui(self, settings: dict[str, Any]) -> None:
@@ -61,6 +65,7 @@ class ModbusWizard(QDialog):
         layout.addWidget(self._build_coils_group(settings))
         layout.addWidget(self._build_inputs_group(settings))
 
+        # Status bar
         self._status_bar = QHBoxLayout()
         self._lbl_status = QLabel("Disconnected", self)
         self._lbl_last_error = QLabel("", self)
@@ -71,17 +76,17 @@ class ModbusWizard(QDialog):
         self._status_bar.addWidget(self._lbl_last_read, 1)
         layout.addLayout(self._status_bar)
 
+        # Save / Cancel
         buttons = QDialogButtonBox(
             QDialogButtonBox.Save | QDialogButtonBox.Cancel, parent=self
         )
         btn_save = buttons.button(QDialogButtonBox.Save)
         if btn_save:
             btn_save.setText("Uložiť & Aplikovať")
+
         buttons.accepted.connect(self._on_save)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-
-        self._update_status_bar()
 
     # ----------------------- UI builders -----------------------
     def _build_connection_group(self, settings: dict[str, Any]) -> QGroupBox:
@@ -92,6 +97,7 @@ class ModbusWizard(QDialog):
         grid.setVerticalSpacing(6)
 
         self.txt_host = QLineEdit(settings.get("host", ""), box)
+
         self.sp_port = QSpinBox(box)
         self.sp_port.setRange(1, 65535)
         self.sp_port.setValue(int(settings.get("port", 502)))
@@ -151,12 +157,16 @@ class ModbusWizard(QDialog):
         self.sp_hb = self._make_coil_spin(settings.get("coil_heartbeat", 2))
         self.sp_flash1 = self._make_coil_spin(settings.get("coil_flash1", -1))
         self.sp_flash2 = self._make_coil_spin(settings.get("coil_flash2", -1))
+
         self.sp_pulse = QSpinBox(box)
         self.sp_pulse.setRange(10, 10000)
         self.sp_pulse.setValue(int(settings.get("pulse_ms", 200)))
+
         self.sp_heartbeat_period = QSpinBox(box)
         self.sp_heartbeat_period.setRange(100, 10000)
-        self.sp_heartbeat_period.setValue(int(settings.get("heartbeat_period_ms", 1000)))
+        self.sp_heartbeat_period.setValue(
+            int(settings.get("heartbeat_period_ms", 1000))
+        )
 
         form.addRow("OK coil address:", self.sp_ok)
         form.addRow("NOK coil address:", self.sp_nok)
@@ -169,10 +179,13 @@ class ModbusWizard(QDialog):
         btn_row = QHBoxLayout()
         self.btn_test_ok = QPushButton("Test OK Pulse", box)
         self.btn_test_ok.clicked.connect(lambda: self._on_test_pulse("ok"))
+
         self.btn_test_nok = QPushButton("Test NOK Pulse", box)
         self.btn_test_nok.clicked.connect(lambda: self._on_test_pulse("nok"))
+
         self.btn_test_hb = QPushButton("Test Heartbeat 3×", box)
         self.btn_test_hb.clicked.connect(self._on_test_heartbeat)
+
         for btn in (self.btn_test_ok, self.btn_test_nok, self.btn_test_hb):
             btn_row.addWidget(btn)
         btn_row.addStretch(1)
@@ -188,10 +201,12 @@ class ModbusWizard(QDialog):
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
+
         self.sp_trigger = QSpinBox(box)
         self.sp_trigger.setRange(0, 65535)
         self.sp_trigger.setValue(int(settings.get("di_trigger", 0)))
         form.addRow("Trigger DI address:", self.sp_trigger)
+
         layout.addLayout(form)
 
         status_row = QHBoxLayout()
@@ -218,14 +233,21 @@ class ModbusWizard(QDialog):
     def _run_async(self, func: Callable[[], Any], callback: Callable[[Any], None] | None = None) -> None:
         future = qt_run(func)
         self._futures.append(future)
+
         if callback is not None:
             future.finished.connect(lambda f=future: callback(f.result()))
+
         future.finished.connect(lambda f=future: self._futures.remove(f) if f in self._futures else None)
 
     def _on_test_connect(self) -> None:
+        print("[DEBUG] Test Connect started")
         self.btn_test_connect.setEnabled(False)
         params = self._collect_connection_params()
         self._lbl_connect_status.setText("Connecting…")
+
+        # stop timer during connect
+        self._trigger_timer.stop()
+
         self._run_async(
             lambda: self._modbus.connect(
                 params["host"],
@@ -238,11 +260,17 @@ class ModbusWizard(QDialog):
         )
 
     def _on_connect_result(self, ok: bool) -> None:
+        print("[DEBUG] Test Connect result:", ok)
         self.btn_test_connect.setEnabled(True)
+
         if ok:
             self._lbl_connect_status.setText("Connected")
+            # Start trigger polling AFTER successful connect
+            self._trigger_timer.start()
         else:
             self._lbl_connect_status.setText("Connection failed")
+            self._trigger_timer.stop()
+
         self._update_status_bar()
 
     def _on_test_pulse(self, status: str) -> None:
@@ -251,6 +279,7 @@ class ModbusWizard(QDialog):
         if addr is None or int(addr) < 0:
             self._lbl_connect_status.setText("Coil disabled")
             return
+
         pulse_ms = int(settings.get("pulse_ms", 200))
         self._run_async(lambda: self._pulse_coil(int(addr), pulse_ms))
 
@@ -260,6 +289,7 @@ class ModbusWizard(QDialog):
         if addr is None or int(addr) < 0:
             self._lbl_connect_status.setText("Heartbeat disabled")
             return
+
         period = max(50, int(settings.get("heartbeat_period_ms", 1000)))
         self._heartbeat_state = False
 
@@ -274,28 +304,43 @@ class ModbusWizard(QDialog):
     def _refresh_trigger(self) -> None:
         if self._reading_trigger or not self.isVisible():
             return
+
+        if not self._modbus.is_connected():
+            return  # important safety gate
+
         settings = self._collect_settings()
         addr = settings.get("di_trigger")
+
         if not self.chk_enable.isChecked() or addr is None:
             return
+
         self._reading_trigger = True
-        self._run_async(lambda: self._modbus.read_discrete_inputs(int(addr), 1), self._on_trigger_read)
+
+        self._run_async(
+            lambda: self._modbus.read_discrete_inputs(int(addr), 1),
+            self._on_trigger_read,
+        )
 
     def _on_trigger_read(self, values: list[bool]) -> None:
         self._reading_trigger = False
         level = bool(values[0]) if values else False
         self._set_trigger_indicator(level)
+
         if self._modbus.last_read_ts:
             ts = datetime.fromtimestamp(self._modbus.last_read_ts)
             self._lbl_last_read.setText(f"Last read: {ts:%H:%M:%S}")
+
         self._update_status_bar()
 
     def _read_trigger_now(self) -> None:
+        if not self._modbus.is_connected():
+            return
         self._refresh_trigger()
 
     def _pulse_coil(self, address: int, pulse_ms: int) -> None:
         if not self._modbus.is_connected():
             return
+
         self._modbus.write_coil(address, True)
         time.sleep(max(10, int(pulse_ms)) / 1000.0)
         self._modbus.write_coil(address, False)
@@ -337,7 +382,9 @@ class ModbusWizard(QDialog):
     def _update_status_bar(self) -> None:
         self._lbl_status.setText("Connected" if self._modbus.is_connected() else "Disconnected")
         err = self._modbus.last_error or ""
-        self._lbl_last_error.setText(f"Last error: {err}" if err else "")
+        self._lbl_last_error.setText(f"Last error: {err}")
+
+
         if self._modbus.last_read_ts:
             ts = datetime.fromtimestamp(self._modbus.last_read_ts)
             self._lbl_last_read.setText(f"Last read: {ts:%H:%M:%S}")
@@ -354,4 +401,3 @@ class ModbusWizard(QDialog):
         except Exception:
             pass
         super().closeEvent(event)
-
