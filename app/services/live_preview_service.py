@@ -54,6 +54,7 @@ class LivePreviewService:
 
         self._pipeline: Optional[Gst.Pipeline] = None
         self._loop: Optional[GLib.MainLoop] = None
+        self._context: Optional[GLib.MainContext] = None
         self._th: Optional[threading.Thread] = None
         self._running = False
 
@@ -176,11 +177,19 @@ class LivePreviewService:
 
         sink.connect("new-sample", self._on_sample)
 
-        bus = pipeline.get_bus()
-        bus.add_signal_watch()
-        bus.connect("message", self._on_bus)
+        context = GLib.MainContext()
 
-        loop = GLib.MainLoop()
+        # Izoluj bus signal watch do dedikovaného GLib kontextu, aby sa
+        # nekryl s Qt event loop-om alebo inými MainLoop-ami v procese.
+        bus = pipeline.get_bus()
+        context.push_thread_default()
+        try:
+            bus.add_signal_watch()
+            bus.connect("message", self._on_bus)
+        finally:
+            context.pop_thread_default()
+
+        loop = GLib.MainLoop(context=context)
 
         ret = pipeline.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
@@ -189,11 +198,16 @@ class LivePreviewService:
 
         self._pipeline = pipeline
         self._loop = loop
+        self._context = context
         self._running = True
 
         def _run():
             try:
-                loop.run()
+                context.push_thread_default()
+                try:
+                    loop.run()
+                finally:
+                    context.pop_thread_default()
             except Exception as e:
                 print("[Live] MainLoop exception:", e)
 
@@ -223,6 +237,7 @@ class LivePreviewService:
         self._pipeline = None
         self._loop = None
         self._th = None
+        self._context = None
         self._running = False
 
         # vyprázdniť fronty
