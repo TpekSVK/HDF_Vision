@@ -1,4 +1,7 @@
-"""Simple Modbus TCP helper focused on coil/DI access for UI triggers."""
+"""
+Simple Modbus TCP helper focused on coil/DI access for UI triggers.
+Compatible with pymodbus 3.x (Jetson / Python3).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +11,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 from pymodbus.client import ModbusTcpClient
+
 
 __all__ = [
     "ModbusConnectionParams",
@@ -19,12 +23,17 @@ __all__ = [
 class ModbusConnectionParams:
     host: str = ""
     port: int = 502
-    unit_id: int = 1
+    unit_id: int = 1          # not used by pymodbus 3.x TCP client
     timeout_ms: int = 1500
     retries: int = 1
 
 
 class ModbusService:
+    """
+    Thread-safe synchronous Modbus TCP wrapper for coils + discrete inputs.
+    Used by ModbusWizard in UI and by SignalingService in RUN mode.
+    """
+
     def __init__(self) -> None:
         self._client: Optional[ModbusTcpClient] = None
         self._lock = threading.Lock()
@@ -46,10 +55,14 @@ class ModbusService:
         if client is None:
             return False
         try:
-            return bool(client.connected) or bool(client.is_socket_open())
+            # pymodbus 3.x: .connected OR socket is open
+            return bool(getattr(client, "connected", False)) or bool(
+                getattr(client, "is_socket_open", lambda: False)()
+            )
         except Exception:
             return False
 
+    # ------------------------------------------------------------------
     def connect(
         self,
         host: str,
@@ -58,12 +71,12 @@ class ModbusService:
         timeout_ms: int = 1500,
         retries: int = 1,
     ) -> bool:
-        """Establish a Modbus TCP connection (blocking)."""
-
+        """Establish Modbus TCP connection."""
         with self._lock:
             self.disconnect()
             self._last_error = None
             self._last_read_ts = None
+
             try:
                 client = ModbusTcpClient(
                     host=host,
@@ -76,6 +89,7 @@ class ModbusService:
                 if not ok:
                     self._last_error = "Connection failed"
                     return False
+
                 self._client = client
                 self._params = ModbusConnectionParams(
                     host=str(host or ""),
@@ -84,8 +98,8 @@ class ModbusService:
                     timeout_ms=int(timeout_ms),
                     retries=int(retries),
                 )
-                self._last_error = None
                 return True
+
             except Exception as exc:
                 self._last_error = str(exc)
                 self._client = None
@@ -108,56 +122,65 @@ class ModbusService:
             return None
         return client
 
+    # ------------------------------------------------------------------
+    #  FIXED API for pymodbus 3.x  → uses address=, count=, value=
+    # ------------------------------------------------------------------
+
     def read_coils(self, address: int, count: int = 1) -> List[bool]:
         with self._lock:
             client = self._ensure_client()
             if client is None:
                 return []
+
             try:
                 result = client.read_coils(address=address, count=count)
                 if result.isError():
                     self._last_error = str(result)
                     return []
+
                 self._last_read_ts = time.time()
                 self._last_error = None
                 return [bool(x) for x in (result.bits or [])][:count]
+
             except Exception as exc:
                 self._last_error = str(exc)
                 return []
-    
-    
+
     def read_discrete_inputs(self, address: int, count: int = 1) -> List[bool]:
         with self._lock:
             client = self._ensure_client()
             if client is None:
                 return []
+
             try:
                 result = client.read_discrete_inputs(address=address, count=count)
                 if result.isError():
                     self._last_error = str(result)
                     return []
+
                 self._last_read_ts = time.time()
                 self._last_error = None
                 return [bool(x) for x in (result.bits or [])][:count]
+
             except Exception as exc:
                 self._last_error = str(exc)
                 return []
-    
-    
+
     def write_coil(self, address: int, value: bool) -> bool:
         with self._lock:
             client = self._ensure_client()
             if client is None:
                 return False
+
             try:
                 result = client.write_coil(address=address, value=bool(value))
                 if result.isError():
                     self._last_error = str(result)
                     return False
+
                 self._last_error = None
                 return True
+
             except Exception as exc:
                 self._last_error = str(exc)
                 return False
-
-
