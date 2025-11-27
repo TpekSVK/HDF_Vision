@@ -26,6 +26,7 @@ from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
 from app.ui.gpio_wizard import GPIOWizard
+from app.ui.modbus_wizard import ModbusWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
@@ -33,6 +34,7 @@ from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
+from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
@@ -68,6 +70,8 @@ class MainWindow(QMainWindow):
         self.gpio = GPIOService()
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
         self.gpio_triggered.connect(self.manual_trigger)
+
+        self.modbus = ModbusService()
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
@@ -306,6 +310,10 @@ class MainWindow(QMainWindow):
         self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
         row1.addWidget(self.btn_gpio_wizard)
+
+        self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
+        self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
+        row1.addWidget(self.btn_modbus_wizard)
 
         row1.addStretch(1)
         s.addLayout(row1)
@@ -804,6 +812,11 @@ class MainWindow(QMainWindow):
         self.gpio.set_active_recipe(self.current_recipe_name())
         dlg = GPIOWizard(self.gpio, self)
         dlg.resize(720, 520)
+        dlg.exec()
+
+    def open_modbus_wizard(self):
+        dlg = ModbusWizard(self.modbus, self)
+        dlg.resize(760, 640)
         dlg.exec()
 
     def _reload_results_strip(self) -> None:
