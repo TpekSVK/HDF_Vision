@@ -627,6 +627,9 @@ class RecipeView:
     trigger_mode: Literal["timed", "external", "manual"] = "timed"
     trigger_interval_ms: Optional[int] = None
     tools: List[Tool] = field(default_factory=list)
+    branch_enabled: bool = False
+    branch_targets: dict[str, str] = field(default_factory=dict)
+    branch_default_view_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.id = str(self.id or "").strip()
@@ -666,6 +669,20 @@ class RecipeView:
         if self.trigger_mode != "timed":
             self.trigger_interval_ms = None
 
+        self.branch_enabled = bool(self.branch_enabled)
+        normalized_targets: dict[str, str] = {}
+        for key, value in dict(self.branch_targets or {}).items():
+            status = str(key or "").strip().lower()
+            if status not in {"ok", "warn", "nok"}:
+                continue
+            target_view = str(value or "").strip()
+            if target_view:
+                normalized_targets[status] = target_view
+        self.branch_targets = normalized_targets
+
+        branch_default = str(self.branch_default_view_id or "").strip()
+        self.branch_default_view_id = branch_default or None
+
         converted: List[Tool] = []
         for tool in self.tools:
             if isinstance(tool, Tool):
@@ -693,6 +710,9 @@ class RecipeView:
             "trigger_mode": self.trigger_mode,
             "trigger_interval_ms": self.trigger_interval_ms,
             "tools": [tool.to_dict() for tool in self.tools],
+            "branch_enabled": self.branch_enabled,
+            "branch_targets": dict(self.branch_targets),
+            "branch_default_view_id": self.branch_default_view_id,
         }
 
     @classmethod
@@ -711,6 +731,9 @@ class RecipeView:
             trigger_mode=data.get("trigger_mode", "timed"),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             tools=data.get("tools", []),
+            branch_enabled=bool(data.get("branch_enabled", False)),
+            branch_targets=data.get("branch_targets", {}),
+            branch_default_view_id=data.get("branch_default_view_id"),
         )
 
     def copy(self) -> "RecipeView":
@@ -727,6 +750,9 @@ class RecipeView:
             trigger_mode=self.trigger_mode,
             trigger_interval_ms=self.trigger_interval_ms,
             tools=[tool.copy() for tool in self.tools],
+            branch_enabled=self.branch_enabled,
+            branch_targets=dict(self.branch_targets),
+            branch_default_view_id=self.branch_default_view_id,
         )
 
     def set_tools(self, tools: Sequence[Tool]) -> None:

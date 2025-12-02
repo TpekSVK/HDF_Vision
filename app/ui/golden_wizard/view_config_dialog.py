@@ -55,12 +55,17 @@ class ViewConfigDialog(QDialog):
         trigger_interval_ms: Optional[int] = None,
         available_frame_sources: Sequence[tuple[str, str]] | None = None,
         frame_source_view_id: Optional[str] = None,
+        available_branch_targets: Sequence[tuple[str, str]] | None = None,
+        branch_enabled: bool = False,
+        branch_targets: Optional[dict[str, str]] = None,
+        branch_default_view_id: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self._mode = mode
         self._view_id = view_id
         self._available_resolutions = list(available_resolutions)
         self._available_frame_sources = list(available_frame_sources or [])
+        self._available_branch_targets = list(available_branch_targets or [])
         self._result: Optional[dict[str, Any]] = None
 
         title = "Add View" if mode == "add" else "Edit View"
@@ -213,6 +218,37 @@ class ViewConfigDialog(QDialog):
         timing_form.addRow(frame_hint)
         layout.addWidget(timing_group)
 
+        branching_group = QGroupBox("Vetvenie snímky (voliteľné)", self)
+        branching_form = QFormLayout(branching_group)
+        branching_form.setSpacing(6)
+
+        self._branch_enabled_checkbox = QCheckBox(
+            "Povoliť presmerovanie na iný view podľa výsledku", branching_group
+        )
+        self._branch_enabled_checkbox.setChecked(bool(branch_enabled))
+        branching_form.addRow(self._branch_enabled_checkbox)
+
+        self._branch_ok_combo = self._create_branch_combo(branching_group)
+        self._branch_warn_combo = self._create_branch_combo(branching_group)
+        self._branch_nok_combo = self._create_branch_combo(branching_group)
+        self._branch_default_combo = self._create_branch_combo(branching_group)
+
+        branching_form.addRow("Cieľ pre OK:", self._branch_ok_combo)
+        branching_form.addRow("Cieľ pre WARN:", self._branch_warn_combo)
+        branching_form.addRow("Cieľ pre NOK:", self._branch_nok_combo)
+        branching_form.addRow("Základný cieľ (fallback):", self._branch_default_combo)
+
+        branch_hint = self._create_description_label(
+            "Ak je vetvenie zapnuté, podľa statusu prvého nástroja sa vyberie"
+            " cieľový view. Ostatné view sa v aktuálnom cykle preskočia.",
+            branching_group,
+        )
+        branching_form.addRow(branch_hint)
+        self._branch_enabled_checkbox.stateChanged.connect(
+            self._on_branch_enabled_changed
+        )
+        layout.addWidget(branching_group)
+
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
         action_text = "Add View" if mode == "add" else "Save"
         self._accept_button = button_box.addButton(
@@ -225,6 +261,9 @@ class ViewConfigDialog(QDialog):
         self._apply_initial_profile(camera_profile)
         self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms)
         self._apply_initial_frame_source(frame_source_view_id)
+        self._apply_initial_branch_targets(
+            branch_enabled, branch_targets or {}, branch_default_view_id
+        )
 
     @staticmethod
     def _create_description_label(text: str, parent: QWidget) -> QLabel:
@@ -310,8 +349,20 @@ class ViewConfigDialog(QDialog):
             "trigger_mode": trigger_mode,
             "trigger_interval_ms": interval_ms,
             "frame_source_view_id": self._frame_source_combo.currentData(),
+            "branch_enabled": self._branch_enabled_checkbox.isChecked(),
+            "branch_targets": self._collect_branch_targets(),
+            "branch_default_view_id": self._branch_default_combo.currentData(),
         }
         super().accept()
+
+    def _create_branch_combo(self, parent: QWidget) -> QComboBox:
+        combo = QComboBox(parent)
+        combo.addItem("Bez presmerovania", None)
+        for view_id, label in self._available_branch_targets:
+            display = label if label else view_id
+            combo.addItem(display, view_id)
+        combo.setEnabled(False)
+        return combo
 
     def _populate_resolution_combo(
         self,
@@ -419,6 +470,54 @@ class ViewConfigDialog(QDialog):
         index = self._frame_source_combo.findData(frame_source_view_id)
         if index >= 0:
             self._frame_source_combo.setCurrentIndex(index)
+
+    def _apply_initial_branch_targets(
+        self,
+        branch_enabled: bool,
+        branch_targets: dict[str, str],
+        branch_default_view_id: Optional[str],
+    ) -> None:
+        self._branch_enabled_checkbox.setChecked(bool(branch_enabled))
+        for status, combo in (
+            ("ok", self._branch_ok_combo),
+            ("warn", self._branch_warn_combo),
+            ("nok", self._branch_nok_combo),
+        ):
+            target = branch_targets.get(status)
+            if not target:
+                continue
+            index = combo.findData(target)
+            if index >= 0:
+                combo.setCurrentIndex(index)
+        if branch_default_view_id:
+            index = self._branch_default_combo.findData(branch_default_view_id)
+            if index >= 0:
+                self._branch_default_combo.setCurrentIndex(index)
+        self._on_branch_enabled_changed()
+
+    def _on_branch_enabled_changed(self) -> None:
+        enabled = self._branch_enabled_checkbox.isChecked()
+        for combo in (
+            self._branch_ok_combo,
+            self._branch_warn_combo,
+            self._branch_nok_combo,
+            self._branch_default_combo,
+        ):
+            combo.setEnabled(enabled)
+
+    def _collect_branch_targets(self) -> dict[str, str]:
+        if not self._branch_enabled_checkbox.isChecked():
+            return {}
+        collected: dict[str, str] = {}
+        for status, combo in (
+            ("ok", self._branch_ok_combo),
+            ("warn", self._branch_warn_combo),
+            ("nok", self._branch_nok_combo),
+        ):
+            target = combo.currentData()
+            if target:
+                collected[status] = target
+        return collected
 
     def _on_trigger_mode_changed(self) -> None:
         mode = str(self._trigger_mode_combo.currentData() or "timed")
