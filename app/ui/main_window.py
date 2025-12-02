@@ -516,6 +516,9 @@ class MainWindow(QMainWindow):
                 )
                 if interval_ms is not None and interval_ms < 0:
                     interval_ms = 0
+                frame_source_view_id = (
+                    str(getattr(view, "frame_source_view_id", "") or "").strip() or None
+                )
                 view_specs.append(
                     {
                         "index": index,
@@ -523,6 +526,7 @@ class MainWindow(QMainWindow):
                         "settle_ms": settle_ms,
                         "trigger_mode": trigger_mode,
                         "interval_ms": interval_ms,
+                        "frame_source_view_id": frame_source_view_id,
                     }
                 )
 
@@ -557,6 +561,7 @@ class MainWindow(QMainWindow):
             trigger_start_ts = time.monotonic()
 
             last_view_id: str | None = None
+            captured_frames: dict[str, Any] = {}
 
             try:
                 for spec in views_to_process:
@@ -566,35 +571,50 @@ class MainWindow(QMainWindow):
                     view_name = getattr(view, "name", view_id)
                     golden = self._load_view_golden_array(recipe_name, view)
 
-                    profile = getattr(view, "camera_profile", None)
-                    try:
-                        apply_view_camera_profile(
-                            self.cam,
-                            base_camera_state,
-                            profile,
-                        )
-                    except Exception as exc:
-                        self.lbl_status.setText(
-                            f"{view_name}: {exc}"
-                        )
-                        self._reset_manual_trigger_progress(recipe_name)
-                        return
+                    source_view_id = spec.get("frame_source_view_id")
+                    view_frame_u8 = None
+                    if source_view_id:
+                        view_frame_u8 = captured_frames.get(source_view_id)
+                        if view_frame_u8 is None:
+                            view_frame_u8 = self._clone_frame(
+                                self._get_last_frame_for_view(source_view_id)
+                            )
 
-                    settle_ms = spec["settle_ms"]
-                    trigger_mode = spec["trigger_mode"]
-                    interval_ms = spec["interval_ms"]
+                    if view_frame_u8 is None:
+                        profile = getattr(view, "camera_profile", None)
+                        try:
+                            apply_view_camera_profile(
+                                self.cam,
+                                base_camera_state,
+                                profile,
+                            )
+                        except Exception as exc:
+                            self.lbl_status.setText(
+                                f"{view_name}: {exc}"
+                            )
+                            self._reset_manual_trigger_progress(recipe_name)
+                            return
 
-                    if settle_ms is not None and settle_ms > 0:
-                        time.sleep(settle_ms / 1000.0)
+                        settle_ms = spec["settle_ms"]
+                        trigger_mode = spec["trigger_mode"]
+                        interval_ms = spec["interval_ms"]
 
-                    latest_frame = self.cam.last_frame()
-                    if latest_frame is not None:
-                        view_frame = latest_frame
-                        base_frame = view_frame.copy()
+                        if settle_ms is not None and settle_ms > 0:
+                            time.sleep(settle_ms / 1000.0)
+
+                        latest_frame = self.cam.last_frame()
+                        if latest_frame is not None:
+                            view_frame = latest_frame
+                            base_frame = view_frame.copy()
+                        else:
+                            view_frame = base_frame
+
+                        view_frame_u8 = view_frame.copy()
                     else:
-                        view_frame = base_frame
-
-                    view_frame_u8 = view_frame.copy()
+                        base_frame = view_frame_u8.copy()
+                        settle_ms = spec["settle_ms"]
+                        trigger_mode = spec["trigger_mode"]
+                        interval_ms = spec["interval_ms"]
 
                     if golden is None:
                         status = "nok"
@@ -683,6 +703,7 @@ class MainWindow(QMainWindow):
                     )
 
                     self._set_last_view_frame(view_id, last_preview_frame)
+                    captured_frames[view_id] = self._clone_frame(view_frame_u8)
                     last_view_id = view_id
 
                     self.view_strip.set_status(view_id, status)
