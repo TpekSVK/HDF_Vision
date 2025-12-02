@@ -2174,6 +2174,22 @@ class GoldenWizard(QDialog):
             frame_source_view_id=getattr(source_view, "frame_source_view_id", None)
             if source_view
             else None,
+            available_branch_targets=[
+                (view.id, view.name or view.id)
+                for view in existing
+                if view.id
+            ],
+            branch_enabled=bool(getattr(source_view, "branch_enabled", False))
+            if source_view
+            else False,
+            branch_targets=dict(getattr(source_view, "branch_targets", {}) or {})
+            if source_view
+            else None,
+            branch_default_view_id=(
+                getattr(source_view, "branch_default_view_id", None)
+                if source_view
+                else None
+            ),
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2190,6 +2206,9 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
+                branch_enabled=bool(data.get("branch_enabled", False)),
+                branch_targets=dict(data.get("branch_targets", {}) or {}),
+                branch_default_view_id=data.get("branch_default_view_id"),
             )
         except Exception as exc:
             self._err(f"Pridanie view zlyhalo: {exc}")
@@ -2224,6 +2243,14 @@ class GoldenWizard(QDialog):
                 if other.id and other.id != view.id
             ],
             frame_source_view_id=getattr(view, "frame_source_view_id", None),
+            available_branch_targets=[
+                (other.id, other.name or other.id)
+                for other in self._views
+                if other.id and other.id != view.id
+            ],
+            branch_enabled=bool(getattr(view, "branch_enabled", False)),
+            branch_targets=dict(getattr(view, "branch_targets", {}) or {}),
+            branch_default_view_id=getattr(view, "branch_default_view_id", None),
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2239,6 +2266,9 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
+                branch_enabled=bool(data.get("branch_enabled", False)),
+                branch_targets=dict(data.get("branch_targets", {}) or {}),
+                branch_default_view_id=data.get("branch_default_view_id"),
             )
         except Exception as exc:
             self._err(f"Úprava view zlyhala: {exc}")

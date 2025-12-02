@@ -562,9 +562,15 @@ class MainWindow(QMainWindow):
 
             last_view_id: str | None = None
             captured_frames: dict[str, Any] = {}
+            spec_lookup = {
+                getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
+                for spec in view_specs
+            }
 
             try:
-                for spec in views_to_process:
+                queue = list(views_to_process)
+                while queue:
+                    spec = queue.pop(0)
                     view = spec["view"]
                     index = spec["index"]
                     view_id = getattr(view, "id", None) or f"view_{index+1}"
@@ -573,7 +579,10 @@ class MainWindow(QMainWindow):
 
                     source_view_id = spec.get("frame_source_view_id")
                     view_frame_u8 = None
-                    if source_view_id:
+                    injected_frame = spec.get("injected_frame")
+                    if injected_frame is not None:
+                        view_frame_u8 = self._clone_frame(injected_frame)
+                    elif source_view_id:
                         view_frame_u8 = captured_frames.get(source_view_id)
                         if view_frame_u8 is None:
                             view_frame_u8 = self._clone_frame(
@@ -715,7 +724,25 @@ class MainWindow(QMainWindow):
                         view_id=view_id,
                     )
 
-                    should_break = bool(fail_fast and status == "nok")
+                    branch_target_id = None
+                    if bool(getattr(view, "branch_enabled", False)):
+                        branch_map = dict(getattr(view, "branch_targets", {}) or {})
+                        branch_target_id = branch_map.get(status) or getattr(
+                            view, "branch_default_view_id", None
+                        )
+                        if branch_target_id and branch_target_id != view_id:
+                            forwarded_frame = self._clone_frame(view_frame_u8)
+                            target_spec = spec_lookup.get(branch_target_id)
+                            if target_spec:
+                                queued_spec = dict(target_spec)
+                                queued_spec["injected_frame"] = forwarded_frame
+                                queue = [queued_spec]
+                            else:
+                                queue = []
+
+                    should_break = bool(
+                        fail_fast and status == "nok" and not branch_target_id
+                    )
 
                     if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
                         time.sleep(interval_ms / 1000.0)

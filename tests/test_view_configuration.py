@@ -146,6 +146,27 @@ def test_view_uses_global_golden_recognizes_per_view_assets():
     assert view_uses_global_golden(empty_path_view) is True
 
 
+def test_view_branching_serialization_roundtrip():
+    raw = {
+        "id": "view_0",
+        "name": "Router",
+        "branch_enabled": True,
+        "branch_targets": {"ok": "view_1", "nok": "view_2", "invalid": "skip"},
+        "branch_default_view_id": "view_fallback",
+    }
+
+    view = RecipeView.from_dict(raw)
+
+    assert view.branch_enabled is True
+    assert view.branch_targets == {"ok": "view_1", "nok": "view_2"}
+    assert view.branch_default_view_id == "view_fallback"
+
+    serialized = view.to_dict()
+    assert serialized["branch_enabled"] is True
+    assert serialized["branch_targets"] == {"ok": "view_1", "nok": "view_2"}
+    assert serialized["branch_default_view_id"] == "view_fallback"
+
+
 def test_resolve_camera_state_inherits_base_configuration():
     base = {
         "width": 1280,
