@@ -621,6 +621,7 @@ class RecipeView:
     id: str = ""
     name: str = ""
     golden_path: str = "golden.png"
+    frame_source_view_id: Optional[str] = None
     camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
     trigger_mode: Literal["timed", "external", "manual"] = "timed"
@@ -631,6 +632,13 @@ class RecipeView:
         self.id = str(self.id or "").strip()
         self.name = str(self.name or "").strip()
         self.golden_path = str(self.golden_path or "golden.png")
+        self.frame_source_view_id = (
+            str(self.frame_source_view_id).strip() or None
+            if self.frame_source_view_id is not None
+            else None
+        )
+        if self.frame_source_view_id == self.id:
+            self.frame_source_view_id = None
         camera_profile = ViewCameraProfile.from_obj(self.camera_profile)
         if isinstance(camera_profile, ViewCameraProfile):
             self.camera_profile = camera_profile
@@ -679,6 +687,7 @@ class RecipeView:
             "id": self.id,
             "name": self.name,
             "golden_path": self.golden_path,
+            "frame_source_view_id": self.frame_source_view_id,
             "camera_profile": camera_profile,
             "settle_ms": self.settle_ms,
             "trigger_mode": self.trigger_mode,
@@ -696,6 +705,7 @@ class RecipeView:
             id=data.get("id", ""),
             name=data.get("name", ""),
             golden_path=data.get("golden_path", "golden.png"),
+            frame_source_view_id=data.get("frame_source_view_id"),
             camera_profile=data.get("camera_profile"),
             settle_ms=data.get("settle_ms"),
             trigger_mode=data.get("trigger_mode", "timed"),
@@ -711,6 +721,7 @@ class RecipeView:
             id=self.id,
             name=self.name,
             golden_path=self.golden_path,
+            frame_source_view_id=self.frame_source_view_id,
             camera_profile=camera_profile,
             settle_ms=self.settle_ms,
             trigger_mode=self.trigger_mode,

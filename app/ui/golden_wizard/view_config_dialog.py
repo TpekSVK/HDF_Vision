@@ -53,11 +53,14 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int] = None,
         trigger_mode: str = "timed",
         trigger_interval_ms: Optional[int] = None,
+        available_frame_sources: Sequence[tuple[str, str]] | None = None,
+        frame_source_view_id: Optional[str] = None,
     ) -> None:
         super().__init__(parent)
         self._mode = mode
         self._view_id = view_id
         self._available_resolutions = list(available_resolutions)
+        self._available_frame_sources = list(available_frame_sources or [])
         self._result: Optional[dict[str, Any]] = None
 
         title = "Add View" if mode == "add" else "Edit View"
@@ -194,6 +197,20 @@ class ViewConfigDialog(QDialog):
         )
         self._interval_edit.setToolTip(interval_hint.text())
         timing_form.addRow(interval_hint)
+
+        self._frame_source_combo = QComboBox(timing_group)
+        self._frame_source_combo.addItem("Samostatný záber (default)", None)
+        for view_id, label in self._available_frame_sources:
+            display = label if label else view_id
+            self._frame_source_combo.addItem(display, view_id)
+        timing_form.addRow("Zdroj snímky:", self._frame_source_combo)
+        frame_hint = self._create_description_label(
+            "Vyber ID iného view-u, z ktorého sa použije posledný záber namiesto"
+            " spúšťania vlastného triggeru. Prázdne = samostatné snímanie.",
+            timing_group,
+        )
+        self._frame_source_combo.setToolTip(frame_hint.text())
+        timing_form.addRow(frame_hint)
         layout.addWidget(timing_group)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
@@ -207,6 +224,7 @@ class ViewConfigDialog(QDialog):
 
         self._apply_initial_profile(camera_profile)
         self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms)
+        self._apply_initial_frame_source(frame_source_view_id)
 
     @staticmethod
     def _create_description_label(text: str, parent: QWidget) -> QLabel:
@@ -291,6 +309,7 @@ class ViewConfigDialog(QDialog):
             "settle_ms": settle_ms,
             "trigger_mode": trigger_mode,
             "trigger_interval_ms": interval_ms,
+            "frame_source_view_id": self._frame_source_combo.currentData(),
         }
         super().accept()
 
@@ -391,6 +410,15 @@ class ViewConfigDialog(QDialog):
         if trigger_interval_ms is not None:
             self._interval_edit.setText(str(int(trigger_interval_ms)))
         self._on_trigger_mode_changed()
+
+    def _apply_initial_frame_source(
+        self, frame_source_view_id: Optional[str]
+    ) -> None:
+        if not frame_source_view_id:
+            return
+        index = self._frame_source_combo.findData(frame_source_view_id)
+        if index >= 0:
+            self._frame_source_combo.setCurrentIndex(index)
 
     def _on_trigger_mode_changed(self) -> None:
         mode = str(self._trigger_mode_combo.currentData() or "timed")

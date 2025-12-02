@@ -32,6 +32,7 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
         "id": "view_1",
         "name": "Primary",
         "golden_path": "golden.png",
+        "frame_source_view_id": " view_0 ",
         "camera_profile": {
             "width": "1280",
             "height": "720",
@@ -55,10 +56,12 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
     assert view.settle_ms == 45
     assert view.trigger_mode == "timed"
     assert view.trigger_interval_ms == 150
+    assert view.frame_source_view_id == "view_0"
 
     serialized = view.to_dict()
     assert serialized["trigger_mode"] == "timed"
     assert serialized["trigger_interval_ms"] == 150
+    assert serialized["frame_source_view_id"] == "view_0"
     profile_dict = serialized["camera_profile"]
     assert profile_dict["pixel_format"] == "Y12"
     assert profile_dict["exposure_us"] == 9000
@@ -92,6 +95,7 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         recipe_name,
         view_id="view_custom",
         view_name="Inspection",
+        frame_source_view_id=None,
         camera_profile=profile,
         settle_ms=120,
         trigger_mode="timed",
@@ -104,11 +108,13 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert new_view.camera_profile.pixel_format == "Y12"
     assert new_view.trigger_mode == "timed"
     assert new_view.trigger_interval_ms == 250
+    assert new_view.frame_source_view_id is None
 
     updated = service.update_view(
         recipe_name,
         new_view.id,
         view_name="Inspection Updated",
+        frame_source_view_id="view_source",
         camera_profile=None,
         settle_ms=None,
         trigger_mode="external",
@@ -119,10 +125,12 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert updated.camera_profile is None
     assert updated.trigger_mode == "external"
     assert updated.trigger_interval_ms is None
+    assert updated.frame_source_view_id == "view_source"
 
     views = {view.id: view for view in service.list_views(recipe_name)}
     assert "view_custom" in views
     assert views["view_custom"].name == "Inspection Updated"
+    assert views["view_custom"].frame_source_view_id == "view_source"
 
 
 def test_view_uses_global_golden_recognizes_per_view_assets():

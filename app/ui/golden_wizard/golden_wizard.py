@@ -2166,6 +2166,14 @@ class GoldenWizard(QDialog):
             trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
             if source_view
             else None,
+            available_frame_sources=[
+                (view.id, view.name or view.id)
+                for view in existing
+                if view.id
+            ],
+            frame_source_view_id=getattr(source_view, "frame_source_view_id", None)
+            if source_view
+            else None,
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2177,6 +2185,7 @@ class GoldenWizard(QDialog):
                 source_view_id=self._active_view_id,
                 view_id=dialog.view_id(),
                 view_name=data.get("name"),
+                frame_source_view_id=data.get("frame_source_view_id"),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
@@ -2209,6 +2218,12 @@ class GoldenWizard(QDialog):
             settle_ms=view.settle_ms,
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
+            available_frame_sources=[
+                (other.id, other.name or other.id)
+                for other in self._views
+                if other.id and other.id != view.id
+            ],
+            frame_source_view_id=getattr(view, "frame_source_view_id", None),
         )
         if dialog.exec() != QDialog.Accepted:
             return
@@ -2219,6 +2234,7 @@ class GoldenWizard(QDialog):
                 recipe,
                 view.id,
                 view_name=data.get("name"),
+                frame_source_view_id=data.get("frame_source_view_id"),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),

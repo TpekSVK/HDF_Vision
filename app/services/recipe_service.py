@@ -113,6 +113,7 @@ class RecipeService:
         source_view_id: str | None = None,
         view_id: str | None = None,
         view_name: str | None = None,
+        frame_source_view_id: str | None = None,
         camera_profile: ViewCameraProfile | dict | str | None = None,
         settle_ms: int | None = None,
         trigger_mode: str | None = None,
@@ -155,6 +156,7 @@ class RecipeService:
         source_trigger_mode: str | None = None
         source_trigger_interval: Optional[int] = None
         source_golden: Optional[str] = None
+        source_frame_source: Optional[str] = None
         if source_view_id:
             try:
                 source_view = recipe.get_view(source_view_id)
@@ -169,6 +171,7 @@ class RecipeService:
                 source_trigger_mode = source_view.trigger_mode
                 source_trigger_interval = source_view.trigger_interval_ms
                 source_golden = source_view.golden_path
+                source_frame_source = source_view.frame_source_view_id
                 draft_tools = self._ensure_draft_tools(name, source_view_id, recipe)
                 source_tools = [tool.copy() for tool in draft_tools]
             except Exception:
@@ -196,10 +199,15 @@ class RecipeService:
                 else source_trigger_interval
             )
 
+        target_frame_source = frame_source_view_id
+        if target_frame_source is None:
+            target_frame_source = source_frame_source
+
         new_view = RecipeView(
             id=new_id,
             name=new_name,
             golden_path=golden_filename,
+            frame_source_view_id=target_frame_source,
             camera_profile=camera_payload,
             settle_ms=target_settle,
             trigger_mode=target_trigger_mode,
@@ -235,6 +243,7 @@ class RecipeService:
         view_id: str,
         *,
         view_name: str,
+        frame_source_view_id: str | None,
         camera_profile: ViewCameraProfile | dict | str | None,
         settle_ms: int | None,
         trigger_mode: str,
@@ -270,6 +279,7 @@ class RecipeService:
             id=view.id,
             name=normalized_name,
             golden_path=view.golden_path,
+            frame_source_view_id=frame_source_view_id,
             camera_profile=camera_payload,
             settle_ms=settle_ms,
             trigger_mode=normalized_mode,
