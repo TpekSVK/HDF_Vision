@@ -36,6 +36,7 @@ from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
+from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
     apply_camera_state,
@@ -535,6 +536,8 @@ class MainWindow(QMainWindow):
             manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
             all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
 
+            ignored_for_aggregation: set[str] = set()
+
             if all_manual:
                 cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
                 index_in_cycle = cycle_position % len(manual_specs)
@@ -726,6 +729,8 @@ class MainWindow(QMainWindow):
 
                     branch_target_id = None
                     if bool(getattr(view, "branch_enabled", False)):
+                        if index == 0:
+                            ignored_for_aggregation.add(view_id)
                         branch_map = dict(getattr(view, "branch_targets", {}) or {})
                         branch_target_id = branch_map.get(status) or getattr(
                             view, "branch_default_view_id", None
@@ -759,7 +764,9 @@ class MainWindow(QMainWindow):
             if self._active_view_id and self._active_view_id not in per_view_statuses:
                 self._update_sidebar(view_id=self._active_view_id)
 
-            aggregated_status = recipe_cfg.aggregation.aggregate_statuses(per_view_statuses)
+            aggregated_status = aggregate_branching_statuses(
+                recipe_cfg.aggregation, per_view_statuses, ignored_for_aggregation
+            )
             color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
             self.lbl_status.setText(aggregated_status.upper())
             self.lbl_status.setStyleSheet(
