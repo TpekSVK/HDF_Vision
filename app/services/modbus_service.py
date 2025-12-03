@@ -32,7 +32,7 @@ class ModbusConfig:
     host: str = "192.168.0.50"
     port: int = 502
     unit_id: int = 1
-    timeout_ms: int = 1500
+    timeout_ms: int = 300
     retry_count: int = 1
     enabled: bool = False
 
@@ -343,8 +343,8 @@ class ModbusService:
         self._last_trigger_edge_ts = 0.0
 
     def _poll_trigger_input(self) -> None:
-        debounce_seconds = 0.2
-        while not self._trigger_monitor_stop.wait(0.05):
+        debounce_seconds = 0.05
+        while not self._trigger_monitor_stop.wait(0.01):
             cfg = self.get_config()
             if not cfg.enabled or cfg.trigger_di is None or int(cfg.trigger_di) < 0:
                 continue
