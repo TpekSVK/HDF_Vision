@@ -161,7 +161,7 @@ class MainWindow(QMainWindow):
         status_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
         status_row = QHBoxLayout(status_container); status_row.setSpacing(16)
         self.lbl_status = QLabel("–")
-        sf = QFont(); sf.setPointSize(28); sf.setBold(True)
+        sf = QFont(); sf.setPointSize(34); sf.setBold(True)
         self.lbl_status.setFont(sf)
         self.lbl_status.setAlignment(Qt.AlignLeft)
         status_row.addWidget(self.lbl_status, 0)
@@ -233,7 +233,8 @@ class MainWindow(QMainWindow):
         self.live_view.setMinimumSize(640, 360)
         self.live_view.setMaximumHeight(720)
         self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        self.live_view.setStyleSheet("border: 1px solid #444; border-radius: 6px; background:#181818;")
+        self._live_view_base_style = "border-radius: 6px; background:#181818;"
+        self._set_live_view_border()
         self.live_view.setContentsMargins(0,0,0,0)
         preview_row.addWidget(self.live_view, 1)
 
@@ -384,6 +385,27 @@ class MainWindow(QMainWindow):
             ):
                 return idx
         return None
+
+    def _set_live_view_border(self, color: str | None = None) -> None:
+        border_color = color or "#444"
+        self.live_view.setStyleSheet(
+            f"border: 2px solid {border_color}; {self._live_view_base_style}"
+        )
+
+    def _apply_run_status_style(self, status: str | None) -> None:
+        color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
+        status_key = str(status or "").lower()
+        color = color_map.get(status_key, "#33dd66")
+
+        font = self.lbl_status.font()
+        font.setPointSize(34)
+        font.setBold(True)
+        self.lbl_status.setFont(font)
+
+        self.lbl_status.setText(str(status or "–").upper())
+        self.lbl_status.setStyleSheet(f"color: {color};")
+        border_color = color if status_key in color_map else None
+        self._set_live_view_border(border_color)
 
     def _sync_resolution_combo(self):
         pix_fmt = getattr(self.cam, "pixel_format", "Y8")
@@ -767,11 +789,7 @@ class MainWindow(QMainWindow):
             aggregated_status = aggregate_branching_statuses(
                 recipe_cfg.aggregation, per_view_statuses, ignored_for_aggregation
             )
-            color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
-            self.lbl_status.setText(aggregated_status.upper())
-            self.lbl_status.setStyleSheet(
-                f"color: {color_map.get(aggregated_status, '#33dd66')};"
-            )
+            self._apply_run_status_style(aggregated_status)
             self._signal_outputs(aggregated_status)
 
             active_frame = self._get_last_frame_for_view(self._active_view_id)
@@ -811,9 +829,7 @@ class MainWindow(QMainWindow):
             self._last_trigger_frame = self._clone_frame(frame_u8)
             self._last_trigger_view_id = None
 
-        color = "#33dd66" if status == "ok" else "#ff3366"
-        self.lbl_status.setText(status.upper())
-        self.lbl_status.setStyleSheet(f"color: {color};")
+        self._apply_run_status_style(status)
         self._signal_outputs(status)
 
         legacy_report = [{
