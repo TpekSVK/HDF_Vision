@@ -118,6 +118,9 @@ class RecipeService:
         settle_ms: int | None = None,
         trigger_mode: str | None = None,
         trigger_interval_ms: int | None = None,
+        branch_enabled: bool | None = None,
+        branch_targets: dict[str, str] | None = None,
+        branch_default_view_id: str | None = None,
     ) -> RecipeView:
         import shutil
 
@@ -157,6 +160,9 @@ class RecipeService:
         source_trigger_interval: Optional[int] = None
         source_golden: Optional[str] = None
         source_frame_source: Optional[str] = None
+        source_branch_enabled: Optional[bool] = None
+        source_branch_targets: Optional[dict[str, str]] = None
+        source_branch_default: Optional[str] = None
         if source_view_id:
             try:
                 source_view = recipe.get_view(source_view_id)
@@ -172,6 +178,11 @@ class RecipeService:
                 source_trigger_interval = source_view.trigger_interval_ms
                 source_golden = source_view.golden_path
                 source_frame_source = source_view.frame_source_view_id
+                source_branch_enabled = getattr(source_view, "branch_enabled", None)
+                source_branch_targets = getattr(source_view, "branch_targets", None)
+                source_branch_default = getattr(
+                    source_view, "branch_default_view_id", None
+                )
                 draft_tools = self._ensure_draft_tools(name, source_view_id, recipe)
                 source_tools = [tool.copy() for tool in draft_tools]
             except Exception:
@@ -203,6 +214,22 @@ class RecipeService:
         if target_frame_source is None:
             target_frame_source = source_frame_source
 
+        target_branch_enabled = (
+            bool(branch_enabled)
+            if branch_enabled is not None
+            else bool(source_branch_enabled)
+        )
+        target_branch_targets = (
+            dict(branch_targets)
+            if branch_targets is not None
+            else dict(source_branch_targets or {})
+        )
+        target_branch_default = (
+            branch_default_view_id
+            if branch_default_view_id is not None
+            else source_branch_default
+        )
+
         new_view = RecipeView(
             id=new_id,
             name=new_name,
@@ -213,6 +240,9 @@ class RecipeService:
             trigger_mode=target_trigger_mode,
             trigger_interval_ms=target_trigger_interval,
             tools=[],
+            branch_enabled=target_branch_enabled,
+            branch_targets=target_branch_targets,
+            branch_default_view_id=target_branch_default,
         )
         if source_tools:
             new_view.set_tools(source_tools)
@@ -248,6 +278,9 @@ class RecipeService:
         settle_ms: int | None,
         trigger_mode: str,
         trigger_interval_ms: int | None,
+        branch_enabled: bool = False,
+        branch_targets: dict[str, str] | None = None,
+        branch_default_view_id: str | None = None,
     ) -> RecipeView:
         recipe = self._load_recipe_config(name)
         view = recipe.get_view(view_id)
@@ -285,6 +318,9 @@ class RecipeService:
             trigger_mode=normalized_mode,
             trigger_interval_ms=normalized_interval,
             tools=[tool.copy() for tool in view.tools],
+            branch_enabled=branch_enabled,
+            branch_targets=dict(branch_targets or {}),
+            branch_default_view_id=branch_default_view_id,
         )
 
         replaced: list[RecipeView] = []
