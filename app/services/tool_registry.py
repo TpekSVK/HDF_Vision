@@ -209,7 +209,7 @@ def _log_registered_tools() -> None:
 
 def _register_default_tools() -> None:
     from app.services import tool_service
-    from app.services.tools import edge, mse, ncc, ssd
+    from app.services.tools import edge, edge_profile_deviation, mse, ncc, ssd
 
     ToolRegistry.register(
         "ssim",
@@ -718,6 +718,126 @@ def _register_default_tools() -> None:
             "metrics_spec": [
                 {"key": "edge_ratio", "unit": None, "priority": 10, "description": "Podiel zmenených hrán"},
                 {"key": "mean_diff", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "edge_profile_deviation",
+        factory=lambda: edge_profile_deviation.EdgeProfileDeviationTool(),
+        meta={
+            "name": "Edge Profile Deviation",
+            "description": "Meranie priamkovosti hrany medzi bodmi A a B.",
+            "category": "Edge",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "point_a": {
+                        "type": "roi",
+                        "default": None,
+                        "description": "Bod A na hrane (x, y) v ROI alebo v golden.",
+                    },
+                    "point_b": {
+                        "type": "roi",
+                        "default": None,
+                        "description": "Bod B na hrane (x, y) v ROI alebo v golden.",
+                    },
+                    "points_in_roi": {
+                        "type": "bool",
+                        "default": True,
+                        "description": "Sú body A/B uložené v ROI súradniciach.",
+                    },
+                    "orientation": {
+                        "type": "enum",
+                        "default": "auto",
+                        "choices": (("auto", "Auto"), ("horizontal", "Horizontal"), ("vertical", "Vertical")),
+                        "description": "Orientácia hrany (auto podľa A-B).",
+                    },
+                    "blur_sigma": {
+                        "type": "float",
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 10.0,
+                        "step": 0.1,
+                        "description": "Sigma pre Gaussian blur pred detekciou hrany.",
+                    },
+                    "scan_step": {
+                        "type": "int",
+                        "default": 2,
+                        "min": 1,
+                        "max": 50,
+                        "description": "Krok skenovania (každý N-ty riadok/stĺpec).",
+                    },
+                    "edge_polarity": {
+                        "type": "enum",
+                        "default": "any",
+                        "choices": (
+                            ("any", "Any"),
+                            ("dark_to_light", "Dark → Light"),
+                            ("light_to_dark", "Light → Dark"),
+                        ),
+                        "description": "Polarita hrany podľa smeru gradientu.",
+                    },
+                    "grad_threshold": {
+                        "type": "float",
+                        "default": 15.0,
+                        "min": 0.0,
+                        "max": 255.0,
+                        "step": 1.0,
+                        "description": "Minimálny gradient pre uznanie hrany.",
+                    },
+                    "search_half_window": {
+                        "type": "int",
+                        "default": 20,
+                        "min": 1,
+                        "max": 200,
+                        "description": "Polovičná šírka vyhľadávacieho okna okolo hrany.",
+                    },
+                    "outlier_trim_pct": {
+                        "type": "float",
+                        "default": 0.1,
+                        "min": 0.0,
+                        "max": 0.9,
+                        "step": 0.05,
+                        "description": "Percento outlier bodov na odrezanie.",
+                    },
+                    "min_coverage": {
+                        "type": "float",
+                        "default": 0.6,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "description": "Minimálne pokrytie scan línií.",
+                    },
+                    "use_subpixel": {
+                        "type": "bool",
+                        "default": False,
+                        "description": "Subpixel lokalizácia maxima gradientu.",
+                    },
+                },
+                "thresholds": {
+                    "max_deviation_max": {
+                        "type": "float",
+                        "default": 0.1,
+                        "min": 0.0,
+                        "description": "Maximálna povolená odchýlka (mm alebo px).",
+                    },
+                    "coverage_min": {
+                        "type": "float",
+                        "default": 0.6,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "description": "Minimálne pokrytie pre OK status.",
+                    },
+                },
+            },
+            "metrics_spec": [
+                {"key": "max_deviation", "unit": None, "priority": 10, "description": "Max odchýlka"},
+                {"key": "p95_deviation", "unit": None, "priority": 8, "description": "95. percentil odchýlky"},
+                {"key": "coverage", "unit": None, "priority": 6, "description": "Pokrytie scan línií"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },

@@ -1490,6 +1490,17 @@ def status_from_metrics(
             return "warn"
         return "ok" if edge_ratio <= edge_ratio_max else "nok"
 
+    if tool_key == "edge_profile_deviation":
+        max_dev_max = _safe_float(threshold_values.get("max_deviation_max"), 0.1)
+        coverage_min = _safe_float(threshold_values.get("coverage_min"), 0.6)
+        max_dev = _safe_float(metric_values.get("max_deviation"), 0.0)
+        coverage = _safe_float(metric_values.get("coverage"), 0.0)
+        if coverage <= 0.0:
+            return "warn"
+        if max_dev > max_dev_max or coverage < coverage_min:
+            return "nok"
+        return "ok"
+
     if tool_key == "absdiff":
         blob_count = _safe_int(metric_values.get("blob_count"), 0)
         max_blob_count = _safe_int(
