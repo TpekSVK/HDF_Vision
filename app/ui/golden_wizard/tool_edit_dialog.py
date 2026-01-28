@@ -89,6 +89,47 @@ class TemplateRoiEditor(QWidget):
         self._btn_reset.setEnabled(bool(enabled))
 
 
+class AngleRoiEditor(QWidget):
+    """ROI editor dedicated to angle estimation."""
+
+    roiChanged = Signal(object)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+
+        self._editor = ROIEditor(self, show_toolbar=False)
+        self._editor.roiChanged.connect(self.roiChanged)
+
+        self._btn_reset = QPushButton("Reset Angle ROI", self)
+        self._btn_reset.clicked.connect(self._editor.reset_roi)
+
+        view_layout = QVBoxLayout(self)
+        view_layout.setContentsMargins(0, 0, 0, 0)
+        view_layout.setSpacing(4)
+        view_layout.addWidget(self._editor, 1)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        controls.addStretch(1)
+        controls.addWidget(self._btn_reset)
+        view_layout.addLayout(controls)
+
+    def set_background(self, pixmap: Optional[QPixmap]) -> None:
+        self._editor.set_background(pixmap)
+
+    def set_roi(self, roi: Optional[tuple[int, int, int, int]]) -> None:
+        self._editor.set_roi(roi)
+
+    def roi(self) -> Optional[tuple[int, int, int, int]]:
+        return self._editor.roi()
+
+    def setEnabled(self, enabled: bool) -> None:  # noqa: N802 - Qt API
+        super().setEnabled(enabled)
+        self._editor.setEnabled(bool(enabled))
+        self._btn_reset.setEnabled(bool(enabled))
+
+
 class ToolEditDialog(QDialog):
     """Dialog providing ROI and ignore mask editing for a tool."""
 
@@ -112,6 +153,8 @@ class ToolEditDialog(QDialog):
         self._golden_image: Optional[np.ndarray] = None if golden_image is None else np.asarray(golden_image).copy()
         self._golden_pixmap: Optional[QPixmap] = None
         self._locator_template_specs: dict[str, dict[str, Any]] = {}
+        self._locator_angle_specs: dict[str, dict[str, Any]] = {}
+        self._angle_field_rows: dict[str, tuple[QLabel, QWidget]] = {}
 
         self._is_locator_template = self._tool.type == "locator.template_match"
         self._use_golden_checkbox: Optional[QCheckBox] = None
@@ -123,6 +166,9 @@ class ToolEditDialog(QDialog):
         self._locator_preview_before: Optional[QLabel] = None
         self._locator_preview_after: Optional[QLabel] = None
         self._btn_locator_evaluate: Optional[QPushButton] = None
+        self._angle_mode_combo: Optional[QComboBox] = None
+        self._angle_roi_editor: Optional[AngleRoiEditor] = None
+        self._angle_roi_container: Optional[QWidget] = None
 
         self._supports_roi = bool(getattr(self._meta_caps, "supports_roi", True))
         self._supports_mask = bool(getattr(self._meta_caps, "supports_ignore_mask", True))
@@ -493,6 +539,141 @@ class ToolEditDialog(QDialog):
         if self._template_editor is not None:
             self._template_editor.setEnabled(self._golden_pixmap is not None and not checked)
 
+    @staticmethod
+    def _angle_mode_from_params(params: dict[str, Any]) -> str:
+        if bool(params.get("angle_enabled", False)):
+            return "edge"
+        if bool(params.get("rotation_enabled", False)):
+            return "brute"
+        return "off"
+
+    @staticmethod
+    def _angle_flags_from_mode(mode: str) -> tuple[bool, bool]:
+        if mode == "edge":
+            return True, False
+        if mode == "brute":
+            return False, True
+        return False, False
+
+    def _current_angle_mode(self) -> str:
+        if self._angle_mode_combo is None:
+            return "off"
+        data = self._angle_mode_combo.currentData()
+        return str(data or "off")
+
+    def _set_angle_field_visible(self, name: str, visible: bool) -> None:
+        row = self._angle_field_rows.get(name)
+        if row is None:
+            return
+        label_widget, field_container = row
+        label_widget.setVisible(visible)
+        field_container.setVisible(visible)
+
+    def _apply_angle_mode_visibility(self, mode: str) -> None:
+        edge_fields = {
+            "angle_roi",
+            "angle_method",
+            "angle_ref_deg",
+            "angle_max_dev_deg",
+            "angle_smooth",
+        }
+        brute_fields = {"angle_range_deg", "angle_step_deg"}
+        show_edge = mode == "edge"
+        show_brute = mode == "brute"
+        for name in edge_fields:
+            self._set_angle_field_visible(name, show_edge)
+        for name in brute_fields:
+            self._set_angle_field_visible(name, show_brute)
+
+    def _on_angle_mode_changed(self) -> None:
+        if self._updating_form:
+            return
+        mode = self._current_angle_mode()
+        self._apply_angle_mode_visibility(mode)
+        self._validate_form()
+
+    def _add_locator_angle_controls(self, param_values: dict[str, Any]) -> int:
+        if not self._is_locator_template or not self._locator_angle_specs:
+            return 0
+
+        group = QGroupBox("Angle estimation", self)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(8, 8, 8, 8)
+        group_layout.setSpacing(6)
+
+        form_layout = QFormLayout()
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(6)
+        group_layout.addLayout(form_layout)
+
+        self._angle_mode_combo = QComboBox(group)
+        self._angle_mode_combo.addItem("Off", "off")
+        self._angle_mode_combo.addItem("Edge-based (fast)", "edge")
+        self._angle_mode_combo.addItem("Brute-force (legacy)", "brute")
+        current_mode = self._angle_mode_from_params(param_values)
+        index = self._angle_mode_combo.findData(current_mode)
+        if index >= 0:
+            self._angle_mode_combo.setCurrentIndex(index)
+        self._angle_mode_combo.currentIndexChanged.connect(self._on_angle_mode_changed)
+        mode_label = QLabel("Angle estimation mode", group)
+        form_layout.addRow(mode_label, self._angle_mode_combo)
+
+        angle_roi_label = QLabel("Angle ROI", group)
+        self._angle_roi_editor = AngleRoiEditor(group)
+        self._angle_roi_editor.setMinimumHeight(180)
+        if self._golden_pixmap is not None:
+            self._angle_roi_editor.set_background(self._golden_pixmap)
+        angle_roi_rect = self._rect_from_any(param_values.get("angle_roi"))
+        if angle_roi_rect:
+            self._angle_roi_editor.set_roi(angle_roi_rect)
+        angle_roi_container = QWidget(group)
+        angle_roi_layout = QVBoxLayout(angle_roi_container)
+        angle_roi_layout.setContentsMargins(0, 0, 0, 0)
+        angle_roi_layout.setSpacing(4)
+        angle_roi_layout.addWidget(self._angle_roi_editor)
+        form_layout.addRow(angle_roi_label, angle_roi_container)
+        self._angle_roi_container = angle_roi_container
+        self._angle_field_rows["angle_roi"] = (angle_roi_label, angle_roi_container)
+
+        def _add_angle_field(field_name: str) -> Optional[QWidget]:
+            spec = self._locator_angle_specs.get(field_name)
+            if spec is None:
+                return None
+            widget = _create_form_widget(spec, self)
+            if widget is None:
+                return None
+            current_value = param_values.get(field_name)
+            self._set_widget_value(widget, spec, current_value)
+            self._param_fields[field_name] = widget
+            label_text = spec.get("label") or field_name
+            label_widget = QLabel(str(label_text), group)
+            container, error_label = self._create_field_container(widget)
+            self._param_wrappers[field_name] = container
+            self._param_error_labels[field_name] = error_label
+            tooltip = _format_spec_tooltip(spec)
+            if tooltip:
+                widget.setToolTip(tooltip)
+                label_widget.setToolTip(tooltip)
+                container.setToolTip(tooltip)
+            form_layout.addRow(label_widget, container)
+            self._connect_field_signals(widget, spec, kind="param", name=field_name)
+            self._angle_field_rows[field_name] = (label_widget, container)
+            return widget
+
+        for field_name in (
+            "angle_method",
+            "angle_ref_deg",
+            "angle_max_dev_deg",
+            "angle_smooth",
+            "angle_range_deg",
+            "angle_step_deg",
+        ):
+            _add_angle_field(field_name)
+
+        self._config_form.addRow(group)
+        self._apply_angle_mode_visibility(current_mode)
+        return 1
+
     def _gather_params_from_widgets(self) -> dict[str, Any]:
         params = dict(getattr(self._tool.params, "values", {}) or {})
         for name, widget in self._param_fields.items():
@@ -509,6 +690,12 @@ class ToolEditDialog(QDialog):
             else:
                 rect = self._template_editor.roi() if self._template_editor is not None else None
                 params["template_roi"] = self._rect_to_dict(rect)
+            mode = self._current_angle_mode()
+            angle_enabled, rotation_enabled = self._angle_flags_from_mode(mode)
+            params["angle_enabled"] = angle_enabled
+            params["rotation_enabled"] = rotation_enabled
+            if self._angle_roi_editor is not None:
+                params["angle_roi"] = self._rect_to_dict(self._angle_roi_editor.roi())
 
         return params
 
@@ -525,6 +712,35 @@ class ToolEditDialog(QDialog):
             return None
         x, y, w, h = rect
         return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
+
+    @staticmethod
+    def _rect_from_any(value: Any) -> Optional[tuple[int, int, int, int]]:
+        if value is None:
+            return None
+        if isinstance(value, ToolRoi):
+            return value.rect()
+        if isinstance(value, dict):
+            try:
+                return (
+                    int(round(float(value.get("x", 0)))),
+                    int(round(float(value.get("y", 0)))),
+                    int(round(float(value.get("w", 0)))),
+                    int(round(float(value.get("h", 0)))),
+                )
+            except Exception:
+                return None
+        if isinstance(value, (list, tuple)) and len(value) >= 4:
+            try:
+                x, y, w, h = value[:4]
+                return (
+                    int(round(float(x))),
+                    int(round(float(y))),
+                    int(round(float(w))),
+                    int(round(float(h))),
+                )
+            except Exception:
+                return None
+        return None
 
     @staticmethod
     def _ensure_gray_u8(image: Optional[np.ndarray]) -> Optional[np.ndarray]:
@@ -719,6 +935,8 @@ class ToolEditDialog(QDialog):
             self._config_form.removeRow(0)
 
         self._locator_template_specs.clear()
+        self._locator_angle_specs.clear()
+        self._angle_field_rows.clear()
 
         try:
             schema = ToolRegistry.get_tool_schema(self._tool.type)
@@ -733,17 +951,36 @@ class ToolEditDialog(QDialog):
                 spec = self._param_specs.pop(key, None)
                 if spec is not None:
                     self._locator_template_specs[key] = spec
+            for key in (
+                "angle_enabled",
+                "angle_roi",
+                "angle_method",
+                "angle_ref_deg",
+                "angle_max_dev_deg",
+                "angle_smooth",
+                "angle_range_deg",
+                "angle_step_deg",
+                "rotation_enabled",
+            ):
+                spec = self._param_specs.get(key)
+                if spec is not None:
+                    self._locator_angle_specs[key] = spec
 
         fields_added = 0
 
         param_values = dict(getattr(self._tool.params, "values", {}) or {})
         threshold_values = dict(getattr(self._tool.thresholds, "values", {}) or {})
 
+        if self._is_locator_template:
+            fields_added += self._add_locator_angle_controls(param_values)
+
         if self._param_specs:
             header = QLabel("Parameters", self)
             header.setStyleSheet("font-weight: 600; padding-top: 4px;")
             self._config_form.addRow(header)
             for name, spec in self._param_specs.items():
+                if name in self._locator_angle_specs:
+                    continue
                 if spec.get("type") not in _SUPPORTED_FORM_FIELD_TYPES:
                     continue
                 widget = _create_form_widget(spec, self)
@@ -1003,6 +1240,12 @@ class ToolEditDialog(QDialog):
                 roi_obj = ToolRoi()
                 roi_obj.set_rect(rect)
                 self._tool.template_roi = roi_obj
+            mode = self._current_angle_mode()
+            angle_enabled, rotation_enabled = self._angle_flags_from_mode(mode)
+            params["angle_enabled"] = angle_enabled
+            params["rotation_enabled"] = rotation_enabled
+            if self._angle_roi_editor is not None:
+                params["angle_roi"] = self._rect_to_dict(self._angle_roi_editor.roi())
 
         self._tool.params = ToolParams(params)
         self._tool.thresholds = ToolThresholds(thresholds)
@@ -1044,4 +1287,4 @@ class ToolEditDialog(QDialog):
 
 
 
-__all__ = ['TemplateRoiEditor', 'ToolEditDialog']
+__all__ = ['TemplateRoiEditor', 'AngleRoiEditor', 'ToolEditDialog']
