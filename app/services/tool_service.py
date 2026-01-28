@@ -173,6 +173,12 @@ class LocatorTemplateMatchTool(BaseTool):
                 bool(params_dict.get("rotation_enabled", False)),
                 round(_safe_float(params_dict.get("angle_range_deg", 15.0), 15.0), 4),
                 round(_safe_float(params_dict.get("angle_step_deg", 1.0), 1.0), 4),
+                bool(params_dict.get("angle_enabled", False)),
+                _freeze_value(params_dict.get("angle_roi")),
+                str(params_dict.get("angle_method", "fitline")),
+                round(_safe_float(params_dict.get("angle_ref_deg", 0.0), 0.0), 4),
+                round(_safe_float(params_dict.get("angle_max_dev_deg", 15.0), 15.0), 4),
+                round(_safe_float(params_dict.get("angle_smooth", 0.0), 0.0), 4),
             ),
             (_safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),),
         )
@@ -1584,8 +1590,11 @@ def run_locator_template_match(
         Tool parameters or plain dictionary. Recognized keys are
         ``use_golden_crop`` (bool), ``template_roi`` (ROI descriptor),
         ``coarse_cap`` (int) and optional rotation settings
-        ``rotation_enabled`` (bool), ``angle_range_deg`` (float) and
-        ``angle_step_deg`` (float).
+        ``rotation_enabled`` (bool), ``angle_range_deg`` (float),
+        ``angle_step_deg`` (float), ``angle_enabled`` (bool),
+        ``angle_roi`` (ROI descriptor), ``angle_method`` (str),
+        ``angle_ref_deg`` (float), ``angle_max_dev_deg`` (float), and
+        ``angle_smooth`` (float).
     thresholds:
         Threshold dictionary or :class:`ToolThresholds`. Uses
         ``threshold_corr`` if present.
@@ -1634,14 +1643,29 @@ def run_locator_template_match(
 
     coarse_cap = _safe_int(params_dict.get("coarse_cap", 600), 600)
     rotation_enabled = bool(params_dict.get("rotation_enabled", False))
+    angle_enabled = bool(params_dict.get("angle_enabled", False))
     angle_range_deg = _safe_float(params_dict.get("angle_range_deg", 15.0), 15.0)
     angle_step_deg = _safe_float(params_dict.get("angle_step_deg", 1.0), 1.0)
+    angle_method = str(params_dict.get("angle_method", "fitline")).strip().lower()
+    angle_ref_deg = _safe_float(params_dict.get("angle_ref_deg", 0.0), 0.0)
+    angle_max_dev_deg = _safe_float(params_dict.get("angle_max_dev_deg", 15.0), 15.0)
+    angle_smooth = _safe_float(params_dict.get("angle_smooth", 0.0), 0.0)
     if not math.isfinite(angle_range_deg):
         angle_range_deg = 0.0
     if not math.isfinite(angle_step_deg) or abs(angle_step_deg) < 1e-6:
         angle_step_deg = 1.0
     angle_range_deg = max(0.0, abs(angle_range_deg))
     angle_step_deg = max(1e-3, abs(angle_step_deg))
+    if not math.isfinite(angle_ref_deg):
+        angle_ref_deg = 0.0
+    if not math.isfinite(angle_max_dev_deg):
+        angle_max_dev_deg = 0.0
+    angle_max_dev_deg = max(0.0, abs(angle_max_dev_deg))
+    if not math.isfinite(angle_smooth):
+        angle_smooth = 0.0
+    angle_smooth = max(0.0, min(1.0, angle_smooth))
+    if angle_method not in {"fitline", "hough"}:
+        angle_method = "fitline"
 
     timings: list[imaging.TimeBlockResult] = []
     dx = 0.0
@@ -1649,6 +1673,72 @@ def run_locator_template_match(
     corr = 0.0
     theta_deg = 0.0
     used = 0
+    theta_raw: Optional[float] = None
+    angle_roi_rect: Optional[tuple[int, int, int, int]] = None
+    angle_fallback: Optional[str] = None
+
+    def _normalize_angle_deg(angle: float) -> float:
+        normalized = ((angle + 90.0) % 180.0) - 90.0
+        return float(normalized)
+
+    def estimate_angle_deg(frame_u8_crop: np.ndarray, method: str) -> Optional[float]:
+        if frame_u8_crop.size == 0:
+            return None
+        edges = cv2.Canny(frame_u8_crop, 50, 150)
+        points = np.column_stack(np.where(edges > 0))
+        if points.shape[0] < 50:
+            return None
+        if method == "hough":
+            h, w = edges.shape[:2]
+            min_length = max(10, int(min(h, w) * 0.25))
+            lines = cv2.HoughLinesP(
+                edges,
+                1,
+                math.pi / 180.0,
+                threshold=40,
+                minLineLength=min_length,
+                maxLineGap=10,
+            )
+            if lines is None:
+                return None
+            angles: list[float] = []
+            for x1, y1, x2, y2 in lines[:, 0, :]:
+                if x1 == x2 and y1 == y2:
+                    continue
+                angle = math.degrees(math.atan2(float(y2 - y1), float(x2 - x1)))
+                angles.append(_normalize_angle_deg(angle))
+            if not angles:
+                return None
+            return float(np.median(np.asarray(angles, dtype=np.float32)))
+
+        points_xy = np.column_stack((points[:, 1], points[:, 0])).astype(np.float32)
+        vx, vy, _x0, _y0 = cv2.fitLine(points_xy, cv2.DIST_L2, 0, 0.01, 0.01)
+        angle = math.degrees(math.atan2(float(vy), float(vx)))
+        return _normalize_angle_deg(angle)
+
+    if angle_enabled:
+        angle_roi_rect = _rect_from_any(params_dict.get("angle_roi"))
+        angle_roi_rect = _clamp_rect(angle_roi_rect, frame_w, frame_h)
+        if angle_roi_rect is None:
+            angle_fallback = "missing_roi"
+        else:
+            ax, ay, aw, ah = angle_roi_rect
+            if aw > 0 and ah > 0:
+                crop = frame_u8[ay : ay + ah, ax : ax + aw]
+                with imaging.time_block("angle_estimate", timings):
+                    theta_raw = estimate_angle_deg(crop, angle_method)
+            if theta_raw is None:
+                angle_fallback = "estimate_failed"
+            else:
+                theta_deg = float(theta_raw) - float(angle_ref_deg)
+                if abs(theta_deg) > angle_max_dev_deg:
+                    theta_deg = 0.0
+                    angle_fallback = "out_of_range"
+                elif angle_smooth > 0.0 and cache is not None:
+                    prev_theta = cache.get("angle_ema")
+                    if isinstance(prev_theta, (int, float)) and math.isfinite(prev_theta):
+                        theta_deg = (1.0 - angle_smooth) * float(prev_theta) + angle_smooth * theta_deg
+                    cache["angle_ema"] = float(theta_deg)
 
     if template_rect is not None and search_rect is not None:
         tx, ty, tw, th = template_rect
@@ -1657,47 +1747,88 @@ def run_locator_template_match(
         if templ.size > 0 and tw > 0 and th > 0:
             sx, sy, sw, sh = search_rect
 
-            def _enumerate_angles() -> list[float]:
-                if not rotation_enabled or angle_range_deg <= 1e-6:
-                    return [0.0]
-                steps = int(math.floor(angle_range_deg / angle_step_deg + 1e-9))
-                candidates = [round(idx * angle_step_deg, 6) for idx in range(-steps, steps + 1)]
-                filtered = [
-                    angle
-                    for angle in candidates
-                    if abs(angle) <= angle_range_deg + 1e-6
-                ]
-                if 0.0 not in filtered:
-                    filtered.append(0.0)
-                return sorted(set(filtered))
+            if angle_enabled:
+                with imaging.time_block("match_template", timings):
+                    dx_rel, dy_rel, corr_candidate, used_candidate = imaging.match_template_u8(
+                        frame_u8,
+                        templ,
+                        roi=(sx, sy, sw, sh),
+                        search_margin=0,
+                        coarse_cap=int(max(1, coarse_cap)),
+                        cache=cache,
+                    )
+                match_x = float(sx + dx_rel)
+                match_y = float(sy + dy_rel)
+                corr = float(corr_candidate)
+                used = int(used_candidate)
+                cg_x = tx + (tw / 2.0)
+                cg_y = ty + (th / 2.0)
+                cf_x = match_x + (tw / 2.0)
+                cf_y = match_y + (th / 2.0)
+                theta_rad = math.radians(theta_deg)
+                cos_t = math.cos(theta_rad)
+                sin_t = math.sin(theta_rad)
+                dx = float(cf_x - (cos_t * cg_x - sin_t * cg_y))
+                dy = float(cf_y - (sin_t * cg_x + cos_t * cg_y))
+            else:
+                def _enumerate_angles() -> list[float]:
+                    if not rotation_enabled or angle_range_deg <= 1e-6:
+                        return [0.0]
+                    steps = int(math.floor(angle_range_deg / angle_step_deg + 1e-9))
+                    candidates = [round(idx * angle_step_deg, 6) for idx in range(-steps, steps + 1)]
+                    filtered = [
+                        angle
+                        for angle in candidates
+                        if abs(angle) <= angle_range_deg + 1e-6
+                    ]
+                    if 0.0 not in filtered:
+                        filtered.append(0.0)
+                    return sorted(set(filtered))
 
-            angle_candidates = _enumerate_angles()
-            rotated_cache: Optional[Dict[Any, np.ndarray]] = None
-            base_key: Optional[tuple[int, tuple[int, int], str]] = None
-            if cache is not None:
-                rotated_cache = cache.setdefault("rotated_templates", {})
-                base_key = (
-                    int(templ.__array_interface__["data"][0]),
-                    templ.shape[:2],
-                    templ.dtype.str,
-                )
+                angle_candidates = _enumerate_angles()
+                rotated_cache: Optional[Dict[Any, np.ndarray]] = None
+                base_key: Optional[tuple[int, tuple[int, int], str]] = None
+                if cache is not None:
+                    rotated_cache = cache.setdefault("rotated_templates", {})
+                    base_key = (
+                        int(templ.__array_interface__["data"][0]),
+                        templ.shape[:2],
+                        templ.dtype.str,
+                    )
 
-            templates: list[tuple[float, np.ndarray]] = []
-            max_w = tw
-            max_h = th
-            for angle in angle_candidates:
-                templ_variant: np.ndarray
-                if abs(angle) <= 1e-6:
-                    templ_variant = templ
-                else:
-                    cache_key = None
-                    if rotated_cache is not None and base_key is not None:
-                        cache_key = (base_key, round(angle, 4))
-                        cached = rotated_cache.get(cache_key)
-                        if cached is not None:
-                            templ_variant = cached
-                        else:
+                templates: list[tuple[float, np.ndarray]] = []
+                max_w = tw
+                max_h = th
+                for angle in angle_candidates:
+                    templ_variant: np.ndarray
+                    if abs(angle) <= 1e-6:
+                        templ_variant = templ
+                    else:
+                        cache_key = None
+                        if rotated_cache is not None and base_key is not None:
                             cache_key = (base_key, round(angle, 4))
+                            cached = rotated_cache.get(cache_key)
+                            if cached is not None:
+                                templ_variant = cached
+                            else:
+                                cache_key = (base_key, round(angle, 4))
+                                center = (tw / 2.0, th / 2.0)
+                                M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                                cos_a = abs(M[0, 0])
+                                sin_a = abs(M[0, 1])
+                                new_w = max(1, int(math.ceil((th * sin_a) + (tw * cos_a))))
+                                new_h = max(1, int(math.ceil((th * cos_a) + (tw * sin_a))))
+                                M[0, 2] += (new_w / 2.0) - center[0]
+                                M[1, 2] += (new_h / 2.0) - center[1]
+                                templ_variant = cv2.warpAffine(
+                                    templ,
+                                    M,
+                                    (new_w, new_h),
+                                    flags=cv2.INTER_LINEAR,
+                                    borderMode=cv2.BORDER_REFLECT101,
+                                )
+                                rotated_cache[cache_key] = templ_variant
+                        else:
                             center = (tw / 2.0, th / 2.0)
                             M = cv2.getRotationMatrix2D(center, angle, 1.0)
                             cos_a = abs(M[0, 0])
@@ -1713,75 +1844,58 @@ def run_locator_template_match(
                                 flags=cv2.INTER_LINEAR,
                                 borderMode=cv2.BORDER_REFLECT101,
                             )
-                            rotated_cache[cache_key] = templ_variant
-                    else:
-                        center = (tw / 2.0, th / 2.0)
-                        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                        cos_a = abs(M[0, 0])
-                        sin_a = abs(M[0, 1])
-                        new_w = max(1, int(math.ceil((th * sin_a) + (tw * cos_a))))
-                        new_h = max(1, int(math.ceil((th * cos_a) + (tw * sin_a))))
-                        M[0, 2] += (new_w / 2.0) - center[0]
-                        M[1, 2] += (new_h / 2.0) - center[1]
-                        templ_variant = cv2.warpAffine(
-                            templ,
-                            M,
-                            (new_w, new_h),
-                            flags=cv2.INTER_LINEAR,
-                            borderMode=cv2.BORDER_REFLECT101,
+                    templates.append((angle, templ_variant))
+                    max_w = max(max_w, templ_variant.shape[1])
+                    max_h = max(max_h, templ_variant.shape[0])
+
+                extra_margin = int(math.ceil(max(max_w - tw, max_h - th) / 2.0))
+
+                best_corr = -2.0
+                best_angle = 0.0
+                best_match: Optional[tuple[float, float]] = None
+                best_size = (tw, th)
+                best_used = 0
+
+                for angle, templ_variant in templates:
+                    h_rot, w_rot = templ_variant.shape[:2]
+                    available_w = sw + 2 * extra_margin
+                    available_h = sh + 2 * extra_margin
+                    if available_w < w_rot or available_h < h_rot:
+                        continue
+                    with imaging.time_block("match_template", timings):
+                        dx_rel, dy_rel, corr_candidate, used_candidate = imaging.match_template_u8(
+                            frame_u8,
+                            templ_variant,
+                            roi=(sx, sy, sw, sh),
+                            search_margin=int(max(0, extra_margin)),
+                            coarse_cap=int(max(1, coarse_cap)),
+                            cache=cache,
                         )
-                templates.append((angle, templ_variant))
-                max_w = max(max_w, templ_variant.shape[1])
-                max_h = max(max_h, templ_variant.shape[0])
 
-            extra_margin = int(math.ceil(max(max_w - tw, max_h - th) / 2.0))
+                    match_x = float(sx + dx_rel)
+                    match_y = float(sy + dy_rel)
+                    if corr_candidate > best_corr:
+                        best_corr = float(corr_candidate)
+                        best_angle = float(angle)
+                        best_match = (match_x, match_y)
+                        best_size = (float(w_rot), float(h_rot))
+                        best_used = int(used_candidate)
 
-            best_corr = -2.0
-            best_angle = 0.0
-            best_match: Optional[tuple[float, float]] = None
-            best_size = (tw, th)
-            best_used = 0
-
-            for angle, templ_variant in templates:
-                h_rot, w_rot = templ_variant.shape[:2]
-                available_w = sw + 2 * extra_margin
-                available_h = sh + 2 * extra_margin
-                if available_w < w_rot or available_h < h_rot:
-                    continue
-                with imaging.time_block("match_template", timings):
-                    dx_rel, dy_rel, corr_candidate, used_candidate = imaging.match_template_u8(
-                        frame_u8,
-                        templ_variant,
-                        roi=(sx, sy, sw, sh),
-                        search_margin=int(max(0, extra_margin)),
-                        coarse_cap=int(max(1, coarse_cap)),
-                        cache=cache,
-                    )
-
-                match_x = float(sx + dx_rel)
-                match_y = float(sy + dy_rel)
-                if corr_candidate > best_corr:
-                    best_corr = float(corr_candidate)
-                    best_angle = float(angle)
-                    best_match = (match_x, match_y)
-                    best_size = (float(w_rot), float(h_rot))
-                    best_used = int(used_candidate)
-
-            if best_match is not None:
-                corr = float(best_corr)
-                used = int(best_used)
-                theta_deg = float(best_angle)
-                match_x, match_y = best_match
-                best_w, best_h = best_size
-                cg_x = tx + (tw / 2.0)
-                cg_y = ty + (th / 2.0)
-                cf_x = match_x + (best_w / 2.0)
-                cf_y = match_y + (best_h / 2.0)
-                theta_rad = math.radians(theta_deg)
-                cos_t = math.cos(theta_rad)
-                sin_t = math.sin(theta_rad)
-                dx = float(cf_x - (cos_t * cg_x - sin_t * cg_y))
-                dy = float(cf_y - (sin_t * cg_x + cos_t * cg_y))
+                if best_match is not None:
+                    corr = float(best_corr)
+                    used = int(best_used)
+                    theta_deg = float(best_angle)
+                    match_x, match_y = best_match
+                    best_w, best_h = best_size
+                    cg_x = tx + (tw / 2.0)
+                    cg_y = ty + (th / 2.0)
+                    cf_x = match_x + (best_w / 2.0)
+                    cf_y = match_y + (best_h / 2.0)
+                    theta_rad = math.radians(theta_deg)
+                    cos_t = math.cos(theta_rad)
+                    sin_t = math.sin(theta_rad)
+                    dx = float(cf_x - (cos_t * cg_x - sin_t * cg_y))
+                    dy = float(cf_y - (sin_t * cg_x + cos_t * cg_y))
 
     cos_theta = math.cos(math.radians(theta_deg))
     sin_theta = math.sin(math.radians(theta_deg))
@@ -1805,6 +1919,14 @@ def run_locator_template_match(
         "status": status,
         "threshold_corr": _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),
     }
+    if angle_enabled:
+        diagnostics["theta_method"] = angle_method
+        diagnostics["theta_raw"] = theta_raw
+        if angle_roi_rect is not None:
+            ax, ay, aw, ah = angle_roi_rect
+            diagnostics["angle_roi"] = {"x": int(ax), "y": int(ay), "w": int(aw), "h": int(ah)}
+        if angle_fallback:
+            diagnostics["angle_fallback"] = angle_fallback
     if timings:
         diagnostics["timings_ms"] = {
             entry.name: float(entry.elapsed_ms) for entry in timings
@@ -1903,4 +2025,3 @@ def run_ssim_tool(
         },
     )
     return result, diagnostics
-

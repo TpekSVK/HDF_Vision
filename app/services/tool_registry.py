@@ -276,6 +276,55 @@ def _register_default_tools() -> None:
                         "label": "Kompenzovať rotáciu",
                         "description": "Kompenzovať rotáciu počas template matchingu.",
                     },
+                    "angle_enabled": {
+                        "type": "bool",
+                        "default": False,
+                        "label": "Angle estimation",
+                        "description": "Rýchly odhad uhla z hrán v malom ROI.",
+                    },
+                    "angle_roi": {
+                        "type": "roi",
+                        "default": None,
+                        "label": "Angle ROI",
+                        "description": "Malé ROI okno s dominantnou hranou pre odhad uhla.",
+                    },
+                    "angle_method": {
+                        "type": "enum",
+                        "default": "fitline",
+                        "choices": (("fitline", "Fit line"), ("hough", "Hough lines")),
+                        "label": "Angle method",
+                        "description": "Metóda odhadu uhla z hrán.",
+                    },
+                    "angle_ref_deg": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": -180.0,
+                        "max": 180.0,
+                        "step": 0.5,
+                        "precision": 2,
+                        "label": "Angle reference (°)",
+                        "description": "Referenčný uhol (golden) pre odchýlku.",
+                    },
+                    "angle_max_dev_deg": {
+                        "type": "float",
+                        "default": 15.0,
+                        "min": 0.0,
+                        "max": 90.0,
+                        "step": 0.5,
+                        "precision": 2,
+                        "label": "Max angle deviation (°)",
+                        "description": "Bezpečnostný limit odchýlky uhla.",
+                    },
+                    "angle_smooth": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.05,
+                        "precision": 2,
+                        "label": "Angle smooth (EMA)",
+                        "description": "Voliteľné EMA vyhladenie odhadu uhla.",
+                    },
                     "angle_range_deg": {
                         "type": "float",
                         "default": 15.0,
@@ -725,4 +774,3 @@ def _register_default_tools() -> None:
 
 
 _register_default_tools()
-
