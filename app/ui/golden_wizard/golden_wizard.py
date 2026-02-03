@@ -1289,6 +1289,18 @@ class GoldenWizard(QDialog):
         self.recipe_name = QLineEdit(current_recipe, self)
         self.chk_pose    = QCheckBox("Enable pose alignment")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
+        self._updating_logging_checkbox = False
+        self.chk_logging = QCheckBox("Ukladať históriu behov", self)
+        self.chk_logging.setToolTip(
+            "Ak je vypnuté, neukladajú sa logy, thumbnaily ani meta dáta na disk."
+        )
+        try:
+            self.chk_logging.setChecked(
+                bool(self.recipes.get_logging_enabled(current_recipe))
+            )
+        except Exception as exc:
+            print(f"[GoldenWizard] get_logging_enabled failed for {current_recipe}: {exc}")
+            self.chk_logging.setChecked(True)
 
         self._view_selector = QComboBox(self)
         self._view_selector.currentIndexChanged.connect(self._on_view_changed)
@@ -1334,6 +1346,7 @@ class GoldenWizard(QDialog):
         top.addWidget(self.btn_remove_view)
         top.addStretch(1)
         top.addWidget(self.chk_pose)
+        top.addWidget(self.chk_logging)
         top.addWidget(QLabel("Zlyhanie locatora:", self))
         top.addWidget(self.failure_policy_combo)
         top.addWidget(self._session_settings_button)
@@ -1455,6 +1468,7 @@ class GoldenWizard(QDialog):
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
+        self.chk_logging.toggled.connect(self._on_logging_changed)
 
         self.btn_test_tool.setEnabled(self._tool_panel.is_test_enabled())
 
@@ -1472,6 +1486,7 @@ class GoldenWizard(QDialog):
         self._last_recipe = self._current_recipe_name()
         self._refresh_view_list(recipe=self._last_recipe, reset_states=True)
         self._sync_locator_policy_ui(self._last_recipe)
+        self._sync_logging_ui(self._last_recipe)
         self._refresh_publish_state()
 
     # ---------- Live ----------
@@ -2032,6 +2047,23 @@ class GoldenWizard(QDialog):
         self._tool_panel.set_locator_failure_policy(policy)
         self._update_locator_policy_banner("")
 
+    def _sync_logging_ui(self, recipe: Optional[str] = None) -> None:
+        if not hasattr(self, "chk_logging"):
+            return
+
+        recipe = recipe or self._current_recipe_name()
+        try:
+            enabled = self.recipes.get_logging_enabled(recipe)
+        except Exception as exc:
+            print(f"[GoldenWizard] get_logging_enabled failed for {recipe}: {exc}")
+            enabled = True
+
+        self._updating_logging_checkbox = True
+        try:
+            self.chk_logging.setChecked(bool(enabled))
+        finally:
+            self._updating_logging_checkbox = False
+
     def _on_failure_policy_changed(self) -> None:
         if getattr(self, "_updating_policy_combo", False):
             return
@@ -2059,6 +2091,27 @@ class GoldenWizard(QDialog):
 
         self._tool_panel.set_locator_failure_policy(normalized)
         self._update_locator_policy_banner("")
+        self._refresh_publish_state()
+
+    def _on_logging_changed(self, checked: bool) -> None:
+        if getattr(self, "_updating_logging_checkbox", False):
+            return
+
+        recipe = self._current_recipe_name()
+        try:
+            normalized = self.recipes.set_logging_enabled(recipe, bool(checked))
+        except Exception as exc:
+            self._err(f"Zmena logovania pre recept zlyhala: {exc}")
+            self._sync_logging_ui(recipe)
+            return
+
+        if bool(normalized) != bool(checked):
+            self._updating_logging_checkbox = True
+            try:
+                self.chk_logging.setChecked(bool(normalized))
+            finally:
+                self._updating_logging_checkbox = False
+
         self._refresh_publish_state()
 
     def _update_locator_policy_banner(self, message: str) -> None:
@@ -2139,6 +2192,7 @@ class GoldenWizard(QDialog):
         self._last_recipe = recipe
         self._refresh_view_list(recipe=recipe, reset_states=True)
         self._sync_locator_policy_ui(recipe)
+        self._sync_logging_ui(recipe)
         self._refresh_publish_state()
 
     def _on_add_view(self) -> None:
