@@ -796,6 +796,7 @@ class RecipeV2:
         "continue_without_alignment"
     )
     export_artifacts: bool = False
+    logging_enabled: bool = True
 
     def __post_init__(self) -> None:
         self.pose_enabled = bool(self.pose_enabled)
@@ -837,6 +838,7 @@ class RecipeV2:
         self.views = converted_views
         self.aggregation = RecipeAggregation.from_obj(self.aggregation)
         self._sync_tools_from_views()
+        self.logging_enabled = bool(self.logging_enabled)
 
         policy = str(self.on_locator_failure or "").lower()
         if policy not in {"fail", "continue_without_alignment"}:
@@ -854,6 +856,7 @@ class RecipeV2:
             "aggregation": self.aggregation.to_dict(),
             "on_locator_failure": self.on_locator_failure,
             "export_artifacts": bool(self.export_artifacts),
+            "logging_enabled": bool(self.logging_enabled),
         }
 
     @classmethod
@@ -870,6 +873,7 @@ class RecipeV2:
                 "on_locator_failure", "continue_without_alignment"
             ),
             export_artifacts=bool(data.get("export_artifacts", False)),
+            logging_enabled=bool(data.get("logging_enabled", True)),
         )
 
     @classmethod
@@ -889,6 +893,7 @@ class RecipeV2:
             aggregation=RecipeAggregation(),
             on_locator_failure="continue_without_alignment",
             export_artifacts=False,
+            logging_enabled=True,
         )
 
     def copy(self) -> "RecipeV2":
@@ -900,6 +905,7 @@ class RecipeV2:
             aggregation=self.aggregation.copy(),
             on_locator_failure=self.on_locator_failure,
             export_artifacts=self.export_artifacts,
+            logging_enabled=self.logging_enabled,
         )
 
     def with_tools(self, tools: Sequence[Tool]) -> "RecipeV2":

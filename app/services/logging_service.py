@@ -226,7 +226,7 @@ def record_pipeline_run(
     notes: Optional[str] = None,
 ) -> None:
     settings = get_session_settings()
-    if not settings.logging_enabled:
+    if not settings.logging_enabled or not bool(getattr(recipe, "logging_enabled", True)):
         return
 
     logging_path = getattr(settings, "logging_path", DEFAULT_LOG_DIR)

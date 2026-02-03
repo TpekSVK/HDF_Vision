@@ -512,13 +512,21 @@ class MainWindow(QMainWindow):
                 recipe_cfg = None
 
             if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
+                logging_enabled = bool(
+                    getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
+                )
                 self._reset_manual_trigger_progress(recipe_name)
-                self._run_legacy_trigger(base_frame, recipe_name)
+                self._run_legacy_trigger(
+                    base_frame,
+                    recipe_name,
+                    logging_enabled=logging_enabled,
+                )
                 return
 
             if not getattr(recipe_cfg, "regions", None):
                 recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
             recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
+            logging_enabled = bool(getattr(recipe_cfg, "logging_enabled", True))
 
             fail_fast = bool(getattr(recipe_cfg.aggregation, "fail_fast", False))
             run_id = f"{recipe_name}_{uuid.uuid4().hex[:8]}"
@@ -667,6 +675,7 @@ class MainWindow(QMainWindow):
                             aggregation=recipe_cfg.aggregation.copy(),
                             on_locator_failure=recipe_cfg.on_locator_failure,
                             export_artifacts=recipe_cfg.export_artifacts,
+                            logging_enabled=recipe_cfg.logging_enabled,
                         )
 
                         result = run_pipeline(
@@ -719,22 +728,23 @@ class MainWindow(QMainWindow):
                     if policy_applied:
                         meta_payload["policy_applied"] = policy_applied
 
-                    artifacts = save_production_result(
-                        view_frame_u8,
-                        meta_payload,
-                        recipe_name,
-                        store_full_nok=True,
-                        nok=status != "ok",
-                        run_id=run_id,
-                        view_id=view_id,
-                    )
+                    if logging_enabled:
+                        artifacts = save_production_result(
+                            view_frame_u8,
+                            meta_payload,
+                            recipe_name,
+                            store_full_nok=True,
+                            nok=status != "ok",
+                            run_id=run_id,
+                            view_id=view_id,
+                        )
 
-                    self._record_run_result(
-                        recipe_name,
-                        status=status,
-                        metrics=combined_metrics,
-                        artifacts=artifacts,
-                    )
+                        self._record_run_result(
+                            recipe_name,
+                            status=status,
+                            metrics=combined_metrics,
+                            artifacts=artifacts,
+                        )
 
                     self._set_last_view_frame(view_id, last_preview_frame)
                     captured_frames[view_id] = self._clone_frame(view_frame_u8)
@@ -809,7 +819,13 @@ class MainWindow(QMainWindow):
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
 
-    def _run_legacy_trigger(self, frame_u8, recipe_name: str):
+    def _run_legacy_trigger(
+        self,
+        frame_u8,
+        recipe_name: str,
+        *,
+        logging_enabled: bool = True,
+    ):
         try:
             res = self.tool.evaluate(frame_u8)
             ok = bool(res.get("ok", False))
@@ -854,20 +870,21 @@ class MainWindow(QMainWindow):
             "per_tool": legacy_report,
         }
 
-        artifacts = save_production_result(
-            frame_u8,
-            meta_payload,
-            recipe_name,
-            store_full_nok=True,
-            nok=status != "ok",
-        )
+        if logging_enabled:
+            artifacts = save_production_result(
+                frame_u8,
+                meta_payload,
+                recipe_name,
+                store_full_nok=True,
+                nok=status != "ok",
+            )
 
-        self._record_run_result(
-            recipe_name,
-            status=status,
-            metrics=metrics,
-            artifacts=artifacts,
-        )
+            self._record_run_result(
+                recipe_name,
+                status=status,
+                metrics=metrics,
+                artifacts=artifacts,
+            )
 
         self._reload_results_strip()
 
