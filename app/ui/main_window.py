@@ -80,6 +80,7 @@ class MainWindow(QMainWindow):
         self._last_pipeline_status: str | None = None
         self._tool_selector_items: list[dict[str, Any]] = []
         self._view_states: dict[str, dict[str, Any]] = {}
+        self._runtime_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._views_by_id: dict[str, Any] = {}
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
@@ -512,13 +513,21 @@ class MainWindow(QMainWindow):
                 recipe_cfg = None
 
             if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
+                logging_enabled = bool(
+                    getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
+                )
                 self._reset_manual_trigger_progress(recipe_name)
-                self._run_legacy_trigger(base_frame, recipe_name)
+                self._run_legacy_trigger(
+                    base_frame,
+                    recipe_name,
+                    logging_enabled=logging_enabled,
+                )
                 return
 
             if not getattr(recipe_cfg, "regions", None):
                 recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
             recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
+            logging_enabled = bool(getattr(recipe_cfg, "logging_enabled", True))
 
             fail_fast = bool(getattr(recipe_cfg.aggregation, "fail_fast", False))
             run_id = f"{recipe_name}_{uuid.uuid4().hex[:8]}"
@@ -667,6 +676,7 @@ class MainWindow(QMainWindow):
                             aggregation=recipe_cfg.aggregation.copy(),
                             on_locator_failure=recipe_cfg.on_locator_failure,
                             export_artifacts=recipe_cfg.export_artifacts,
+                            logging_enabled=recipe_cfg.logging_enabled,
                         )
 
                         result = run_pipeline(
@@ -719,22 +729,30 @@ class MainWindow(QMainWindow):
                     if policy_applied:
                         meta_payload["policy_applied"] = policy_applied
 
-                    artifacts = save_production_result(
-                        view_frame_u8,
-                        meta_payload,
-                        recipe_name,
-                        store_full_nok=True,
-                        nok=status != "ok",
-                        run_id=run_id,
-                        view_id=view_id,
-                    )
+                    if logging_enabled:
+                        artifacts = save_production_result(
+                            view_frame_u8,
+                            meta_payload,
+                            recipe_name,
+                            store_full_nok=True,
+                            nok=status != "ok",
+                            run_id=run_id,
+                            view_id=view_id,
+                        )
 
-                    self._record_run_result(
-                        recipe_name,
-                        status=status,
-                        metrics=combined_metrics,
-                        artifacts=artifacts,
-                    )
+                        self._record_run_result(
+                            recipe_name,
+                            status=status,
+                            metrics=combined_metrics,
+                            artifacts=artifacts,
+                        )
+                    else:
+                        self._bump_runtime_stats(
+                            recipe_name,
+                            status=status,
+                            view_id=view_id,
+                            cycle_time_ms=cycle_time_value,
+                        )
 
                     self._set_last_view_frame(view_id, last_preview_frame)
                     captured_frames[view_id] = self._clone_frame(view_frame_u8)
@@ -809,7 +827,13 @@ class MainWindow(QMainWindow):
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
 
-    def _run_legacy_trigger(self, frame_u8, recipe_name: str):
+    def _run_legacy_trigger(
+        self,
+        frame_u8,
+        recipe_name: str,
+        *,
+        logging_enabled: bool = True,
+    ):
         try:
             res = self.tool.evaluate(frame_u8)
             ok = bool(res.get("ok", False))
@@ -854,20 +878,27 @@ class MainWindow(QMainWindow):
             "per_tool": legacy_report,
         }
 
-        artifacts = save_production_result(
-            frame_u8,
-            meta_payload,
-            recipe_name,
-            store_full_nok=True,
-            nok=status != "ok",
-        )
+        if logging_enabled:
+            artifacts = save_production_result(
+                frame_u8,
+                meta_payload,
+                recipe_name,
+                store_full_nok=True,
+                nok=status != "ok",
+            )
 
-        self._record_run_result(
-            recipe_name,
-            status=status,
-            metrics=metrics,
-            artifacts=artifacts,
-        )
+            self._record_run_result(
+                recipe_name,
+                status=status,
+                metrics=metrics,
+                artifacts=artifacts,
+            )
+        else:
+            self._bump_runtime_stats(
+                recipe_name,
+                status=status,
+                cycle_time_ms=None,
+            )
 
         self._reload_results_strip()
 
@@ -1054,6 +1085,74 @@ class MainWindow(QMainWindow):
             return None
         return frame.copy() if isinstance(frame, np.ndarray) else frame
 
+    def _runtime_stats_key(self, recipe: str, view_id: str | None) -> tuple[str, str]:
+        return (recipe, view_id or "")
+
+    def _bump_runtime_stats(
+        self,
+        recipe: str,
+        *,
+        status: str,
+        view_id: str | None = None,
+        cycle_time_ms: float | None = None,
+    ) -> None:
+        key = self._runtime_stats_key(recipe, view_id)
+        entry = self._runtime_stats.setdefault(
+            key,
+            {"total": 0, "ok": 0, "nok": 0, "total_cycle_time_ms": 0.0},
+        )
+        entry["total"] = int(entry.get("total", 0)) + 1
+        if str(status).lower() == "ok":
+            entry["ok"] = int(entry.get("ok", 0)) + 1
+        else:
+            entry["nok"] = int(entry.get("nok", 0)) + 1
+        if cycle_time_ms is not None:
+            entry["total_cycle_time_ms"] = float(entry.get("total_cycle_time_ms", 0.0)) + float(
+                cycle_time_ms
+            )
+
+    def _get_runtime_stats(self, recipe: str, view_id: str | None) -> dict[str, Any] | None:
+        key = self._runtime_stats_key(recipe, view_id)
+        entry = self._runtime_stats.get(key)
+        if not entry:
+            return None
+        total = int(entry.get("total", 0))
+        ok = int(entry.get("ok", 0))
+        nok = int(entry.get("nok", 0))
+        total_cycle_time_ms = float(entry.get("total_cycle_time_ms", 0.0))
+        yield_value = float(ok) / float(total) if total > 0 else 0.0
+        return {
+            "total": total,
+            "ok": ok,
+            "nok": nok,
+            "yield": round(yield_value, 4),
+            "total_cycle_time_ms": max(0.0, total_cycle_time_ms),
+        }
+
+    @staticmethod
+    def _merge_stats(base: Mapping[str, Any], delta: Mapping[str, Any]) -> dict[str, Any]:
+        total = int(base.get("total", 0)) + int(delta.get("total", 0))
+        ok = int(base.get("ok", 0)) + int(delta.get("ok", 0))
+        nok = int(base.get("nok", 0)) + int(delta.get("nok", 0))
+        total_cycle_time_ms = float(base.get("total_cycle_time_ms", 0.0)) + float(
+            delta.get("total_cycle_time_ms", 0.0)
+        )
+        yield_value = float(ok) / float(total) if total > 0 else 0.0
+        return {
+            "total": total,
+            "ok": ok,
+            "nok": nok,
+            "yield": round(yield_value, 4),
+            "total_cycle_time_ms": max(0.0, total_cycle_time_ms),
+        }
+
+    def _is_logging_enabled_for_recipe(self, recipe: str) -> bool:
+        try:
+            recipe_cfg = load_recipe_config(recipe)
+        except Exception:
+            return True
+        return bool(getattr(recipe_cfg, "logging_enabled", True))
+
     def _update_sidebar(
         self,
         st: dict | None = None,
@@ -1071,6 +1170,10 @@ class MainWindow(QMainWindow):
             self.sb_recipe.setText(f"Recept: {name}")
             if st is None:
                 st = self.stats.daily_for_recipe(name, view_id=active_view)
+            if not self._is_logging_enabled_for_recipe(name):
+                runtime_stats = self._get_runtime_stats(name, active_view)
+                if runtime_stats:
+                    st = self._merge_stats(st, runtime_stats)
             pose_enabled = getattr(self.tool, "pose_enabled", True)
             self.sb_pose.setText(f"Pose alignment: {'ON' if pose_enabled else 'OFF'}")
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")

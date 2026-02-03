@@ -721,10 +721,14 @@ class PipelineOrchestrator:
         per_tool: List[PipelineToolReport] = []
         policy_applied: Optional[str] = None
         session_settings = settings_service.get_session_settings()
+        logging_enabled = session_settings.logging_enabled and bool(
+            getattr(recipe, "logging_enabled", True)
+        )
         collect_overlay = (
-            session_settings.logging_enabled
+            logging_enabled
             and session_settings.export_artifacts
             and session_settings.export_overlay
+            and bool(getattr(recipe, "export_artifacts", False))
         )
 
         overlay_palette = overlay_utils.default_palette() if collect_overlay else []

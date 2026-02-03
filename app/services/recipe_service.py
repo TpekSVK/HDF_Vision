@@ -97,6 +97,17 @@ class RecipeService:
         self.db.mark_recipe_draft_updated(name)
         return normalized
 
+    def get_logging_enabled(self, name: str) -> bool:
+        recipe = self._load_recipe_config(name)
+        return bool(getattr(recipe, "logging_enabled", True))
+
+    def set_logging_enabled(self, name: str, enabled: bool) -> bool:
+        recipe = self._load_recipe_config(name)
+        recipe.logging_enabled = bool(enabled)
+        self._save_recipe_config(name, recipe)
+        self.db.mark_recipe_draft_updated(name)
+        return bool(recipe.logging_enabled)
+
     # --- views ---
     def list_views(self, name: str) -> List[RecipeView]:
         recipe = self._load_recipe_config(name)
