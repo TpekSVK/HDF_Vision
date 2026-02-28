@@ -7,7 +7,7 @@ import time
 import queue
 from collections import deque
 
-from app.services.xu_stub import XUControls
+from app.services.xu_stub import create_xu_backend
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -66,7 +66,7 @@ class CameraService:
         self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
                                 "pixel_format": self.pixel_format}
-        self._xu: XUControls | None = None
+        self._xu: object | None = None
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -488,9 +488,9 @@ class CameraService:
                     pass
                 raise RuntimeError(f"Camera reopen failed: {exc}") from exc
 
-    def _ensure_xu(self) -> XUControls:
+    def _ensure_xu(self):
         if self._xu is None or getattr(self._xu, "video_dev", None) != self.device:
-            self._xu = XUControls(self.device)
+            self._xu = create_xu_backend(self.device, prefer_hid=True)
         return self._xu
 
     def set_manual_exposure_us(self, exposure_us: int):
@@ -508,3 +508,23 @@ class CameraService:
         except Exception as exc:
             raise RuntimeError(f"Set gain failed: {exc}") from exc
         self.gain_db = val
+
+    def set_stream_mode(self, mode: int):
+        val = int(mode)
+        try:
+            self._ensure_xu().set_stream_mode(val)
+        except Exception as exc:
+            raise RuntimeError(f"Set stream mode failed: {exc}") from exc
+
+    def get_stream_mode(self) -> int:
+        try:
+            return int(self._ensure_xu().get_stream_mode())
+        except Exception as exc:
+            raise RuntimeError(f"Get stream mode failed: {exc}") from exc
+
+    def set_flash_mode(self, mode: int):
+        val = int(mode)
+        try:
+            self._ensure_xu().set_flash_mode(val)
+        except Exception as exc:
+            raise RuntimeError(f"Set flash mode failed: {exc}") from exc

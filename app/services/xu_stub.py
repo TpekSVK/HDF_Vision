@@ -12,8 +12,14 @@ import json
 import os
 import subprocess
 import uuid
+import logging
 from pathlib import Path
 from typing import Any, Dict
+
+from app.services.xu_controls_hid_cu55mh import CU55MH_HID, CU55MHHidError, select_hidraw_for_device
+
+
+logger = logging.getLogger(__name__)
 
 # Reálne GUID a selektory sú odvodené z Windows SDK pre See3CAM_CU55M.
 # GUID zodpovedá extension jednotke `e-con See3CAM_CU55M` a selektory
@@ -160,3 +166,21 @@ class XUControls:
         self._run_v4l2_ctl(f"gain={val}")
         self._state["gain_db"] = val
         self._save_state()
+
+
+def create_xu_backend(video_dev: str = "/dev/video0", prefer_hid: bool = True):
+    if prefer_hid:
+        hidraw_path = select_hidraw_for_device(video_dev)
+        if hidraw_path:
+            try:
+                backend = CU55MH_HID(video_dev=video_dev, hidraw_path=hidraw_path)
+                logger.info("XU backend selected: HID (%s)", hidraw_path)
+                return backend
+            except (CU55MHHidError, OSError) as exc:
+                logger.info("XU HID backend unavailable (%s), fallback to stub.", exc)
+        else:
+            logger.info("XU HID backend unavailable (no /dev/hidraw*), fallback to stub.")
+
+    backend = XUControls(video_dev)
+    logger.info("XU backend selected: STUB")
+    return backend
