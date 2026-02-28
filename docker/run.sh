@@ -82,6 +82,17 @@ echo "[diag] /dev/video* na hostovi:"; ls -l /dev/video* 2>/dev/null || true
 # Vyber device (ak chceš fixne video1, exportuj CAM_DEV=/dev/video1)
 CAM_DEV="${CAM_DEV:-/dev/video0}"
 
+HIDRAW_DEVICES=()
+for hid in /dev/hidraw*; do
+  [[ -e "$hid" ]] || continue
+  HIDRAW_DEVICES+=("--device" "${hid}:${hid}")
+done
+if [[ ${#HIDRAW_DEVICES[@]} -eq 0 ]]; then
+  echo "[diag] /dev/hidraw* nebolo nájdené – HID backend nebude dostupný."
+else
+  echo "[diag] HID devices: ${HIDRAW_DEVICES[*]}"
+fi
+
 # --- Spusti GPIO init na hoste ešte pred kontajnerom ---
 configure_gpio_runtime || true
 
@@ -94,6 +105,7 @@ exec docker run --rm -it \
   --security-opt apparmor=unconfined \
   --cap-add SYS_ADMIN \
   --device ${CAM_DEV}:${CAM_DEV} \
+  "${HIDRAW_DEVICES[@]}" \
   --device-cgroup-rule='c 81:* rmw' \
   --env CAM_DEV="${CAM_DEV}" \
   --env DISPLAY="${DISPLAY:-:0}" \
