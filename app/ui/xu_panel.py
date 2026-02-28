@@ -41,6 +41,7 @@ class XUPanel(QWidget):
         f.addRow("", action_row)
 
         btn_apply_all.clicked.connect(self._apply_all)
+        self.stream_mode.currentIndexChanged.connect(self._apply_stream_mode)
 
         note = QLabel("Pozn.: StreamMode 0=Master, 1=Trigger; Flash 0=OFF,1=Strobe,2=Torch (podľa XU API).")
         note.setWordWrap(True)
@@ -71,14 +72,27 @@ class XUPanel(QWidget):
         val = int(self.gain_db.value())
         self._sh(f"v4l2-ctl -d {dev} -c gain={val}")
 
+
+    def _apply_stream_mode(self):
+        sm = 0 if self.stream_mode.currentIndex() == 0 else 1
+        try:
+            self.mw.cam.set_stream_mode(sm)
+        except Exception as exc:
+            print(f"[XU][ERR] stream mode set failed: {exc}")
+
     def _apply_xu(self):
-        # STUB: tu prídu linux XU volania (UVC XU GUID+selector) alebo vendor .so
-        # StreamMode: 0 Master, 1 Trigger (SetStreamModeCU55_MH) – podľa manuálu
         sm = 0 if self.stream_mode.currentIndex() == 0 else 1
         fm = self.flash_mode.currentIndex()  # 0/1/2
         pf = self.pixfmt.currentIndex()      # 0=Y8, 1=Y12
-        print(f"[XU] (stub) SetStreamMode={sm}, SetFlash={fm}, PixelFormat={'Y12' if pf==1 else 'Y8'}")
-        # TODO: doplniť po dodaní XU selector/ID pre Linux. Zatiaľ iba zalogujeme.
+
+        try:
+            self.mw.cam.set_stream_mode(sm)
+            self.mw.cam.set_flash_mode(fm)
+        except Exception as exc:
+            print(f"[XU][ERR] apply failed: {exc}")
+            return
+
+        print(f"[XU] SetStreamMode={sm}, SetFlash={fm}, PixelFormat={'Y12' if pf==1 else 'Y8'}")
 
     def _apply_all(self):
         self._apply_exposure()
