@@ -29,9 +29,10 @@ from PySide6.QtWidgets import (
 )
 
 import os
+import time
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 from functools import partial
 
 import numpy as np
@@ -95,6 +96,9 @@ from app.ui.golden_wizard.view_config_dialog import (
     ViewConfigDialog,
     _DEFAULT_CAMERA_RESOLUTIONS,
 )
+
+if TYPE_CHECKING:
+    from app.services.modbus_service import ModbusService
 
 
 class ToolsTableWidget(QTableWidget):
@@ -1255,7 +1259,14 @@ class GoldenWizard(QDialog):
       3) Uložiť recept (golden.png + regions.json)
       4) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
     """
-    def __init__(self, camera, recipes: RecipeService, parent=None):
+    def __init__(
+        self,
+        camera,
+        recipes: RecipeService,
+        parent=None,
+        *,
+        modbus: "ModbusService | None" = None,
+    ):
         super().__init__(parent)
 
         self._base_title = "Golden WIZARD"
@@ -1263,6 +1274,7 @@ class GoldenWizard(QDialog):
         self.setModal(True)
         self.cam = camera
         self.recipes = recipes
+        self.modbus = modbus
         self.current_img = None
         self._default_camera_state = self._snapshot_camera_state()
 
@@ -1785,10 +1797,39 @@ class GoldenWizard(QDialog):
     # ---------- Akcie ----------
     def _capture_golden(self):
         try:
-            # ak je live ON, zober aktuálny frame a hneď live vypni (freeze)
-            frame = (self._lp.last_frame_u8() if self._live_on else None)
+            if self.modbus is not None:
+                self.modbus.pulse_configured_flashes()
+                capture_delay_ms = self.modbus.recommended_flash_capture_delay_ms(
+                    post_flash_guard_ms=0
+                )
+                if capture_delay_ms > 0:
+                    time.sleep(capture_delay_ms / 1000.0)
+
+            # Pri golden capture preferuj frame z kontinuálneho streamu
+            # (rovnaký princíp ako RUN trigger), kde je vyššia šanca
+            # trafiť blesk; one_shot nech je iba fallback.
+            frame = None
+            best_flash_frame = None
+            best_flash_score = float("-inf")
+            deadline = time.monotonic() + 0.18
+            while time.monotonic() < deadline:
+                candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame()
+                if candidate is not None:
+                    score = float(np.mean(candidate))
+                    if score > best_flash_score:
+                        best_flash_score = score
+                        best_flash_frame = np.asarray(candidate).copy()
+                time.sleep(0.01)
+
+            frame = best_flash_frame
+            if frame is None:
+                frame = self.cam.last_frame()
             if frame is None:
                 frame = self.cam.one_shot()
+            if frame is None and self._live_on:
+                frame = self._lp.last_frame_u8()
+            if frame is None:
+                raise RuntimeError("Frame z kamery nie je dostupný.")
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()
