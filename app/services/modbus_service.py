@@ -102,6 +102,7 @@ class ModbusService:
     def __init__(self, config_path: Path | str = _CONFIG_PATH) -> None:
         self._config_path = Path(config_path)
         self._lock = threading.Lock()
+        self._client_io_lock = threading.Lock()
         self._config = self._load_config()
         self._client: Optional[ModbusTcpClient] = None
         self._client_config_key: Optional[Tuple[str, int, float, int]] = None
@@ -284,11 +285,19 @@ class ModbusService:
         client = self._ensure_client(config)
         if client is None:
             return False
-        try:
-            response = client.write_coil(int(address), value, unit=int(config.unit_id))
-        except (ModbusException, OSError) as exc:
-            self.last_error = str(exc)
-            return False
+        with self._client_io_lock:
+            try:
+                response = client.write_coil(int(address), value, unit=int(config.unit_id))
+            except (ModbusException, OSError, AttributeError) as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return False
+            except Exception as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return False
         if isinstance(response, ExceptionResponse) or getattr(response, "isError", lambda: False)():
             self.last_error = str(response)
             return False
@@ -349,11 +358,19 @@ class ModbusService:
         if client is None:
             return None
 
-        try:
-            response = client.read_discrete_inputs(int(address), 1, unit=int(cfg.unit_id))
-        except (ModbusException, OSError) as exc:
-            self.last_error = str(exc)
-            return None
+        with self._client_io_lock:
+            try:
+                response = client.read_discrete_inputs(int(address), 1, unit=int(cfg.unit_id))
+            except (ModbusException, OSError, AttributeError) as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return None
+            except Exception as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return None
 
         if isinstance(response, ExceptionResponse) or getattr(response, "isError", lambda: False)():
             self.last_error = str(response)
