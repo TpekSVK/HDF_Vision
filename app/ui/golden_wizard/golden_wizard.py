@@ -1799,15 +1799,37 @@ class GoldenWizard(QDialog):
         try:
             if self.modbus is not None:
                 self.modbus.pulse_configured_flashes()
-                capture_delay_ms = self.modbus.recommended_flash_capture_delay_ms()
+                capture_delay_ms = self.modbus.recommended_flash_capture_delay_ms(
+                    post_flash_guard_ms=0
+                )
                 if capture_delay_ms > 0:
                     time.sleep(capture_delay_ms / 1000.0)
 
-            # Pri golden capture preferuj nový snímok (one_shot),
-            # aby bol časovo zarovnaný s bleskom.
-            frame = self.cam.one_shot()
+            # Pri golden capture preferuj frame z kontinuálneho streamu
+            # (rovnaký princíp ako RUN trigger), kde je vyššia šanca
+            # trafiť blesk; one_shot nech je iba fallback.
+            frame = None
+            best_flash_frame = None
+            best_flash_score = float("-inf")
+            deadline = time.monotonic() + 0.18
+            while time.monotonic() < deadline:
+                candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame()
+                if candidate is not None:
+                    score = float(np.mean(candidate))
+                    if score > best_flash_score:
+                        best_flash_score = score
+                        best_flash_frame = np.asarray(candidate).copy()
+                time.sleep(0.01)
+
+            frame = best_flash_frame
+            if frame is None:
+                frame = self.cam.last_frame()
+            if frame is None:
+                frame = self.cam.one_shot()
             if frame is None and self._live_on:
                 frame = self._lp.last_frame_u8()
+            if frame is None:
+                raise RuntimeError("Frame z kamery nie je dostupný.")
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()
