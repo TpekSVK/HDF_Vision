@@ -266,20 +266,22 @@ class ModbusService:
         cfg = self.get_config()
         if not cfg.enabled:
             return
-        if int(cfg.flash1_coil) >= 0:
+
+        def _handle_flash(coil: int, delay_ms: int, pulse_ms: int) -> None:
+            if int(coil) < 0:
+                return
+            if int(delay_ms) < 0:
+                self._write_coil(coil, True, cfg)
+                return
             self.pulse_coil(
-                cfg.flash1_coil,
-                pulse_ms=cfg.flash1_pulse_ms,
-                delay_ms=cfg.flash1_delay_ms,
+                coil,
+                pulse_ms=pulse_ms,
+                delay_ms=delay_ms,
                 config=cfg,
             )
-        if int(cfg.flash2_coil) >= 0:
-            self.pulse_coil(
-                cfg.flash2_coil,
-                pulse_ms=cfg.flash2_pulse_ms,
-                delay_ms=cfg.flash2_delay_ms,
-                config=cfg,
-            )
+
+        _handle_flash(cfg.flash1_coil, cfg.flash1_delay_ms, cfg.flash1_pulse_ms)
+        _handle_flash(cfg.flash2_coil, cfg.flash2_delay_ms, cfg.flash2_pulse_ms)
 
     def recommended_flash_capture_delay_ms(self, *, post_flash_guard_ms: int = 10) -> int:
         cfg = self.get_config()

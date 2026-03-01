@@ -107,15 +107,17 @@ class ModbusWizard(QDialog):
         self.spin_heartbeat = self._coil_spin(box, default=2)
         self.spin_flash1 = self._coil_spin(box, default=-1)
         self.spin_flash1_delay = QSpinBox(box)
-        self.spin_flash1_delay.setRange(0, 10000)
+        self.spin_flash1_delay.setRange(-1, 10000)
         self.spin_flash1_delay.setValue(0)
+        self.spin_flash1_delay.setSpecialValueText("Always ON (-1)")
         self.spin_flash1_pulse = QSpinBox(box)
         self.spin_flash1_pulse.setRange(1, 10000)
         self.spin_flash1_pulse.setValue(200)
         self.spin_flash2 = self._coil_spin(box, default=-1)
         self.spin_flash2_delay = QSpinBox(box)
-        self.spin_flash2_delay.setRange(0, 10000)
+        self.spin_flash2_delay.setRange(-1, 10000)
         self.spin_flash2_delay.setValue(0)
+        self.spin_flash2_delay.setSpecialValueText("Always ON (-1)")
         self.spin_flash2_pulse = QSpinBox(box)
         self.spin_flash2_pulse.setRange(1, 10000)
         self.spin_flash2_pulse.setValue(200)
@@ -131,10 +133,10 @@ class ModbusWizard(QDialog):
             ("NOK coil address:", self.spin_nok),
             ("Heartbeat coil address:", self.spin_heartbeat),
             ("Flash1 coil address:", self.spin_flash1),
-            ("Flash1 delay (ms):", self.spin_flash1_delay),
+            ("Flash1 delay (ms, -1 = trvalo zapnuté):", self.spin_flash1_delay),
             ("Flash1 pulse length (ms):", self.spin_flash1_pulse),
             ("Flash2 coil address:", self.spin_flash2),
-            ("Flash2 delay (ms):", self.spin_flash2_delay),
+            ("Flash2 delay (ms, -1 = trvalo zapnuté):", self.spin_flash2_delay),
             ("Flash2 pulse length (ms):", self.spin_flash2_pulse),
             ("Pulse length OK/NOK (ms):", self.spin_pulse_len),
             ("Heartbeat period (ms):", self.spin_heartbeat_period),
@@ -293,4 +295,3 @@ class ModbusWizard(QDialog):
     def closeEvent(self, event) -> None:  # type: ignore[override]
         self._poll_timer.stop()
         super().closeEvent(event)
-
