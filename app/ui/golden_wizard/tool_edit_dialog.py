@@ -141,11 +141,24 @@ class EdgeAnchorEditor(QWidget):
         self._point_a: Optional[tuple[float, float]] = None
         self._point_b: Optional[tuple[float, float]] = None
         self._next_target: str = "a"
+        self._roi_rect: Optional[tuple[int, int, int, int]] = None
+        self._detected_line: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
         self.setMinimumHeight(220)
         self.setMouseTracking(True)
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._pixmap = pixmap
+        self.update()
+
+    def set_roi_rect(self, roi_rect: Optional[tuple[int, int, int, int]]) -> None:
+        self._roi_rect = roi_rect
+        self.update()
+
+    def set_detected_line(
+        self,
+        line: Optional[tuple[tuple[float, float], tuple[float, float]]],
+    ) -> None:
+        self._detected_line = line
         self.update()
 
     def clear_points(self) -> None:
@@ -233,6 +246,21 @@ class EdgeAnchorEditor(QWidget):
         painter.setPen(QPen(QColor(110, 110, 110), 1, Qt.DashLine))
         painter.drawRect(rect)
 
+        if self._roi_rect is not None:
+            rx, ry, rw, rh = self._roi_rect
+            roi_tl = self._widget_from_image((float(rx), float(ry)), rect)
+            roi_br = self._widget_from_image((float(rx + rw), float(ry + rh)), rect)
+            roi_rect = QRectF(roi_tl, roi_br).normalized()
+            painter.setPen(QPen(QColor(80, 230, 120), 2, Qt.DashLine))
+            painter.drawRect(roi_rect)
+
+        if self._detected_line is not None:
+            p1_img, p2_img = self._detected_line
+            p1 = self._widget_from_image(p1_img, rect)
+            p2 = self._widget_from_image(p2_img, rect)
+            painter.setPen(QPen(QColor(255, 235, 59), 2))
+            painter.drawLine(p1, p2)
+
         def _draw_point(pt: tuple[float, float], label: str, color: QColor) -> QPointF:
             wp = self._widget_from_image(pt, rect)
             painter.setPen(QPen(color, 2))
@@ -281,6 +309,7 @@ class ToolEditDialog(QDialog):
         self._angle_field_rows: dict[str, tuple[QLabel, QWidget]] = {}
         self._edge_anchor_editor: Optional[EdgeAnchorEditor] = None
         self._edge_anchor_status: Optional[QLabel] = None
+        self._btn_edge_auto_detect: Optional[QPushButton] = None
 
         self._is_locator_template = self._tool.type == "locator.template_match"
         self._use_golden_checkbox: Optional[QCheckBox] = None
@@ -696,6 +725,7 @@ class ToolEditDialog(QDialog):
     def _on_edge_anchor_points_changed(self, point_a: object, point_b: object) -> None:
         pa = point_a if isinstance(point_a, tuple) else None
         pb = point_b if isinstance(point_b, tuple) else None
+        self._edge_anchor_status.setStyleSheet("color: #444;") if self._edge_anchor_status is not None else None
         self._update_edge_anchor_status(pa, pb)
 
     def _init_edge_anchor_panel(self) -> None:
@@ -718,7 +748,11 @@ class ToolEditDialog(QDialog):
         pa = self._parse_point(params_values.get("point_a"))
         pb = self._parse_point(params_values.get("point_b"))
         self._edge_anchor_editor.set_points(pa, pb)
+        roi_rect = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
+        self._edge_anchor_editor.set_roi_rect(roi_rect)
         self._edge_anchor_editor.pointsChanged.connect(self._on_edge_anchor_points_changed)
+        if self._roi_editor is not None:
+            self._roi_editor.roiChanged.connect(self._edge_anchor_editor.set_roi_rect)
         group_layout.addWidget(self._edge_anchor_editor, 1)
 
         controls = QHBoxLayout()
@@ -727,6 +761,9 @@ class ToolEditDialog(QDialog):
         btn_clear = QPushButton("Reset A-B", group)
         btn_clear.clicked.connect(self._edge_anchor_editor.clear_points)
         controls.addWidget(btn_clear)
+        self._btn_edge_auto_detect = QPushButton("Auto detect edge in ROI", group)
+        self._btn_edge_auto_detect.clicked.connect(self._on_edge_auto_detect_clicked)
+        controls.addWidget(self._btn_edge_auto_detect)
         controls.addStretch(1)
         group_layout.addLayout(controls)
 
@@ -736,6 +773,79 @@ class ToolEditDialog(QDialog):
         self._update_edge_anchor_status(pa, pb)
 
         self._roi_sections_layout.addWidget(group, 1)
+
+    def _detect_edge_line_in_roi(self) -> tuple[bool, str]:
+        if self._edge_anchor_editor is None:
+            return False, "Editor anchor points nie je dostupný."
+        if self._golden_image is None:
+            return False, "Golden snímka nie je dostupná."
+
+        roi_rect = self._roi_editor.roi() if self._roi_editor is not None else None
+        if roi_rect is None:
+            roi_rect = self._tool.roi.rect()
+        if roi_rect is None:
+            return False, "Najprv nastav ROI oblasť pre auto detekciu hrany."
+
+        x, y, w, h = roi_rect
+        if w <= 2 or h <= 2:
+            return False, "ROI je príliš malá."
+
+        img = self._ensure_gray_u8(self._golden_image)
+        if img is None:
+            return False, "Golden snímku sa nepodarilo previesť."
+
+        ih, iw = img.shape[:2]
+        x0 = max(0, min(iw - 1, int(x)))
+        y0 = max(0, min(ih - 1, int(y)))
+        x1 = max(0, min(iw, int(x + w)))
+        y1 = max(0, min(ih, int(y + h)))
+        if x1 - x0 < 3 or y1 - y0 < 3:
+            return False, "ROI po orezaní mimo obraz je príliš malá."
+
+        roi = img[y0:y1, x0:x1]
+        blur = cv2.GaussianBlur(roi, (5, 5), 0)
+        edges = cv2.Canny(blur, 60, 180)
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=np.pi / 180.0,
+            threshold=max(20, int(min(roi.shape[:2]) * 0.25)),
+            minLineLength=max(20, int(min(roi.shape[:2]) * 0.4)),
+            maxLineGap=max(8, int(min(roi.shape[:2]) * 0.08)),
+        )
+        if lines is None or len(lines) == 0:
+            return False, "V ROI sa nepodarilo nájsť hranu."
+
+        best = None
+        best_len = -1.0
+        for entry in lines.reshape(-1, 4):
+            lx1, ly1, lx2, ly2 = [float(v) for v in entry]
+            length = float(np.hypot(lx2 - lx1, ly2 - ly1))
+            if length > best_len:
+                best_len = length
+                best = (lx1, ly1, lx2, ly2)
+
+        if best is None:
+            return False, "Detekcia hrany zlyhala."
+
+        lx1, ly1, lx2, ly2 = best
+        point_a = (x0 + lx1, y0 + ly1)
+        point_b = (x0 + lx2, y0 + ly2)
+
+        self._edge_anchor_editor.set_points(point_a, point_b)
+        self._edge_anchor_editor.set_roi_rect((x0, y0, x1 - x0, y1 - y0))
+        self._edge_anchor_editor.set_detected_line((point_a, point_b))
+        return True, f"Auto detekcia úspešná (dĺžka hrany: {best_len:.1f}px)."
+
+    def _on_edge_auto_detect_clicked(self) -> None:
+        ok, message = self._detect_edge_line_in_roi()
+        if self._edge_anchor_status is None:
+            return
+        if ok:
+            self._edge_anchor_status.setStyleSheet("color: #2d8a34;")
+        else:
+            self._edge_anchor_status.setStyleSheet("color: #a33;")
+        self._edge_anchor_status.setText(message)
 
     def _set_locator_message(self, text: str, color: Optional[str] = None) -> None:
         if self._locator_message_label is None:
