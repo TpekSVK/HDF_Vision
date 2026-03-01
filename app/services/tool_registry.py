@@ -746,8 +746,8 @@ def _register_default_tools() -> None:
                     },
                     "points_in_roi": {
                         "type": "bool",
-                        "default": True,
-                        "description": "Sú body A/B uložené v ROI súradniciach.",
+                        "default": False,
+                        "description": "Sú body A/B uložené v ROI súradniciach (editor ich štandardne ukladá v golden súradniciach).",
                     },
                     "orientation": {
                         "type": "enum",
