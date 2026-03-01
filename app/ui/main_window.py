@@ -2,7 +2,7 @@ from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
