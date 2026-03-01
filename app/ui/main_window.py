@@ -48,6 +48,9 @@ from app.ui.camera_profile_utils import (
 
 class MainWindow(QMainWindow):
     external_triggered = Signal()
+    _UI_STATE_PATH = Path("/data/config.json")
+    _LAST_RECIPE_STATE_KEY = "last_recipe"
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("HDF Vision")
@@ -88,14 +91,15 @@ class MainWindow(QMainWindow):
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
         self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
-
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
                 self.recipes.create("default")
-            self.recipes.load("default")
+            startup_recipe = self._resolve_startup_recipe()
+            self.recipes.load(startup_recipe)
             self.tool = self.recipes.tool  # ToolService z RecipeService
-            print("[Tool] Loaded recipe: default")
+            self._persist_last_recipe(startup_recipe)
+            print(f"[Tool] Loaded recipe: {startup_recipe}")
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
@@ -1840,10 +1844,51 @@ class MainWindow(QMainWindow):
             self.cmb_recipe.setCurrentIndex(ix)
         self.cmb_recipe.blockSignals(False)
 
+    def _resolve_startup_recipe(self) -> str:
+        recipes = self.recipes.list()
+        if not recipes:
+            return "default"
+
+        saved_recipe = ""
+        try:
+            if self._UI_STATE_PATH.exists():
+                with open(self._UI_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                saved_recipe = str(data.get(self._LAST_RECIPE_STATE_KEY, "") or "").strip()
+        except Exception:
+            saved_recipe = ""
+
+        if saved_recipe and saved_recipe in recipes:
+            return saved_recipe
+        return "default" if "default" in recipes else recipes[0]
+
+    def _persist_last_recipe(self, recipe_name: str) -> None:
+        name = str(recipe_name or "").strip()
+        if not name:
+            return
+        data: dict[str, Any] = {}
+        try:
+            if self._UI_STATE_PATH.exists():
+                with open(self._UI_STATE_PATH, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = dict(loaded)
+        except Exception:
+            data = {}
+
+        data[self._LAST_RECIPE_STATE_KEY] = name
+        try:
+            self._UI_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._UI_STATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
     def on_recipe_changed(self, name: str):
         try:
             self.recipes.load(name)
             self.tool = self.recipes.tool
+            self._persist_last_recipe(name)
             self._refresh_views()
             self._reset_manual_trigger_progress(name)
             self.lbl_status.setText("Recipe loaded.")
@@ -1867,6 +1912,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(name)
         self.tool = self.recipes.tool
+        self._persist_last_recipe(name)
         self._refresh_views()
         self._reset_manual_trigger_progress(name)
         self._reload_results_strip()
@@ -1887,6 +1933,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
+        self._persist_last_recipe(new)
         self._refresh_views()
         self._reset_manual_trigger_progress(new)
         self._reload_results_strip()
@@ -1909,6 +1956,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        self._persist_last_recipe("default")
         self._refresh_views()
         self._reset_manual_trigger_progress("default")
         self._reload_results_strip()
