@@ -992,6 +992,7 @@ class MainWindow(QMainWindow):
         print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
+        self.modbus.pulse_configured_flashes()
         self.external_triggered.emit()
 
     def _update_live_view(self):

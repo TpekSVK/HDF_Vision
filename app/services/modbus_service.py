@@ -41,6 +41,10 @@ class ModbusConfig:
     heartbeat_coil: int = 2
     flash1_coil: int = -1
     flash2_coil: int = -1
+    flash1_delay_ms: int = 0
+    flash2_delay_ms: int = 0
+    flash1_pulse_ms: int = 200
+    flash2_pulse_ms: int = 200
     pulse_length_ms: int = 200
     heartbeat_period_ms: int = 1000
 
@@ -68,6 +72,18 @@ class ModbusConfig:
             ),
             flash1_coil=_to_int(data.get("flash1_coil", cls.flash1_coil), cls.flash1_coil),
             flash2_coil=_to_int(data.get("flash2_coil", cls.flash2_coil), cls.flash2_coil),
+            flash1_delay_ms=_to_int(
+                data.get("flash1_delay_ms", cls.flash1_delay_ms), cls.flash1_delay_ms
+            ),
+            flash2_delay_ms=_to_int(
+                data.get("flash2_delay_ms", cls.flash2_delay_ms), cls.flash2_delay_ms
+            ),
+            flash1_pulse_ms=_to_int(
+                data.get("flash1_pulse_ms", cls.flash1_pulse_ms), cls.flash1_pulse_ms
+            ),
+            flash2_pulse_ms=_to_int(
+                data.get("flash2_pulse_ms", cls.flash2_pulse_ms), cls.flash2_pulse_ms
+            ),
             pulse_length_ms=_to_int(
                 data.get("pulse_length_ms", cls.pulse_length_ms), cls.pulse_length_ms
             ),
@@ -86,6 +102,7 @@ class ModbusService:
     def __init__(self, config_path: Path | str = _CONFIG_PATH) -> None:
         self._config_path = Path(config_path)
         self._lock = threading.Lock()
+        self._client_io_lock = threading.Lock()
         self._config = self._load_config()
         self._client: Optional[ModbusTcpClient] = None
         self._client_config_key: Optional[Tuple[str, int, float, int]] = None
@@ -230,31 +247,80 @@ class ModbusService:
         cfg = self.get_config()
         if not cfg.enabled:
             return
-        coil = cfg.flash1_coil if int(channel) == 1 else cfg.flash2_coil
-        self.pulse_coil(coil, pulse_ms=pulse_ms or cfg.pulse_length_ms, config=cfg)
+        if int(channel) == 1:
+            coil = cfg.flash1_coil
+            delay_ms = cfg.flash1_delay_ms
+            duration_ms = pulse_ms if pulse_ms is not None else cfg.flash1_pulse_ms
+        else:
+            coil = cfg.flash2_coil
+            delay_ms = cfg.flash2_delay_ms
+            duration_ms = pulse_ms if pulse_ms is not None else cfg.flash2_pulse_ms
+        self.pulse_coil(
+            coil,
+            pulse_ms=duration_ms,
+            delay_ms=delay_ms,
+            config=cfg,
+        )
+
+    def pulse_configured_flashes(self) -> None:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return
+        if int(cfg.flash1_coil) >= 0:
+            self.pulse_coil(
+                cfg.flash1_coil,
+                pulse_ms=cfg.flash1_pulse_ms,
+                delay_ms=cfg.flash1_delay_ms,
+                config=cfg,
+            )
+        if int(cfg.flash2_coil) >= 0:
+            self.pulse_coil(
+                cfg.flash2_coil,
+                pulse_ms=cfg.flash2_pulse_ms,
+                delay_ms=cfg.flash2_delay_ms,
+                config=cfg,
+            )
 
     def _write_coil(self, address: int, value: bool, config: ModbusConfig) -> bool:
         client = self._ensure_client(config)
         if client is None:
             return False
-        try:
-            response = client.write_coil(int(address), value, unit=int(config.unit_id))
-        except (ModbusException, OSError) as exc:
-            self.last_error = str(exc)
-            return False
+        with self._client_io_lock:
+            try:
+                response = client.write_coil(int(address), value, unit=int(config.unit_id))
+            except (ModbusException, OSError, AttributeError) as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return False
+            except Exception as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return False
         if isinstance(response, ExceptionResponse) or getattr(response, "isError", lambda: False)():
             self.last_error = str(response)
             return False
         return True
 
-    def pulse_coil(self, address: int, *, pulse_ms: Optional[int] = None, config: Optional[ModbusConfig] = None) -> bool:
+    def pulse_coil(
+        self,
+        address: int,
+        *,
+        pulse_ms: Optional[int] = None,
+        delay_ms: int = 0,
+        config: Optional[ModbusConfig] = None,
+    ) -> bool:
         if address is None or int(address) < 0:
             self.last_error = "Invalid coil address"
             return False
         cfg = config or self.get_config()
+        delay = max(0, int(delay_ms)) / 1000.0
         duration = max(1, int(pulse_ms if pulse_ms is not None else cfg.pulse_length_ms)) / 1000.0
 
         def _job() -> None:
+            if delay > 0:
+                time.sleep(delay)
             if not self._write_coil(address, True, cfg):
                 return
             time.sleep(duration)
@@ -292,11 +358,19 @@ class ModbusService:
         if client is None:
             return None
 
-        try:
-            response = client.read_discrete_inputs(int(address), 1, unit=int(cfg.unit_id))
-        except (ModbusException, OSError) as exc:
-            self.last_error = str(exc)
-            return None
+        with self._client_io_lock:
+            try:
+                response = client.read_discrete_inputs(int(address), 1, unit=int(cfg.unit_id))
+            except (ModbusException, OSError, AttributeError) as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return None
+            except Exception as exc:
+                self.last_error = str(exc)
+                with self._lock:
+                    self._close_client()
+                return None
 
         if isinstance(response, ExceptionResponse) or getattr(response, "isError", lambda: False)():
             self.last_error = str(response)
@@ -370,4 +444,3 @@ class ModbusService:
     def close(self) -> None:
         self._stop_trigger_monitor()
         self._close_client()
-
