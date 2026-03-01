@@ -31,7 +31,7 @@ from PySide6.QtWidgets import (
 import os
 import math
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 from functools import partial
 
 import numpy as np
@@ -95,6 +95,9 @@ from app.ui.golden_wizard.view_config_dialog import (
     ViewConfigDialog,
     _DEFAULT_CAMERA_RESOLUTIONS,
 )
+
+if TYPE_CHECKING:
+    from app.services.modbus_service import ModbusService
 
 
 class ToolsTableWidget(QTableWidget):
@@ -1255,7 +1258,14 @@ class GoldenWizard(QDialog):
       3) Uložiť recept (golden.png + regions.json)
       4) Live feed (ON/OFF) – samostatný náhľad (bez kreslenia)
     """
-    def __init__(self, camera, recipes: RecipeService, parent=None):
+    def __init__(
+        self,
+        camera,
+        recipes: RecipeService,
+        parent=None,
+        *,
+        modbus: "ModbusService | None" = None,
+    ):
         super().__init__(parent)
 
         self._base_title = "Golden WIZARD"
@@ -1263,6 +1273,7 @@ class GoldenWizard(QDialog):
         self.setModal(True)
         self.cam = camera
         self.recipes = recipes
+        self.modbus = modbus
         self.current_img = None
         self._default_camera_state = self._snapshot_camera_state()
 
@@ -1785,6 +1796,8 @@ class GoldenWizard(QDialog):
     # ---------- Akcie ----------
     def _capture_golden(self):
         try:
+            if self.modbus is not None:
+                self.modbus.pulse_configured_flashes()
             # ak je live ON, zober aktuálny frame a hneď live vypni (freeze)
             frame = (self._lp.last_frame_u8() if self._live_on else None)
             if frame is None:

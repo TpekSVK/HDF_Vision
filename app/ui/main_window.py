@@ -493,6 +493,7 @@ class MainWindow(QMainWindow):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
+        self.modbus.pulse_configured_flashes()
         try:
             frame = self.cam.last_frame()
             if frame is None:
@@ -924,7 +925,7 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def open_wizard(self):
-        dlg = GoldenWizard(self.cam, self.recipes, self)
+        dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
         dlg.resize(1200, 800)
         dlg.exec()
         self._reset_manual_trigger_progress(self.current_recipe_name())
