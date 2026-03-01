@@ -229,7 +229,7 @@ class EdgeAnchorEditor(QWidget):
             painter.drawText(self.rect(), Qt.AlignCenter, "Golden image not available")
             return
 
-        painter.drawPixmap(rect, self._pixmap)
+        painter.drawPixmap(rect.toRect(), self._pixmap)
         painter.setPen(QPen(QColor(110, 110, 110), 1, Qt.DashLine))
         painter.drawRect(rect)
 
@@ -252,7 +252,6 @@ class EdgeAnchorEditor(QWidget):
             painter.setPen(QPen(QColor(255, 210, 110), 2))
             painter.drawLine(wp_a, wp_b)
 
-        super().paintEvent(event)
 
 
 class ToolEditDialog(QDialog):
