@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 import os
+import time
 import math
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
@@ -1798,10 +1799,15 @@ class GoldenWizard(QDialog):
         try:
             if self.modbus is not None:
                 self.modbus.pulse_configured_flashes()
-            # ak je live ON, zober aktuálny frame a hneď live vypni (freeze)
-            frame = (self._lp.last_frame_u8() if self._live_on else None)
-            if frame is None:
-                frame = self.cam.one_shot()
+                capture_delay_ms = self.modbus.recommended_flash_capture_delay_ms()
+                if capture_delay_ms > 0:
+                    time.sleep(capture_delay_ms / 1000.0)
+
+            # Pri golden capture preferuj nový snímok (one_shot),
+            # aby bol časovo zarovnaný s bleskom.
+            frame = self.cam.one_shot()
+            if frame is None and self._live_on:
+                frame = self._lp.last_frame_u8()
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()

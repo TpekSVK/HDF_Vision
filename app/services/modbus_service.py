@@ -281,6 +281,21 @@ class ModbusService:
                 config=cfg,
             )
 
+    def recommended_flash_capture_delay_ms(self, *, post_flash_guard_ms: int = 10) -> int:
+        cfg = self.get_config()
+        if not cfg.enabled:
+            return 0
+
+        delays: list[int] = []
+        if int(cfg.flash1_coil) >= 0:
+            delays.append(max(0, int(cfg.flash1_delay_ms)))
+        if int(cfg.flash2_coil) >= 0:
+            delays.append(max(0, int(cfg.flash2_delay_ms)))
+        if not delays:
+            return 0
+
+        return max(0, min(delays) + max(0, int(post_flash_guard_ms)))
+
     def _write_coil(self, address: int, value: bool, config: ModbusConfig) -> bool:
         client = self._ensure_client(config)
         if client is None:
