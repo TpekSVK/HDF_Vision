@@ -116,3 +116,40 @@ def test_edge_profile_deviation_warns_on_no_coverage() -> None:
     result = _run_tool(image, params, thresholds, ToolMask(ignore_mask))
     assert result.status == "warn"
     assert result.metrics["coverage"] == 0.0
+
+
+def test_edge_profile_deviation_defaults_points_to_global_coordinates() -> None:
+    height, width = 140, 240
+    y_profile = np.full(width, 70.0)
+    image = _make_edge_image(height, width, y_profile)
+
+    params = {
+        "point_a": {"x": 60, "y": 70},
+        "point_b": {"x": 180, "y": 70},
+        # points_in_roi intentionally omitted (UI stores points in golden coords)
+        "orientation": "auto",
+        "blur_sigma": 0.5,
+        "scan_step": 2,
+        "edge_polarity": "dark_to_light",
+        "grad_threshold": 5.0,
+        "search_half_window": 8,
+        "outlier_trim_pct": 0.0,
+        "min_coverage": 0.5,
+    }
+    thresholds = {"max_deviation_max": 1.0, "coverage_min": 0.5}
+
+    tool = EdgeProfileDeviationTool()
+    tool_model = Tool(
+        type="edge_profile_deviation",
+        name="edge_profile_deviation",
+        roi=ToolRoi({"x": 40, "y": 20, "w": 170, "h": 90}),
+        ignore_mask=ToolMask(),
+        params=ToolParams(params),
+        thresholds=ToolThresholds(thresholds),
+    )
+    runner_context = ToolRunnerContext(frame=image, frame_aligned=None, T_total=None, frame_is_aligned=False)
+    tool.prepare({"tool": tool_model, "tool_id": "edge_profile_deviation", "runner_context": runner_context})
+
+    result = tool.run(image, image, ToolParams(params), ToolThresholds(thresholds), {})
+    assert result.status == "ok"
+    assert result.metrics["coverage"] >= 0.5

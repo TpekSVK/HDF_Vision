@@ -37,7 +37,7 @@ class EdgeProfileDeviationTool(PairTool):
 
         point_a = _parse_point(params_dict.get("point_a"))
         point_b = _parse_point(params_dict.get("point_b"))
-        points_in_roi = bool(params_dict.get("points_in_roi", True))
+        points_in_roi = bool(params_dict.get("points_in_roi", False))
         orientation = str(params_dict.get("orientation", "auto")).lower()
 
         if point_a is None or point_b is None:
