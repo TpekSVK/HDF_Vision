@@ -48,7 +48,8 @@ from app.ui.camera_profile_utils import (
 
 class MainWindow(QMainWindow):
     external_triggered = Signal()
-    _LAST_RECIPE_SETTINGS_KEY = "ui/last_recipe"
+    _UI_STATE_PATH = Path("/data/config.json")
+    _LAST_RECIPE_STATE_KEY = "last_recipe"
 
     def __init__(self):
         super().__init__()
@@ -90,8 +91,6 @@ class MainWindow(QMainWindow):
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
         self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
-        self._settings = QSettings("HDF", "Vision")
-
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -1850,7 +1849,15 @@ class MainWindow(QMainWindow):
         if not recipes:
             return "default"
 
-        saved_recipe = str(self._settings.value(self._LAST_RECIPE_SETTINGS_KEY, "") or "").strip()
+        saved_recipe = ""
+        try:
+            if self._UI_STATE_PATH.exists():
+                with open(self._UI_STATE_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                saved_recipe = str(data.get(self._LAST_RECIPE_STATE_KEY, "") or "").strip()
+        except Exception:
+            saved_recipe = ""
+
         if saved_recipe and saved_recipe in recipes:
             return saved_recipe
         return "default" if "default" in recipes else recipes[0]
@@ -1859,8 +1866,23 @@ class MainWindow(QMainWindow):
         name = str(recipe_name or "").strip()
         if not name:
             return
-        self._settings.setValue(self._LAST_RECIPE_SETTINGS_KEY, name)
-        self._settings.sync()
+        data: dict[str, Any] = {}
+        try:
+            if self._UI_STATE_PATH.exists():
+                with open(self._UI_STATE_PATH, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    data = dict(loaded)
+        except Exception:
+            data = {}
+
+        data[self._LAST_RECIPE_STATE_KEY] = name
+        try:
+            self._UI_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(self._UI_STATE_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def on_recipe_changed(self, name: str):
         try:
