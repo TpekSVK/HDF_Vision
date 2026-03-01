@@ -106,7 +106,19 @@ class ModbusWizard(QDialog):
         self.spin_nok = self._coil_spin(box, default=1)
         self.spin_heartbeat = self._coil_spin(box, default=2)
         self.spin_flash1 = self._coil_spin(box, default=-1)
+        self.spin_flash1_delay = QSpinBox(box)
+        self.spin_flash1_delay.setRange(0, 10000)
+        self.spin_flash1_delay.setValue(0)
+        self.spin_flash1_pulse = QSpinBox(box)
+        self.spin_flash1_pulse.setRange(1, 10000)
+        self.spin_flash1_pulse.setValue(200)
         self.spin_flash2 = self._coil_spin(box, default=-1)
+        self.spin_flash2_delay = QSpinBox(box)
+        self.spin_flash2_delay.setRange(0, 10000)
+        self.spin_flash2_delay.setValue(0)
+        self.spin_flash2_pulse = QSpinBox(box)
+        self.spin_flash2_pulse.setRange(1, 10000)
+        self.spin_flash2_pulse.setValue(200)
         self.spin_pulse_len = QSpinBox(box)
         self.spin_pulse_len.setRange(10, 10000)
         self.spin_pulse_len.setValue(200)
@@ -119,7 +131,11 @@ class ModbusWizard(QDialog):
             ("NOK coil address:", self.spin_nok),
             ("Heartbeat coil address:", self.spin_heartbeat),
             ("Flash1 coil address:", self.spin_flash1),
+            ("Flash1 delay (ms):", self.spin_flash1_delay),
+            ("Flash1 pulse length (ms):", self.spin_flash1_pulse),
             ("Flash2 coil address:", self.spin_flash2),
+            ("Flash2 delay (ms):", self.spin_flash2_delay),
+            ("Flash2 pulse length (ms):", self.spin_flash2_pulse),
             ("Pulse length OK/NOK (ms):", self.spin_pulse_len),
             ("Heartbeat period (ms):", self.spin_heartbeat_period),
         ]
@@ -192,7 +208,11 @@ class ModbusWizard(QDialog):
         self.spin_nok.setValue(int(config.nok_coil))
         self.spin_heartbeat.setValue(int(config.heartbeat_coil))
         self.spin_flash1.setValue(int(config.flash1_coil))
+        self.spin_flash1_delay.setValue(int(config.flash1_delay_ms))
+        self.spin_flash1_pulse.setValue(int(config.flash1_pulse_ms))
         self.spin_flash2.setValue(int(config.flash2_coil))
+        self.spin_flash2_delay.setValue(int(config.flash2_delay_ms))
+        self.spin_flash2_pulse.setValue(int(config.flash2_pulse_ms))
         self.spin_pulse_len.setValue(int(config.pulse_length_ms))
         self.spin_heartbeat_period.setValue(int(config.heartbeat_period_ms))
         self.spin_trigger.setValue(int(config.trigger_di))
@@ -209,7 +229,11 @@ class ModbusWizard(QDialog):
             nok_coil=int(self.spin_nok.value()),
             heartbeat_coil=int(self.spin_heartbeat.value()),
             flash1_coil=int(self.spin_flash1.value()),
+            flash1_delay_ms=int(self.spin_flash1_delay.value()),
+            flash1_pulse_ms=int(self.spin_flash1_pulse.value()),
             flash2_coil=int(self.spin_flash2.value()),
+            flash2_delay_ms=int(self.spin_flash2_delay.value()),
+            flash2_pulse_ms=int(self.spin_flash2_pulse.value()),
             pulse_length_ms=int(self.spin_pulse_len.value()),
             heartbeat_period_ms=int(self.spin_heartbeat_period.value()),
             trigger_di=int(self.spin_trigger.value()),
