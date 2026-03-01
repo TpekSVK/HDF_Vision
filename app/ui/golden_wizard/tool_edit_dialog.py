@@ -5,8 +5,8 @@ from typing import Any, Optional
 
 import cv2
 import numpy as np
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -130,6 +130,131 @@ class AngleRoiEditor(QWidget):
         self._btn_reset.setEnabled(bool(enabled))
 
 
+class EdgeAnchorEditor(QWidget):
+    """Simple point editor for selecting A-B anchors directly on golden image."""
+
+    pointsChanged = Signal(object, object)
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self._pixmap: Optional[QPixmap] = None
+        self._point_a: Optional[tuple[float, float]] = None
+        self._point_b: Optional[tuple[float, float]] = None
+        self._next_target: str = "a"
+        self.setMinimumHeight(220)
+        self.setMouseTracking(True)
+
+    def set_background(self, pixmap: Optional[QPixmap]) -> None:
+        self._pixmap = pixmap
+        self.update()
+
+    def clear_points(self) -> None:
+        self._point_a = None
+        self._point_b = None
+        self._next_target = "a"
+        self.pointsChanged.emit(self._point_a, self._point_b)
+        self.update()
+
+    def set_points(
+        self,
+        point_a: Optional[tuple[float, float]],
+        point_b: Optional[tuple[float, float]],
+    ) -> None:
+        self._point_a = point_a
+        self._point_b = point_b
+        self._next_target = "a" if point_a is None else ("b" if point_b is None else "a")
+        self.pointsChanged.emit(self._point_a, self._point_b)
+        self.update()
+
+    def points(self) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
+        return self._point_a, self._point_b
+
+    def _image_rect(self) -> Optional[QRectF]:
+        if self._pixmap is None or self._pixmap.isNull():
+            return None
+        pw = float(self._pixmap.width())
+        ph = float(self._pixmap.height())
+        ww = float(max(1, self.width()))
+        wh = float(max(1, self.height()))
+        scale = min(ww / pw, wh / ph)
+        rw = pw * scale
+        rh = ph * scale
+        ox = (ww - rw) * 0.5
+        oy = (wh - rh) * 0.5
+        return QRectF(ox, oy, rw, rh)
+
+    def _widget_from_image(self, point: tuple[float, float], rect: QRectF) -> QPointF:
+        assert self._pixmap is not None
+        x = rect.left() + (float(point[0]) / max(1.0, float(self._pixmap.width()))) * rect.width()
+        y = rect.top() + (float(point[1]) / max(1.0, float(self._pixmap.height()))) * rect.height()
+        return QPointF(x, y)
+
+    def _image_from_widget(self, pos: QPointF, rect: QRectF) -> Optional[tuple[float, float]]:
+        if self._pixmap is None or rect.width() <= 0 or rect.height() <= 0:
+            return None
+        if not rect.contains(pos):
+            return None
+        xn = (pos.x() - rect.left()) / rect.width()
+        yn = (pos.y() - rect.top()) / rect.height()
+        x = float(np.clip(xn * self._pixmap.width(), 0.0, max(0.0, self._pixmap.width() - 1.0)))
+        y = float(np.clip(yn * self._pixmap.height(), 0.0, max(0.0, self._pixmap.height() - 1.0)))
+        return x, y
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        rect = self._image_rect()
+        if rect is None:
+            return
+        point = self._image_from_widget(event.position(), rect)
+        if point is None:
+            return
+        if self._next_target == "a":
+            self._point_a = point
+            self._next_target = "b"
+        else:
+            self._point_b = point
+            self._next_target = "a"
+        self.pointsChanged.emit(self._point_a, self._point_b)
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(20, 20, 20))
+
+        rect = self._image_rect()
+        if self._pixmap is None or self._pixmap.isNull() or rect is None:
+            painter.setPen(QColor(180, 180, 180))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Golden image not available")
+            return
+
+        painter.drawPixmap(rect, self._pixmap)
+        painter.setPen(QPen(QColor(110, 110, 110), 1, Qt.DashLine))
+        painter.drawRect(rect)
+
+        def _draw_point(pt: tuple[float, float], label: str, color: QColor) -> QPointF:
+            wp = self._widget_from_image(pt, rect)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(color)
+            painter.drawEllipse(wp, 5.0, 5.0)
+            painter.setPen(QPen(color, 1))
+            painter.drawText(wp + QPointF(8.0, -8.0), label)
+            return wp
+
+        wp_a: Optional[QPointF] = None
+        wp_b: Optional[QPointF] = None
+        if self._point_a is not None:
+            wp_a = _draw_point(self._point_a, "A", QColor(255, 110, 110))
+        if self._point_b is not None:
+            wp_b = _draw_point(self._point_b, "B", QColor(110, 170, 255))
+        if wp_a is not None and wp_b is not None:
+            painter.setPen(QPen(QColor(255, 210, 110), 2))
+            painter.drawLine(wp_a, wp_b)
+
+        super().paintEvent(event)
+
+
 class ToolEditDialog(QDialog):
     """Dialog providing ROI and ignore mask editing for a tool."""
 
@@ -155,6 +280,8 @@ class ToolEditDialog(QDialog):
         self._locator_template_specs: dict[str, dict[str, Any]] = {}
         self._locator_angle_specs: dict[str, dict[str, Any]] = {}
         self._angle_field_rows: dict[str, tuple[QLabel, QWidget]] = {}
+        self._edge_anchor_editor: Optional[EdgeAnchorEditor] = None
+        self._edge_anchor_status: Optional[QLabel] = None
 
         self._is_locator_template = self._tool.type == "locator.template_match"
         self._use_golden_checkbox: Optional[QCheckBox] = None
@@ -384,6 +511,8 @@ class ToolEditDialog(QDialog):
 
         if self._is_locator_template:
             self._init_locator_template_panel()
+        if self._tool.type == "edge_profile_deviation":
+            self._init_edge_anchor_panel()
 
         self.resize(900, 640)
 
@@ -519,6 +648,95 @@ class ToolEditDialog(QDialog):
 
         self._roi_sections_layout.addWidget(panel, 1)
         self._on_locator_use_golden_changed(self._use_golden_checkbox.isChecked())
+
+    def _parse_point(self, value: Any) -> Optional[tuple[float, float]]:
+        if value is None:
+            return None
+        if isinstance(value, dict) and "x" in value and "y" in value:
+            try:
+                return float(value["x"]), float(value["y"])
+            except Exception:
+                return None
+        if isinstance(value, (tuple, list)) and len(value) >= 2:
+            try:
+                return float(value[0]), float(value[1])
+            except Exception:
+                return None
+        return None
+
+    @staticmethod
+    def _point_to_dict(point: Optional[tuple[float, float]]) -> Optional[dict[str, float]]:
+        if point is None:
+            return None
+        return {"x": float(point[0]), "y": float(point[1])}
+
+    def _update_edge_anchor_status(
+        self,
+        point_a: Optional[tuple[float, float]],
+        point_b: Optional[tuple[float, float]],
+    ) -> None:
+        if self._edge_anchor_status is None:
+            return
+        if point_a is None and point_b is None:
+            self._edge_anchor_status.setText("Klikni do obrázka: najprv bod A, potom bod B.")
+            return
+        if point_a is not None and point_b is None:
+            self._edge_anchor_status.setText(
+                f"Bod A = ({point_a[0]:.1f}, {point_a[1]:.1f}). Klikni pre bod B."
+            )
+            return
+        if point_a is None and point_b is not None:
+            self._edge_anchor_status.setText(
+                f"Bod B = ({point_b[0]:.1f}, {point_b[1]:.1f}). Klikni pre bod A."
+            )
+            return
+        self._edge_anchor_status.setText(
+            f"A=({point_a[0]:.1f}, {point_a[1]:.1f}), B=({point_b[0]:.1f}, {point_b[1]:.1f})"
+        )
+
+    def _on_edge_anchor_points_changed(self, point_a: object, point_b: object) -> None:
+        pa = point_a if isinstance(point_a, tuple) else None
+        pb = point_b if isinstance(point_b, tuple) else None
+        self._update_edge_anchor_status(pa, pb)
+
+    def _init_edge_anchor_panel(self) -> None:
+        if getattr(self, "_roi_sections_layout", None) is None:
+            return
+        group = QGroupBox("Anchor points A-B", self)
+        group_layout = QVBoxLayout(group)
+        group_layout.setContentsMargins(8, 8, 8, 8)
+        group_layout.setSpacing(6)
+
+        hint = QLabel("Vyber body A a B kliknutím do golden snímky. Body sa ukladajú do parametrov point_a/point_b.", group)
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666;")
+        group_layout.addWidget(hint)
+
+        self._edge_anchor_editor = EdgeAnchorEditor(group)
+        if self._golden_pixmap is not None:
+            self._edge_anchor_editor.set_background(self._golden_pixmap)
+        params_values = dict(getattr(self._tool.params, "values", {}) or {})
+        pa = self._parse_point(params_values.get("point_a"))
+        pb = self._parse_point(params_values.get("point_b"))
+        self._edge_anchor_editor.set_points(pa, pb)
+        self._edge_anchor_editor.pointsChanged.connect(self._on_edge_anchor_points_changed)
+        group_layout.addWidget(self._edge_anchor_editor, 1)
+
+        controls = QHBoxLayout()
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        btn_clear = QPushButton("Reset A-B", group)
+        btn_clear.clicked.connect(self._edge_anchor_editor.clear_points)
+        controls.addWidget(btn_clear)
+        controls.addStretch(1)
+        group_layout.addLayout(controls)
+
+        self._edge_anchor_status = QLabel(group)
+        self._edge_anchor_status.setStyleSheet("color: #444;")
+        group_layout.addWidget(self._edge_anchor_status)
+        self._update_edge_anchor_status(pa, pb)
+
+        self._roi_sections_layout.addWidget(group, 1)
 
     def _set_locator_message(self, text: str, color: Optional[str] = None) -> None:
         if self._locator_message_label is None:
@@ -679,6 +897,11 @@ class ToolEditDialog(QDialog):
         for name, widget in self._param_fields.items():
             spec = self._param_specs.get(name, {})
             params[name] = self._get_widget_value(widget, spec)
+
+        if self._tool.type == "edge_profile_deviation" and self._edge_anchor_editor is not None:
+            point_a, point_b = self._edge_anchor_editor.points()
+            params["point_a"] = self._point_to_dict(point_a)
+            params["point_b"] = self._point_to_dict(point_b)
 
         if self._is_locator_template:
             use_golden = True
@@ -1228,6 +1451,11 @@ class ToolEditDialog(QDialog):
 
         thresholds = dict(self._current_form_values.get("thresholds", {}))
         thresholds.update(self._last_validation.get("thresholds", {}))
+
+        if self._tool.type == "edge_profile_deviation" and self._edge_anchor_editor is not None:
+            point_a, point_b = self._edge_anchor_editor.points()
+            params["point_a"] = self._point_to_dict(point_a)
+            params["point_b"] = self._point_to_dict(point_b)
 
         if self._is_locator_template:
             use_golden = bool(params.get("use_golden_crop", True))
