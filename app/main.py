@@ -8,7 +8,7 @@ def main():
     app.setStyleSheet(DARK_STYLE)
     w = MainWindow()
     w.resize(900, 600)
-    w.show()
+    w.showFullScreen()
     sys.exit(app.exec())
     
 
