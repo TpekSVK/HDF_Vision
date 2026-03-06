@@ -270,35 +270,4 @@ def analyze(
         "pose_enabled": 1 if pose_enabled else 0,
     }
 
-    display_items: list[dict[str, Any]] = []
-    if nok and filtered_contours:
-        defect_mask = np.zeros_like(binm, dtype=np.uint8)
-        cv2.drawContours(defect_mask, filtered_contours, -1, 255, thickness=cv2.FILLED)
-        display_items.append(
-            {
-                "kind": "mask",
-                "mask": defect_mask,
-                "color": (0, 0, 255),
-                "alpha": 95,
-                "label": "Defekt",
-                "z_index": 5,
-            }
-        )
-        for contour in filtered_contours:
-            contour_points = contour.reshape(-1, 2)
-            if contour_points.size == 0:
-                continue
-            display_items.append(
-                {
-                    "kind": "contour",
-                    "points": contour_points,
-                    "color": (0, 0, 255),
-                    "alpha": 255,
-                    "thickness": 2,
-                    "closed": True,
-                    "label": "Defekt kontúra",
-                    "z_index": 40,
-                }
-            )
-
-    return {"ok": not nok, "metrics": metrics, "display_items": display_items}
+    return {"ok": not nok, "metrics": metrics}

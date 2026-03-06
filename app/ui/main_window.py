@@ -38,7 +38,6 @@ from app.services.modbus_service import ModbusService
 from app.models.schema import RecipeV2
 from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
-from app.utils import overlay as overlay_utils
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
@@ -859,40 +858,23 @@ class MainWindow(QMainWindow):
         *,
         logging_enabled: bool = True,
     ):
-        display_items: list[dict[str, Any]] = []
-        rendered_frame = frame_u8
         try:
             res = self.tool.evaluate(frame_u8)
             ok = bool(res.get("ok", False))
             metrics = dict(res.get("metrics", {}) or {})
-            display_items = list(res.get("display_items", []) or [])
             status = "ok" if ok else "nok"
         except Exception as exc:
             print("[Tool] evaluate failed:", exc)
             metrics = {}
             status = "nok"
 
-        if status == "nok" and display_items:
-            try:
-                overlay = overlay_utils.render_overlay(
-                    frame_u8.shape[:2],
-                    overlay_utils.parse_display_items(
-                        display_items,
-                        default_color=(0, 0, 255),
-                        default_label="Defekt",
-                    ),
-                )
-                rendered_frame = overlay_utils.apply_overlay(frame_u8, overlay)
-            except Exception:
-                rendered_frame = frame_u8
-
-        self._set_last_view_frame(None, rendered_frame)
+        self._set_last_view_frame(None, frame_u8)
         active_frame = self._get_last_frame_for_view(self._active_view_id)
         if active_frame is not None:
             self._last_trigger_frame = self._clone_frame(active_frame)
             self._last_trigger_view_id = self._active_view_id
         else:
-            self._last_trigger_frame = self._clone_frame(rendered_frame)
+            self._last_trigger_frame = self._clone_frame(frame_u8)
             self._last_trigger_view_id = None
 
         self._apply_run_status_style(status)
@@ -922,7 +904,7 @@ class MainWindow(QMainWindow):
 
         if logging_enabled:
             artifacts = save_production_result(
-                rendered_frame,
+                frame_u8,
                 meta_payload,
                 recipe_name,
                 store_full_nok=True,
