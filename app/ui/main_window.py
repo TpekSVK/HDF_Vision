@@ -1,12 +1,13 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
-    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout
+    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
 import math
+import subprocess
 from pathlib import Path
 import time
 import uuid
@@ -308,6 +309,53 @@ class MainWindow(QMainWindow):
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(100)  # ~10 FPS
         self._run_timer.timeout.connect(self._update_live_view)
+
+        # Systémové akcie (spodná ľavá časť RUN)
+        power_actions_container = QWidget()
+        power_actions_row = QHBoxLayout(power_actions_container)
+        power_actions_row.setContentsMargins(0, 0, 0, 0)
+        power_actions_row.setSpacing(10)
+
+        self.btn_shutdown_pc = QPushButton("⏻ Vypnúť PC")
+        self.btn_shutdown_pc.setToolTip("Bezpečne vypnúť aplikáciu aj počítač")
+        self.btn_shutdown_pc.setStyleSheet(
+            """
+            QPushButton {
+                background: #c62828;
+                color: #ffffff;
+                border: 2px solid #8e0000;
+                border-radius: 22px;
+                padding: 8px 16px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background: #d32f2f; }
+            QPushButton:pressed { background: #8e0000; }
+            """
+        )
+        self.btn_shutdown_pc.clicked.connect(self._confirm_shutdown_pc)
+        power_actions_row.addWidget(self.btn_shutdown_pc)
+
+        self.btn_reboot_pc = QPushButton("↻ Reštart PC")
+        self.btn_reboot_pc.setToolTip("Bezpečne reštartovať aplikáciu aj počítač")
+        self.btn_reboot_pc.setStyleSheet(
+            """
+            QPushButton {
+                background: #d35400;
+                color: #ffffff;
+                border: 2px solid #9c3e00;
+                border-radius: 22px;
+                padding: 8px 16px;
+                font-weight: 700;
+            }
+            QPushButton:hover { background: #e67e22; }
+            QPushButton:pressed { background: #9c3e00; }
+            """
+        )
+        self.btn_reboot_pc.clicked.connect(self._confirm_reboot_pc)
+        power_actions_row.addWidget(self.btn_reboot_pc)
+
+        power_actions_row.addStretch(1)
+        run_root.addWidget(power_actions_container, 0, Qt.AlignLeft | Qt.AlignBottom)
         # spúšťa sa až pri Live ON v _toggle_live()
 
         # inicializuj pohľady a pravý panel
@@ -1824,6 +1872,62 @@ class MainWindow(QMainWindow):
     def _on_tool_selection_changed(self):
         self._update_metrics_panel()
         self._reload_results_strip()
+
+    def _confirm_shutdown_pc(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Vypnutie PC",
+            "Naozaj chcete vypnúť tento počítač?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._execute_power_action(["shutdown", "-h", "now"], "vypnutie")
+
+    def _confirm_reboot_pc(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "Reštart PC",
+            "Naozaj chcete reštartovať tento počítač?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+        self._execute_power_action(["shutdown", "-r", "now"], "reštart")
+
+    def _execute_power_action(self, shutdown_cmd: list[str], action_label: str) -> None:
+        try:
+            self.cam.stop()
+        except Exception:
+            pass
+        try:
+            self.gpio.close()
+        except Exception:
+            pass
+        try:
+            self.modbus.close()
+        except Exception:
+            pass
+
+        try:
+            subprocess.Popen(
+                ["nohup", "bash", "-lc", f"sleep 1; {' '.join(shutdown_cmd)}"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "Chyba",
+                f"Nepodarilo sa vykonať {action_label} PC.\n\n{exc}",
+            )
+            return
+
+        self.close()
 
     def closeEvent(self, e):
         try:
