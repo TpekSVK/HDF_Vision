@@ -1,13 +1,12 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
-    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox
+    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
 import math
-import subprocess
 from pathlib import Path
 import time
 import uuid
@@ -1883,7 +1882,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        self._execute_power_action(["shutdown", "-h", "now"], "vypnutie")
+        self._request_host_power_action("shutdown")
 
     def _confirm_reboot_pc(self) -> None:
         answer = QMessageBox.question(
@@ -1895,9 +1894,9 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
-        self._execute_power_action(["shutdown", "-r", "now"], "reštart")
+        self._request_host_power_action("reboot")
 
-    def _execute_power_action(self, shutdown_cmd: list[str], action_label: str) -> None:
+    def _request_host_power_action(self, action: str) -> None:
         try:
             self.cam.stop()
         except Exception:
@@ -1911,23 +1910,12 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        try:
-            subprocess.Popen(
-                ["nohup", "bash", "-lc", f"sleep 1; {' '.join(shutdown_cmd)}"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except Exception as exc:
-            QMessageBox.critical(
-                self,
-                "Chyba",
-                f"Nepodarilo sa vykonať {action_label} PC.\n\n{exc}",
-            )
-            return
-
-        self.close()
+        if action == "shutdown":
+            QApplication.exit(10)
+        elif action == "reboot":
+            QApplication.exit(11)
+        else:
+            QMessageBox.critical(self, "Chyba", f"Neznáma akcia napájania: {action}")
 
     def closeEvent(self, e):
         try:

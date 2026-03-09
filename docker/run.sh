@@ -86,7 +86,8 @@ CAM_DEV="${CAM_DEV:-/dev/video0}"
 configure_gpio_runtime || true
 
 # Spustenie (GUI + UVC)
-exec docker run --rm -it \
+set +e
+docker run --rm -it \
   --privileged \
   --runtime nvidia \
   --network host \
@@ -111,3 +112,19 @@ exec docker run --rm -it \
   -w /workspace \
   "${IMAGE_NAME}" \
   bash -lc 'echo "[diag] whoami=$(whoami)"; id; ls -l /dev/video* 2>/dev/null || true; python3 -m app.main'
+APP_RC=$?
+set -e
+
+case "${APP_RC}" in
+  10)
+    echo "[host] App requested host shutdown."
+    shutdown -h now
+    ;;
+  11)
+    echo "[host] App requested host reboot."
+    shutdown -r now
+    ;;
+  *)
+    exit "${APP_RC}"
+    ;;
+esac

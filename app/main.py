@@ -9,12 +9,12 @@ def main():
     w = MainWindow()
     w.resize(900, 600)
     w.showFullScreen()
-    sys.exit(app.exec())
-    
+    return app.exec()
+
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except Exception as e:
         import traceback
         print("[FATAL] Unhandled exception:", e)
