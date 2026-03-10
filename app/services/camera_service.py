@@ -1,4 +1,5 @@
 # app/services/camera_service.py
+import glob
 import os
 import cv2
 import numpy as np
@@ -56,8 +57,10 @@ class CameraService:
         self._pipeline = None
         self._loop = None
 
-        # zásobník kandidátov zariadení
-        self.devices = [self.device, "/dev/video0", "/dev/video1"]
+        # zásobník kandidátov zariadení (detekované capture streamy)
+        self.devices = self._enumerate_capture_devices(preferred=self.device)
+        if self.device not in self.devices:
+            self.devices.insert(0, self.device)
 
         self._ring = deque(maxlen=5)
         self._t_ring = None
@@ -67,6 +70,58 @@ class CameraService:
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
                                 "pixel_format": self.pixel_format}
         self._xu: XUControls | None = None
+
+    @staticmethod
+    def _list_video_nodes() -> list[str]:
+        nodes: list[tuple[int, str]] = []
+        for raw in glob.glob("/dev/video*"):
+            name = os.path.basename(raw)
+            suffix = name.removeprefix("video")
+            if not suffix.isdigit():
+                continue
+            nodes.append((int(suffix), raw))
+        nodes.sort(key=lambda item: item[0])
+        return [path for _, path in nodes]
+
+    @staticmethod
+    def _can_read_single_frame(device: str) -> bool:
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            cap.release()
+            return False
+
+        try:
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+            for _ in range(6):
+                ok, frame = cap.read()
+                if ok and frame is not None and getattr(frame, "size", 0) > 0:
+                    return True
+            return False
+        finally:
+            cap.release()
+
+    def _enumerate_capture_devices(self, *, preferred: str | None = None) -> list[str]:
+        ordered: list[str] = []
+
+        pref = str(preferred or "").strip()
+        if pref:
+            ordered.append(pref)
+
+        for dev in self._list_video_nodes():
+            if dev not in ordered:
+                ordered.append(dev)
+
+        valid: list[str] = []
+        for dev in ordered:
+            if self._can_read_single_frame(dev):
+                valid.append(dev)
+
+        if not valid and pref:
+            valid.append(pref)
+        return valid
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -283,6 +338,9 @@ class CameraService:
     # Public API
     # =========================
     def start(self):
+        # obnov detekciu capture zariadení (po pripojení/odpojení kamier)
+        self.devices = self._enumerate_capture_devices(preferred=self.device)
+
         # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
         seen = set()
         devs = []
@@ -457,7 +515,9 @@ class CameraService:
             self.stop()
 
         self.device = target
-        known = [target] + [d for d in self.devices if d != target]
+        known = self._enumerate_capture_devices(preferred=target)
+        if target not in known:
+            known.insert(0, target)
         self.devices = known
         self._last_open_args.update({"device": target})
 
