@@ -41,6 +41,7 @@ from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
+    resolve_view_camera_state,
     snapshot_camera_state,
 )
 
@@ -90,6 +91,9 @@ class MainWindow(QMainWindow):
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
         self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
+        self._run_view_cameras: dict[str, CameraService] = {}
+        self._run_view_camera_states: dict[str, dict[str, Any]] = {}
+        self._run_view_frame_ts: dict[str, float] = {}
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -422,6 +426,7 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
+            self._stop_run_view_cameras()
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
@@ -433,8 +438,7 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
-            if not self.live_enabled:
-                self._apply_run_camera_profile()
+            self._start_run_view_cameras()
 
     def _match_resolution_index(self, width: int, height: int, fps: int, pixel_format: str | None) -> int | None:
         pix_fmt = (pixel_format or "Y8").upper()
@@ -564,12 +568,7 @@ class MainWindow(QMainWindow):
             return
         self.modbus.pulse_configured_flashes()
         try:
-            frame = self.cam.last_frame()
-            if frame is None:
-                try:
-                    frame = self.cam.one_shot()
-                except Exception:
-                    frame = None
+            frame = self._latest_view_frame(self._active_view_id)
             if frame is None:
                 self.lbl_status.setText("Žiadny snímok z kamery.")
                 return
@@ -633,8 +632,6 @@ class MainWindow(QMainWindow):
                     }
                 )
 
-            base_camera_state = snapshot_camera_state(self.cam)
-
             manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
             all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
 
@@ -695,20 +692,6 @@ class MainWindow(QMainWindow):
                             )
 
                     if view_frame_u8 is None:
-                        profile = getattr(view, "camera_profile", None)
-                        try:
-                            apply_view_camera_profile(
-                                self.cam,
-                                base_camera_state,
-                                profile,
-                            )
-                        except Exception as exc:
-                            self.lbl_status.setText(
-                                f"{view_name}: {exc}"
-                            )
-                            self._reset_manual_trigger_progress(recipe_name)
-                            return
-
                         settle_ms = spec["settle_ms"]
                         trigger_mode = spec["trigger_mode"]
                         interval_ms = spec["interval_ms"]
@@ -716,7 +699,7 @@ class MainWindow(QMainWindow):
                         if settle_ms is not None and settle_ms > 0:
                             time.sleep(settle_ms / 1000.0)
 
-                        latest_frame = self.cam.last_frame()
+                        latest_frame = self._latest_view_frame(view_id)
                         if latest_frame is not None:
                             view_frame = latest_frame
                             base_frame = view_frame.copy()
@@ -729,6 +712,13 @@ class MainWindow(QMainWindow):
                         settle_ms = spec["settle_ms"]
                         trigger_mode = spec["trigger_mode"]
                         interval_ms = spec["interval_ms"]
+
+                    frame_ts = self._run_view_frame_ts.get(view_id, 0.0)
+                    if frame_ts > 0.0:
+                        age_ms = max(0.0, (time.monotonic() - frame_ts) * 1000.0)
+                        print(
+                            f"[RUN][{self._run_view_label(view_id)}] trigger uses cached frame age={age_ms:.2f} ms"
+                        )
 
                     if golden is None:
                         status = "nok"
@@ -866,10 +856,6 @@ class MainWindow(QMainWindow):
                     if should_break:
                         break
             finally:
-                try:
-                    apply_camera_state(self.cam, base_camera_state)
-                except Exception as exc:
-                    print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
                 self._sync_resolution_combo()
 
             if self._active_view_id and self._active_view_id not in per_view_statuses:
@@ -1010,29 +996,9 @@ class MainWindow(QMainWindow):
         self.live_enabled = self.btn_live.isChecked()
         self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
         if self.live_enabled:
-            try:
-                self._run_idle_camera_state = snapshot_camera_state(self.cam)
-            except Exception:
-                self._run_idle_camera_state = None
-            base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else None
-            if base_state:
-                try:
-                    apply_camera_state(self.cam, base_state)
-                except Exception as exc:
-                    self.lbl_status.setText(f"Live kamera: {exc}")
             self._run_timer.start()
         else:
             self._run_timer.stop()
-            restored = False
-            if isinstance(self._run_idle_camera_state, Mapping) and self._run_idle_camera_state:
-                try:
-                    apply_camera_state(self.cam, self._run_idle_camera_state)
-                except Exception as exc:
-                    self.lbl_status.setText(f"Obnovenie kamery zlyhalo: {exc}")
-                else:
-                    restored = True
-            if not restored:
-                self._apply_run_camera_profile()
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
@@ -1052,7 +1018,7 @@ class MainWindow(QMainWindow):
         try:
             # Zdroj podľa live stavu
             if self.live_enabled:
-                src = self.cam.last_frame()
+                src = self._latest_view_frame(self._active_view_id)
             else:
                 src = self._get_last_frame_for_view(self._active_view_id)
                 if (
@@ -1691,6 +1657,64 @@ class MainWindow(QMainWindow):
         except Exception:
             self._run_idle_camera_state = None
 
+    def _run_view_label(self, view_id: str, fallback_index: int | None = None) -> str:
+        if fallback_index is not None:
+            return f"View{fallback_index + 1}"
+        digits = "".join(ch for ch in str(view_id or "") if ch.isdigit())
+        if digits:
+            return f"View{digits}"
+        return view_id or "View"
+
+    def _stop_run_view_cameras(self) -> None:
+        for view_id, cam in list(self._run_view_cameras.items()):
+            label = self._run_view_label(view_id)
+            print(f"[RUN][{label}] stream stop")
+            with suppress(Exception):
+                cam.stop()
+        self._run_view_cameras.clear()
+        self._run_view_camera_states.clear()
+        self._run_view_frame_ts.clear()
+
+    def _start_run_view_cameras(self) -> None:
+        if self.mode != "RUN":
+            return
+        self._stop_run_view_cameras()
+        base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else {}
+        for index, (view_id, view) in enumerate(self._views_by_id.items()):
+            label = self._run_view_label(view_id, index)
+            state = resolve_view_camera_state(base_state, getattr(view, "camera_profile", None))
+            width = int(state.get("width") or getattr(self.cam, "width", 1920) or 1920)
+            height = int(state.get("height") or getattr(self.cam, "height", 1080) or 1080)
+            fps = int(state.get("fps") or getattr(self.cam, "fps", 60) or 60)
+            device = str(state.get("device") or getattr(self.cam, "device", "/dev/video0") or "/dev/video0")
+            pixel_format = str(state.get("pixel_format") or getattr(self.cam, "pixel_format", "Y8") or "Y8").upper()
+            cam = CameraService(device=device, width=width, height=height, fps=fps)
+            cam.pixel_format = pixel_format
+            try:
+                cam.start()
+                self._run_view_cameras[view_id] = cam
+                self._run_view_camera_states[view_id] = state
+                self._run_view_frame_ts[view_id] = 0.0
+                print(f"[RUN][{label}] stream start")
+            except Exception as exc:
+                print(f"[RUN][{label}] stream start failed: {exc}")
+
+    def _latest_view_frame(self, view_id: str | None):
+        key = self._view_storage_key(view_id)
+        if key in self._run_view_cameras:
+            cam = self._run_view_cameras[key]
+            label = self._run_view_label(key)
+            frame = None
+            with suppress(Exception):
+                frame = cam.last_frame()
+            if frame is not None:
+                frame_copy = frame.copy() if isinstance(frame, np.ndarray) else frame
+                self._run_view_frame_ts[key] = time.monotonic()
+                self._set_last_view_frame(view_id, frame_copy)
+                print(f"[RUN][{label}] latest frame timestamp={self._run_view_frame_ts[key]:.6f}")
+                return frame_copy
+        return self._get_last_frame_for_view(view_id)
+
     def _refresh_views(self):
         self._golden_cache.clear()
         try:
@@ -1715,8 +1739,8 @@ class MainWindow(QMainWindow):
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
-        if self.mode == "RUN" and not self.live_enabled:
-            self._apply_run_camera_profile(self._active_view_id)
+        if self.mode == "RUN":
+            self._start_run_view_cameras()
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -1803,8 +1827,6 @@ class MainWindow(QMainWindow):
             self._last_trigger_view_id = view_id
         else:
             self._last_trigger_view_id = None
-        if self.mode == "RUN" and not self.live_enabled:
-            self._apply_run_camera_profile(view_id)
         if not self.live_enabled:
             self._update_live_view()
 
@@ -1919,6 +1941,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         try:
+            self._stop_run_view_cameras()
             self.cam.stop()
             self.gpio.close()
             self.modbus.close()
