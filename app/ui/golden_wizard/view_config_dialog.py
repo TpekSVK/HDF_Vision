@@ -48,6 +48,7 @@ class ViewConfigDialog(QDialog):
         view_id: str,
         name: str,
         available_resolutions: Sequence[tuple[str, dict[str, Any]]],
+        available_devices: Sequence[str] | None = None,
         current_camera: Optional[dict[str, Any]] = None,
         camera_profile: ViewCameraProfile | dict | str | None = None,
         settle_ms: Optional[int] = None,
@@ -64,6 +65,7 @@ class ViewConfigDialog(QDialog):
         self._mode = mode
         self._view_id = view_id
         self._available_resolutions = list(available_resolutions)
+        self._available_devices = [str(item).strip() for item in (available_devices or []) if str(item).strip()]
         self._available_frame_sources = list(available_frame_sources or [])
         self._available_branch_targets = list(available_branch_targets or [])
         self._result: Optional[dict[str, Any]] = None
@@ -106,6 +108,19 @@ class ViewConfigDialog(QDialog):
         camera_group = QGroupBox("Kamera profil (voliteľná)", self)
         camera_form = QFormLayout(camera_group)
         camera_form.setSpacing(6)
+
+        self._device_combo = QComboBox(camera_group)
+        self._device_combo.addItem("Inherit", None)
+        for device in self._available_devices:
+            self._device_combo.addItem(device, device)
+        camera_form.addRow("Camera Device:", self._device_combo)
+        device_hint = self._create_description_label(
+            "Vyber fyzické zariadenie (/dev/videoX), ktoré sa má použiť pre tento"
+            " view. „Inherit“ ponechá globálnu kameru.",
+            camera_group,
+        )
+        self._device_combo.setToolTip(device_hint.text())
+        camera_form.addRow(device_hint)
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
@@ -340,7 +355,7 @@ class ViewConfigDialog(QDialog):
         if trigger_mode != "timed":
             interval_ms = None
 
-        profile = self._build_camera_profile(exposure_us, gain_db)
+        profile = self._build_camera_profile(exposure_us, gain_db, self._device_combo.currentData())
 
         self._result = {
             "name": name,
@@ -441,6 +456,12 @@ class ViewConfigDialog(QDialog):
                 index = self._pixel_format_combo.findData(profile_obj.pixel_format)
                 if index >= 0:
                     self._pixel_format_combo.setCurrentIndex(index)
+            if profile_obj.device:
+                index = self._device_combo.findData(profile_obj.device)
+                if index < 0:
+                    self._device_combo.addItem(profile_obj.device, profile_obj.device)
+                    index = self._device_combo.count() - 1
+                self._device_combo.setCurrentIndex(index)
 
     def _apply_initial_timing(
         self,
@@ -527,6 +548,7 @@ class ViewConfigDialog(QDialog):
         self,
         exposure_us: Optional[int],
         gain_db: Optional[float],
+        device: Optional[str],
     ) -> Optional[ViewCameraProfile]:
         data: dict[str, Any] = {}
         resolution_data = self._resolution_combo.currentData()
@@ -544,6 +566,8 @@ class ViewConfigDialog(QDialog):
             data["exposure_us"] = exposure_us
         if gain_db is not None:
             data["gain_db"] = gain_db
+        if device:
+            data["device"] = str(device).strip()
 
         profile = ViewCameraProfile.from_obj(data)
         if isinstance(profile, ViewCameraProfile) and not profile.is_empty():

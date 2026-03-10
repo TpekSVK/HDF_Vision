@@ -443,6 +443,37 @@ class CameraService:
         self._paused_external = False
         print("[CameraService] resumed after external access")
 
+
+    def select_device(self, device: str):
+        target = str(device or "").strip()
+        if not target:
+            return
+        if target == self.device:
+            return
+
+        current = self.device
+        was_running = any([self._cap is not None, self._pipeline is not None, self._mode])
+        if was_running:
+            self.stop()
+
+        self.device = target
+        known = [target] + [d for d in self.devices if d != target]
+        self.devices = known
+        self._last_open_args.update({"device": target})
+
+        if was_running:
+            try:
+                self.start()
+            except Exception as exc:
+                self.device = current
+                self.devices = [current] + [d for d in self.devices if d != current]
+                self._last_open_args.update({"device": current})
+                try:
+                    self.start()
+                except Exception:
+                    pass
+                raise RuntimeError(f"Camera switch to {target} failed: {exc}") from exc
+
     def apply_resolution(self, *, width: int, height: int, fps: int, pixel_format: str | None = None):
         width = int(width)
         height = int(height)
