@@ -520,6 +520,7 @@ class ViewCameraProfile:
     pixel_format: Optional[str] = None
     exposure_us: Optional[int] = None
     gain_db: Optional[float] = None
+    device: Optional[str] = None
 
     def __post_init__(self) -> None:
         self.width = self._coerce_int(self.width)
@@ -527,6 +528,10 @@ class ViewCameraProfile:
         self.fps = self._coerce_int(self.fps)
         self.exposure_us = self._coerce_int(self.exposure_us)
         self.gain_db = self._coerce_float(self.gain_db)
+        if isinstance(self.device, str):
+            self.device = self.device.strip() or None
+        elif self.device is not None:
+            self.device = str(self.device).strip() or None
         if isinstance(self.pixel_format, str):
             text = self.pixel_format.strip().upper()
             self.pixel_format = text or None
@@ -561,6 +566,7 @@ class ViewCameraProfile:
                 self.pixel_format,
                 self.exposure_us,
                 self.gain_db,
+                self.device,
             )
         )
 
@@ -572,6 +578,7 @@ class ViewCameraProfile:
             pixel_format=self.pixel_format,
             exposure_us=self.exposure_us,
             gain_db=self.gain_db,
+            device=self.device,
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -588,6 +595,8 @@ class ViewCameraProfile:
             data["exposure_us"] = int(self.exposure_us)
         if self.gain_db is not None:
             data["gain_db"] = float(self.gain_db)
+        if self.device:
+            data["device"] = self.device
         return data
 
     @classmethod
@@ -606,6 +615,7 @@ class ViewCameraProfile:
                 pixel_format=value.get("pixel_format"),
                 exposure_us=value.get("exposure_us"),
                 gain_db=value.get("gain_db"),
+                device=value.get("device"),
             )
             return None if profile.is_empty() else profile
         if isinstance(value, str):

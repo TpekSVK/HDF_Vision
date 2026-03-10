@@ -53,6 +53,11 @@ def resolve_view_camera_state(
                 state["gain_db"] = float(gain)
             except Exception:
                 pass
+        device = base.get("device") if "device" in base else None
+        if device is not None:
+            text = str(device).strip()
+            if text:
+                state["device"] = text
 
     profile_obj = _normalize_camera_profile(profile)
     if isinstance(profile_obj, ViewCameraProfile):
@@ -68,6 +73,8 @@ def resolve_view_camera_state(
             state["exposure_us"] = int(profile_obj.exposure_us)
         if profile_obj.gain_db is not None:
             state["gain_db"] = float(profile_obj.gain_db)
+        if profile_obj.device:
+            state["device"] = profile_obj.device
 
     return state
 
@@ -104,6 +111,12 @@ def snapshot_camera_state(camera: Any) -> dict[str, Any]:
         except Exception:
             pass
 
+    device = getattr(camera, "device", None)
+    if device:
+        text = str(device).strip()
+        if text:
+            state["device"] = text
+
     return state
 
 
@@ -130,6 +143,18 @@ def apply_camera_state(
             warn(text)
         else:
             raise RuntimeError(text) from exc
+
+    target_device = str(state.get("device") or "").strip()
+    if target_device and str(current.get("device") or "").strip() != target_device:
+        if not hasattr(camera, "select_device"):
+            _handle_error("Zmena kamery pre view nie je podporovaná", RuntimeError("select_device missing"))
+        else:
+            try:
+                camera.select_device(target_device)
+            except Exception as exc:  # pragma: no cover - hardware dependent
+                _handle_error("Prepnutie kamery pre view zlyhalo", exc)
+            else:
+                current["device"] = target_device
 
     have_resolution = all(key in state for key in ("width", "height", "fps"))
     if have_resolution:

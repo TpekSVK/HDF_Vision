@@ -1,4 +1,6 @@
 # app/services/camera_service.py
+import fcntl
+import glob
 import os
 import cv2
 import numpy as np
@@ -19,6 +21,13 @@ try:
     _GST_OK = True
 except Exception:
     _GST_OK = False
+
+
+# v4l2 ioctl constants
+_VIDIOC_QUERYCAP = 0x80685600
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+_V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+_V4L2_CAP_DEVICE_CAPS = 0x80000000
 
 
 class CameraService:
@@ -56,8 +65,10 @@ class CameraService:
         self._pipeline = None
         self._loop = None
 
-        # zásobník kandidátov zariadení
-        self.devices = [self.device, "/dev/video0", "/dev/video1"]
+        # zásobník kandidátov zariadení (detekované capture streamy)
+        self.devices = self._enumerate_capture_devices(preferred=self.device)
+        if self.device not in self.devices:
+            self.devices.insert(0, self.device)
 
         self._ring = deque(maxlen=5)
         self._t_ring = None
@@ -67,6 +78,87 @@ class CameraService:
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
                                 "pixel_format": self.pixel_format}
         self._xu: XUControls | None = None
+
+    @staticmethod
+    def _list_video_nodes() -> list[str]:
+        nodes: list[tuple[int, str]] = []
+        for raw in glob.glob("/dev/video*"):
+            name = os.path.basename(raw)
+            suffix = name.removeprefix("video")
+            if not suffix.isdigit():
+                continue
+            nodes.append((int(suffix), raw))
+        nodes.sort(key=lambda item: item[0])
+        return [path for _, path in nodes]
+
+    @staticmethod
+    def _is_capture_device(device: str) -> bool:
+        try:
+            fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            try:
+                fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError:
+                return False
+
+        try:
+            buf = bytearray(104)  # struct v4l2_capability
+            fcntl.ioctl(fd, _VIDIOC_QUERYCAP, buf, True)
+            caps = int.from_bytes(buf[84:88], byteorder="little", signed=False)
+            dev_caps = int.from_bytes(buf[88:92], byteorder="little", signed=False)
+            effective_caps = dev_caps if (caps & _V4L2_CAP_DEVICE_CAPS) else caps
+            return bool(
+                effective_caps
+                & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE)
+            )
+        except Exception:
+            return False
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _can_read_single_frame(device: str) -> bool:
+        cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
+        if not cap.isOpened():
+            cap.release()
+            return False
+
+        try:
+            try:
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            except Exception:
+                pass
+            for _ in range(6):
+                ok, frame = cap.read()
+                if ok and frame is not None and getattr(frame, "size", 0) > 0:
+                    return True
+            return False
+        finally:
+            cap.release()
+
+    def _enumerate_capture_devices(self, *, preferred: str | None = None) -> list[str]:
+        ordered: list[str] = []
+
+        pref = str(preferred or "").strip()
+        if pref:
+            ordered.append(pref)
+
+        for dev in self._list_video_nodes():
+            if dev not in ordered:
+                ordered.append(dev)
+
+        valid: list[str] = []
+        verify_frame = str(os.getenv("HDF_CAMERA_PROBE_FRAMES", "")).strip().lower() in {"1", "true", "yes"}
+        for dev in ordered:
+            if not self._is_capture_device(dev):
+                continue
+            if verify_frame and not self._can_read_single_frame(dev):
+                continue
+            valid.append(dev)
+
+        if not valid and pref:
+            valid.append(pref)
+        return valid
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -283,6 +375,9 @@ class CameraService:
     # Public API
     # =========================
     def start(self):
+        # obnov detekciu capture zariadení (po pripojení/odpojení kamier)
+        self.devices = self._enumerate_capture_devices(preferred=self.device)
+
         # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
         seen = set()
         devs = []
@@ -442,6 +537,39 @@ class CameraService:
         self.start()
         self._paused_external = False
         print("[CameraService] resumed after external access")
+
+
+    def select_device(self, device: str):
+        target = str(device or "").strip()
+        if not target:
+            return
+        if target == self.device:
+            return
+
+        current = self.device
+        was_running = any([self._cap is not None, self._pipeline is not None, self._mode])
+        if was_running:
+            self.stop()
+
+        self.device = target
+        known = self._enumerate_capture_devices(preferred=target)
+        if target not in known:
+            known.insert(0, target)
+        self.devices = known
+        self._last_open_args.update({"device": target})
+
+        if was_running:
+            try:
+                self.start()
+            except Exception as exc:
+                self.device = current
+                self.devices = [current] + [d for d in self.devices if d != current]
+                self._last_open_args.update({"device": current})
+                try:
+                    self.start()
+                except Exception:
+                    pass
+                raise RuntimeError(f"Camera switch to {target} failed: {exc}") from exc
 
     def apply_resolution(self, *, width: int, height: int, fps: int, pixel_format: str | None = None):
         width = int(width)

@@ -2174,6 +2174,17 @@ class GoldenWizard(QDialog):
     def _available_camera_resolutions(self) -> list[tuple[str, dict[str, Any]]]:
         return [(label, dict(data)) for label, data in _DEFAULT_CAMERA_RESOLUTIONS]
 
+    def _available_camera_devices(self) -> list[str]:
+        devices: list[str] = []
+        current = str(getattr(self.cam, "device", "") or "").strip()
+        if current:
+            devices.append(current)
+        for raw in getattr(self.cam, "devices", []) or []:
+            text = str(raw or "").strip()
+            if text and text not in devices:
+                devices.append(text)
+        return devices
+
     def _current_camera_config(self) -> Optional[dict[str, Any]]:
         width = getattr(self.cam, "width", None)
         height = getattr(self.cam, "height", None)
@@ -2185,6 +2196,7 @@ class GoldenWizard(QDialog):
                 "height": int(height),
                 "fps": int(fps),
                 "pixel_format": (pixel_format or "Y8").upper(),
+                "device": str(getattr(self.cam, "device", "") or "").strip() or None,
             }
         return None
 
@@ -2254,6 +2266,7 @@ class GoldenWizard(QDialog):
             view_id=proposed_id,
             name=proposed_name,
             available_resolutions=self._available_camera_resolutions(),
+            available_devices=self._available_camera_devices(),
             current_camera=self._current_camera_config(),
             camera_profile=source_view.camera_profile if source_view else None,
             settle_ms=source_view.settle_ms if source_view else None,
@@ -2327,6 +2340,7 @@ class GoldenWizard(QDialog):
             view_id=view.id,
             name=view.name or view.id,
             available_resolutions=self._available_camera_resolutions(),
+            available_devices=self._available_camera_devices(),
             current_camera=self._current_camera_config(),
             camera_profile=view.camera_profile,
             settle_ms=view.settle_ms,
