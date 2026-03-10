@@ -1,4 +1,5 @@
 # app/services/camera_service.py
+import fcntl
 import glob
 import os
 import cv2
@@ -20,6 +21,13 @@ try:
     _GST_OK = True
 except Exception:
     _GST_OK = False
+
+
+# v4l2 ioctl constants
+_VIDIOC_QUERYCAP = 0x80685600
+_V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+_V4L2_CAP_VIDEO_CAPTURE_MPLANE = 0x00001000
+_V4L2_CAP_DEVICE_CAPS = 0x80000000
 
 
 class CameraService:
@@ -84,6 +92,31 @@ class CameraService:
         return [path for _, path in nodes]
 
     @staticmethod
+    def _is_capture_device(device: str) -> bool:
+        try:
+            fd = os.open(device, os.O_RDWR | os.O_NONBLOCK)
+        except OSError:
+            try:
+                fd = os.open(device, os.O_RDONLY | os.O_NONBLOCK)
+            except OSError:
+                return False
+
+        try:
+            buf = bytearray(104)  # struct v4l2_capability
+            fcntl.ioctl(fd, _VIDIOC_QUERYCAP, buf, True)
+            caps = int.from_bytes(buf[84:88], byteorder="little", signed=False)
+            dev_caps = int.from_bytes(buf[88:92], byteorder="little", signed=False)
+            effective_caps = dev_caps if (caps & _V4L2_CAP_DEVICE_CAPS) else caps
+            return bool(
+                effective_caps
+                & (_V4L2_CAP_VIDEO_CAPTURE | _V4L2_CAP_VIDEO_CAPTURE_MPLANE)
+            )
+        except Exception:
+            return False
+        finally:
+            os.close(fd)
+
+    @staticmethod
     def _can_read_single_frame(device: str) -> bool:
         cap = cv2.VideoCapture(device, cv2.CAP_V4L2)
         if not cap.isOpened():
@@ -115,9 +148,13 @@ class CameraService:
                 ordered.append(dev)
 
         valid: list[str] = []
+        verify_frame = str(os.getenv("HDF_CAMERA_PROBE_FRAMES", "")).strip().lower() in {"1", "true", "yes"}
         for dev in ordered:
-            if self._can_read_single_frame(dev):
-                valid.append(dev)
+            if not self._is_capture_device(dev):
+                continue
+            if verify_frame and not self._can_read_single_frame(dev):
+                continue
+            valid.append(dev)
 
         if not valid and pref:
             valid.append(pref)

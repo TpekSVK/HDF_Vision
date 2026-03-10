@@ -58,9 +58,22 @@ def test_enumerate_capture_devices_prefers_selected_and_filters_non_capture(monk
         lambda: ["/dev/video0", "/dev/video1", "/dev/video2", "/dev/video4"],
     )
 
-    readable = {"/dev/video0", "/dev/video2"}
-    monkeypatch.setattr(svc, "_can_read_single_frame", lambda dev: dev in readable)
+    capture = {"/dev/video0", "/dev/video2"}
+    monkeypatch.setattr(svc, "_is_capture_device", lambda dev: dev in capture)
 
     devices = svc._enumerate_capture_devices(preferred="/dev/video2")
 
     assert devices == ["/dev/video2", "/dev/video0"]
+
+
+def test_enumerate_capture_devices_optional_frame_probe(monkeypatch):
+    svc = CameraService.__new__(CameraService)
+
+    monkeypatch.setattr(svc, "_list_video_nodes", lambda: ["/dev/video0", "/dev/video2"])
+    monkeypatch.setattr(svc, "_is_capture_device", lambda _dev: True)
+    monkeypatch.setattr("app.services.camera_service.os.getenv", lambda key, default="": "1" if key == "HDF_CAMERA_PROBE_FRAMES" else default)
+    monkeypatch.setattr(svc, "_can_read_single_frame", lambda dev: dev == "/dev/video2")
+
+    devices = svc._enumerate_capture_devices(preferred="/dev/video0")
+
+    assert devices == ["/dev/video2"]
