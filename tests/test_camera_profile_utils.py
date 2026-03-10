@@ -18,6 +18,7 @@ from app.models.schema import ViewCameraProfile
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
+    resolve_view_camera_state,
     snapshot_camera_state,
 )
 
@@ -33,6 +34,8 @@ class DummyCamera:
         gain_db: float | None = None,
         *,
         fail_resolution: bool = False,
+        fail_device_switch: bool = False,
+        device: str = "/dev/video0",
     ) -> None:
         self.width = int(width)
         self.height = int(height)
@@ -41,6 +44,8 @@ class DummyCamera:
         self.exposure_us = exposure_us
         self.gain_db = gain_db
         self._fail_resolution = fail_resolution
+        self._fail_device_switch = fail_device_switch
+        self.device = device
 
     def apply_resolution(
         self,
@@ -57,6 +62,11 @@ class DummyCamera:
         self.fps = int(fps)
         if pixel_format is not None:
             self.pixel_format = pixel_format
+
+    def select_device(self, device: str) -> None:
+        if self._fail_device_switch:
+            raise RuntimeError("switch error")
+        self.device = str(device)
 
     def set_manual_exposure_us(self, value: int) -> None:
         self.exposure_us = int(value)
@@ -76,6 +86,7 @@ def test_snapshot_camera_state_reads_camera_properties():
     assert state["pixel_format"] == "Y8"
     assert state["exposure_us"] == 8500
     assert state["gain_db"] == pytest.approx(3.25)
+    assert state["device"] == "/dev/video0"
 
 
 def test_apply_camera_state_updates_camera_configuration():
@@ -132,3 +143,17 @@ def test_apply_view_camera_profile_merges_base_with_overrides():
     assert cam.pixel_format == "Y8"
     assert cam.exposure_us == 9000
     assert cam.gain_db == 2
+
+
+def test_resolve_view_camera_state_prefers_profile_device_override():
+    state = resolve_view_camera_state({"device": "/dev/video0"}, ViewCameraProfile(device="/dev/video1"))
+
+    assert state["device"] == "/dev/video1"
+
+
+def test_apply_view_camera_profile_switches_camera_device():
+    cam = DummyCamera(640, 480, 30, "Y8", device="/dev/video0")
+
+    apply_view_camera_profile(cam, {"device": "/dev/video0"}, {"device": "/dev/video1"})
+
+    assert cam.device == "/dev/video1"
