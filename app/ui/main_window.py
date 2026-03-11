@@ -980,11 +980,32 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
         dlg.resize(1200, 800)
         dlg.exec()
+        self._warm_up_camera_after_wizard()
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
+
+    def _warm_up_camera_after_wizard(self) -> None:
+        """Best-effort camera warm-up after returning from Golden Wizard."""
+
+        with suppress(Exception):
+            self.cam.resume_after_external()
+
+        warmed_frames = 0
+        deadline = time.monotonic() + 0.35
+        while warmed_frames < 3 and time.monotonic() < deadline:
+            try:
+                frame = self.cam.one_shot()
+            except Exception:
+                break
+            if frame is not None:
+                warmed_frames += 1
+
+        if warmed_frames > 0:
+            with suppress(Exception):
+                self._last_trigger_frame = self.cam.last_frame()
 
     def open_gpio_wizard(self):
         self.gpio.set_active_recipe(self.current_recipe_name())
