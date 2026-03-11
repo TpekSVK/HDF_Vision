@@ -90,6 +90,7 @@ class MainWindow(QMainWindow):
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
         self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
+        self._ignore_external_triggers_until: float = 0.0
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -980,11 +981,51 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
         dlg.resize(1200, 800)
         dlg.exec()
+        self._warm_up_camera_after_wizard()
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
+
+    def _warm_up_camera_after_wizard(self) -> None:
+        """Warm-up camera via configured Modbus relay trigger without running recipe."""
+
+        with suppress(Exception):
+            self.cam.resume_after_external()
+
+        self._ignore_external_triggers_until = time.monotonic() + 1.0
+        warmed_frame = None
+        try:
+            for _ in range(3):
+                with suppress(Exception):
+                    self.modbus.pulse_configured_flashes()
+
+                delay_ms = 0
+                with suppress(Exception):
+                    delay_ms = int(self.modbus.recommended_flash_capture_delay_ms(post_flash_guard_ms=5))
+                if delay_ms > 0:
+                    time.sleep(delay_ms / 1000.0)
+
+                frame = None
+                with suppress(Exception):
+                    frame = self.cam.last_frame()
+                if frame is None:
+                    with suppress(Exception):
+                        frame = self.cam.one_shot()
+
+                if frame is not None:
+                    warmed_frame = self._clone_frame(frame)
+
+                time.sleep(0.01)
+        finally:
+            self._ignore_external_triggers_until = max(
+                self._ignore_external_triggers_until,
+                time.monotonic() + 0.15,
+            )
+
+        if warmed_frame is not None:
+            self._last_trigger_frame = warmed_frame
 
     def open_gpio_wizard(self):
         self.gpio.set_active_recipe(self.current_recipe_name())
@@ -1044,6 +1085,8 @@ class MainWindow(QMainWindow):
     def _handle_external_trigger(self, source: str) -> None:
         print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
+            return
+        if time.monotonic() < self._ignore_external_triggers_until:
             return
         self.modbus.pulse_configured_flashes()
         self.external_triggered.emit()
