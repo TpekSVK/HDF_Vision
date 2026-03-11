@@ -7,3 +7,4 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 - Test sa spustí na nábežnej hrane (prechod LOW → HIGH). Zariadenie musí vytvoriť krátky pulz alebo flanžu na túto hranu.
 - Ak zariadenie používa opačnú polaritu (HIGH → LOW), je potrebné ho prispôsobiť alebo doplniť invertor – aplikácia reaguje len na nábežnú hranu.
 - V konfigurácii receptu nastavte pre daný pohľad `Trigger Mode` na `External Trigger`.
+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
