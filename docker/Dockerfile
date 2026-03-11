@@ -28,8 +28,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt \
-    && pip3 uninstall -y opencv-python opencv-python-headless opencv-contrib-python || true
+RUN pip3 install --no-cache-dir -r /tmp/requirements.txt && \
+    (pip3 uninstall -y opencv-python opencv-python-headless opencv-contrib-python || true)
 # ^ tu bol problém: chýbala medzera alebo nový riadok pred komentárom
 
 WORKDIR /workspace
