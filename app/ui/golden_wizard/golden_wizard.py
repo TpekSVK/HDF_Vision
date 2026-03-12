@@ -1812,7 +1812,7 @@ class GoldenWizard(QDialog):
             best_flash_score = float("-inf")
             deadline = time.monotonic() + 0.18
             while time.monotonic() < deadline:
-                candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame()
+                candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame(caller="golden_wizard_capture")
                 if candidate is not None:
                     score = float(np.mean(candidate))
                     if score > best_flash_score:
@@ -1822,7 +1822,7 @@ class GoldenWizard(QDialog):
 
             frame = best_flash_frame
             if frame is None:
-                frame = self.cam.last_frame()
+                frame = self.cam.last_frame(caller="golden_wizard_capture")
             if frame is None:
                 frame = self.cam.one_shot()
             if frame is None and self._live_on:
@@ -2944,6 +2944,11 @@ class GoldenWizard(QDialog):
         try:
             self._live_timer.stop()
             self._lp.stop()
+        except Exception:
+            pass
+        try:
+            if bool(getattr(self.cam, "_paused_external", False)):
+                self.cam.resume_after_external()
         except Exception:
             pass
         e.accept()
