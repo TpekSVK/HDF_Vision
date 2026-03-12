@@ -41,6 +41,8 @@ class DummyCamera:
         self.exposure_us = exposure_us
         self.gain_db = gain_db
         self._fail_resolution = fail_resolution
+        self.supported_controls: set[str] | None = None
+        self.calls: list[tuple[str, int | float]] = []
 
     def apply_resolution(
         self,
@@ -60,9 +62,25 @@ class DummyCamera:
 
     def set_manual_exposure_us(self, value: int) -> None:
         self.exposure_us = int(value)
+        self.calls.append(("exposure_us", int(value)))
 
     def set_gain_db(self, value: int) -> None:
         self.gain_db = int(value)
+        self.calls.append(("gain", int(value)))
+
+    def set_gamma(self, value: float) -> None:
+        self.calls.append(("gamma", float(value)))
+
+    def set_brightness(self, value: float) -> None:
+        self.calls.append(("brightness", float(value)))
+
+    def set_sharpness(self, value: float) -> None:
+        self.calls.append(("sharpness", float(value)))
+
+    def get_supported_v4l2_controls(self) -> set[str]:
+        if self.supported_controls is None:
+            return set()
+        return set(self.supported_controls)
 
 
 def test_snapshot_camera_state_reads_camera_properties():
@@ -132,3 +150,26 @@ def test_apply_view_camera_profile_merges_base_with_overrides():
     assert cam.pixel_format == "Y8"
     assert cam.exposure_us == 9000
     assert cam.gain_db == 2
+
+
+def test_apply_camera_state_skips_unsupported_controls_without_warning():
+    cam = DummyCamera(640, 480, 30, "Y8", exposure_us=4000, gain_db=1)
+    cam.supported_controls = {"brightness", "exposure_time_absolute"}
+    warnings: list[str] = []
+
+    apply_camera_state(
+        cam,
+        {
+            "exposure_us": 9000,
+            "gain_db": 4,
+            "gamma": 2,
+            "brightness": 11,
+            "sharpness": 3,
+        },
+        warn=warnings.append,
+    )
+
+    assert warnings == []
+    assert ("exposure_us", 9000) in cam.calls
+    assert ("brightness", 11.0) in cam.calls
+    assert all(name not in {"gain", "gamma", "sharpness"} for name, _ in cam.calls)

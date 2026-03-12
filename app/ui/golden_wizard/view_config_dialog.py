@@ -50,6 +50,8 @@ class ViewConfigDialog(QDialog):
         available_resolutions: Sequence[tuple[str, dict[str, Any]]],
         current_camera: Optional[dict[str, Any]] = None,
         camera_profile: ViewCameraProfile | dict | str | None = None,
+        camera_model: Optional[str] = None,
+        supported_v4l2_controls: Optional[set[str]] = None,
         settle_ms: Optional[int] = None,
         trigger_mode: str = "timed",
         trigger_interval_ms: Optional[int] = None,
@@ -67,6 +69,17 @@ class ViewConfigDialog(QDialog):
         self._available_frame_sources = list(available_frame_sources or [])
         self._available_branch_targets = list(available_branch_targets or [])
         self._result: Optional[dict[str, Any]] = None
+        self._camera_model = str(camera_model or "").strip()
+        controls = {str(c).strip() for c in (supported_v4l2_controls or set()) if str(c).strip()}
+        if "see3cam" in self._camera_model.lower() and "cu55" in self._camera_model.lower():
+            controls = {"brightness", "exposure_time_absolute"}
+        if not controls:
+            controls = {"brightness", "exposure_time_absolute", "exposure_absolute", "gain", "gamma", "sharpness"}
+        self._supported_v4l2_controls = controls
+        self._supports_gain = "gain" in controls
+        self._supports_gamma = "gamma" in controls
+        self._supports_brightness = "brightness" in controls
+        self._supports_sharpness = "sharpness" in controls
 
         title = "Add View" if mode == "add" else "Edit View"
         self.setWindowTitle(title)
@@ -155,20 +168,24 @@ class ViewConfigDialog(QDialog):
         self._exposure_edit.setToolTip(exposure_hint.text())
         camera_form.addRow(exposure_hint)
 
-        camera_form.addRow("Gain [dB]:", self._gain_edit)
-        gain_hint = self._create_description_label(
-            "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
-            " hodnotu z kamery; v multi-view má každé view vlastnú uloženú"
-            " kombináciu.",
-            camera_group,
-        )
-        self._gain_edit.setToolTip(gain_hint.text())
-        camera_form.addRow(gain_hint)
+        if self._supports_gain:
+            camera_form.addRow("Gain [dB]:", self._gain_edit)
+            gain_hint = self._create_description_label(
+                "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
+                " hodnotu z kamery; v multi-view má každé view vlastnú uloženú"
+                " kombináciu.",
+                camera_group,
+            )
+            self._gain_edit.setToolTip(gain_hint.text())
+            camera_form.addRow(gain_hint)
 
         camera_form.addRow("Pixel Format:", self._pixel_format_combo)
-        camera_form.addRow("Gamma:", self._gamma_edit)
-        camera_form.addRow("Brightness:", self._brightness_edit)
-        camera_form.addRow("Sharpness:", self._sharpness_edit)
+        if self._supports_gamma:
+            camera_form.addRow("Gamma:", self._gamma_edit)
+        if self._supports_brightness:
+            camera_form.addRow("Brightness:", self._brightness_edit)
+        if self._supports_sharpness:
+            camera_form.addRow("Sharpness:", self._sharpness_edit)
         camera_form.addRow("Stream Mode:", self._stream_mode_combo)
         camera_form.addRow("Flash Mode:", self._flash_mode_combo)
         pixel_hint = self._create_description_label(
@@ -329,10 +346,10 @@ class ViewConfigDialog(QDialog):
             return
 
         try:
-            gain_db = self._parse_optional_float(self._gain_edit.text())
-            gamma = self._parse_optional_float(self._gamma_edit.text())
-            brightness = self._parse_optional_float(self._brightness_edit.text())
-            sharpness = self._parse_optional_float(self._sharpness_edit.text())
+            gain_db = self._parse_optional_float(self._gain_edit.text()) if self._supports_gain else None
+            gamma = self._parse_optional_float(self._gamma_edit.text()) if self._supports_gamma else None
+            brightness = self._parse_optional_float(self._brightness_edit.text()) if self._supports_brightness else None
+            sharpness = self._parse_optional_float(self._sharpness_edit.text()) if self._supports_sharpness else None
         except ValueError:
             QMessageBox.critical(
                 self,
@@ -461,7 +478,7 @@ class ViewConfigDialog(QDialog):
         if isinstance(profile_obj, ViewCameraProfile):
             if profile_obj.exposure_us is not None:
                 self._exposure_edit.setText(str(int(profile_obj.exposure_us)))
-            if profile_obj.gain_db is not None:
+            if self._supports_gain and profile_obj.gain_db is not None:
                 self._gain_edit.setText(str(profile_obj.gain_db))
             if profile_obj.device_id:
                 self._device_edit.setText(str(profile_obj.device_id))
@@ -469,11 +486,11 @@ class ViewConfigDialog(QDialog):
                 index = self._pixel_format_combo.findData(profile_obj.pixel_format)
                 if index >= 0:
                     self._pixel_format_combo.setCurrentIndex(index)
-            if profile_obj.gamma is not None:
+            if self._supports_gamma and profile_obj.gamma is not None:
                 self._gamma_edit.setText(str(profile_obj.gamma))
-            if profile_obj.brightness is not None:
+            if self._supports_brightness and profile_obj.brightness is not None:
                 self._brightness_edit.setText(str(profile_obj.brightness))
-            if profile_obj.sharpness is not None:
+            if self._supports_sharpness and profile_obj.sharpness is not None:
                 self._sharpness_edit.setText(str(profile_obj.sharpness))
             if profile_obj.stream_mode is not None:
                 index = self._stream_mode_combo.findData(profile_obj.stream_mode)
@@ -590,13 +607,13 @@ class ViewConfigDialog(QDialog):
             data["device_id"] = device_id
         if exposure_us is not None:
             data["exposure_us"] = exposure_us
-        if gain_db is not None:
+        if self._supports_gain and gain_db is not None:
             data["gain_db"] = gain_db
-        if gamma is not None:
+        if self._supports_gamma and gamma is not None:
             data["gamma"] = gamma
-        if brightness is not None:
+        if self._supports_brightness and brightness is not None:
             data["brightness"] = brightness
-        if sharpness is not None:
+        if self._supports_sharpness and sharpness is not None:
             data["sharpness"] = sharpness
         stream_mode = self._stream_mode_combo.currentData()
         if stream_mode is not None:
