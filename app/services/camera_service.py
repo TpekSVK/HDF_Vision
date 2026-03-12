@@ -74,6 +74,18 @@ class CameraService:
         self._supported_v4l2_controls: set[str] | None = None
         self._camera_model: str | None = None
 
+    def is_pipeline_open(self) -> bool:
+        return bool(self._cap is not None or self._pipeline is not None or self._mode)
+
+    def get_hid_device(self) -> str | None:
+        hid = self._hid
+        if hid is not None:
+            return hid.hidraw_path
+        try:
+            return map_video_to_hidraw(self.device)
+        except Exception:
+            return None
+
     def _init_hid(self):
         if self._hid is not None:
             return
@@ -606,9 +618,46 @@ class CameraService:
             raise RuntimeError(f"HID control not available for {self.device}")
         return self._hid
 
-    def set_stream_mode(self, mode: int):
-        self._ensure_hid().set_stream_mode(mode)
-        self._logger.debug("Set stream mode=%s on %s", int(mode), self.device)
+    def set_stream_mode(self, mode: int, *, stabilize_delay_s: float = 0.05):
+        requested = int(mode)
+        pipeline_open = self.is_pipeline_open()
+        hid_dev = self.get_hid_device()
+
+        current: int | None = None
+        try:
+            current = int(self._ensure_hid().get_stream_mode())
+        except Exception as exc:
+            self._logger.debug("Get stream mode before set failed on %s (%s): %s", self.device, hid_dev, exc)
+
+        self._logger.debug(
+            "stream mode request=%s current=%s pipeline_open=%s video_device=%s hid_device=%s",
+            requested,
+            current,
+            pipeline_open,
+            self.device,
+            hid_dev,
+        )
+
+        if current is not None and current == requested:
+            self._logger.debug("stream mode already set, skipping")
+            return
+
+        restarted = False
+        if pipeline_open:
+            self.stop()
+            restarted = True
+
+        try:
+            self._ensure_hid().set_stream_mode(requested)
+            self._logger.debug("stream mode HID set executed (mode=%s)", requested)
+            if stabilize_delay_s > 0:
+                time.sleep(float(stabilize_delay_s))
+        except Exception:
+            self._logger.exception("stream mode HID set failed (mode=%s)", requested)
+            raise
+        finally:
+            if restarted:
+                self.start()
 
     def get_stream_mode(self) -> int:
         try:
