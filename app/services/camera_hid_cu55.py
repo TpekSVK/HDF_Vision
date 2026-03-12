@@ -18,7 +18,9 @@ except Exception:  # pragma: no cover - optional runtime dependency
 LOGGER = logging.getLogger(__name__)
 
 
-HID_PACKET_SIZE = 65
+HID_TX_PACKET_SIZE = 65
+HID_RX_PAYLOAD_SIZE = 64
+HID_RX_MAX_SIZE = 65
 REPORT_ID = 0x00
 COMMAND_GROUP = 0x9F
 
@@ -40,6 +42,14 @@ FLASH_STROBE = 0x01
 FLASH_TORCH = 0x02
 
 STATUS_SUCCESS = 0x01
+CU55_VENDOR_ID = "2560"
+CU55_PRODUCT_ID = "c155"
+
+IDX_REPORT_ID = 0
+IDX_GROUP = 1
+IDX_COMMAND = 2
+IDX_VALUE = 3
+IDX_STATUS = 7
 
 
 @dataclass
@@ -78,14 +88,14 @@ class CU55HID:
         if self.fd is None:
             raise RuntimeError("HID device not open")
 
-        packet = bytearray(HID_PACKET_SIZE)
+        packet = bytearray(HID_TX_PACKET_SIZE)
         packet[0] = REPORT_ID
         packet[1] = COMMAND_GROUP
         packet[2] = command & 0xFF
         if payload is not None:
             packet[3] = payload & 0xFF
 
-        LOGGER.debug("HID TX packet: %s", packet.hex(" "))
+        LOGGER.debug("HID TX %s: %s", self.hidraw_path, packet.hex(" "))
         try:
             os.write(self.fd, packet)
         except OSError as exc:
@@ -96,19 +106,40 @@ class CU55HID:
             raise TimeoutError(f"HID read timeout for command 0x{command:02X}")
 
         try:
-            reply = os.read(self.fd, HID_PACKET_SIZE)
+            reply_raw = os.read(self.fd, HID_RX_MAX_SIZE)
         except OSError as exc:
             raise RuntimeError(f"HID read failed: {exc}") from exc
 
-        LOGGER.debug("HID RX packet: %s", reply.hex(" "))
-        if len(reply) < 7:
+        # Na Linuxe môže hidraw vrátiť buď 64 B payload (bez report ID), alebo 65 B
+        # (s report ID). Interný parser používa jednotný 65-bajtový rámec.
+        if len(reply_raw) == HID_RX_PAYLOAD_SIZE:
+            reply = bytes([REPORT_ID]) + bytes(reply_raw)
+        elif len(reply_raw) == HID_RX_MAX_SIZE:
+            reply = bytes(reply_raw)
+        else:
+            raise RuntimeError(f"HID reply has unexpected length: {len(reply_raw)}")
+
+        LOGGER.debug("HID RX %s: %s", self.hidraw_path, reply.hex(" "))
+        if len(reply) < 8:
             raise RuntimeError(f"HID reply too short: {len(reply)}")
-        if reply[0] != COMMAND_GROUP:
-            raise RuntimeError(f"Invalid HID group: 0x{reply[0]:02X}")
-        if reply[1] != (command & 0xFF):
-            raise RuntimeError(f"Invalid HID command echo: 0x{reply[1]:02X}")
-        if reply[6] != STATUS_SUCCESS:
-            raise RuntimeError(f"HID command failed status=0x{reply[6]:02X}")
+
+        if command in {GET_STREAM_MODE, SET_STREAM_MODE, GET_FLASH_MODE, SET_FLASH_MODE, SET_DEFAULT, GET_ROLL, SET_ROLL}:
+            if reply[IDX_GROUP] != COMMAND_GROUP:
+                raise RuntimeError(f"Invalid HID group: 0x{reply[IDX_GROUP]:02X}")
+            if reply[IDX_COMMAND] != (command & 0xFF):
+                raise RuntimeError(f"Invalid HID command echo: 0x{reply[IDX_COMMAND]:02X}")
+
+            status_candidates = [reply[IDX_STATUS]]
+            if len(reply) > (IDX_STATUS + 1):
+                status_candidates.append(reply[IDX_STATUS + 1])
+            if STATUS_SUCCESS not in status_candidates:
+                raise RuntimeError(f"HID command failed status=0x{reply[IDX_STATUS]:02X}")
+        elif command in {READ_FIRMWARE_VERSION, READ_UNIQUE_ID}:
+            if reply[1] != (command & 0xFF):
+                raise RuntimeError(f"Invalid HID info reply command: 0x{reply[1]:02X}")
+        else:
+            raise RuntimeError(f"Unsupported HID command 0x{command:02X}")
+
         return reply
 
     def set_stream_mode(self, mode: int):
@@ -118,7 +149,7 @@ class CU55HID:
         self._send_cmd(SET_STREAM_MODE, mode)
 
     def get_stream_mode(self) -> int:
-        return int(self._send_cmd(GET_STREAM_MODE)[2])
+        return int(self._send_cmd(GET_STREAM_MODE)[IDX_VALUE])
 
     def set_flash_mode(self, mode: int):
         mode = int(mode)
@@ -127,13 +158,23 @@ class CU55HID:
         self._send_cmd(SET_FLASH_MODE, mode)
 
     def get_flash_mode(self) -> int:
-        return int(self._send_cmd(GET_FLASH_MODE)[2])
+        return int(self._send_cmd(GET_FLASH_MODE)[IDX_VALUE])
 
-    def read_firmware_version(self) -> bytes:
-        return self._send_cmd(READ_FIRMWARE_VERSION)[2:]
+    def read_firmware_version(self) -> tuple[int, int, int, int]:
+        reply = self._send_cmd(READ_FIRMWARE_VERSION)
+        return (
+            int(reply[2]),
+            int(reply[3]),
+            int(reply[5]),
+            int(reply[6] << 8 | reply[7]),
+        )
 
-    def read_unique_id(self) -> bytes:
-        return self._send_cmd(READ_UNIQUE_ID)[2:]
+    def read_firmware_version_string(self) -> str:
+        return ".".join(str(part) for part in self.read_firmware_version())
+
+    def read_unique_id(self) -> str:
+        reply = self._send_cmd(READ_UNIQUE_ID)
+        return "".join(f"{b:02X}" for b in reply[2:6])
 
 
 def _usb_identity_udevadm(devnode: str) -> USBIdentity:
@@ -175,10 +216,9 @@ def _usb_identity_pyudev(devnode: str) -> USBIdentity:
 def _extract_parent_path(path: Optional[str]) -> Optional[str]:
     if not path:
         return None
-    m = re.search(r"(usb-[^:]+)", path)
-    if m:
-        return m.group(1)
-    return path
+    # Udev ID_PATH niekedy obsahuje suffix rozhrania (napr. ":1.0").
+    # Pri párovaní video<->hidraw chceme porovnať fyzickú USB vetvu.
+    return re.sub(r":\d+\.\d+$", "", path)
 
 
 def map_video_to_hidraw(video_dev: str) -> Optional[str]:
@@ -187,6 +227,13 @@ def map_video_to_hidraw(video_dev: str) -> Optional[str]:
         video_identity = _usb_identity_udevadm(video_dev)
 
     if video_identity.vendor_id is None and video_identity.product_id is None:
+        return None
+
+    vendor_id = (video_identity.vendor_id or "").lower()
+    product_id = (video_identity.product_id or "").lower()
+
+    # CU55 kamera používa VID/PID 2560:c155.
+    if vendor_id != CU55_VENDOR_ID or product_id != CU55_PRODUCT_ID:
         return None
 
     video_parent = _extract_parent_path(video_identity.devpath)
@@ -198,9 +245,9 @@ def map_video_to_hidraw(video_dev: str) -> Optional[str]:
 
         if not hid_identity.vendor_id or not hid_identity.product_id:
             continue
-        if hid_identity.vendor_id != video_identity.vendor_id:
+        if hid_identity.vendor_id.lower() != vendor_id:
             continue
-        if hid_identity.product_id != video_identity.product_id:
+        if hid_identity.product_id.lower() != product_id:
             continue
 
         hid_parent = _extract_parent_path(hid_identity.devpath)
