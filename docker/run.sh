@@ -78,6 +78,7 @@ fi
 xhost +local:root >/dev/null 2>&1 || true
 echo "[diag] DISPLAY=${DISPLAY:-<unset>}"
 echo "[diag] /dev/video* na hostovi:"; ls -l /dev/video* 2>/dev/null || true
+echo "[diag] /dev/hidraw* na hostovi:"; ls -l /dev/hidraw* 2>/dev/null || true
 
 # Vyber device (ak chceš fixne video1, exportuj CAM_DEV=/dev/video1)
 CAM_DEV="${CAM_DEV:-/dev/video0}"
@@ -96,6 +97,7 @@ docker run --rm -it \
   --cap-add SYS_ADMIN \
   --device ${CAM_DEV}:${CAM_DEV} \
   --device-cgroup-rule='c 81:* rmw' \
+  --device-cgroup-rule='c 238:* rmw' \
   --env CAM_DEV="${CAM_DEV}" \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
@@ -111,7 +113,7 @@ docker run --rm -it \
   -v "$(pwd)/data":/workspace/data \
   -w /workspace \
   "${IMAGE_NAME}" \
-  bash -lc 'echo "[diag] whoami=$(whoami)"; id; ls -l /dev/video* 2>/dev/null || true; python3 -m app.main'
+  bash -lc 'echo "[diag] whoami=$(whoami)"; id; ls -l /dev/video* 2>/dev/null || true; ls -l /dev/hidraw* 2>/dev/null || true; python3 -m app.main'
 APP_RC=$?
 set -e
 

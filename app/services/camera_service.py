@@ -5,9 +5,11 @@ import numpy as np
 import threading
 import time
 import queue
+import logging
+import subprocess
 from collections import deque
 
-from app.services.xu_stub import XUControls
+from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -66,7 +68,22 @@ class CameraService:
         self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
                                 "pixel_format": self.pixel_format}
-        self._xu: XUControls | None = None
+        self._hid: CU55HID | None = None
+        self._logger = logging.getLogger(__name__)
+
+    def _init_hid(self):
+        if self._hid is not None:
+            return
+        try:
+            hid_path = map_video_to_hidraw(self.device)
+            if not hid_path:
+                self._logger.warning("No HID device mapped for %s", self.device)
+                return
+            self._hid = CU55HID(hid_path)
+            self._hid.open()
+        except Exception as exc:
+            self._logger.exception("Failed to initialize HID control: %s", exc)
+            self._hid = None
 
     # =========================
     # GStreamer časť (preferovaná)
@@ -295,7 +312,8 @@ class CameraService:
             for dev in devs:
                 if self._start_gst(dev):
                     self.device = dev
-                    self._xu = None
+                    self._hid = None
+                    self._init_hid()
                     self._last_open_args.update({
                         "device": dev,
                         "width": int(self.width),
@@ -310,7 +328,8 @@ class CameraService:
         for dev in devs:
             if self._start_v4l2(dev):
                 self.device = dev
-                self._xu = None
+                self._hid = None
+                self._init_hid()
                 self._last_open_args.update({
                     "device": dev,
                     "width": int(self.width),
@@ -364,6 +383,12 @@ class CameraService:
             self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
+        if self._hid is not None:
+            try:
+                self._hid.close()
+            except Exception:
+                pass
+            self._hid = None
         self._reset_buffers()
         self.stop_continuous()
 
@@ -438,7 +463,7 @@ class CameraService:
         self.height = int(args.get("height", self.height))
         self.fps    = int(args.get("fps", self.fps))
         self.pixel_format = args.get("pixel_format", self.pixel_format)
-        self._xu = None
+        self._hid = None
         self.start()
         self._paused_external = False
         print("[CameraService] resumed after external access")
@@ -488,23 +513,76 @@ class CameraService:
                     pass
                 raise RuntimeError(f"Camera reopen failed: {exc}") from exc
 
-    def _ensure_xu(self) -> XUControls:
-        if self._xu is None or getattr(self._xu, "video_dev", None) != self.device:
-            self._xu = XUControls(self.device)
-        return self._xu
+    def _run_v4l2_ctl(self, arg: str) -> bool:
+        cmd = ["v4l2-ctl", "-d", self.device, "-c", arg]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            return True
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return False
+
+    def _ensure_hid(self) -> CU55HID:
+        if self._hid is None:
+            self._init_hid()
+        if self._hid is None:
+            raise RuntimeError(f"HID control not available for {self.device}")
+        return self._hid
+
+    def set_stream_mode(self, mode: int):
+        try:
+            self._ensure_hid().set_stream_mode(mode)
+        except Exception as exc:
+            self._logger.error("Set stream mode failed: %s", exc)
+
+    def get_stream_mode(self) -> int:
+        try:
+            return self._ensure_hid().get_stream_mode()
+        except Exception as exc:
+            self._logger.error("Get stream mode failed: %s", exc)
+            return 0
+
+    def set_flash_mode(self, mode: int):
+        try:
+            self._ensure_hid().set_flash_mode(mode)
+        except Exception as exc:
+            self._logger.error("Set flash mode failed: %s", exc)
+
+    def get_flash_mode(self) -> int:
+        try:
+            return self._ensure_hid().get_flash_mode()
+        except Exception as exc:
+            self._logger.error("Get flash mode failed: %s", exc)
+            return 0
+
+    def read_firmware_version(self) -> bytes:
+        try:
+            return self._ensure_hid().read_firmware_version()
+        except Exception as exc:
+            self._logger.error("Read firmware version failed: %s", exc)
+            return b""
+
+    def read_unique_id(self) -> bytes:
+        try:
+            return self._ensure_hid().read_unique_id()
+        except Exception as exc:
+            self._logger.error("Read unique ID failed: %s", exc)
+            return b""
 
     def set_manual_exposure_us(self, exposure_us: int):
         val = int(exposure_us)
-        try:
-            self._ensure_xu().set_manual_exposure_us(val)
-        except Exception as exc:
-            raise RuntimeError(f"Set exposure failed: {exc}") from exc
+        if val <= 0:
+            raise RuntimeError("Set exposure failed: exposure must be positive")
+        self._run_v4l2_ctl("exposure_auto=1")
+        if not self._run_v4l2_ctl(f"exposure_time_absolute={val}"):
+            hundred_us = max(1, val // 100)
+            if not self._run_v4l2_ctl(f"exposure_absolute={hundred_us}"):
+                raise RuntimeError("Set exposure failed: v4l2-ctl command failed")
         self.exposure_us = val
 
     def set_gain_db(self, gain_db: int):
         val = int(gain_db)
-        try:
-            self._ensure_xu().set_gain_db(val)
-        except Exception as exc:
-            raise RuntimeError(f"Set gain failed: {exc}") from exc
+        if val < 0:
+            raise RuntimeError("Set gain failed: gain must be non-negative")
+        if not self._run_v4l2_ctl(f"gain={val}"):
+            raise RuntimeError("Set gain failed: v4l2-ctl command failed")
         self.gain_db = val
