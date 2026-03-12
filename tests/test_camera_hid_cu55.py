@@ -69,6 +69,22 @@ def test_unique_id_and_firmware_are_parsed_from_verified_reply_layout(monkeypatc
     assert dev.read_firmware_version_string() == "1.5.131.1648"
 
 
+
+
+def test_set_stream_mode_accepts_status_in_next_index_for_65b_reply(monkeypatch):
+    # Niektoré kernel/driver kombinácie vrátia 65 B frame a success status
+    # na nasledujúcom indexe (pri zachovaní rovnakého command/value layoutu).
+    reply_65 = bytes([
+        0x00, 0x9F, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x01
+    ]) + bytes(56)
+    fake = _FakeOS(reply_65)
+    monkeypatch.setattr(hid_mod, "os", fake)
+    monkeypatch.setattr(hid_mod.select, "select", lambda *_args, **_kwargs: ([11], [], []))
+
+    dev = hid_mod.CU55HID("/dev/hidraw1")
+    dev.open()
+    dev.set_stream_mode(hid_mod.MODE_TRIGGER)
+
 def test_map_video_to_hidraw_filters_for_cu55_vid_pid(monkeypatch):
     monkeypatch.setattr(hid_mod, "_usb_identity_pyudev", lambda dev: hid_mod.USBIdentity("1d6b", "0002", "usb-a"))
     monkeypatch.setattr(hid_mod, "_usb_identity_udevadm", lambda dev: hid_mod.USBIdentity(None, None, None))

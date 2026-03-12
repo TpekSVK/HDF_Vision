@@ -20,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 
 HID_TX_PACKET_SIZE = 65
 HID_RX_PAYLOAD_SIZE = 64
+HID_RX_MAX_SIZE = 65
 REPORT_ID = 0x00
 COMMAND_GROUP = 0x9F
 
@@ -105,13 +106,18 @@ class CU55HID:
             raise TimeoutError(f"HID read timeout for command 0x{command:02X}")
 
         try:
-            reply_payload = os.read(self.fd, HID_RX_PAYLOAD_SIZE)
+            reply_raw = os.read(self.fd, HID_RX_MAX_SIZE)
         except OSError as exc:
             raise RuntimeError(f"HID read failed: {exc}") from exc
 
-        # Linux hidraw číta report payload (64 B). Doplníme report ID na index 0,
-        # aby parser pracoval s jednotným 65-bajtovým rámcom.
-        reply = bytes([REPORT_ID]) + bytes(reply_payload)
+        # Na Linuxe môže hidraw vrátiť buď 64 B payload (bez report ID), alebo 65 B
+        # (s report ID). Interný parser používa jednotný 65-bajtový rámec.
+        if len(reply_raw) == HID_RX_PAYLOAD_SIZE:
+            reply = bytes([REPORT_ID]) + bytes(reply_raw)
+        elif len(reply_raw) == HID_RX_MAX_SIZE:
+            reply = bytes(reply_raw)
+        else:
+            raise RuntimeError(f"HID reply has unexpected length: {len(reply_raw)}")
 
         LOGGER.debug("HID RX %s: %s", self.hidraw_path, reply.hex(" "))
         if len(reply) < 8:
@@ -122,7 +128,11 @@ class CU55HID:
                 raise RuntimeError(f"Invalid HID group: 0x{reply[IDX_GROUP]:02X}")
             if reply[IDX_COMMAND] != (command & 0xFF):
                 raise RuntimeError(f"Invalid HID command echo: 0x{reply[IDX_COMMAND]:02X}")
-            if reply[IDX_STATUS] != STATUS_SUCCESS:
+
+            status_candidates = [reply[IDX_STATUS]]
+            if len(reply) > (IDX_STATUS + 1):
+                status_candidates.append(reply[IDX_STATUS + 1])
+            if STATUS_SUCCESS not in status_candidates:
                 raise RuntimeError(f"HID command failed status=0x{reply[IDX_STATUS]:02X}")
         elif command in {READ_FIRMWARE_VERSION, READ_UNIQUE_ID}:
             if reply[1] != (command & 0xFF):
