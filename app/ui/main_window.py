@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
 
 import json
+import logging
 import math
 from pathlib import Path
 import time
@@ -50,6 +51,7 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self._logger = logging.getLogger(__name__)
         self.setWindowTitle("HDF Vision")
         self.mode = "RUN"  # RUN alebo SETUP
 
@@ -461,11 +463,54 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_status.setText(f"Flash {int(channel)} vypnutý")
 
+    def _run_trigger_context(self, *, requested_stream_mode: int | None = None) -> dict[str, Any]:
+        current_stream_mode: int | None = None
+        stream_mode_error: str | None = None
+        try:
+            current_stream_mode = int(self.cam.get_stream_mode())
+        except Exception as exc:
+            stream_mode_error = str(exc)
+
+        return {
+            "requested_stream_mode": requested_stream_mode,
+            "current_stream_mode": current_stream_mode,
+            "stream_mode_error": stream_mode_error,
+            "pipeline_open": bool(getattr(self.cam, "is_pipeline_open", lambda: False)()),
+            "live_active": bool(self.live_enabled),
+            "active_view_id": self._active_view_id,
+            "video_device": getattr(self.cam, "device", None),
+            "hid_device": getattr(self.cam, "get_hid_device", lambda: None)(),
+        }
+
+    def _log_run_trigger_context(
+        self,
+        message: str,
+        *,
+        requested_stream_mode: int | None = None,
+        hid_set: str = "not_applicable",
+    ) -> None:
+        ctx = self._run_trigger_context(requested_stream_mode=requested_stream_mode)
+        ctx["hid_set"] = hid_set
+        self._logger.debug(
+            "%s | requested=%s current=%s pipeline_open=%s live_active=%s active_view_id=%s video_device=%s hid_device=%s hid_set=%s stream_mode_error=%s",
+            message,
+            ctx.get("requested_stream_mode"),
+            ctx.get("current_stream_mode"),
+            ctx.get("pipeline_open"),
+            ctx.get("live_active"),
+            ctx.get("active_view_id"),
+            ctx.get("video_device"),
+            ctx.get("hid_device"),
+            ctx.get("hid_set"),
+            ctx.get("stream_mode_error"),
+        )
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
         self.modbus.pulse_configured_flashes()
+        self._log_run_trigger_context("RUN trigger start")
         try:
             frame = self.cam.last_frame()
             if frame is None:
@@ -599,13 +644,32 @@ class MainWindow(QMainWindow):
 
                     if view_frame_u8 is None:
                         profile = getattr(view, "camera_profile", None)
+                        requested_stream_mode = None
+                        if isinstance(base_camera_state, Mapping):
+                            requested_stream_mode = base_camera_state.get("stream_mode")
+                        profile_stream_mode = getattr(profile, "stream_mode", None)
+                        if profile_stream_mode is not None:
+                            requested_stream_mode = profile_stream_mode
+                        self._log_run_trigger_context(
+                            f"RUN trigger capture flow for view={view_id}",
+                            requested_stream_mode=(
+                                int(requested_stream_mode)
+                                if isinstance(requested_stream_mode, Integral)
+                                else None
+                            ),
+                            hid_set="skipped",
+                        )
                         try:
                             apply_view_camera_profile(
                                 self.cam,
                                 base_camera_state,
                                 profile,
+                                apply_stream_mode=False,
                             )
                         except Exception as exc:
+                            self._logger.exception(
+                                "RUN trigger camera profile apply failed for view=%s", view_id
+                            )
                             self.lbl_status.setText(
                                 f"{view_name}: {exc}"
                             )
@@ -770,8 +834,9 @@ class MainWindow(QMainWindow):
                         break
             finally:
                 try:
-                    apply_camera_state(self.cam, base_camera_state)
+                    apply_camera_state(self.cam, base_camera_state, apply_stream_mode=False)
                 except Exception as exc:
+                    self._logger.exception("[Trigger] Obnovenie nastavenia kamery zlyhalo")
                     print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
 
             if self._active_view_id and self._active_view_id not in per_view_statuses:

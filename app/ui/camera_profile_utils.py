@@ -124,6 +124,8 @@ def apply_camera_state(
     state: Mapping[str, Any] | None,
     *,
     warn: Callable[[str], None] | None = None,
+    apply_stream_mode: bool = True,
+    apply_flash_mode: bool = True,
 ) -> None:
     """Apply fully resolved camera state to ``camera`` consistently."""
 
@@ -199,7 +201,13 @@ def apply_camera_state(
     if skipped_controls:
         _LOGGER.info("Skipped unsupported camera controls: %s", skipped_controls)
 
-    for key, setter in (("stream_mode", "set_stream_mode"), ("flash_mode", "set_flash_mode")):
+    mode_setters = []
+    if apply_stream_mode:
+        mode_setters.append(("stream_mode", "set_stream_mode"))
+    if apply_flash_mode:
+        mode_setters.append(("flash_mode", "set_flash_mode"))
+
+    for key, setter in mode_setters:
         if key in state and state.get(key) is not None:
             method = getattr(camera, setter, None)
             if callable(method):
@@ -216,11 +224,19 @@ def apply_view_camera_profile(
     profile: ViewCameraProfile | Mapping[str, Any] | str | None,
     *,
     warn: Callable[[str], None] | None = None,
+    apply_stream_mode: bool = True,
+    apply_flash_mode: bool = True,
 ) -> dict[str, Any]:
     """Resolve and apply per-view camera profile."""
 
     state = resolve_view_camera_state(base_state or {}, profile)
-    apply_camera_state(camera, state, warn=warn)
+    apply_camera_state(
+        camera,
+        state,
+        warn=warn,
+        apply_stream_mode=apply_stream_mode,
+        apply_flash_mode=apply_flash_mode,
+    )
     return state
 
 
