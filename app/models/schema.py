@@ -514,19 +514,34 @@ class RecipeAggregation:
 class ViewCameraProfile:
     """Optional per-view overrides for camera configuration."""
 
+    device_id: Optional[str] = None
     width: Optional[int] = None
     height: Optional[int] = None
     fps: Optional[int] = None
     pixel_format: Optional[str] = None
     exposure_us: Optional[int] = None
     gain_db: Optional[float] = None
+    gamma: Optional[float] = None
+    brightness: Optional[float] = None
+    sharpness: Optional[float] = None
+    stream_mode: Optional[int] = None
+    flash_mode: Optional[int] = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.device_id, str):
+            self.device_id = self.device_id.strip() or None
+        elif self.device_id is not None:
+            self.device_id = str(self.device_id).strip() or None
         self.width = self._coerce_int(self.width)
         self.height = self._coerce_int(self.height)
         self.fps = self._coerce_int(self.fps)
         self.exposure_us = self._coerce_int(self.exposure_us)
+        self.stream_mode = self._coerce_int(self.stream_mode)
+        self.flash_mode = self._coerce_int(self.flash_mode)
         self.gain_db = self._coerce_float(self.gain_db)
+        self.gamma = self._coerce_float(self.gamma)
+        self.brightness = self._coerce_float(self.brightness)
+        self.sharpness = self._coerce_float(self.sharpness)
         if isinstance(self.pixel_format, str):
             text = self.pixel_format.strip().upper()
             self.pixel_format = text or None
@@ -561,21 +576,35 @@ class ViewCameraProfile:
                 self.pixel_format,
                 self.exposure_us,
                 self.gain_db,
+                self.gamma,
+                self.brightness,
+                self.sharpness,
+                self.stream_mode,
+                self.flash_mode,
+                self.device_id,
             )
         )
 
     def copy(self) -> "ViewCameraProfile":
         return ViewCameraProfile(
+            device_id=self.device_id,
             width=self.width,
             height=self.height,
             fps=self.fps,
             pixel_format=self.pixel_format,
             exposure_us=self.exposure_us,
             gain_db=self.gain_db,
+            gamma=self.gamma,
+            brightness=self.brightness,
+            sharpness=self.sharpness,
+            stream_mode=self.stream_mode,
+            flash_mode=self.flash_mode,
         )
 
     def to_dict(self) -> Dict[str, Any]:
         data: Dict[str, Any] = {}
+        if self.device_id:
+            data["device_id"] = self.device_id
         if self.width is not None:
             data["width"] = int(self.width)
         if self.height is not None:
@@ -588,6 +617,16 @@ class ViewCameraProfile:
             data["exposure_us"] = int(self.exposure_us)
         if self.gain_db is not None:
             data["gain_db"] = float(self.gain_db)
+        if self.gamma is not None:
+            data["gamma"] = float(self.gamma)
+        if self.brightness is not None:
+            data["brightness"] = float(self.brightness)
+        if self.sharpness is not None:
+            data["sharpness"] = float(self.sharpness)
+        if self.stream_mode is not None:
+            data["stream_mode"] = int(self.stream_mode)
+        if self.flash_mode is not None:
+            data["flash_mode"] = int(self.flash_mode)
         return data
 
     @classmethod
@@ -600,12 +639,18 @@ class ViewCameraProfile:
             return value.copy()
         if isinstance(value, dict):
             profile = cls(
+                device_id=value.get("device_id"),
                 width=value.get("width"),
                 height=value.get("height"),
                 fps=value.get("fps"),
                 pixel_format=value.get("pixel_format"),
                 exposure_us=value.get("exposure_us"),
                 gain_db=value.get("gain_db"),
+                gamma=value.get("gamma"),
+                brightness=value.get("brightness"),
+                sharpness=value.get("sharpness"),
+                stream_mode=value.get("stream_mode"),
+                flash_mode=value.get("flash_mode"),
             )
             return None if profile.is_empty() else profile
         if isinstance(value, str):

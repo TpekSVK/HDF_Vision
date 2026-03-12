@@ -529,10 +529,8 @@ class CameraService:
         return self._hid
 
     def set_stream_mode(self, mode: int):
-        try:
-            self._ensure_hid().set_stream_mode(mode)
-        except Exception as exc:
-            self._logger.error("Set stream mode failed: %s", exc)
+        self._ensure_hid().set_stream_mode(mode)
+        self._logger.debug("Set stream mode=%s on %s", int(mode), self.device)
 
     def get_stream_mode(self) -> int:
         try:
@@ -542,10 +540,8 @@ class CameraService:
             return 0
 
     def set_flash_mode(self, mode: int):
-        try:
-            self._ensure_hid().set_flash_mode(mode)
-        except Exception as exc:
-            self._logger.error("Set flash mode failed: %s", exc)
+        self._ensure_hid().set_flash_mode(mode)
+        self._logger.debug("Set flash mode=%s on %s", int(mode), self.device)
 
     def get_flash_mode(self) -> int:
         try:
@@ -578,6 +574,21 @@ class CameraService:
             if not self._run_v4l2_ctl(f"exposure_absolute={hundred_us}"):
                 raise RuntimeError("Set exposure failed: v4l2-ctl command failed")
         self.exposure_us = val
+
+    def set_gamma(self, value: float):
+        val = int(round(float(value)))
+        if not self._run_v4l2_ctl(f"gamma={val}"):
+            raise RuntimeError("Set gamma failed: v4l2-ctl command failed")
+
+    def set_brightness(self, value: float):
+        val = int(round(float(value)))
+        if not self._run_v4l2_ctl(f"brightness={val}"):
+            raise RuntimeError("Set brightness failed: v4l2-ctl command failed")
+
+    def set_sharpness(self, value: float):
+        val = int(round(float(value)))
+        if not self._run_v4l2_ctl(f"sharpness={val}"):
+            raise RuntimeError("Set sharpness failed: v4l2-ctl command failed")
 
     def set_gain_db(self, gain_db: int):
         val = int(gain_db)

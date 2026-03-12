@@ -103,7 +103,7 @@ class ViewConfigDialog(QDialog):
         basic_form.addRow(id_hint)
         layout.addWidget(basic_group)
 
-        camera_group = QGroupBox("Kamera profil (voliteľná)", self)
+        camera_group = QGroupBox("Camera settings pre tento view", self)
         camera_form = QFormLayout(camera_group)
         camera_form.setSpacing(6)
 
@@ -127,6 +127,24 @@ class ViewConfigDialog(QDialog):
         self._pixel_format_combo.addItem("Inherit", None)
         self._pixel_format_combo.addItem("Y8", "Y8")
         self._pixel_format_combo.addItem("Y12", "Y12")
+        self._device_edit = QLineEdit(camera_group)
+        self._device_edit.setPlaceholderText("/dev/video0 (optional)")
+        self._gamma_edit = QLineEdit(camera_group)
+        self._gamma_edit.setPlaceholderText("Leave blank to inherit")
+        self._brightness_edit = QLineEdit(camera_group)
+        self._brightness_edit.setPlaceholderText("Leave blank to inherit")
+        self._sharpness_edit = QLineEdit(camera_group)
+        self._sharpness_edit.setPlaceholderText("Leave blank to inherit")
+        self._stream_mode_combo = QComboBox(camera_group)
+        self._stream_mode_combo.addItem("Inherit", None)
+        self._stream_mode_combo.addItem("Master (0)", 0)
+        self._stream_mode_combo.addItem("Trigger (1)", 1)
+        self._flash_mode_combo = QComboBox(camera_group)
+        self._flash_mode_combo.addItem("Inherit", None)
+        self._flash_mode_combo.addItem("OFF (0)", 0)
+        self._flash_mode_combo.addItem("STROBE (1)", 1)
+        self._flash_mode_combo.addItem("TORCH (2)", 2)
+        camera_form.addRow("Camera device:", self._device_edit)
         camera_form.addRow("Exposure [µs]:", self._exposure_edit)
         exposure_hint = self._create_description_label(
             "Prepíše expozičný čas kamery len pre tento view. Prázdna hodnota"
@@ -148,6 +166,11 @@ class ViewConfigDialog(QDialog):
         camera_form.addRow(gain_hint)
 
         camera_form.addRow("Pixel Format:", self._pixel_format_combo)
+        camera_form.addRow("Gamma:", self._gamma_edit)
+        camera_form.addRow("Brightness:", self._brightness_edit)
+        camera_form.addRow("Sharpness:", self._sharpness_edit)
+        camera_form.addRow("Stream Mode:", self._stream_mode_combo)
+        camera_form.addRow("Flash Mode:", self._flash_mode_combo)
         pixel_hint = self._create_description_label(
             "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
             " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
@@ -307,6 +330,9 @@ class ViewConfigDialog(QDialog):
 
         try:
             gain_db = self._parse_optional_float(self._gain_edit.text())
+            gamma = self._parse_optional_float(self._gamma_edit.text())
+            brightness = self._parse_optional_float(self._brightness_edit.text())
+            sharpness = self._parse_optional_float(self._sharpness_edit.text())
         except ValueError:
             QMessageBox.critical(
                 self,
@@ -340,7 +366,7 @@ class ViewConfigDialog(QDialog):
         if trigger_mode != "timed":
             interval_ms = None
 
-        profile = self._build_camera_profile(exposure_us, gain_db)
+        profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
 
         self._result = {
             "name": name,
@@ -437,10 +463,26 @@ class ViewConfigDialog(QDialog):
                 self._exposure_edit.setText(str(int(profile_obj.exposure_us)))
             if profile_obj.gain_db is not None:
                 self._gain_edit.setText(str(profile_obj.gain_db))
+            if profile_obj.device_id:
+                self._device_edit.setText(str(profile_obj.device_id))
             if profile_obj.pixel_format:
                 index = self._pixel_format_combo.findData(profile_obj.pixel_format)
                 if index >= 0:
                     self._pixel_format_combo.setCurrentIndex(index)
+            if profile_obj.gamma is not None:
+                self._gamma_edit.setText(str(profile_obj.gamma))
+            if profile_obj.brightness is not None:
+                self._brightness_edit.setText(str(profile_obj.brightness))
+            if profile_obj.sharpness is not None:
+                self._sharpness_edit.setText(str(profile_obj.sharpness))
+            if profile_obj.stream_mode is not None:
+                index = self._stream_mode_combo.findData(profile_obj.stream_mode)
+                if index >= 0:
+                    self._stream_mode_combo.setCurrentIndex(index)
+            if profile_obj.flash_mode is not None:
+                index = self._flash_mode_combo.findData(profile_obj.flash_mode)
+                if index >= 0:
+                    self._flash_mode_combo.setCurrentIndex(index)
 
     def _apply_initial_timing(
         self,
@@ -527,6 +569,9 @@ class ViewConfigDialog(QDialog):
         self,
         exposure_us: Optional[int],
         gain_db: Optional[float],
+        gamma: Optional[float],
+        brightness: Optional[float],
+        sharpness: Optional[float],
     ) -> Optional[ViewCameraProfile]:
         data: dict[str, Any] = {}
         resolution_data = self._resolution_combo.currentData()
@@ -540,10 +585,25 @@ class ViewConfigDialog(QDialog):
         if pixel_format:
             data["pixel_format"] = pixel_format
 
+        device_id = self._device_edit.text().strip()
+        if device_id:
+            data["device_id"] = device_id
         if exposure_us is not None:
             data["exposure_us"] = exposure_us
         if gain_db is not None:
             data["gain_db"] = gain_db
+        if gamma is not None:
+            data["gamma"] = gamma
+        if brightness is not None:
+            data["brightness"] = brightness
+        if sharpness is not None:
+            data["sharpness"] = sharpness
+        stream_mode = self._stream_mode_combo.currentData()
+        if stream_mode is not None:
+            data["stream_mode"] = int(stream_mode)
+        flash_mode = self._flash_mode_combo.currentData()
+        if flash_mode is not None:
+            data["flash_mode"] = int(flash_mode)
 
         profile = ViewCameraProfile.from_obj(data)
         if isinstance(profile, ViewCameraProfile) and not profile.is_empty():

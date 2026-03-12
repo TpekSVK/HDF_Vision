@@ -1276,7 +1276,6 @@ class GoldenWizard(QDialog):
         self.recipes = recipes
         self.modbus = modbus
         self.current_img = None
-        self._default_camera_state = self._snapshot_camera_state()
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._dirty_views: dict[str, dict[str, bool]] = {}
@@ -2196,11 +2195,10 @@ class GoldenWizard(QDialog):
         apply_camera_state(self.cam, state, warn=warn)
 
     def _apply_view_camera_profile(self, view: Optional[RecipeView]) -> None:
-        base_state = getattr(self, "_default_camera_state", {})
         profile = getattr(view, "camera_profile", None) if view else None
         apply_view_camera_profile(
             self.cam,
-            base_state,
+            {},
             profile,
             warn=self._warn,
         )
@@ -2920,12 +2918,6 @@ class GoldenWizard(QDialog):
             if result != QMessageBox.Yes:
                 e.ignore()
                 return
-        try:
-            base_state = getattr(self, "_default_camera_state", None)
-            if isinstance(base_state, dict) and base_state:
-                self._apply_camera_state(base_state, show_warnings=False)
-        except Exception:
-            pass
         try:
             self._live_timer.stop()
             self._lp.stop()
