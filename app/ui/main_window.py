@@ -20,8 +20,6 @@ import numpy as np
 from threading import Thread
 from app.services.retention_service import RetentionService
 
-from app.ui.xu_panel import XUPanel
-
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
@@ -88,8 +86,6 @@ class MainWindow(QMainWindow):
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
-        self._setup_camera_state: dict[str, Any] = snapshot_camera_state(self.cam)
-        self._run_idle_camera_state: dict[str, Any] | None = dict(self._setup_camera_state)
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -382,29 +378,6 @@ class MainWindow(QMainWindow):
         row1.addStretch(1)
         s.addLayout(row1)
 
-        cam_title = QLabel("Nastavenia kamery"); tf2 = QFont(); tf2.setPointSize(12); tf2.setBold(True); cam_title.setFont(tf2)
-        s.addWidget(cam_title)
-
-        # Rozlíšenie
-        res_line = QHBoxLayout()
-        res_line.addWidget(QLabel("Rozlíšenie:"))
-        self._resolution_presets: list[tuple[str, dict[str, Any]]] = [
-            ("1920x1080@60 Y8", {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"}),
-            ("1280x720@60 Y8",  {"width": 1280, "height": 720,  "fps": 60, "pixel_format": "Y8"}),
-            ("2592x1944@30 Y8 (len setup/pomalé)", {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"}),
-        ]
-        self.cmb_res = QComboBox()
-        for label, data in self._resolution_presets:
-            self.cmb_res.addItem(label, data)
-        self._sync_resolution_combo()
-        self.cmb_res.currentIndexChanged.connect(self._on_resolution_changed)
-        res_line.addWidget(self.cmb_res)
-        s.addLayout(res_line)
-
-        # XU panel
-        self.xu = XUPanel(self)
-        s.addWidget(self.xu)
-
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
 
@@ -426,27 +399,11 @@ class MainWindow(QMainWindow):
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
         else:
-            try:
-                self._setup_camera_state = snapshot_camera_state(self.cam)
-            except Exception:
-                pass
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
             if not self.live_enabled:
                 self._apply_run_camera_profile()
-
-    def _match_resolution_index(self, width: int, height: int, fps: int, pixel_format: str | None) -> int | None:
-        pix_fmt = (pixel_format or "Y8").upper()
-        for idx, (_, data) in enumerate(self._resolution_presets):
-            if (
-                int(data.get("width", 0)) == int(width)
-                and int(data.get("height", 0)) == int(height)
-                and int(data.get("fps", 0)) == int(fps)
-                and (data.get("pixel_format", "Y8") or "Y8").upper() == pix_fmt
-            ):
-                return idx
-        return None
 
     def _set_live_view_border(self, color: str | None = None) -> None:
         border_color = color or "#444"
@@ -468,60 +425,6 @@ class MainWindow(QMainWindow):
         self.lbl_status.setStyleSheet(f"color: {color};")
         border_color = color if status_key in color_map else None
         self._set_live_view_border(border_color)
-
-    def _sync_resolution_combo(self):
-        pix_fmt = getattr(self.cam, "pixel_format", "Y8")
-        idx = self._match_resolution_index(self.cam.width, self.cam.height, self.cam.fps, pix_fmt)
-        if idx is None:
-            idx = 0
-        self.cmb_res.blockSignals(True)
-        self.cmb_res.setCurrentIndex(idx)
-        self.cmb_res.blockSignals(False)
-
-    def _on_resolution_changed(self, index: int):
-        data = self.cmb_res.itemData(index)
-        if not isinstance(data, dict):
-            return
-        target = (
-            int(data.get("width", 0)),
-            int(data.get("height", 0)),
-            int(data.get("fps", 0)),
-            (data.get("pixel_format", "Y8") or "Y8").upper(),
-        )
-        current = (
-            int(getattr(self.cam, "width", 0)),
-            int(getattr(self.cam, "height", 0)),
-            int(getattr(self.cam, "fps", 0)),
-            (getattr(self.cam, "pixel_format", "Y8") or "Y8").upper(),
-        )
-        if target == current:
-            return
-        was_live = self.live_enabled and self._run_timer.isActive()
-        if was_live:
-            self._run_timer.stop()
-        success = False
-        try:
-            self.cam.apply_resolution(**data)
-        except Exception as exc:
-            self.lbl_status.setText(f"Zmena rozlíšenia zlyhala: {exc}")
-            self._sync_resolution_combo()
-        else:
-            success = True
-            label = self.cmb_res.itemText(index)
-            self.lbl_status.setText(f"Rozlíšenie nastavené: {label}")
-        finally:
-            if was_live:
-                self._run_timer.start()
-        if success:
-            try:
-                state = snapshot_camera_state(self.cam)
-            except Exception:
-                pass
-            else:
-                self._setup_camera_state = state
-                if self.mode == "RUN" and not self.live_enabled:
-                    self._run_idle_camera_state = dict(state)
-            self._update_live_view()
 
     def _reset_manual_trigger_progress(self, recipe_name: str | None = None) -> None:
         if recipe_name is None:
@@ -870,7 +773,6 @@ class MainWindow(QMainWindow):
                     apply_camera_state(self.cam, base_camera_state)
                 except Exception as exc:
                     print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
-                self._sync_resolution_combo()
 
             if self._active_view_id and self._active_view_id not in per_view_statuses:
                 self._update_sidebar(view_id=self._active_view_id)
@@ -1010,29 +912,11 @@ class MainWindow(QMainWindow):
         self.live_enabled = self.btn_live.isChecked()
         self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
         if self.live_enabled:
-            try:
-                self._run_idle_camera_state = snapshot_camera_state(self.cam)
-            except Exception:
-                self._run_idle_camera_state = None
-            base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else None
-            if base_state:
-                try:
-                    apply_camera_state(self.cam, base_state)
-                except Exception as exc:
-                    self.lbl_status.setText(f"Live kamera: {exc}")
+            self._apply_run_camera_profile()
             self._run_timer.start()
         else:
             self._run_timer.stop()
-            restored = False
-            if isinstance(self._run_idle_camera_state, Mapping) and self._run_idle_camera_state:
-                try:
-                    apply_camera_state(self.cam, self._run_idle_camera_state)
-                except Exception as exc:
-                    self.lbl_status.setText(f"Obnovenie kamery zlyhalo: {exc}")
-                else:
-                    restored = True
-            if not restored:
-                self._apply_run_camera_profile()
+            self._apply_run_camera_profile()
             self._update_live_view()
 
     def _handle_gpio_trigger(self):
@@ -1678,18 +1562,12 @@ class MainWindow(QMainWindow):
             return
 
         profile = getattr(view_obj, "camera_profile", None)
-        base_state = self._setup_camera_state if isinstance(self._setup_camera_state, Mapping) else None
-
         try:
-            apply_view_camera_profile(self.cam, base_state, profile)
+            apply_view_camera_profile(self.cam, {}, profile)
         except Exception as exc:
             self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
             return
 
-        try:
-            self._run_idle_camera_state = snapshot_camera_state(self.cam)
-        except Exception:
-            self._run_idle_camera_state = None
 
     def _refresh_views(self):
         self._golden_cache.clear()
