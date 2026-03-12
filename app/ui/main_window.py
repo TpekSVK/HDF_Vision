@@ -64,7 +64,7 @@ class MainWindow(QMainWindow):
 
         # Kamera
         self.cam = CameraService()
-        self.cam.start()
+        self.cam.start(caller="main_window_init")
 
         # DB + služby
         self.db = DbService()
@@ -512,7 +512,9 @@ class MainWindow(QMainWindow):
         self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
         try:
-            frame = self.cam.last_frame()
+            self._logger.info("trigger_click(caller=run_manual_trigger)")
+            gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
+            frame = self.cam.last_frame(caller="run_manual_trigger")
             if frame is None:
                 try:
                     frame = self.cam.one_shot()
@@ -683,7 +685,7 @@ class MainWindow(QMainWindow):
                         if settle_ms is not None and settle_ms > 0:
                             time.sleep(settle_ms / 1000.0)
 
-                        latest_frame = self.cam.last_frame()
+                        latest_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
                         if latest_frame is not None:
                             view_frame = latest_frame
                             base_frame = view_frame.copy()
@@ -861,6 +863,12 @@ class MainWindow(QMainWindow):
             if not self.live_enabled:
                 self._update_live_view()
 
+            gst_starts_after = int(getattr(self.cam, "gst_start_count", lambda: 0)())
+            self._logger.info(
+                "trigger_click_gst_starts(caller=run_manual_trigger, count=%s)",
+                max(0, gst_starts_after - gst_starts_before),
+            )
+
         except Exception:
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
@@ -1001,7 +1009,7 @@ class MainWindow(QMainWindow):
         try:
             # Zdroj podľa live stavu
             if self.live_enabled:
-                src = self.cam.last_frame()
+                src = self.cam.last_frame(caller="run_live_view")
             else:
                 src = self._get_last_frame_for_view(self._active_view_id)
                 if (
@@ -1841,7 +1849,7 @@ class MainWindow(QMainWindow):
 
     def _request_host_power_action(self, action: str) -> None:
         try:
-            self.cam.stop()
+            self.cam.stop(caller="main_window_power_action")
         except Exception:
             pass
         try:
@@ -1862,7 +1870,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         try:
-            self.cam.stop()
+            self.cam.stop(caller="main_window_close")
             self.gpio.close()
             self.modbus.close()
         finally:

@@ -73,6 +73,44 @@ class CameraService:
         self._logger = logging.getLogger(__name__)
         self._supported_v4l2_controls: set[str] | None = None
         self._camera_model: str | None = None
+        self._active_pipeline_signature: dict[str, object] | None = None
+        self._gst_start_count = 0
+
+    def _pipeline_signature(self, *, device: str | None = None) -> dict[str, object]:
+        dev = device or self.device
+        return {
+            "device": str(dev or ""),
+            "width": int(self.width),
+            "height": int(self.height),
+            "fps": int(self.fps),
+            "pixel_format": str(self.pixel_format or "Y8").upper(),
+        }
+
+    def _pipeline_caps(self, signature: dict[str, object]) -> str:
+        return (
+            f"format={signature.get('pixel_format')},"
+            f"{signature.get('width')}x{signature.get('height')}@{signature.get('fps')}"
+        )
+
+    def gst_start_count(self) -> int:
+        return int(self._gst_start_count)
+
+    def _log_start_pipeline(self, signature: dict[str, object], caller: str) -> None:
+        self._logger.info(
+            "start_pipeline(requested_device=%s, requested_caps=%s, caller=%s)",
+            signature.get("device"),
+            self._pipeline_caps(signature),
+            caller,
+        )
+
+    def _log_reuse_existing_pipeline(self, caller: str) -> None:
+        self._logger.info("reuse_existing_pipeline(caller=%s)", caller)
+
+    def _log_stop_pipeline(self, caller: str) -> None:
+        self._logger.info("stop_pipeline(caller=%s)", caller)
+
+    def _log_latest_frame_used(self, caller: str) -> None:
+        self._logger.info("latest_frame_used(caller=%s)", caller)
 
     def is_pipeline_open(self) -> bool:
         return bool(self._cap is not None or self._pipeline is not None or self._mode)
@@ -236,6 +274,7 @@ class CameraService:
 
             self._t = threading.Thread(target=_loop_run, daemon=True)
             self._t.start()
+            self._gst_start_count += 1
             print(f"[Camera] GST started: {pipe}")
             return True
 
@@ -314,7 +353,15 @@ class CameraService:
     # =========================
     # Public API
     # =========================
-    def start(self):
+    def start(self, *, caller: str = "unspecified"):
+        requested_signature = self._pipeline_signature()
+        if self.is_pipeline_open():
+            if self._active_pipeline_signature == requested_signature:
+                self._log_reuse_existing_pipeline(caller)
+                return False
+            self.stop(caller=f"{caller}:restart")
+
+        self._log_start_pipeline(requested_signature, caller)
         # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
         seen = set()
         devs = []
@@ -327,6 +374,7 @@ class CameraService:
             for dev in devs:
                 if self._start_gst(dev):
                     self.device = dev
+                    self._active_pipeline_signature = self._pipeline_signature(device=dev)
                     self._hid = None
                     self._init_hid()
                     self._last_open_args.update({
@@ -338,12 +386,13 @@ class CameraService:
                         "pixel_format": self.pixel_format,
                     })
                     self.get_supported_v4l2_controls(refresh=True)
-                    return
+                    return True
 
         # 2) Fallback: OpenCV V4L2
         for dev in devs:
             if self._start_v4l2(dev):
                 self.device = dev
+                self._active_pipeline_signature = self._pipeline_signature(device=dev)
                 self._hid = None
                 self._init_hid()
                 self._last_open_args.update({
@@ -355,7 +404,7 @@ class CameraService:
                     "pixel_format": self.pixel_format,
                 })
                 self.get_supported_v4l2_controls(refresh=True)
-                return
+                return True
 
         # nič sa neotvorilo
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
@@ -374,7 +423,8 @@ class CameraService:
             raise RuntimeError("No frame available for one-shot.")
         return last
 
-    def stop(self):
+    def stop(self, *, caller: str = "unspecified"):
+        self._log_stop_pipeline(caller)
         self._stop.set()
         # V4L2
         if self._cap is not None:
@@ -400,6 +450,7 @@ class CameraService:
             self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
+        self._active_pipeline_signature = None
         if self._hid is not None:
             try:
                 self._hid.close()
@@ -440,10 +491,12 @@ class CameraService:
                 frame = f8
             self._ring.append(frame)
 
-    def last_frame(self):
+    def last_frame(self, *, caller: str = "unspecified"):
         """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
         if self._ring:
+            self._log_latest_frame_used(caller)
             return self._ring[-1]
+        self._log_latest_frame_used(caller)
         return self.one_shot()
 
     def stop_continuous(self):
@@ -466,7 +519,7 @@ class CameraService:
             "pixel_format": self.pixel_format,
         })
         # zastav všetko (cap aj GStreamer pipeline)
-        self.stop()
+        self.stop(caller="pause_for_external")
         self._paused_external = True
         print("[CameraService] paused for external access")
 
@@ -481,7 +534,7 @@ class CameraService:
         self.fps    = int(args.get("fps", self.fps))
         self.pixel_format = args.get("pixel_format", self.pixel_format)
         self._hid = None
-        self.start()
+        self.start(caller="resume_after_external")
         self._paused_external = False
         print("[CameraService] resumed after external access")
 
@@ -497,8 +550,17 @@ class CameraService:
             "pixel_format": self.pixel_format,
         }
         was_running = any([self._cap is not None, self._pipeline is not None, self._mode])
+        unchanged = (
+            int(self.width) == width
+            and int(self.height) == height
+            and int(self.fps) == fps
+            and str(self.pixel_format or "Y8").upper() == pix_fmt
+        )
+        if was_running and unchanged:
+            self._log_reuse_existing_pipeline("apply_resolution")
+            return
         if was_running:
-            self.stop()
+            self.stop(caller="apply_resolution")
         self.width = width
         self.height = height
         self.fps = fps
@@ -512,7 +574,7 @@ class CameraService:
         })
         if was_running:
             try:
-                self.start()
+                self.start(caller="apply_resolution")
             except Exception as exc:
                 self.width = current["width"]
                 self.height = current["height"]
@@ -525,7 +587,7 @@ class CameraService:
                     "pixel_format": self.pixel_format,
                 })
                 try:
-                    self.start()
+                    self.start(caller="apply_resolution:rollback")
                 except Exception:
                     pass
                 raise RuntimeError(f"Camera reopen failed: {exc}") from exc
@@ -644,7 +706,7 @@ class CameraService:
 
         restarted = False
         if pipeline_open:
-            self.stop()
+            self.stop(caller="set_stream_mode")
             restarted = True
 
         try:
@@ -657,7 +719,7 @@ class CameraService:
             raise
         finally:
             if restarted:
-                self.start()
+                self.start(caller="set_stream_mode")
 
     def get_stream_mode(self) -> int:
         try:
