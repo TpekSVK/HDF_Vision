@@ -628,19 +628,19 @@ class CameraService:
             self._logger.error("Get flash mode failed: %s", exc)
             return 0
 
-    def read_firmware_version(self) -> bytes:
+    def read_firmware_version(self) -> tuple[int, int, int, int]:
         try:
             return self._ensure_hid().read_firmware_version()
         except Exception as exc:
             self._logger.error("Read firmware version failed: %s", exc)
-            return b""
+            return (0, 0, 0, 0)
 
-    def read_unique_id(self) -> bytes:
+    def read_unique_id(self) -> str:
         try:
             return self._ensure_hid().read_unique_id()
         except Exception as exc:
             self._logger.error("Read unique ID failed: %s", exc)
-            return b""
+            return ""
 
     def set_manual_exposure_us(self, exposure_us: int):
         val = int(exposure_us)
