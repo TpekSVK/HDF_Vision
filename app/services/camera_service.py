@@ -7,6 +7,7 @@ import time
 import queue
 import logging
 import subprocess
+import re
 from collections import deque
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw
@@ -70,6 +71,8 @@ class CameraService:
                                 "pixel_format": self.pixel_format}
         self._hid: CU55HID | None = None
         self._logger = logging.getLogger(__name__)
+        self._supported_v4l2_controls: set[str] | None = None
+        self._camera_model: str | None = None
 
     def _init_hid(self):
         if self._hid is not None:
@@ -322,6 +325,7 @@ class CameraService:
                         "fourcc": "GREY",
                         "pixel_format": self.pixel_format,
                     })
+                    self.get_supported_v4l2_controls(refresh=True)
                     return
 
         # 2) Fallback: OpenCV V4L2
@@ -338,6 +342,7 @@ class CameraService:
                     "fourcc": "GREY",
                     "pixel_format": self.pixel_format,
                 })
+                self.get_supported_v4l2_controls(refresh=True)
                 return
 
         # nič sa neotvorilo
@@ -517,9 +522,82 @@ class CameraService:
         cmd = ["v4l2-ctl", "-d", self.device, "-c", arg]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
+            self._logger.debug("Applied V4L2 control on %s: %s", self.device, arg)
             return True
-        except (FileNotFoundError, subprocess.CalledProcessError):
+        except (FileNotFoundError, subprocess.CalledProcessError) as exc:
+            self._logger.debug("Failed V4L2 control on %s: %s (%s)", self.device, arg, exc)
             return False
+
+    def _query_v4l2_controls(self) -> set[str]:
+        cmd = ["v4l2-ctl", "-d", self.device, "--list-ctrls"]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return set()
+        controls: set[str] = set()
+        for line in result.stdout.splitlines():
+            stripped = line.strip()
+            if not stripped or ":" not in stripped:
+                continue
+            name = stripped.split(":", 1)[0].strip().split()[0]
+            if re.match(r"^[a-z0-9_]+$", name):
+                controls.add(name)
+        return controls
+
+    def _query_camera_model(self) -> str | None:
+        cmd = ["v4l2-ctl", "-d", self.device, "--all"]
+        try:
+            result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            return None
+        for line in result.stdout.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key.strip().lower() == "card type":
+                model = value.strip()
+                return model or None
+        return None
+
+    def _is_cu55_model(self) -> bool:
+        model = (self._camera_model or "").lower()
+        return "see3cam" in model and "cu55" in model
+
+    def get_supported_v4l2_controls(self, *, refresh: bool = False) -> set[str]:
+        if self._supported_v4l2_controls is not None and not refresh:
+            return set(self._supported_v4l2_controls)
+
+        discovered = self._query_v4l2_controls()
+        self._camera_model = self._query_camera_model()
+        if self._is_cu55_model():
+            supported = {"brightness", "exposure_time_absolute"}
+            if "exposure_absolute" in discovered:
+                supported.add("exposure_absolute")
+        elif discovered:
+            supported = discovered
+        else:
+            supported = {
+                "brightness",
+                "exposure_time_absolute",
+                "exposure_absolute",
+                "gain",
+                "gamma",
+                "sharpness",
+            }
+
+        self._supported_v4l2_controls = set(supported)
+        self._logger.info(
+            "Detected V4L2 controls for %s (model=%s): %s",
+            self.device,
+            self._camera_model or "unknown",
+            sorted(self._supported_v4l2_controls),
+        )
+        return set(self._supported_v4l2_controls)
+
+    def get_camera_model(self) -> str | None:
+        if self._camera_model is None:
+            self.get_supported_v4l2_controls()
+        return self._camera_model
 
     def _ensure_hid(self) -> CU55HID:
         if self._hid is None:

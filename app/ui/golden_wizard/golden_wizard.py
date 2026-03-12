@@ -2187,6 +2187,25 @@ class GoldenWizard(QDialog):
             }
         return None
 
+    def _camera_model(self) -> str | None:
+        getter = getattr(self.cam, "get_camera_model", None)
+        if callable(getter):
+            try:
+                model = getter()
+                return str(model).strip() or None if model is not None else None
+            except Exception:
+                return None
+        return None
+
+    def _camera_v4l2_controls(self) -> set[str]:
+        getter = getattr(self.cam, "get_supported_v4l2_controls", None)
+        if callable(getter):
+            try:
+                return {str(item).strip() for item in getter() if str(item).strip()}
+            except Exception:
+                return set()
+        return set()
+
     def _snapshot_camera_state(self) -> dict[str, Any]:
         return snapshot_camera_state(self.cam)
 
@@ -2254,6 +2273,8 @@ class GoldenWizard(QDialog):
             available_resolutions=self._available_camera_resolutions(),
             current_camera=self._current_camera_config(),
             camera_profile=source_view.camera_profile if source_view else None,
+            camera_model=self._camera_model(),
+            supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=source_view.settle_ms if source_view else None,
             trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
             trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
@@ -2327,6 +2348,8 @@ class GoldenWizard(QDialog):
             available_resolutions=self._available_camera_resolutions(),
             current_camera=self._current_camera_config(),
             camera_profile=view.camera_profile,
+            camera_model=self._camera_model(),
+            supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=view.settle_ms,
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),

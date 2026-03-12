@@ -9,6 +9,27 @@ from app.models.schema import ViewCameraProfile
 
 _LOGGER = logging.getLogger(__name__)
 
+_DEFAULT_V4L2_CONTROLS = {
+    "brightness",
+    "exposure_time_absolute",
+    "exposure_absolute",
+    "gain",
+    "gamma",
+    "sharpness",
+}
+
+
+def _supported_v4l2_controls(camera: Any) -> set[str]:
+    getter = getattr(camera, "get_supported_v4l2_controls", None)
+    if callable(getter):
+        try:
+            controls = {str(item).strip() for item in getter() if str(item).strip()}
+            if controls:
+                return controls
+        except Exception:
+            pass
+    return set(_DEFAULT_V4L2_CONTROLS)
+
 
 def _normalize_camera_profile(
     profile: ViewCameraProfile | Mapping[str, Any] | str | None,
@@ -128,26 +149,55 @@ def apply_camera_state(
         except Exception as exc:
             _handle_error("Zmena rozlíšenia pre view zlyhala", exc)
 
+    supported_controls = _supported_v4l2_controls(camera)
+    _LOGGER.info("Available V4L2 controls: %s", sorted(supported_controls))
+    applied_controls: list[str] = []
+    skipped_controls: list[str] = []
+
     if "exposure_us" in state and state.get("exposure_us") is not None:
-        try:
-            camera.set_manual_exposure_us(int(state["exposure_us"]))
-        except Exception as exc:
-            _handle_error("Nastavenie expozície zlyhalo", exc)
+        if not ({"exposure_time_absolute", "exposure_absolute"} & supported_controls):
+            skipped_controls.append("exposure_us")
+            _LOGGER.debug("Skipped unsupported V4L2 control: exposure_us")
+        else:
+            try:
+                camera.set_manual_exposure_us(int(state["exposure_us"]))
+                applied_controls.append("exposure_us")
+            except Exception as exc:
+                _handle_error("Nastavenie expozície zlyhalo", exc)
 
     if "gain_db" in state and state.get("gain_db") is not None:
-        try:
-            camera.set_gain_db(int(round(float(state["gain_db"]))))
-        except Exception as exc:
-            _handle_error("Nastavenie gainu zlyhalo", exc)
+        if "gain" not in supported_controls:
+            skipped_controls.append("gain")
+            _LOGGER.debug("Skipped unsupported V4L2 control: gain")
+        else:
+            try:
+                camera.set_gain_db(int(round(float(state["gain_db"]))))
+                applied_controls.append("gain")
+            except Exception as exc:
+                _handle_error("Nastavenie gainu zlyhalo", exc)
 
-    for key, setter in (("gamma", "set_gamma"), ("brightness", "set_brightness"), ("sharpness", "set_sharpness")):
+    for key, setter, control_name in (
+        ("gamma", "set_gamma", "gamma"),
+        ("brightness", "set_brightness", "brightness"),
+        ("sharpness", "set_sharpness", "sharpness"),
+    ):
         if key in state and state.get(key) is not None:
+            if control_name not in supported_controls:
+                skipped_controls.append(control_name)
+                _LOGGER.debug("Skipped unsupported V4L2 control: %s", control_name)
+                continue
             method = getattr(camera, setter, None)
             if callable(method):
                 try:
                     method(float(state[key]))
+                    applied_controls.append(control_name)
                 except Exception as exc:
                     _handle_error(f"Nastavenie {key} zlyhalo", exc)
+
+    if applied_controls:
+        _LOGGER.info("Applied camera controls: %s", applied_controls)
+    if skipped_controls:
+        _LOGGER.info("Skipped unsupported camera controls: %s", skipped_controls)
 
     for key, setter in (("stream_mode", "set_stream_mode"), ("flash_mode", "set_flash_mode")):
         if key in state and state.get(key) is not None:
