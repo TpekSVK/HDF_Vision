@@ -17,6 +17,7 @@ from numbers import Integral, Real
 from typing import Any
 
 import numpy as np
+import Jetson.GPIO as GPIO
 
 from threading import Thread
 from app.services.retention_service import RetentionService
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
+        self._run_trigger_gpio_ready = False
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -501,11 +503,20 @@ class MainWindow(QMainWindow):
         )
 
     def _send_run_trigger_gpio_pulse(self) -> None:
-        sent = bool(getattr(self.gpio, "pulse_trigger_output", lambda: False)())
-        if sent:
-            self._logger.info("production trigger sent via fixed GPIO mapping")
-        else:
-            self._logger.warning("production trigger GPIO pulse failed (fixed mapping)")
+        self._ensure_run_trigger_gpio_ready()
+        GPIO.output(7, GPIO.HIGH)
+        self._logger.info("GPIO trigger HIGH pin=7")
+        time.sleep(0.010)
+        GPIO.output(7, GPIO.LOW)
+        self._logger.info("GPIO trigger LOW pin=7")
+
+    def _ensure_run_trigger_gpio_ready(self) -> None:
+        if self._run_trigger_gpio_ready:
+            return
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BOARD)
+        GPIO.setup(7, GPIO.OUT, initial=GPIO.LOW)
+        self._run_trigger_gpio_ready = True
 
     def manual_trigger(self):
         if self.mode != "RUN":
@@ -531,7 +542,7 @@ class MainWindow(QMainWindow):
                 )
                 self._reset_manual_trigger_progress(recipe_name)
                 if base_frame is None:
-                    base_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
+                    base_frame = self.cam.capture_trigger_frame(timeout_s=1.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                 self._run_legacy_trigger(
                     base_frame,
                     recipe_name,
@@ -686,7 +697,7 @@ class MainWindow(QMainWindow):
                             current_stream_mode = None
 
                         if current_stream_mode == 1:
-                            view_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
+                            view_frame = self.cam.capture_trigger_frame(timeout_s=1.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                         else:
                             view_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
 
@@ -1874,6 +1885,9 @@ class MainWindow(QMainWindow):
             self.cam.stop(caller="main_window_close")
             self.gpio.close()
             self.modbus.close()
+            if self._run_trigger_gpio_ready:
+                GPIO.output(7, GPIO.LOW)
+                GPIO.cleanup()
         finally:
             e.accept()
 
