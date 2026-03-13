@@ -922,13 +922,14 @@ class MainWindow(QMainWindow):
         self._apply_run_status_style(aggregated_status)
         self._signal_outputs(aggregated_status)
 
-        active_frame = self._get_last_frame_for_view(self._active_view_id)
-        if active_frame is not None:
-            self._last_trigger_frame = self._clone_frame(active_frame)
-            self._last_trigger_view_id = self._active_view_id
-        else:
+        if trigger_state["last_preview_frame"] is not None:
             self._last_trigger_frame = self._clone_frame(trigger_state["last_preview_frame"])
             self._last_trigger_view_id = trigger_state["last_view_id"]
+        else:
+            active_frame = self._get_last_frame_for_view(self._active_view_id)
+            if active_frame is not None:
+                self._last_trigger_frame = self._clone_frame(active_frame)
+                self._last_trigger_view_id = self._active_view_id
 
         self._reload_results_strip()
         if not self.live_enabled:
@@ -1068,6 +1069,9 @@ class MainWindow(QMainWindow):
         self.cam.end_trigger_capture()
         if was_live_enabled:
             self._run_timer.start()
+        elif not self.live_enabled:
+            # Po ukončení trigger capture obnov statický preview frame.
+            self._update_live_view()
         self._logger.info("run trigger resumed preview")
         self._log_trigger_cycle(
             "preview_resume",
@@ -1108,12 +1112,7 @@ class MainWindow(QMainWindow):
                 src = self.cam.last_frame(caller="run_live_view")
             else:
                 src = self._get_last_frame_for_view(self._active_view_id)
-                if (
-                    src is None
-                    and self._last_trigger_frame is not None
-                    and self._view_storage_key(self._last_trigger_view_id)
-                    == self._view_storage_key(self._active_view_id)
-                ):
+                if src is None:
                     src = self._last_trigger_frame
             if src is None:
                 self.live_view.clear()
