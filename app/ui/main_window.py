@@ -1069,6 +1069,9 @@ class MainWindow(QMainWindow):
         self.cam.end_trigger_capture()
         if was_live_enabled:
             self._run_timer.start()
+        elif not self.live_enabled:
+            # Po ukončení trigger capture obnov statický preview frame.
+            self._update_live_view()
         self._logger.info("run trigger resumed preview")
         self._log_trigger_cycle(
             "preview_resume",
@@ -1108,9 +1111,7 @@ class MainWindow(QMainWindow):
             if self.live_enabled:
                 src = self.cam.last_frame(caller="run_live_view")
             else:
-                src = self._last_trigger_frame
-                if src is None:
-                    src = self._get_last_frame_for_view(self._active_view_id)
+                src = self._get_last_frame_for_view(self._active_view_id)
                 if src is None:
                     src = self._last_trigger_frame
             if src is None:
