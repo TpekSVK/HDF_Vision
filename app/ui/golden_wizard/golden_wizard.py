@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 import os
 import time
 import math
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 from functools import partial
@@ -1268,6 +1269,7 @@ class GoldenWizard(QDialog):
         modbus: "ModbusService | None" = None,
     ):
         super().__init__(parent)
+        self._logger = logging.getLogger(__name__)
 
         self._base_title = "Golden WIZARD"
         self.setWindowTitle(self._base_title)
@@ -1287,7 +1289,7 @@ class GoldenWizard(QDialog):
         # --- Live infra (len video label, bez kreslenia) ---
 
         dev = os.environ.get("CAM_DEV") or getattr(self.cam, "devices", ["/dev/video0"])[0]
-        print(f"[GoldenWizard] Live device: {dev}")
+        self._logger.debug("wizard_live_device=%s", dev)
         self._lp = LivePreviewService(dev, 1280, 720, 60)
 
         self._live_timer = QTimer(self)
@@ -1311,7 +1313,7 @@ class GoldenWizard(QDialog):
                 bool(self.recipes.get_logging_enabled(current_recipe))
             )
         except Exception as exc:
-            print(f"[GoldenWizard] get_logging_enabled failed for {current_recipe}: {exc}")
+            self._logger.warning("get_logging_enabled failed for %s: %s", current_recipe, exc)
             self.chk_logging.setChecked(True)
 
         self._view_selector = QComboBox(self)
@@ -1504,17 +1506,19 @@ class GoldenWizard(QDialog):
     # ---------- Live ----------
     def _pause_runtime_camera_for_wizard(self) -> None:
         if self._runtime_camera_paused_by_wizard:
+            self._logger.debug("wizard_camera_pause skipped: already paused")
             return
         self.cam.pause_for_external()
         self._runtime_camera_paused_by_wizard = True
-        print("[GoldenWizard] wizard paused runtime camera")
+        self._logger.info("wizard_camera_pause done")
 
     def _resume_runtime_camera_from_wizard(self) -> None:
         if not self._runtime_camera_paused_by_wizard:
+            self._logger.debug("wizard_camera_resume skipped: not paused")
             return
         self.cam.resume_after_external()
         self._runtime_camera_paused_by_wizard = False
-        print("[GoldenWizard] wizard resumed runtime camera")
+        self._logger.info("wizard_camera_resume done")
 
     def _toggle_live(self, checked: bool):
         if checked:
@@ -1543,7 +1547,7 @@ class GoldenWizard(QDialog):
         self._live_timer.start()
         self._live_on = True
         self.btn_live.setText("Live ON")
-        print("[GoldenWizard] wizard preview started")
+        self._logger.info("wizard_preview state=started")
 
     def _stop_preview_session(
         self,
@@ -1558,7 +1562,7 @@ class GoldenWizard(QDialog):
         except Exception:
             pass
         if self._live_on:
-            print("[GoldenWizard] wizard preview stopped")
+            self._logger.info("wizard_preview state=stopped")
         self._live_on = False
         self.btn_live.setText("Live OFF")
         self.live_lbl.hide()
@@ -1569,7 +1573,7 @@ class GoldenWizard(QDialog):
             try:
                 self._resume_runtime_camera_from_wizard()
             except Exception as e:
-                print("[GoldenWizard] resume_after_external:", e)
+                self._logger.error("resume_after_external failed: %s", e)
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()

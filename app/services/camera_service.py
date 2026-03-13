@@ -83,6 +83,28 @@ class CameraService:
         self._trigger_state_lock = threading.Lock()
         self._cap_read_lock = threading.Lock()
 
+    def _log_trigger_cycle_state(self, event: str, **fields: object) -> None:
+        payload = {
+            "event": event,
+            "stream_mode": fields.get("stream_mode"),
+            "pipeline_open": bool(fields.get("pipeline_open", self.is_pipeline_open())),
+            "trigger_mode": bool(fields.get("trigger_mode", self._is_trigger_mode_active())),
+            "preview_paused": bool(fields.get("preview_paused", False)),
+            "trigger_primed": bool(fields.get("trigger_primed", self._trigger_primed)),
+            "frame_received": bool(fields.get("frame_received", False)),
+            "camera_open": bool(fields.get("camera_open", self._cap is not None or self._pipeline is not None)),
+            "paused_external": bool(fields.get("paused_external", self._paused_external)),
+            "fallback": fields.get("fallback"),
+            "note": fields.get("note"),
+        }
+        self._logger.debug(
+            "trigger_cycle event=%(event)s stream_mode=%(stream_mode)s pipeline_open=%(pipeline_open)s "
+            "trigger_mode=%(trigger_mode)s preview_paused=%(preview_paused)s trigger_primed=%(trigger_primed)s "
+            "frame_received=%(frame_received)s camera_open=%(camera_open)s paused_external=%(paused_external)s "
+            "fallback=%(fallback)s note=%(note)s",
+            payload,
+        )
+
     def _is_preview_path_active(self) -> bool:
         """
         Preview path je queue/appsink + ring buffer pre UI live náhľad.
@@ -819,12 +841,25 @@ class CameraService:
         settle_delay_s: float = 0.05,
         trigger_fn: Callable[[], None] | None = None,
     ) -> bool:
+        if self._paused_external:
+            self._log_trigger_cycle_state(
+                "priming_blocked",
+                preview_paused=True,
+                note="preview session currently owns camera",
+            )
+            raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
+
         pipeline_was_open = self.is_pipeline_open()
         if not pipeline_was_open:
             self.start(caller="trigger_pipeline_open")
             self._logger.info("trigger pipeline opened")
         if not self._is_trigger_mode_active():
             self._trigger_primed = False
+            self._log_trigger_cycle_state(
+                "priming_skipped",
+                fallback="trigger_mode_inactive",
+                note="trigger mode inactive; fallback capture path will be used",
+            )
             return False
         if self._trigger_primed:
             return True
@@ -846,16 +881,52 @@ class CameraService:
             self._logger.info("priming frame discarded via cap.read()")
             self._trigger_primed = True
             self._logger.info("camera primed")
+            self._log_trigger_cycle_state("priming_done", trigger_primed=True)
             return True
         finally:
             self.end_trigger_capture()
             self._trigger_priming_in_progress = False
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
+        stream_mode: int | None = None
+        try:
+            stream_mode = int(self.get_stream_mode())
+        except Exception:
+            stream_mode = None
+
+        if self._paused_external:
+            self._log_trigger_cycle_state(
+                "capture_blocked",
+                stream_mode=stream_mode,
+                preview_paused=True,
+                note="preview session currently owns camera",
+            )
+            raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
+
+        if not self.is_pipeline_open():
+            self._log_trigger_cycle_state(
+                "capture_guard_failed",
+                stream_mode=stream_mode,
+                note="camera pipeline is not open",
+            )
+            raise RuntimeError("Trigger capture failed: camera is not open (pipeline is closed)")
+
         if not self._is_trigger_mode_active():
+            self._log_trigger_cycle_state(
+                "capture_fallback",
+                stream_mode=stream_mode,
+                fallback="trigger_mode_inactive",
+                note="trigger mode inactive; using preview/ring fallback frame",
+            )
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
+        self._log_trigger_cycle_state(
+            "capture_start",
+            stream_mode=stream_mode,
+            preview_paused=self._is_trigger_capture_active(),
+            trigger_primed=self._trigger_primed,
+        )
         self.begin_trigger_capture()
         try:
             started = time.monotonic()
@@ -886,6 +957,13 @@ class CameraService:
         self._logger.info("production frame received via cap.read()")
         self._logger.info("frame received latency=%.2f ms", latency_ms)
         self._logger.info("frame reused for display+inspection")
+        self._log_trigger_cycle_state(
+            "capture_done",
+            stream_mode=stream_mode,
+            preview_paused=False,
+            trigger_primed=self._trigger_primed,
+            frame_received=True,
+        )
         return frame
 
     def set_stream_mode(self, mode: int, *, stabilize_delay_s: float = 0.05):

@@ -506,6 +506,39 @@ class MainWindow(QMainWindow):
             ctx.get("stream_mode_error"),
         )
 
+    def _log_trigger_cycle(
+        self,
+        event: str,
+        *,
+        active_view: str | None = None,
+        trigger_mode: str | None = None,
+        preview_state: str | None = None,
+        trigger_primed: bool | None = None,
+        frame_received: bool = False,
+        note: str | None = None,
+    ) -> None:
+        stream_mode: int | None = None
+        stream_mode_error: str | None = None
+        try:
+            stream_mode = int(self.cam.get_stream_mode())
+        except Exception as exc:
+            stream_mode_error = str(exc)
+        self._logger.debug(
+            "trigger_cycle event=%s active_recipe=%s active_view=%s stream_mode=%s pipeline_open=%s "
+            "trigger_mode=%s preview=%s trigger_primed=%s frame_received=%s note=%s stream_mode_error=%s",
+            event,
+            self.current_recipe_name(),
+            active_view or self._active_view_id,
+            stream_mode,
+            bool(getattr(self.cam, "is_pipeline_open", lambda: False)()),
+            trigger_mode,
+            preview_state,
+            trigger_primed,
+            frame_received,
+            note,
+            stream_mode_error,
+        )
+
     def _send_run_trigger_gpio_pulse(self) -> None:
         sent = bool(getattr(self.gpio, "pulse_physical_pin", lambda *_args, **_kwargs: False)(7, pulse_seconds=0.01))
         if sent:
@@ -557,10 +590,16 @@ class MainWindow(QMainWindow):
             return
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
+            self._log_trigger_cycle("cycle_start", preview_state="paused")
             if trigger_state["recipe_cfg"] is None:
                 base_frame = self.cam.capture_trigger_frame(
                     timeout_s=0.8,
                     trigger_fn=self._send_run_trigger_gpio_pulse,
+                )
+                self._log_trigger_cycle(
+                    "legacy_capture_done",
+                    trigger_mode="legacy",
+                    frame_received=base_frame is not None,
                 )
                 self._run_legacy_trigger(
                     base_frame,
@@ -692,6 +731,13 @@ class MainWindow(QMainWindow):
         interval_ms = spec["interval_ms"]
         self._logger.info("active view id: %s", view_id)
         self._logger.info("trigger mode for current view: %s", trigger_mode)
+        self._log_trigger_cycle(
+            "view_start",
+            active_view=view_id,
+            trigger_mode=trigger_mode,
+            preview_state="paused",
+            trigger_primed=bool(getattr(self.cam, "_trigger_primed", False)),
+        )
 
         golden = self._load_view_golden_array(recipe_name, view)
         source_view_id = spec.get("frame_source_view_id")
@@ -739,6 +785,15 @@ class MainWindow(QMainWindow):
                 self._reset_manual_trigger_progress(recipe_name)
                 return {"should_break": True}
             view_frame_u8 = view_frame.copy()
+
+        self._log_trigger_cycle(
+            "view_capture_done",
+            active_view=view_id,
+            trigger_mode=trigger_mode,
+            preview_state="paused",
+            trigger_primed=bool(getattr(self.cam, "_trigger_primed", False)),
+            frame_received=view_frame_u8 is not None,
+        )
 
         if golden is None:
             status = "nok"
@@ -999,6 +1054,11 @@ class MainWindow(QMainWindow):
     def _pause_live_preview_for_trigger(self) -> bool:
         was_live_enabled = bool(self.live_enabled)
         self._logger.info("run trigger paused preview")
+        self._log_trigger_cycle(
+            "preview_pause",
+            preview_state="paused",
+            note="manual trigger cycle start",
+        )
         if was_live_enabled:
             self._run_timer.stop()
         self.cam.begin_trigger_capture()
@@ -1009,6 +1069,11 @@ class MainWindow(QMainWindow):
         if was_live_enabled:
             self._run_timer.start()
         self._logger.info("run trigger resumed preview")
+        self._log_trigger_cycle(
+            "preview_resume",
+            preview_state="resumed",
+            note="manual trigger cycle end",
+        )
 
     def _toggle_live(self):
         self.live_enabled = self.btn_live.isChecked()
