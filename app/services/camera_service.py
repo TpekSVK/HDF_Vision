@@ -757,7 +757,8 @@ class CameraService:
         settle_delay_s: float = 0.05,
         trigger_fn: Callable[[], None] | None = None,
     ) -> bool:
-        if not self.is_pipeline_open():
+        pipeline_was_open = self.is_pipeline_open()
+        if not pipeline_was_open:
             self.start(caller="trigger_pipeline_open")
             self._logger.info("trigger pipeline opened")
         if not self._is_trigger_mode_active():
@@ -767,16 +768,19 @@ class CameraService:
             return True
         self._trigger_priming_in_progress = True
         try:
-            self._logger.info("priming started")
-            self._clear_queue()
+            self._logger.info("trigger priming started")
+            if not pipeline_was_open:
+                time.sleep(0.5)
+            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
             if settle_delay_s > 0:
                 time.sleep(float(settle_delay_s))
-            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
-            try:
-                _ = self._q.get(timeout=0.5)
-            except queue.Empty as exc:
-                raise RuntimeError("Priming failed: no frame after dummy trigger") from exc
-            self._logger.info("priming frame discarded")
+            if self._cap is None:
+                raise RuntimeError("Priming failed: OpenCV capture is not available")
+
+            ok, _ = self._cap.read()
+            if not ok:
+                raise RuntimeError("Priming failed: cap.read() returned no frame")
+            self._logger.info("priming frame discarded via cap.read()")
             self._trigger_primed = True
             self._logger.info("camera primed")
             return True
@@ -784,19 +788,31 @@ class CameraService:
             self._trigger_priming_in_progress = False
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
-        if not self._is_trigger_path_active():
+        if not self._is_trigger_mode_active():
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
-        self._clear_queue()
-        # TODO: queue-based trigger path je prechodové riešenie; trigger capture presunúť na blocking read model.
         started = time.monotonic()
         self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-        try:
-            frame = self._q.get(timeout=float(timeout_s))
-        except queue.Empty as exc:
-            raise RuntimeError("No frame received after production trigger") from exc
+        deadline = started + float(timeout_s)
+        frame = None
+        if self._cap is None:
+            raise RuntimeError("Production capture failed: OpenCV capture is not available")
+
+        while time.monotonic() < deadline:
+            ok, grabbed = self._cap.read()
+            if ok and grabbed is not None:
+                frame = grabbed
+                break
+            time.sleep(0.005)
+
+        if frame is None:
+            raise RuntimeError("No frame received after production trigger")
+        frame = self._normalize_frame_u8(frame)
+        if frame is None:
+            raise RuntimeError("Production capture failed: invalid frame returned")
         latency_ms = (time.monotonic() - started) * 1000.0
+        self._logger.info("production frame received via cap.read()")
         self._logger.info("frame received latency=%.2f ms", latency_ms)
         self._logger.info("frame reused for display+inspection")
         return frame
