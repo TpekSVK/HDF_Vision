@@ -117,6 +117,23 @@ class RecipeService:
         recipe = self._load_recipe_config(name)
         return recipe.get_view(view_id)
 
+    @staticmethod
+    def _normalize_trigger_mode(trigger_mode: str | None) -> str:
+        mode = str(trigger_mode or "timed").strip().lower()
+        if mode not in {"timed", "external", "manual"}:
+            mode = "timed"
+        return mode
+
+    @classmethod
+    def _normalize_trigger_interval(
+        cls,
+        trigger_mode: str | None,
+        trigger_interval_ms: int | None,
+    ) -> int | None:
+        if cls._normalize_trigger_mode(trigger_mode) != "timed":
+            return None
+        return int(trigger_interval_ms) if trigger_interval_ms is not None else None
+
     def add_view(
         self,
         name: str,
@@ -209,17 +226,11 @@ class RecipeService:
             camera_payload = target_camera
 
         target_settle = settle_ms if settle_ms is not None else source_settle
-        target_trigger_mode = (trigger_mode or source_trigger_mode or "timed").strip().lower()
-        if target_trigger_mode not in {"timed", "external", "manual"}:
-            target_trigger_mode = "timed"
-        if target_trigger_mode != "timed":
-            target_trigger_interval = None
-        else:
-            target_trigger_interval = (
-                trigger_interval_ms
-                if trigger_interval_ms is not None
-                else source_trigger_interval
-            )
+        target_trigger_mode = self._normalize_trigger_mode(trigger_mode or source_trigger_mode)
+        target_trigger_interval = self._normalize_trigger_interval(
+            target_trigger_mode,
+            trigger_interval_ms if trigger_interval_ms is not None else source_trigger_interval,
+        )
 
         target_frame_source = frame_source_view_id
         if target_frame_source is None:
@@ -307,17 +318,11 @@ class RecipeService:
         else:
             camera_payload = camera_profile
 
-        normalized_mode = str(trigger_mode or "timed").strip().lower()
-        if normalized_mode not in {"timed", "external", "manual"}:
-            normalized_mode = "timed"
-        if normalized_mode != "timed":
-            normalized_interval = None
-        else:
-            normalized_interval = (
-                int(trigger_interval_ms)
-                if trigger_interval_ms is not None
-                else None
-            )
+        normalized_mode = self._normalize_trigger_mode(trigger_mode)
+        normalized_interval = self._normalize_trigger_interval(
+            normalized_mode,
+            trigger_interval_ms,
+        )
 
         updated_view = RecipeView(
             id=view.id,
