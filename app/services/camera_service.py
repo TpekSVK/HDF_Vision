@@ -692,6 +692,54 @@ class CameraService:
             except queue.Empty:
                 break
 
+    def _build_opencv_gst_pipeline(self, dev: str) -> str:
+        return (
+            f"v4l2src device={dev} io-mode=2 ! "
+            f"video/x-raw,format={self._gst_caps_format()},width={self.width},height={self.height},framerate={self.fps}/1 ! "
+            f"appsink drop=true max-buffers=2 sync=false"
+        )
+
+    def _ensure_trigger_read_capture(self) -> None:
+        if self._cap is not None:
+            return
+
+        if self._pipeline is not None:
+            try:
+                self._pipeline.set_state(Gst.State.NULL)
+            except Exception:
+                pass
+            self._pipeline = None
+        if self._loop is not None:
+            try:
+                self._loop.quit()
+            except Exception:
+                pass
+            self._loop = None
+        if self._t is not None and self._t.is_alive():
+            self._t.join(timeout=1.0)
+        self._t = None
+
+        pipeline = self._build_opencv_gst_pipeline(self.device)
+        cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
+        if not cap.isOpened():
+            cap.release()
+            raise RuntimeError(f"Failed to open trigger capture pipeline for {self.device}")
+        self._cap = cap
+        self._mode = "trigger_gst"
+
+    def _read_trigger_frame_via_cap(self, *, timeout_s: float):
+        if self._cap is None:
+            raise RuntimeError("Trigger capture backend is not available")
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            ok, frame = self._cap.read()
+            if ok and frame is not None:
+                if frame.ndim == 3 and frame.shape[2] == 3:
+                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                return frame
+            time.sleep(0.002)
+        raise RuntimeError("No frame received after trigger")
+
     def _is_trigger_mode_active(self) -> bool:
         try:
             return int(self.get_stream_mode()) == int(MODE_TRIGGER)
@@ -716,9 +764,11 @@ class CameraService:
         settle_delay_s: float = 0.05,
         trigger_fn: Callable[[], None] | None = None,
     ) -> bool:
+        opened_now = False
         if not self.is_pipeline_open():
             self.start(caller="trigger_pipeline_open")
             self._logger.info("trigger pipeline opened")
+            opened_now = True
         if not self._is_trigger_mode_active():
             self._trigger_primed = False
             return False
@@ -727,34 +777,18 @@ class CameraService:
         self._trigger_priming_in_progress = True
         try:
             self._logger.info("priming started")
-            self._clear_queue()
+
+            self._ensure_trigger_read_capture()
+
+            if opened_now:
+                time.sleep(0.5)
             if settle_delay_s > 0:
                 time.sleep(float(settle_delay_s))
 
-            if trigger_fn is not None:
-                self._logger.debug("[Camera] HW trigger prime pulse 1")
-                self._fire_trigger(note="priming hw trigger pulse 1 sent", trigger_fn=trigger_fn)
-                time.sleep(0.03)
-                self._logger.debug("[Camera] HW trigger prime pulse 2")
-                self._fire_trigger(note="priming hw trigger pulse 2 sent", trigger_fn=trigger_fn)
-            else:
-                self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
-
-            self._logger.debug("[Camera] Waiting for primed frame...")
-            try:
-                _ = self._q.get(timeout=1.2)
-            except queue.Empty as exc:
-                if trigger_fn is None:
-                    raise RuntimeError("Priming failed: no frame after dummy trigger") from exc
-                self._logger.debug("[Camera] Priming retry pulse")
-                self._fire_trigger(note="priming hw trigger retry pulse sent", trigger_fn=trigger_fn)
-                self._logger.debug("[Camera] Waiting for primed frame...")
-                try:
-                    _ = self._q.get(timeout=1.2)
-                except queue.Empty as retry_exc:
-                    raise RuntimeError("Priming failed: no frame after hardware trigger priming") from retry_exc
-            self._logger.debug("[Camera] Primed frame received")
-            self._logger.info("priming frame discarded")
+            self._fire_trigger(note="priming trigger sent", trigger_fn=trigger_fn)
+            self._logger.debug("trigger capture via cap.read()")
+            _ = self._read_trigger_frame_via_cap(timeout_s=1.2)
+            self._logger.debug("discard priming frame")
             self._trigger_primed = True
             self._logger.info("camera primed")
             return True
@@ -766,13 +800,11 @@ class CameraService:
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
-        self._clear_queue()
         started = time.monotonic()
         self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-        try:
-            frame = self._q.get(timeout=float(timeout_s))
-        except queue.Empty as exc:
-            raise RuntimeError("No frame received after production trigger") from exc
+        self._logger.debug("trigger capture via cap.read()")
+        frame = self._read_trigger_frame_via_cap(timeout_s=float(timeout_s))
+        self._logger.debug("frame received via cap.read()")
         latency_ms = (time.monotonic() - started) * 1000.0
         self._logger.info("frame received latency=%.2f ms", latency_ms)
         self._logger.info("frame reused for display+inspection")
