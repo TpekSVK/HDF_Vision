@@ -24,7 +24,6 @@ from app.services.retention_service import RetentionService
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
-from app.ui.gpio_wizard import GPIOWizard
 from app.ui.modbus_wizard import ModbusWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
@@ -100,7 +99,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
-        self.gpio.set_active_recipe(self.current_recipe_name())
 
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
@@ -369,9 +367,6 @@ class MainWindow(QMainWindow):
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
-        self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
-        self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
-        row1.addWidget(self.btn_gpio_wizard)
 
         self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
@@ -506,11 +501,11 @@ class MainWindow(QMainWindow):
         )
 
     def _send_run_trigger_gpio_pulse(self) -> None:
-        sent = bool(getattr(self.gpio, "pulse_physical_pin", lambda *_args, **_kwargs: False)(7, pulse_seconds=0.01))
+        sent = bool(getattr(self.gpio, "pulse_trigger_output", lambda: False)())
         if sent:
-            self._logger.info("production trigger sent via GPIO pin=7 pulse_ms=10")
+            self._logger.info("production trigger sent via fixed GPIO mapping")
         else:
-            self._logger.warning("production trigger GPIO pulse failed pin=7")
+            self._logger.warning("production trigger GPIO pulse failed (fixed mapping)")
 
     def manual_trigger(self):
         if self.mode != "RUN":
@@ -972,12 +967,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-
-    def open_gpio_wizard(self):
-        self.gpio.set_active_recipe(self.current_recipe_name())
-        dlg = GPIOWizard(self.gpio, self)
-        dlg.resize(720, 520)
-        dlg.exec()
 
     def open_modbus_wizard(self):
         dlg = ModbusWizard(self.modbus, self)
@@ -1954,7 +1943,6 @@ class MainWindow(QMainWindow):
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
-            self.gpio.set_active_recipe(name)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -1974,7 +1962,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -1984,7 +1971,6 @@ class MainWindow(QMainWindow):
             return
         new = new.strip()
         self.recipes.rename(old, new)
-        self.gpio.rename_profile(old, new)
         self._reset_manual_trigger_progress(old)
         self._refresh_recipe_list()
         self.recipes.load(new)
@@ -1995,7 +1981,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -2007,7 +1992,6 @@ class MainWindow(QMainWindow):
         if r != QMessageBox.Yes:
             return
         self.recipes.delete(name)
-        self.gpio.delete_profile(name)
         self._reset_manual_trigger_progress(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
@@ -2018,7 +2002,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
