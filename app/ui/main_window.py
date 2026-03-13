@@ -40,6 +40,7 @@ from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
+    resolve_view_camera_state,
     snapshot_camera_state,
 )
 
@@ -554,6 +555,7 @@ class MainWindow(QMainWindow):
                 base_camera_state = trigger_state.get("base_camera_state")
                 if base_camera_state is not None:
                     try:
+                        self._logger.info("restoring base camera state")
                         apply_camera_state(self.cam, base_camera_state, apply_stream_mode=False)
                     except Exception as exc:
                         self._logger.exception("[Trigger] Obnovenie nastavenia kamery zlyhalo")
@@ -564,6 +566,8 @@ class MainWindow(QMainWindow):
         was_live_enabled = self._pause_live_preview_for_trigger()
         gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
         recipe_name = self.current_recipe_name()
+        base_camera_state = snapshot_camera_state(self.cam)
+        self._logger.info("snapshot camera state taken")
 
         try:
             recipe_cfg = load_recipe_config(recipe_name)
@@ -581,6 +585,7 @@ class MainWindow(QMainWindow):
                 "logging_enabled": bool(
                     getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
                 ),
+                "base_camera_state": base_camera_state,
             }
 
         if not getattr(recipe_cfg, "regions", None):
@@ -659,7 +664,7 @@ class MainWindow(QMainWindow):
                 getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
                 for spec in view_specs
             },
-            "base_camera_state": snapshot_camera_state(self.cam),
+            "base_camera_state": base_camera_state,
             "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
         }
 
@@ -707,10 +712,11 @@ class MainWindow(QMainWindow):
                 ),
                 hid_set="skipped",
             )
-            apply_view_camera_profile(
+            view_camera_state = resolve_view_camera_state(base_camera_state, profile)
+            self._logger.info("applying view camera state")
+            apply_camera_state(
                 self.cam,
-                base_camera_state,
-                profile,
+                view_camera_state,
                 apply_stream_mode=False,
             )
 
