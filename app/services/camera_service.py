@@ -9,6 +9,7 @@ import logging
 import subprocess
 import re
 from collections import deque
+from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
 
@@ -702,7 +703,19 @@ class CameraService:
         hid.send_software_trigger()
         self._logger.info("%s", note)
 
-    def ensure_trigger_pipeline_primed(self, *, settle_delay_s: float = 0.05) -> bool:
+    def _fire_trigger(self, *, note: str, trigger_fn: Callable[[], None] | None = None) -> None:
+        if trigger_fn is not None:
+            trigger_fn()
+            self._logger.info("%s", note)
+            return
+        self._send_software_trigger(note=note)
+
+    def ensure_trigger_pipeline_primed(
+        self,
+        *,
+        settle_delay_s: float = 0.05,
+        trigger_fn: Callable[[], None] | None = None,
+    ) -> bool:
         if not self.is_pipeline_open():
             self.start(caller="trigger_pipeline_open")
             self._logger.info("trigger pipeline opened")
@@ -717,7 +730,7 @@ class CameraService:
             self._clear_queue()
             if settle_delay_s > 0:
                 time.sleep(float(settle_delay_s))
-            self._send_software_trigger(note="priming dummy trigger sent")
+            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
             try:
                 _ = self._q.get(timeout=0.5)
             except queue.Empty as exc:
@@ -729,14 +742,14 @@ class CameraService:
         finally:
             self._trigger_priming_in_progress = False
 
-    def capture_trigger_frame(self, *, timeout_s: float = 0.6):
+    def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
         if not self._is_trigger_mode_active():
             return self.last_frame(caller="capture_trigger_frame:master")
 
-        self.ensure_trigger_pipeline_primed()
+        self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
         self._clear_queue()
         started = time.monotonic()
-        self._send_software_trigger(note="production trigger sent")
+        self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
         try:
             frame = self._q.get(timeout=float(timeout_s))
         except queue.Empty as exc:

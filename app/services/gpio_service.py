@@ -488,6 +488,21 @@ class GPIOService:
                 if pin in configured:
                     self._pulse_pin(int(pin), pulse_seconds)
 
+    def pulse_physical_pin(self, pin: int, *, pulse_seconds: float = 0.01) -> bool:
+        """Force a pulse on a physical output-capable pin (independent of role mapping)."""
+
+        board_pin = int(pin)
+        capabilities = _PIN_CAPABILITIES.get(board_pin, ())
+        if "output" not in capabilities:
+            return False
+        with self._lock:
+            try:
+                self._driver.setup(board_pin, self._driver.OUT, initial=self._driver.LOW)
+                self._pulse_pin(board_pin, float(pulse_seconds))
+                return True
+            except Exception:
+                return False
+
     def set_outputs_level(self, pins: Iterable[int], *, level: bool) -> None:
         """Drive configured output pins to a fixed logic level."""
 

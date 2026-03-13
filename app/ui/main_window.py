@@ -505,6 +505,13 @@ class MainWindow(QMainWindow):
             ctx.get("stream_mode_error"),
         )
 
+    def _send_run_trigger_gpio_pulse(self) -> None:
+        sent = bool(getattr(self.gpio, "pulse_physical_pin", lambda *_args, **_kwargs: False)(7, pulse_seconds=0.01))
+        if sent:
+            self._logger.info("production trigger sent via GPIO pin=7 pulse_ms=10")
+        else:
+            self._logger.warning("production trigger GPIO pulse failed pin=7")
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
@@ -529,7 +536,7 @@ class MainWindow(QMainWindow):
                 )
                 self._reset_manual_trigger_progress(recipe_name)
                 if base_frame is None:
-                    base_frame = self.cam.capture_trigger_frame(timeout_s=0.8)
+                    base_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                 self._run_legacy_trigger(
                     base_frame,
                     recipe_name,
@@ -684,7 +691,7 @@ class MainWindow(QMainWindow):
                             current_stream_mode = None
 
                         if current_stream_mode == 1:
-                            view_frame = self.cam.capture_trigger_frame(timeout_s=0.8)
+                            view_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                         else:
                             view_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
 
