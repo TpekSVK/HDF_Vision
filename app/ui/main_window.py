@@ -518,6 +518,7 @@ class MainWindow(QMainWindow):
             return
         self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
+        self._pause_live_preview_for_trigger()
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
             gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
@@ -884,6 +885,8 @@ class MainWindow(QMainWindow):
         except Exception:
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
+        finally:
+            self._resume_live_preview_after_trigger()
 
     def _run_legacy_trigger(
         self,
@@ -993,6 +996,16 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def _pause_live_preview_for_trigger(self) -> bool:
+        was_live_enabled = bool(self.live_enabled)
+        self._logger.debug("preview paused")
+        self.cam.begin_trigger_capture()
+        return was_live_enabled
+
+    def _resume_live_preview_after_trigger(self) -> None:
+        self.cam.end_trigger_capture()
+        self._logger.debug("preview resumed")
+
     def _toggle_live(self):
         self.live_enabled = self.btn_live.isChecked()
         self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
@@ -1019,6 +1032,8 @@ class MainWindow(QMainWindow):
 
     def _update_live_view(self):
         try:
+            if self.cam.is_trigger_capture_in_progress():
+                return
             # Zdroj podľa live stavu
             if self.live_enabled:
                 src = self.cam.last_frame(caller="run_live_view")

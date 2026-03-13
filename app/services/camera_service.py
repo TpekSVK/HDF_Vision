@@ -79,6 +79,7 @@ class CameraService:
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
         self._trigger_capture_active = False
+        self._trigger_capture_depth = 0
         self._trigger_state_lock = threading.Lock()
         self._cap_read_lock = threading.Lock()
 
@@ -96,10 +97,30 @@ class CameraService:
     def _set_trigger_capture_active(self, active: bool) -> None:
         with self._trigger_state_lock:
             self._trigger_capture_active = bool(active)
+            self._trigger_capture_depth = 1 if self._trigger_capture_active else 0
 
     def _is_trigger_capture_active(self) -> bool:
         with self._trigger_state_lock:
-            return bool(self._trigger_capture_active)
+            return bool(self._trigger_capture_active or self._trigger_capture_depth > 0)
+
+    def begin_trigger_capture(self) -> None:
+        with self._trigger_state_lock:
+            self._trigger_capture_depth += 1
+            self._trigger_capture_active = self._trigger_capture_depth > 0
+            in_progress = self._trigger_capture_active
+        self._logger.debug("trigger_capture_in_progress %s", in_progress)
+
+    def end_trigger_capture(self) -> None:
+        with self._trigger_state_lock:
+            self._trigger_capture_depth = max(0, self._trigger_capture_depth - 1)
+            self._trigger_capture_active = self._trigger_capture_depth > 0
+            in_progress = self._trigger_capture_active
+        self._logger.debug("trigger_capture_in_progress %s", in_progress)
+
+    def is_trigger_capture_in_progress(self) -> bool:
+        in_progress = self._is_trigger_capture_active()
+        self._logger.debug("trigger_capture_in_progress %s", in_progress)
+        return in_progress
 
     def _normalize_frame_u8(self, frame):
         """Zjednotená normalizácia frame do uint8 grayscale."""
@@ -513,7 +534,7 @@ class CameraService:
         self._active_pipeline_signature = None
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
-        self._set_trigger_capture_active(False)
+        self.end_trigger_capture()
         if self._hid is not None:
             try:
                 self._hid.close()
@@ -808,7 +829,7 @@ class CameraService:
         if self._trigger_primed:
             return True
         self._trigger_priming_in_progress = True
-        self._set_trigger_capture_active(True)
+        self.begin_trigger_capture()
         try:
             self._logger.info("trigger priming started")
             if not pipeline_was_open:
@@ -827,7 +848,7 @@ class CameraService:
             self._logger.info("camera primed")
             return True
         finally:
-            self._set_trigger_capture_active(False)
+            self.end_trigger_capture()
             self._trigger_priming_in_progress = False
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
@@ -835,7 +856,7 @@ class CameraService:
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
-        self._set_trigger_capture_active(True)
+        self.begin_trigger_capture()
         try:
             started = time.monotonic()
             self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
@@ -854,7 +875,7 @@ class CameraService:
                     break
                 time.sleep(0.005)
         finally:
-            self._set_trigger_capture_active(False)
+            self.end_trigger_capture()
 
         if frame is None:
             raise RuntimeError("No frame received after production trigger")
