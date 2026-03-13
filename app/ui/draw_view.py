@@ -1091,15 +1091,15 @@ class RoiMaskEditor(QWidget):
         self._brush_label = QLabel(self)
         self._update_brush_label(self._brush_slider.value())
 
-        self._btn_reset_roi = QPushButton("Reset ROI", self)
-        self._btn_clear_mask = QPushButton("Clear Mask", self)
-        self._btn_undo_mask = QPushButton("Undo", self)
+        self._btn_reset_roi = QPushButton("Obnoviť ROI", self)
+        self._btn_clear_mask = QPushButton("Vymazať masku", self)
+        self._btn_undo_mask = QPushButton("Späť", self)
 
         self._btn_reset_roi.clicked.connect(self._on_reset_roi)
         self._btn_clear_mask.clicked.connect(self.view.clear_mask)
         self._btn_undo_mask.clicked.connect(self.view.undo_mask)
 
-        self._mask_hint = QLabel("Mask mode: Left click adds, right click erases.", self)
+        self._mask_hint = QLabel("Režim masky: ľavé tlačidlo pridáva, pravé tlačidlo maže.", self)
         self._mask_hint.setStyleSheet("color: #666; font-size: 11px;")
 
         controls = QHBoxLayout()

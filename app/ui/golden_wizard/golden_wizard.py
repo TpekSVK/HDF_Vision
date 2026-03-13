@@ -259,10 +259,10 @@ class ToolConfigPanel(QWidget):
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(6)
 
-        self._btn_test = QPushButton("Test", self)
+        self._btn_test = QPushButton("Otestovať", self)
         self._btn_test.clicked.connect(self._on_test_clicked)
 
-        self._btn_defaults = QPushButton("Restore defaults", self)
+        self._btn_defaults = QPushButton("Obnoviť predvolené", self)
         self._btn_defaults.clicked.connect(self._on_restore_defaults)
 
         controls_layout.addWidget(self._btn_test)
@@ -322,18 +322,18 @@ class ToolConfigPanel(QWidget):
         toggle_layout.setContentsMargins(0, 0, 0, 0)
         toggle_layout.setSpacing(8)
 
-        self._preview_toggle_aligned = QCheckBox("Preview aligned", self._preview_toggle_container)
+        self._preview_toggle_aligned = QCheckBox("Náhľad zarovnania", self._preview_toggle_container)
         self._preview_toggle_aligned.toggled.connect(
             lambda checked: self._on_preview_toggle_changed("aligned", checked)
         )
         toggle_layout.addWidget(self._preview_toggle_aligned)
 
-        self._preview_toggle_binarized = QCheckBox("Preview binarization", self._preview_toggle_container)
+        self._preview_toggle_binarized = QCheckBox("Náhľad binarizácie", self._preview_toggle_container)
         self._preview_toggle_binarized.toggled.connect(
             lambda checked: self._on_preview_toggle_changed("binarization", checked)
         )
         toggle_layout.addWidget(self._preview_toggle_binarized)
-        self._preview_toggle_overlay = QCheckBox("Preview overlay", self._preview_toggle_container)
+        self._preview_toggle_overlay = QCheckBox("Náhľad prekrytia", self._preview_toggle_container)
         self._preview_toggle_overlay.toggled.connect(
             lambda checked: self._on_preview_toggle_changed("overlay", checked)
         )
@@ -353,7 +353,7 @@ class ToolConfigPanel(QWidget):
         preview_layout.setContentsMargins(0, 0, 0, 0)
         preview_layout.setSpacing(8)
 
-        self._preview_before_label = QLabel("No preview", self._preview_widget)
+        self._preview_before_label = QLabel("Náhľad nie je dostupný", self._preview_widget)
         self._preview_before_label.setAlignment(Qt.AlignCenter)
         self._preview_before_label.setMinimumSize(160, 160)
         self._preview_before_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -363,7 +363,7 @@ class ToolConfigPanel(QWidget):
         self._preview_before_label.setScaledContents(True)
         preview_layout.addWidget(self._preview_before_label, 1)
 
-        self._preview_after_label = QLabel("No preview", self._preview_widget)
+        self._preview_after_label = QLabel("Náhľad nie je dostupný", self._preview_widget)
         self._preview_after_label.setAlignment(Qt.AlignCenter)
         self._preview_after_label.setMinimumSize(160, 160)
         self._preview_after_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -473,7 +473,7 @@ class ToolConfigPanel(QWidget):
         added_fields = False
 
         if any(self._is_supported_spec(spec) for spec in self._param_specs.values()):
-            header = QLabel("Parameters", self)
+            header = QLabel("Parametre", self)
             header.setStyleSheet("font-weight: 600; padding-top: 2px;")
             self._form_layout.addRow(header)
             for name, spec in self._param_specs.items():
@@ -505,7 +505,7 @@ class ToolConfigPanel(QWidget):
                 added_fields = True
 
         if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
-            header = QLabel("Thresholds", self)
+            header = QLabel("Prahy", self)
             header.setStyleSheet("font-weight: 600; padding-top: 6px;")
             self._form_layout.addRow(header)
             for name, spec in self._threshold_specs.items():
@@ -722,9 +722,9 @@ class ToolConfigPanel(QWidget):
             toggle.setVisible(False)
             toggle.blockSignals(False)
         self._preview_widget.setVisible(False)
-        self._preview_before_label.setText("No preview")
+        self._preview_before_label.setText("Náhľad nie je dostupný")
         self._preview_before_label.setPixmap(QPixmap())
-        self._preview_after_label.setText("No preview")
+        self._preview_after_label.setText("Náhľad nie je dostupný")
         self._preview_after_label.setPixmap(QPixmap())
 
     def _update_diagnostics(
@@ -966,8 +966,8 @@ class ToolConfigPanel(QWidget):
         elif self._preview_binarized_key and self._preview_binarized_key in self._preview_cache:
             after_pixmap = self._preview_cache[self._preview_binarized_key]
 
-        self._apply_preview_pixmap(self._preview_before_label, before_pixmap, "No preview")
-        self._apply_preview_pixmap(self._preview_after_label, after_pixmap, "No preview")
+        self._apply_preview_pixmap(self._preview_before_label, before_pixmap, "Náhľad nie je dostupný")
+        self._apply_preview_pixmap(self._preview_after_label, after_pixmap, "Náhľad nie je dostupný")
         self._preview_widget.setVisible(bool(before_pixmap or after_pixmap))
 
     def _on_preview_toggle_changed(self, mode: str, checked: bool) -> None:
@@ -1301,7 +1301,7 @@ class GoldenWizard(QDialog):
         # ---- Horná lišta ----
         current_recipe = getattr(self.recipes.tool, "recipe", "default")
         self.recipe_name = QLineEdit(current_recipe, self)
-        self.chk_pose    = QCheckBox("Enable pose alignment")
+        self.chk_pose    = QCheckBox("Zapnúť zarovnanie pozície")
         self.chk_pose.setChecked(getattr(self.recipes.tool, "pose_enabled", False))
         self._updating_logging_checkbox = False
         self.chk_logging = QCheckBox("Ukladať históriu behov", self)
@@ -1318,12 +1318,12 @@ class GoldenWizard(QDialog):
 
         self._view_selector = QComboBox(self)
         self._view_selector.currentIndexChanged.connect(self._on_view_changed)
-        self.btn_add_view = QPushButton("Add View", self)
+        self.btn_add_view = QPushButton("Pridať pohľad", self)
         self.btn_add_view.clicked.connect(self._on_add_view)
-        self.btn_edit_view = QPushButton("Edit View", self)
+        self.btn_edit_view = QPushButton("Upraviť pohľad", self)
         self.btn_edit_view.clicked.connect(self._on_edit_view)
         self.btn_edit_view.setEnabled(False)
-        self.btn_remove_view = QPushButton("Remove View", self)
+        self.btn_remove_view = QPushButton("Odstrániť pohľad", self)
         self.btn_remove_view.clicked.connect(self._on_remove_view)
 
         self._updating_policy_combo = False
@@ -1337,17 +1337,17 @@ class GoldenWizard(QDialog):
             "Ako má pipeline reagovať, keď locator nezarovná frame."
         )
 
-        self.btn_add_tool = QPushButton("Add tool")
+        self.btn_add_tool = QPushButton("Pridať nástroj")
         self.btn_add_tool.clicked.connect(self._open_tool_catalog)
 
         # Toggle Live
-        self.btn_live = QPushButton("Live OFF")
+        self.btn_live = QPushButton("Live vypnuté")
         self.btn_live.setCheckable(True)
         self.btn_live.clicked.connect(self._toggle_live)
 
         self._session_settings_button = QToolButton(self)
         self._session_settings_button.setText("⚙")
-        self._session_settings_button.setToolTip("Session settings")
+        self._session_settings_button.setToolTip("Nastavenia relácie")
         self._session_settings_button.setAutoRaise(True)
         self._session_settings_button.clicked.connect(self._open_session_settings)
 
@@ -1368,22 +1368,22 @@ class GoldenWizard(QDialog):
         top.addWidget(self.btn_live)
 
         # ---- Dva režimy zobrazenia ----
-        # 1) Live LABEL (video) – používa sa len pri Live ON
+        # 1) Live LABEL (video) – používa sa len pri Live zapnuté
         self.live_lbl = QLabel("—")
         self.live_lbl.setAlignment(Qt.AlignCenter)
         self.live_lbl.setMinimumHeight(360)
         self.live_lbl.hide()  # default skryté
 
-        # 2) DrawView (kreslenie) – používa sa pri Live OFF
+        # 2) DrawView (kreslenie) – používa sa pri Live vypnuté
         self.view = DrawView(self)
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
-        self.btn_save_tool = QPushButton("Save Tool")
-        self.btn_test_tool = QPushButton("Test")
+        self.btn_save_tool = QPushButton("Uložiť nástroj")
+        self.btn_test_tool = QPushButton("Otestovať")
         self.btn_test_tool.setEnabled(False)
-        self.btn_publish_recipe = QPushButton("Publish/Update Recipe")
+        self.btn_publish_recipe = QPushButton("Publikovať/Aktualizovať recept")
 
         buttons = QHBoxLayout()
         buttons.addWidget(btn_cap_golden)
@@ -1419,7 +1419,7 @@ class GoldenWizard(QDialog):
         self.tools_table.setDragDropMode(QAbstractItemView.InternalMove)
         self.tools_table.setDragDropOverwriteMode(False)
         self.tools_table.setDefaultDropAction(Qt.MoveAction)
-        tools_label = QLabel("Tools in recipe:", self)
+        tools_label = QLabel("Nástroje v recepte:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
             header_item.setToolTip("Locator nástroje musia bežať pred analyzátormi.")
@@ -1546,7 +1546,7 @@ class GoldenWizard(QDialog):
         self._lp.start()
         self._live_timer.start()
         self._live_on = True
-        self.btn_live.setText("Live ON")
+        self.btn_live.setText("Live zapnuté")
         self._logger.info("wizard_preview state=started")
 
     def _stop_preview_session(
@@ -1564,7 +1564,7 @@ class GoldenWizard(QDialog):
         if self._live_on:
             self._logger.info("wizard_preview state=stopped")
         self._live_on = False
-        self.btn_live.setText("Live OFF")
+        self.btn_live.setText("Live vypnuté")
         self.live_lbl.hide()
         self.view.show()
         if clear_label:
@@ -2084,7 +2084,7 @@ class GoldenWizard(QDialog):
 
     # ---------- Info/Err ----------
     def _info(self, msg):
-        QMessageBox.information(self, "Info", msg)
+        QMessageBox.information(self, "Informácia", msg)
 
     def _warn(self, msg):
         QMessageBox.warning(self, "Upozornenie", msg)
@@ -2532,9 +2532,9 @@ class GoldenWizard(QDialog):
             actions_layout.setContentsMargins(0, 0, 0, 0)
             actions_layout.setSpacing(4)
 
-            btn_edit = QPushButton("Edit", actions_widget)
+            btn_edit = QPushButton("Upraviť", actions_widget)
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
-            btn_del = QPushButton("Delete", actions_widget)
+            btn_del = QPushButton("Zmazať", actions_widget)
             btn_del.clicked.connect(lambda _, idx=row: self._delete_tool(idx))
 
             actions_layout.addWidget(btn_edit)

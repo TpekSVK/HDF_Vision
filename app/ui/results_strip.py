@@ -101,10 +101,10 @@ class ResultsStrip(QWidget):
         self.area.setWidget(self.wrap)
 
         self.variant_selector = QComboBox(self)
-        self.variant_selector.addItem("Auto (Overlay→Aligned→Raw)", "auto")
-        self.variant_selector.addItem("Overlay", "overlay")
-        self.variant_selector.addItem("Aligned", "aligned")
-        self.variant_selector.addItem("Raw", "raw")
+        self.variant_selector.addItem("Auto (Prekrytie → Zarovnaný → Pôvodný)", "auto")
+        self.variant_selector.addItem("Prekrytie", "overlay")
+        self.variant_selector.addItem("Zarovnaný", "aligned")
+        self.variant_selector.addItem("Pôvodný", "raw")
         self.variant_selector.currentIndexChanged.connect(lambda _=0: self.reload())
 
         controls = QHBoxLayout()
@@ -310,11 +310,11 @@ class ResultsStrip(QWidget):
         layout = QVBoxLayout(container)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        label = QLabel("No images found", container)
+        label = QLabel("Nenašli sa žiadne obrázky", container)
         label.setAlignment(Qt.AlignCenter)
         layout.addWidget(label)
 
-        button = QPushButton("Open folder", container)
+        button = QPushButton("Otvoriť priečinok", container)
         button.setFixedWidth(140)
         button.clicked.connect(self._open_folder)
         layout.addWidget(button, alignment=Qt.AlignCenter)
@@ -614,7 +614,7 @@ class ResultsStrip(QWidget):
         display_value = entry.get("display_items")
         if display_value is not None and not isinstance(display_value, (str, bytes)):
             overlay_sources.append(display_value)
-        overlay_items: list[overlay_utils.OverlayItem] = []
+        overlay_items: list[overlay_utils.PrekrytieItem] = []
         if overlay_sources:
             overlay_items = overlay_utils.parse_display_items(
                 overlay_sources,
@@ -764,7 +764,7 @@ class ResultsStrip(QWidget):
         if target_path and target_path.is_file():
             if self._open_with_desktop(target_path, prefer_image_viewer=True):
                 self._last_folder_to_open = target_path.parent
-                self.mw.lbl_status.setText(f"Open image: {target_path}")
+                self.mw.lbl_status.setText(f"Otvoriť obrázok: {target_path}")
                 return
 
         folder: Optional[Path] = None
@@ -772,7 +772,7 @@ class ResultsStrip(QWidget):
             folder = self._determine_folder_to_open(target_path)
         if folder and self._open_with_desktop(folder, prefer_image_viewer=False):
             self._last_folder_to_open = folder
-            self.mw.lbl_status.setText(f"Open folder: {folder}")
+            self.mw.lbl_status.setText(f"Otvoriť priečinok: {folder}")
             return
 
         logger.debug(

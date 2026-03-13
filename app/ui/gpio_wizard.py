@@ -48,7 +48,7 @@ class GPIOWizard(QDialog):
 
     def __init__(self, gpio: GPIOService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("GPIO Wizard")
+        self.setWindowTitle("Sprievodca GPIO")
         self._gpio = gpio
         self._rows: list[_PinRow] = []
         self._test_rows: list[_TestPinRow] = []
