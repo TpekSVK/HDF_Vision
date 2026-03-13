@@ -730,11 +730,30 @@ class CameraService:
             self._clear_queue()
             if settle_delay_s > 0:
                 time.sleep(float(settle_delay_s))
-            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
+
+            if trigger_fn is not None:
+                self._logger.debug("[Camera] HW trigger prime pulse 1")
+                self._fire_trigger(note="priming hw trigger pulse 1 sent", trigger_fn=trigger_fn)
+                time.sleep(0.03)
+                self._logger.debug("[Camera] HW trigger prime pulse 2")
+                self._fire_trigger(note="priming hw trigger pulse 2 sent", trigger_fn=trigger_fn)
+            else:
+                self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
+
+            self._logger.debug("[Camera] Waiting for primed frame...")
             try:
-                _ = self._q.get(timeout=0.5)
+                _ = self._q.get(timeout=1.2)
             except queue.Empty as exc:
-                raise RuntimeError("Priming failed: no frame after dummy trigger") from exc
+                if trigger_fn is None:
+                    raise RuntimeError("Priming failed: no frame after dummy trigger") from exc
+                self._logger.debug("[Camera] Priming retry pulse")
+                self._fire_trigger(note="priming hw trigger retry pulse sent", trigger_fn=trigger_fn)
+                self._logger.debug("[Camera] Waiting for primed frame...")
+                try:
+                    _ = self._q.get(timeout=1.2)
+                except queue.Empty as retry_exc:
+                    raise RuntimeError("Priming failed: no frame after hardware trigger priming") from retry_exc
+            self._logger.debug("[Camera] Primed frame received")
             self._logger.info("priming frame discarded")
             self._trigger_primed = True
             self._logger.info("camera primed")
@@ -742,7 +761,7 @@ class CameraService:
         finally:
             self._trigger_priming_in_progress = False
 
-    def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
+    def capture_trigger_frame(self, *, timeout_s: float = 1.5, trigger_fn: Callable[[], None] | None = None):
         if not self._is_trigger_mode_active():
             return self.last_frame(caller="capture_trigger_frame:master")
 
