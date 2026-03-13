@@ -104,3 +104,22 @@ def test_map_video_to_hidraw_matches_same_usb_parent(monkeypatch):
     monkeypatch.setattr(hid_mod, "_usb_identity_udevadm", lambda dev: hid_mod.USBIdentity(None, None, None))
 
     assert hid_mod.map_video_to_hidraw("/dev/video0") == "/dev/hidraw1"
+
+
+def test_send_software_trigger_uses_set_roll_high_then_low(monkeypatch):
+    sent: list[tuple[int, int | None]] = []
+
+    dev = hid_mod.CU55HID("/dev/hidraw1")
+
+    def _fake_send(command: int, payload: int | None = None):
+        sent.append((command, payload))
+        return bytes([0] * hid_mod.HID_RX_MAX_SIZE)
+
+    monkeypatch.setattr(dev, "_send_cmd", _fake_send)
+
+    dev.send_software_trigger()
+
+    assert sent == [
+        (hid_mod.SET_ROLL, 0x01),
+        (hid_mod.SET_ROLL, 0x00),
+    ]
