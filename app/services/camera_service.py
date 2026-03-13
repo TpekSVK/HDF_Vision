@@ -372,7 +372,25 @@ class CameraService:
             if d and d not in seen:
                 devs.append(d); seen.add(d)
 
-        # 1) GStreamer
+        # 1) GStreamer cez OpenCV backend (single capture handle)
+        for dev in devs:
+            if self._start_opencv_gst(dev):
+                self.device = dev
+                self._active_pipeline_signature = self._pipeline_signature(device=dev)
+                self._hid = None
+                self._init_hid()
+                self._last_open_args.update({
+                    "device": dev,
+                    "width": int(self.width),
+                    "height": int(self.height),
+                    "fps": int(self.fps),
+                    "fourcc": "GREY",
+                    "pixel_format": self.pixel_format,
+                })
+                self.get_supported_v4l2_controls(refresh=True)
+                return True
+
+        # 2) GStreamer (gst-python)
         if _GST_OK:
             for dev in devs:
                 if self._start_gst(dev):
@@ -391,7 +409,7 @@ class CameraService:
                     self.get_supported_v4l2_controls(refresh=True)
                     return True
 
-        # 2) Fallback: OpenCV V4L2
+        # 3) Fallback: OpenCV V4L2
         for dev in devs:
             if self._start_v4l2(dev):
                 self.device = dev
@@ -699,33 +717,25 @@ class CameraService:
             f"appsink drop=true max-buffers=2 sync=false"
         )
 
-    def _ensure_trigger_read_capture(self) -> None:
-        if self._cap is not None:
-            return
-
-        if self._pipeline is not None:
-            try:
-                self._pipeline.set_state(Gst.State.NULL)
-            except Exception:
-                pass
-            self._pipeline = None
-        if self._loop is not None:
-            try:
-                self._loop.quit()
-            except Exception:
-                pass
-            self._loop = None
-        if self._t is not None and self._t.is_alive():
-            self._t.join(timeout=1.0)
-        self._t = None
-
-        pipeline = self._build_opencv_gst_pipeline(self.device)
+    def _start_opencv_gst(self, dev: str) -> bool:
+        pipeline = self._build_opencv_gst_pipeline(dev)
         cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not cap.isOpened():
             cap.release()
-            raise RuntimeError(f"Failed to open trigger capture pipeline for {self.device}")
+            return False
+
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        except Exception:
+            pass
+
         self._cap = cap
-        self._mode = "trigger_gst"
+        self._mode = "opencv_gst"
+        self._stop.clear()
+        self._t = threading.Thread(target=self._grab_loop, daemon=True)
+        self._t.start()
+        print(f"[Camera] OpenCV GST started on {dev} {self.width}x{self.height}@{self.fps} {self.pixel_format}")
+        return True
 
     def _read_trigger_frame_via_cap(self, *, timeout_s: float):
         if self._cap is None:
@@ -774,11 +784,19 @@ class CameraService:
             return False
         if self._trigger_primed:
             return True
+
+        if self._cap is None:
+            if self.is_pipeline_open():
+                self.stop(caller="trigger_pipeline_switch_to_existing_capture")
+            if not self._start_opencv_gst(self.device):
+                raise RuntimeError(f"Failed to open capture handle for trigger mode on {self.device}")
+            opened_now = True
+            self._logger.info("trigger pipeline opened")
+
+        self._logger.info("trigger using existing capture handle")
         self._trigger_priming_in_progress = True
         try:
             self._logger.info("priming started")
-
-            self._ensure_trigger_read_capture()
 
             if opened_now:
                 time.sleep(0.5)
@@ -786,9 +804,9 @@ class CameraService:
                 time.sleep(float(settle_delay_s))
 
             self._fire_trigger(note="priming trigger sent", trigger_fn=trigger_fn)
-            self._logger.debug("trigger capture via cap.read()")
+            self._logger.debug("trigger capture via self._cap.read()")
             _ = self._read_trigger_frame_via_cap(timeout_s=1.2)
-            self._logger.debug("discard priming frame")
+            self._logger.info("priming frame discarded via self._cap.read()")
             self._trigger_primed = True
             self._logger.info("camera primed")
             return True
@@ -802,9 +820,9 @@ class CameraService:
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
         started = time.monotonic()
         self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-        self._logger.debug("trigger capture via cap.read()")
+        self._logger.info("trigger using existing capture handle")
         frame = self._read_trigger_frame_via_cap(timeout_s=float(timeout_s))
-        self._logger.debug("frame received via cap.read()")
+        self._logger.info("production frame received via self._cap.read()")
         latency_ms = (time.monotonic() - started) * 1000.0
         self._logger.info("frame received latency=%.2f ms", latency_ms)
         self._logger.info("frame reused for display+inspection")
