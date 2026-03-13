@@ -9,8 +9,9 @@ import logging
 import subprocess
 import re
 from collections import deque
+from collections.abc import Callable
 
-from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw
+from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -75,6 +76,8 @@ class CameraService:
         self._camera_model: str | None = None
         self._active_pipeline_signature: dict[str, object] | None = None
         self._gst_start_count = 0
+        self._trigger_primed = False
+        self._trigger_priming_in_progress = False
 
     def _pipeline_signature(self, *, device: str | None = None) -> dict[str, object]:
         dev = device or self.device
@@ -451,6 +454,8 @@ class CameraService:
         self._t = None
         self._mode = None
         self._active_pipeline_signature = None
+        self._trigger_primed = False
+        self._trigger_priming_in_progress = False
         if self._hid is not None:
             try:
                 self._hid.close()
@@ -680,6 +685,80 @@ class CameraService:
             raise RuntimeError(f"HID control not available for {self.device}")
         return self._hid
 
+    def _clear_queue(self):
+        while True:
+            try:
+                self._q.get_nowait()
+            except queue.Empty:
+                break
+
+    def _is_trigger_mode_active(self) -> bool:
+        try:
+            return int(self.get_stream_mode()) == int(MODE_TRIGGER)
+        except Exception:
+            return False
+
+    def _send_software_trigger(self, *, note: str) -> None:
+        hid = self._ensure_hid()
+        hid.send_software_trigger()
+        self._logger.info("%s", note)
+
+    def _fire_trigger(self, *, note: str, trigger_fn: Callable[[], None] | None = None) -> None:
+        if trigger_fn is not None:
+            trigger_fn()
+            self._logger.info("%s", note)
+            return
+        self._send_software_trigger(note=note)
+
+    def ensure_trigger_pipeline_primed(
+        self,
+        *,
+        settle_delay_s: float = 0.05,
+        trigger_fn: Callable[[], None] | None = None,
+    ) -> bool:
+        if not self.is_pipeline_open():
+            self.start(caller="trigger_pipeline_open")
+            self._logger.info("trigger pipeline opened")
+        if not self._is_trigger_mode_active():
+            self._trigger_primed = False
+            return False
+        if self._trigger_primed:
+            return True
+        self._trigger_priming_in_progress = True
+        try:
+            self._logger.info("priming started")
+            self._clear_queue()
+            if settle_delay_s > 0:
+                time.sleep(float(settle_delay_s))
+            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
+            try:
+                _ = self._q.get(timeout=0.5)
+            except queue.Empty as exc:
+                raise RuntimeError("Priming failed: no frame after dummy trigger") from exc
+            self._logger.info("priming frame discarded")
+            self._trigger_primed = True
+            self._logger.info("camera primed")
+            return True
+        finally:
+            self._trigger_priming_in_progress = False
+
+    def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
+        if not self._is_trigger_mode_active():
+            return self.last_frame(caller="capture_trigger_frame:master")
+
+        self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
+        self._clear_queue()
+        started = time.monotonic()
+        self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
+        try:
+            frame = self._q.get(timeout=float(timeout_s))
+        except queue.Empty as exc:
+            raise RuntimeError("No frame received after production trigger") from exc
+        latency_ms = (time.monotonic() - started) * 1000.0
+        self._logger.info("frame received latency=%.2f ms", latency_ms)
+        self._logger.info("frame reused for display+inspection")
+        return frame
+
     def set_stream_mode(self, mode: int, *, stabilize_delay_s: float = 0.05):
         requested = int(mode)
         pipeline_open = self.is_pipeline_open()
@@ -703,6 +782,8 @@ class CameraService:
         if current is not None and current == requested:
             self._logger.debug("stream mode already set, skipping")
             return
+
+        self._trigger_primed = False
 
         restarted = False
         if pipeline_open:

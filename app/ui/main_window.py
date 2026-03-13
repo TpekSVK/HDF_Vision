@@ -505,6 +505,13 @@ class MainWindow(QMainWindow):
             ctx.get("stream_mode_error"),
         )
 
+    def _send_run_trigger_gpio_pulse(self) -> None:
+        sent = bool(getattr(self.gpio, "pulse_physical_pin", lambda *_args, **_kwargs: False)(7, pulse_seconds=0.01))
+        if sent:
+            self._logger.info("production trigger sent via GPIO pin=7 pulse_ms=10")
+        else:
+            self._logger.warning("production trigger GPIO pulse failed pin=7")
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
@@ -514,17 +521,7 @@ class MainWindow(QMainWindow):
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
             gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
-            frame = self.cam.last_frame(caller="run_manual_trigger")
-            if frame is None:
-                try:
-                    frame = self.cam.one_shot()
-                except Exception:
-                    frame = None
-            if frame is None:
-                self.lbl_status.setText("Žiadny snímok z kamery.")
-                return
-
-            base_frame = frame.copy()
+            base_frame = None
             recipe_name = self.current_recipe_name()
 
             try:
@@ -538,6 +535,8 @@ class MainWindow(QMainWindow):
                     getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
                 )
                 self._reset_manual_trigger_progress(recipe_name)
+                if base_frame is None:
+                    base_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                 self._run_legacy_trigger(
                     base_frame,
                     recipe_name,
@@ -685,13 +684,23 @@ class MainWindow(QMainWindow):
                         if settle_ms is not None and settle_ms > 0:
                             time.sleep(settle_ms / 1000.0)
 
-                        latest_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
-                        if latest_frame is not None:
-                            view_frame = latest_frame
-                            base_frame = view_frame.copy()
-                        else:
-                            view_frame = base_frame
+                        current_stream_mode = None
+                        try:
+                            current_stream_mode = int(self.cam.get_stream_mode())
+                        except Exception:
+                            current_stream_mode = None
 
+                        if current_stream_mode == 1:
+                            view_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
+                        else:
+                            view_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
+
+                        if view_frame is None:
+                            self.lbl_status.setText("Žiadny snímok z kamery.")
+                            self._reset_manual_trigger_progress(recipe_name)
+                            return
+
+                        base_frame = view_frame.copy()
                         view_frame_u8 = view_frame.copy()
                     else:
                         base_frame = view_frame_u8.copy()
@@ -864,10 +873,13 @@ class MainWindow(QMainWindow):
                 self._update_live_view()
 
             gst_starts_after = int(getattr(self.cam, "gst_start_count", lambda: 0)())
+            gst_restarts = max(0, gst_starts_after - gst_starts_before)
             self._logger.info(
                 "trigger_click_gst_starts(caller=run_manual_trigger, count=%s)",
-                max(0, gst_starts_after - gst_starts_before),
+                gst_restarts,
             )
+            if gst_restarts > 0:
+                self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
 
         except Exception:
             self._signal_outputs("nok")
