@@ -513,6 +513,39 @@ class MainWindow(QMainWindow):
         else:
             self._logger.warning("production trigger GPIO pulse failed pin=7")
 
+    def _build_runtime_view_spec(self, view: Any, index: int) -> dict[str, Any]:
+        settle_ms = getattr(view, "settle_ms", None)
+        settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
+        if settle_ms is not None and settle_ms < 0:
+            settle_ms = 0
+
+        # manual = view sa spracuje iba po kliknutí TRIGGER (bez auto-sleep medzi viewmi)
+        # timed = po spracovaní sa čaká trigger_interval_ms
+        # external = view čaká na externý trigger (GPIO/Modbus), interval sa nepoužíva
+        trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").strip().lower()
+        if trigger_mode not in {"timed", "external", "manual"}:
+            trigger_mode = "timed"
+
+        interval_ms = getattr(view, "trigger_interval_ms", None)
+        interval_ms = int(interval_ms) if isinstance(interval_ms, Integral) else None
+        if interval_ms is not None and interval_ms < 0:
+            interval_ms = 0
+        if trigger_mode != "timed":
+            interval_ms = None
+
+        frame_source_view_id = str(getattr(view, "frame_source_view_id", "") or "").strip() or None
+        return {
+            "index": index,
+            "view": view,
+            "settle_ms": settle_ms,
+            "trigger_mode": trigger_mode,
+            "interval_ms": interval_ms,
+            "frame_source_view_id": frame_source_view_id,
+            "branch_enabled": bool(getattr(view, "branch_enabled", False)),
+            "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
+            "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
+        }
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
@@ -592,36 +625,10 @@ class MainWindow(QMainWindow):
             recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
         recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
 
-        view_specs: list[dict[str, Any]] = []
-        for index, view in enumerate(recipe_cfg.views):
-            settle_ms = getattr(view, "settle_ms", None)
-            settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
-            if settle_ms is not None and settle_ms < 0:
-                settle_ms = 0
-            trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").lower()
-            if trigger_mode not in {"timed", "external", "manual"}:
-                trigger_mode = "timed"
-            interval_ms = getattr(view, "trigger_interval_ms", None)
-            interval_ms = (
-                int(interval_ms)
-                if isinstance(interval_ms, Integral) and interval_ms is not None
-                else None
-            )
-            if interval_ms is not None and interval_ms < 0:
-                interval_ms = 0
-            frame_source_view_id = (
-                str(getattr(view, "frame_source_view_id", "") or "").strip() or None
-            )
-            view_specs.append(
-                {
-                    "index": index,
-                    "view": view,
-                    "settle_ms": settle_ms,
-                    "trigger_mode": trigger_mode,
-                    "interval_ms": interval_ms,
-                    "frame_source_view_id": frame_source_view_id,
-                }
-            )
+        view_specs: list[dict[str, Any]] = [
+            self._build_runtime_view_spec(view, index)
+            for index, view in enumerate(recipe_cfg.views)
+        ]
 
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
@@ -826,11 +833,11 @@ class MainWindow(QMainWindow):
 
         branch_target_id = None
         replace_queue = None
-        if bool(getattr(view, "branch_enabled", False)):
+        if bool(spec["branch_enabled"]):
             if index == 0:
                 trigger_state["ignored_for_aggregation"].add(view_id)
-            branch_map = dict(getattr(view, "branch_targets", {}) or {})
-            branch_target_id = branch_map.get(status) or getattr(view, "branch_default_view_id", None)
+            branch_map = dict(spec["branch_targets"])
+            branch_target_id = branch_map.get(status) or spec.get("branch_default_view_id")
             if branch_target_id and branch_target_id != view_id:
                 forwarded_frame = self._clone_frame(view_frame_u8)
                 target_spec = trigger_state["spec_lookup"].get(branch_target_id)
