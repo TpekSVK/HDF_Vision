@@ -4,11 +4,9 @@ import cv2
 import numpy as np
 import threading
 import time
-import queue
 import logging
 import subprocess
 import re
-from collections import deque
 from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
@@ -48,9 +46,8 @@ class CameraService:
         self.gain_db = 0
 
         # runtime
-        self._q = queue.Queue(maxsize=5)
-        self._stop = threading.Event()
         self._t = None
+        self._last_frame = None
 
         # backend info
         self._mode = None  # "gst" alebo "v4l2"
@@ -63,9 +60,6 @@ class CameraService:
         # zásobník kandidátov zariadení
         self.devices = [self.device, "/dev/video0", "/dev/video1"]
 
-        self._ring = deque(maxlen=5)
-        self._t_ring = None
-        self._stop_ring = threading.Event()
         self._paused_external = False
         self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
@@ -182,34 +176,30 @@ class CameraService:
         return "GREY"
 
     def _reset_buffers(self):
-        self._q = queue.Queue(maxsize=5)
-        self._ring = deque(maxlen=5)
+        self._last_frame = None
 
-    def _on_new_sample(self, sink):
-        sample = sink.emit("pull-sample")
-        if sample is None:
-            return Gst.FlowReturn.ERROR
-        buf = sample.get_buffer()
-        ok, map_info = buf.map(Gst.MapFlags.READ)
-        if not ok:
-            return Gst.FlowReturn.ERROR
-        try:
-            caps = sample.get_caps()
-            s = caps.get_structure(0)
-            w = int(s.get_value("width"))
-            h = int(s.get_value("height"))
-            # GRAY8 by mal byť width*height bajtov
-            arr = np.frombuffer(map_info.data, dtype=np.uint8)
-            arr = arr.reshape((h, -1))[:, :w].copy()
-            if self._q.full():
-                try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    pass
-            self._q.put_nowait(arr)
-        finally:
-            buf.unmap(map_info)
-        return Gst.FlowReturn.OK
+    def _normalize_frame(self, frame):
+        if frame is None:
+            return None
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.ndim == 3 and frame.shape[2] == 1:
+            frame = frame[:, :, 0]
+
+        if frame.dtype == np.uint16:
+            maxv = int(frame.max())
+            if maxv <= 0:
+                frame = np.zeros_like(frame, dtype=np.uint8)
+            elif maxv <= 4095:
+                frame = (frame >> 4).astype(np.uint8)
+            elif maxv <= 1023:
+                frame = (frame >> 2).astype(np.uint8)
+            else:
+                frame = cv2.convertScaleAbs(frame, alpha=255.0/65535.0)
+        elif frame.dtype != np.uint8:
+            frame = cv2.convertScaleAbs(frame)
+
+        return frame
 
     def _gst_bus_cb(self, bus, msg):
         t = msg.type
@@ -224,64 +214,7 @@ class CameraService:
             self.stop()
 
     def _start_gst(self, dev):
-        if not _GST_OK:
-            return False
-
-        # poradie variantov: najprv bez konverzie, potom s konverziou; s fps a bez fps
-        variants = [
-            self._gst_pipeline_str(dev, use_convert=False, with_fps=True),
-            self._gst_pipeline_str(dev, use_convert=True,  with_fps=True),
-            self._gst_pipeline_str(dev, use_convert=False, with_fps=False),
-            self._gst_pipeline_str(dev, use_convert=True,  with_fps=False),
-            # úplný fallback – bez caps (nech negociáciu spraví GSt, appsink dostane čo príde)
-            f"v4l2src device={dev} io-mode=2 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2",
-        ]
-
-        tried = []
-        for pipe in variants:
-            try:
-                pipeline = Gst.parse_launch(pipe)
-            except Exception as e:
-                tried.append(("parse_fail", str(e), pipe))
-                continue
-
-            sink = pipeline.get_by_name("sink")
-            if sink is None:
-                tried.append(("no_sink", "", pipe))
-                pipeline.set_state(Gst.State.NULL)
-                continue
-            sink.connect("new-sample", self._on_new_sample)
-
-            bus = pipeline.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message", self._gst_bus_cb)
-
-            loop = GLib.MainLoop()
-
-            ret = pipeline.set_state(Gst.State.PLAYING)
-            if ret == Gst.StateChangeReturn.FAILURE:
-                tried.append(("PLAYING_fail", "", pipe))
-                pipeline.set_state(Gst.State.NULL)
-                continue
-
-            # uložiť runtime objekty a spustiť loop v thread-e
-            self._pipeline = pipeline
-            self._loop = loop
-            self._mode = "gst"
-
-            def _loop_run():
-                try:
-                    loop.run()
-                except Exception as e:
-                    print("[GST] MainLoop exception:", e)
-
-            self._t = threading.Thread(target=_loop_run, daemon=True)
-            self._t.start()
-            self._gst_start_count += 1
-            print(f"[Camera] GST started: {pipe}")
-            return True
-
-        print("[GST] All variants failed:", tried)
+        # Legacy gst-python path is intentionally disabled in single-capture mode.
         return False
 
     # =========================
@@ -292,17 +225,19 @@ class CameraService:
         if not cap.isOpened():
             return False
 
-        # zníž buffre, vypni RGB konverziu
-        try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        except Exception: pass
-        try: cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-        except Exception: pass
+        try:
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
+        except Exception:
+            pass
+        try:
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
+        except Exception:
+            pass
 
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_FPS, self.fps)
 
-        # preferuj GREY/Y800
         try:
             fourcc_primary = cv2.VideoWriter_fourcc(*self._v4l2_fourcc())
             if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_primary):
@@ -317,62 +252,40 @@ class CameraService:
 
         self._cap = cap
         self._mode = "v4l2"
-        self._stop.clear()
-        self._t = threading.Thread(target=self._grab_loop, daemon=True)
-        self._t.start()
         print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps} {self.pixel_format}")
         return True
-
-    def _grab_loop(self):
-        while not self._stop.is_set():
-            ok, frame = self._cap.read()
-            if not ok:
-                time.sleep(0.005)
-                continue
-
-            # ak príde BGR (niektoré buildy), preveď na greyscale
-            if frame.ndim == 3 and frame.shape[2] == 3:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-            # --- kľúčové: 16-bit -> 8-bit (Y12/Y16 normalizácia) ---
-            if frame.dtype == np.uint16:
-                maxv = int(frame.max())
-                if maxv <= 0:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
-                elif maxv <= 4095:          # typicky Y12
-                    frame = (frame >> 4).astype(np.uint8)
-                elif maxv <= 1023:          # ak by sa objavil 10-bit
-                    frame = (frame >> 2).astype(np.uint8)
-                else:                        # plný 16-bit
-                    frame = cv2.convertScaleAbs(frame, alpha=255.0/65535.0)
-
-            try:
-                if self._q.full():
-                    _ = self._q.get_nowait()
-                self._q.put_nowait(frame)
-            except queue.Full:
-                pass
 
     # =========================
     # Public API
     # =========================
-    def start(self, *, caller: str = "unspecified"):
+    def open(self, profile: dict | None = None, *, caller: str = "unspecified"):
+        profile = profile or {}
+        if "device" in profile:
+            self.device = profile["device"]
+        if "width" in profile:
+            self.width = int(profile["width"])
+        if "height" in profile:
+            self.height = int(profile["height"])
+        if "fps" in profile:
+            self.fps = int(profile["fps"])
+        if "pixel_format" in profile and profile["pixel_format"]:
+            self.pixel_format = str(profile["pixel_format"]).upper()
+
         requested_signature = self._pipeline_signature()
         if self.is_pipeline_open():
             if self._active_pipeline_signature == requested_signature:
                 self._log_reuse_existing_pipeline(caller)
                 return False
-            self.stop(caller=f"{caller}:restart")
+            self.close(caller=f"{caller}:restart")
 
         self._log_start_pipeline(requested_signature, caller)
-        # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
         seen = set()
         devs = []
         for d in [self.device] + list(self.devices):
             if d and d not in seen:
-                devs.append(d); seen.add(d)
+                devs.append(d)
+                seen.add(d)
 
-        # 1) GStreamer cez OpenCV backend (single capture handle)
         for dev in devs:
             if self._start_opencv_gst(dev):
                 self.device = dev
@@ -390,26 +303,6 @@ class CameraService:
                 self.get_supported_v4l2_controls(refresh=True)
                 return True
 
-        # 2) GStreamer (gst-python)
-        if _GST_OK:
-            for dev in devs:
-                if self._start_gst(dev):
-                    self.device = dev
-                    self._active_pipeline_signature = self._pipeline_signature(device=dev)
-                    self._hid = None
-                    self._init_hid()
-                    self._last_open_args.update({
-                        "device": dev,
-                        "width": int(self.width),
-                        "height": int(self.height),
-                        "fps": int(self.fps),
-                        "fourcc": "GREY",
-                        "pixel_format": self.pixel_format,
-                    })
-                    self.get_supported_v4l2_controls(refresh=True)
-                    return True
-
-        # 3) Fallback: OpenCV V4L2
         for dev in devs:
             if self._start_v4l2(dev):
                 self.device = dev
@@ -427,34 +320,17 @@ class CameraService:
                 self.get_supported_v4l2_controls(refresh=True)
                 return True
 
-        # nič sa neotvorilo
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
-    def one_shot(self):
-        tries = 0
-        last = None
-        while tries < 3:
-            try:
-                last = self._q.get(timeout=0.5)
-            except queue.Empty:
-                tries += 1
-                continue
-            tries += 1
-        if last is None:
-            raise RuntimeError("No frame available for one-shot.")
-        return last
-
-    def stop(self, *, caller: str = "unspecified"):
+    def close(self, *, caller: str = "unspecified"):
         self._log_stop_pipeline(caller)
-        self._stop.set()
-        # V4L2
         if self._cap is not None:
             try:
                 self._cap.release()
             except Exception:
                 pass
             self._cap = None
-        # GST
+
         if self._pipeline is not None:
             try:
                 self._pipeline.set_state(Gst.State.NULL)
@@ -480,59 +356,52 @@ class CameraService:
             except Exception:
                 pass
             self._hid = None
-        self._reset_buffers()
-        self.stop_continuous()
 
-    def start_continuous(self):
-        """Spustí ľahký kontinuálny zber do ring bufferu (bez GStreamer UI)."""
-        if self._t_ring and self._t_ring.is_alive():
-            return
-        self._stop_ring.clear()
-        self._t_ring = threading.Thread(target=self._loop_ring, daemon=True)
-        self._t_ring.start()
+    def reopen(self, profile: dict | None = None, *, caller: str = "unspecified"):
+        self.close(caller=f"{caller}:close")
+        return self.open(profile=profile, caller=f"{caller}:open")
 
-    def _loop_ring(self):
-        import time
-        while not self._stop_ring.is_set():
-            if self._cap is None:
-                time.sleep(0.01)
-                continue
-            ok, frame = self._cap.read()
-            if not ok or frame is None:
-                time.sleep(0.002); continue
-            if frame.ndim == 3 and frame.shape[2] == 1:
-                frame = frame[:, :, 0]
-            if frame.dtype != np.uint8:
-                import cv2
-                f = frame
-                # normalizácia 16->8 (konzistentne)
-                if f.dtype == np.uint16:
-                    # Y12 -> 8-bit
-                    f8 = cv2.convertScaleAbs(f, alpha=255.0/4095.0)
-                else:
-                    f8 = cv2.convertScaleAbs(f)
-                frame = f8
-            self._ring.append(frame)
+    def read_preview_frame(self):
+        if self._cap is None:
+            raise RuntimeError("Preview capture backend is not available")
+        ok, frame = self._cap.read()
+        if not ok or frame is None:
+            return None
+        frame = self._normalize_frame(frame)
+        self._last_frame = frame
+        return frame
+
+    def get_last_frame(self):
+        return self._last_frame
+
+    def one_shot(self):
+        frame = self.read_preview_frame()
+        if frame is None:
+            raise RuntimeError("No frame available for one-shot.")
+        return frame
 
     def last_frame(self, *, caller: str = "unspecified"):
-        """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
-        if self._ring:
-            self._log_latest_frame_used(caller)
-            return self._ring[-1]
         self._log_latest_frame_used(caller)
+        if self._last_frame is not None:
+            return self._last_frame
         return self.one_shot()
 
+    def start(self, *, caller: str = "unspecified"):
+        return self.open(caller=caller)
+
+    def stop(self, *, caller: str = "unspecified"):
+        self.close(caller=caller)
+
+    def start_continuous(self):
+        return
+
     def stop_continuous(self):
-        try:
-            self._stop_ring.set()
-        except Exception:
-            pass
+        return
 
     def pause_for_external(self):
         """Uvoľní zariadenie pre externý klient (Live vo WIZARDe)."""
         if self._paused_external:
             return
-        # zapamätaj poslednú config
         self._last_open_args.update({
             "device": self.device,
             "width": int(self.width),
@@ -541,8 +410,7 @@ class CameraService:
             "fourcc": "GREY",
             "pixel_format": self.pixel_format,
         })
-        # zastav všetko (cap aj GStreamer pipeline)
-        self.stop(caller="pause_for_external")
+        self.close(caller="pause_for_external")
         self._paused_external = True
         print("[CameraService] paused for external access")
 
@@ -552,14 +420,41 @@ class CameraService:
             return
         args = self._last_open_args
         self.device = args.get("device", self.device)
-        self.width  = int(args.get("width", self.width))
+        self.width = int(args.get("width", self.width))
         self.height = int(args.get("height", self.height))
-        self.fps    = int(args.get("fps", self.fps))
+        self.fps = int(args.get("fps", self.fps))
         self.pixel_format = args.get("pixel_format", self.pixel_format)
         self._hid = None
-        self.start(caller="resume_after_external")
+        self.open(caller="resume_after_external")
         self._paused_external = False
         print("[CameraService] resumed after external access")
+
+    def capture_trigger_frame(self, *, timeout_s: float = 1.5, trigger_fn: Callable[[], None] | None = None):
+        if not self._is_trigger_mode_active():
+            frame = self.read_preview_frame()
+            if frame is None:
+                raise RuntimeError("No frame received in preview mode")
+            return frame
+
+        if self._cap is None:
+            raise RuntimeError("Trigger capture backend is not available")
+
+        self._logger.info("trigger capture started, expecting preview paused externally")
+        self._fire_trigger(note="priming trigger sent", trigger_fn=trigger_fn)
+        _ok, _discard = self._cap.read()
+        self._logger.info("priming frame discarded via self._cap.read()")
+
+        self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            ok, frame = self._cap.read()
+            if ok and frame is not None:
+                frame = self._normalize_frame(frame)
+                self._last_frame = frame
+                self._logger.info("production frame received via self._cap.read()")
+                return frame
+            time.sleep(0.002)
+        raise RuntimeError("No frame received after trigger")
 
     def apply_resolution(self, *, width: int, height: int, fps: int, pixel_format: str | None = None):
         width = int(width)
@@ -703,12 +598,6 @@ class CameraService:
             raise RuntimeError(f"HID control not available for {self.device}")
         return self._hid
 
-    def _clear_queue(self):
-        while True:
-            try:
-                self._q.get_nowait()
-            except queue.Empty:
-                break
 
     def _build_opencv_gst_pipeline(self, dev: str) -> str:
         return (
@@ -731,30 +620,9 @@ class CameraService:
 
         self._cap = cap
         self._mode = "opencv_gst"
-        self._stop.clear()
-        self._t = threading.Thread(target=self._grab_loop, daemon=True)
-        self._t.start()
         print(f"[Camera] OpenCV GST started on {dev} {self.width}x{self.height}@{self.fps} {self.pixel_format}")
         return True
 
-    def _read_trigger_frame_via_cap(self, *, timeout_s: float):
-        if self._cap is None:
-            raise RuntimeError("Trigger capture backend is not available")
-        deadline = time.monotonic() + float(timeout_s)
-        while time.monotonic() < deadline:
-            ok, frame = self._cap.read()
-            if ok and frame is not None:
-                if frame.ndim == 3 and frame.shape[2] == 3:
-                    frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                return frame
-            time.sleep(0.002)
-        raise RuntimeError("No frame received after trigger")
-
-    def _is_trigger_mode_active(self) -> bool:
-        try:
-            return int(self.get_stream_mode()) == int(MODE_TRIGGER)
-        except Exception:
-            return False
 
     def _send_software_trigger(self, *, note: str) -> None:
         hid = self._ensure_hid()
@@ -768,65 +636,14 @@ class CameraService:
             return
         self._send_software_trigger(note=note)
 
-    def ensure_trigger_pipeline_primed(
-        self,
-        *,
-        settle_delay_s: float = 0.05,
-        trigger_fn: Callable[[], None] | None = None,
-    ) -> bool:
-        opened_now = False
-        if not self.is_pipeline_open():
-            self.start(caller="trigger_pipeline_open")
-            self._logger.info("trigger pipeline opened")
-            opened_now = True
-        if not self._is_trigger_mode_active():
-            self._trigger_primed = False
-            return False
-        if self._trigger_primed:
-            return True
-
-        if self._cap is None:
-            if self.is_pipeline_open():
-                self.stop(caller="trigger_pipeline_switch_to_existing_capture")
-            if not self._start_opencv_gst(self.device):
-                raise RuntimeError(f"Failed to open capture handle for trigger mode on {self.device}")
-            opened_now = True
-            self._logger.info("trigger pipeline opened")
-
-        self._logger.info("trigger using existing capture handle")
-        self._trigger_priming_in_progress = True
+    def _is_trigger_mode_active(self) -> bool:
         try:
-            self._logger.info("priming started")
+            return int(self.get_stream_mode()) == int(MODE_TRIGGER)
+        except Exception:
+            return False
 
-            if opened_now:
-                time.sleep(0.5)
-            if settle_delay_s > 0:
-                time.sleep(float(settle_delay_s))
 
-            self._fire_trigger(note="priming trigger sent", trigger_fn=trigger_fn)
-            self._logger.debug("trigger capture via self._cap.read()")
-            _ = self._read_trigger_frame_via_cap(timeout_s=1.2)
-            self._logger.info("priming frame discarded via self._cap.read()")
-            self._trigger_primed = True
-            self._logger.info("camera primed")
-            return True
-        finally:
-            self._trigger_priming_in_progress = False
 
-    def capture_trigger_frame(self, *, timeout_s: float = 1.5, trigger_fn: Callable[[], None] | None = None):
-        if not self._is_trigger_mode_active():
-            return self.last_frame(caller="capture_trigger_frame:master")
-
-        self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
-        started = time.monotonic()
-        self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-        self._logger.info("trigger using existing capture handle")
-        frame = self._read_trigger_frame_via_cap(timeout_s=float(timeout_s))
-        self._logger.info("production frame received via self._cap.read()")
-        latency_ms = (time.monotonic() - started) * 1000.0
-        self._logger.info("frame received latency=%.2f ms", latency_ms)
-        self._logger.info("frame reused for display+inspection")
-        return frame
 
     def set_stream_mode(self, mode: int, *, stabilize_delay_s: float = 0.05):
         requested = int(mode)
