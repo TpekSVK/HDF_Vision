@@ -1054,9 +1054,9 @@ class ROIEditor(QWidget):
         self._view.historyChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
-        self._btn_undo = QPushButton("Undo", self)
-        self._btn_redo = QPushButton("Redo", self)
-        self._btn_reset = QPushButton("Reset", self)
+        self._btn_undo = QPushButton("Späť", self)
+        self._btn_redo = QPushButton("Znova", self)
+        self._btn_reset = QPushButton("Obnoviť", self)
         self._btn_undo.clicked.connect(self._view.undo)
         self._btn_redo.clicked.connect(self._view.redo)
         self._btn_reset.clicked.connect(self._view.reset_roi)
@@ -1209,11 +1209,11 @@ class MaskEditor(QWidget):
 
         self._mode_group.buttonClicked.connect(self._on_mode_changed)
 
-        self._fill_label = QLabel("Fill:", self)
+        self._fill_label = QLabel("Výplň:", self)
         self._fill_label.setStyleSheet("color: #666;")
         self._fill_combo = QComboBox(self)
-        self._fill_combo.addItem("Inside", self._view.FILL_INSIDE)
-        self._fill_combo.addItem("Around", self._view.FILL_AROUND)
+        self._fill_combo.addItem("Vo vnútri", self._view.FILL_INSIDE)
+        self._fill_combo.addItem("Okolo", self._view.FILL_AROUND)
         self._fill_combo.currentIndexChanged.connect(self._on_fill_mode_changed)
         self._fill_label.setEnabled(False)
         self._fill_combo.setEnabled(False)
@@ -1226,20 +1226,20 @@ class MaskEditor(QWidget):
         self._brush_label = QLabel("", self)
         self._brush_label.setStyleSheet("color: #666;")
 
-        self._btn_undo = QPushButton("Undo", self)
-        self._btn_redo = QPushButton("Redo", self)
-        self._btn_clear = QPushButton("Clear", self)
+        self._btn_undo = QPushButton("Späť", self)
+        self._btn_redo = QPushButton("Znova", self)
+        self._btn_clear = QPushButton("Vymazať", self)
         self._btn_undo.clicked.connect(self._view.undo)
         self._btn_redo.clicked.connect(self._view.redo)
         self._btn_clear.clicked.connect(self._view.clear_mask)
 
-        self._info_label = QLabel("Ignore pixels: 0", self)
+        self._info_label = QLabel("Ignorované pixely: 0", self)
         self._info_label.setStyleSheet("color: #bbb;")
         self._hint_label = QLabel("", self)
         self._hint_label.setStyleSheet("color: #d48806; font-size: 11px;")
         self._hint_label.setVisible(False)
 
-        self._show_roi_checkbox = QCheckBox("Show ROI overlay", self)
+        self._show_roi_checkbox = QCheckBox("Zobraziť prekrytie ROI", self)
         self._show_roi_checkbox.setChecked(False)
         self._show_roi_checkbox.toggled.connect(self._on_show_roi_toggled)
         self._show_roi_checkbox.setEnabled(False)
@@ -1442,7 +1442,7 @@ class MaskEditor(QWidget):
     def _update_info_label(self) -> None:
         mask = self._view.mask()
         count = int(np.count_nonzero(mask)) if mask is not None else 0
-        self._info_label.setText(f"Ignore pixels: {_format_pixels(count)}")
+        self._info_label.setText(f"Ignorované pixely: {_format_pixels(count)}")
         if count > MAX_MASK_PIXELS:
             limit = _format_pixels(MAX_MASK_PIXELS)
             self._hint_label.setText(

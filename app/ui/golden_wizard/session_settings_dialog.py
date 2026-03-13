@@ -1,4 +1,4 @@
-"""Session settings dialog used by the Golden Wizard."""
+"""Dialóg nastavení relácie pre Golden Wizard."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -28,14 +28,14 @@ class SessionSettingsDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Session settings")
+        self.setWindowTitle("Nastavenia relácie")
         self.setModal(True)
 
         self._settings = settings_service.get_session_settings()
 
         layout = QVBoxLayout(self)
 
-        self._logging_checkbox = QCheckBox("Enable logging for new runs", self)
+        self._logging_checkbox = QCheckBox("Zapnúť ukladanie záznamov pre nové behy", self)
         self._logging_checkbox.setChecked(bool(self._settings.logging_enabled))
 
         layout.addWidget(self._logging_checkbox)
@@ -52,7 +52,7 @@ class SessionSettingsDialog(QDialog):
 
         self._path_edit = QLineEdit(str(target_dir), self)
         self._path_edit.setPlaceholderText("/data/logs")
-        browse_btn = QPushButton("Browse…", self)
+        browse_btn = QPushButton("Prehľadávať…", self)
         browse_btn.clicked.connect(self._on_browse_clicked)
 
         path_row = QHBoxLayout()
@@ -61,15 +61,15 @@ class SessionSettingsDialog(QDialog):
 
         path_widget = QWidget(self)
         path_widget.setLayout(path_row)
-        form.addRow("Target directory", path_widget)
+        form.addRow("Cieľový priečinok", path_widget)
 
-        self._artifacts_checkbox = QCheckBox("Export aligned frame PNG", self)
+        self._artifacts_checkbox = QCheckBox("Exportovať zarovnaný obrázok (PNG)", self)
         self._artifacts_checkbox.setChecked(bool(self._settings.export_artifacts))
-        form.addRow("Artifacts", self._artifacts_checkbox)
+        form.addRow("Výstupy", self._artifacts_checkbox)
 
-        self._overlay_checkbox = QCheckBox("Include overlay PNG", self)
+        self._overlay_checkbox = QCheckBox("Pridať prekrytie (PNG)", self)
         self._overlay_checkbox.setChecked(bool(self._settings.export_overlay))
-        form.addRow("Overlay", self._overlay_checkbox)
+        form.addRow("Prekrytie", self._overlay_checkbox)
 
         self._artifacts_checkbox.toggled.connect(self._on_artifacts_toggled)
         self._on_artifacts_toggled(self._artifacts_checkbox.isChecked())
@@ -82,7 +82,7 @@ class SessionSettingsDialog(QDialog):
     def _on_browse_clicked(self) -> None:
         current = self._path_edit.text().strip() or str(self._settings.logging_path)
         directory = QFileDialog.getExistingDirectory(
-            self, "Select target directory", current
+            self, "Vyberte cieľový priečinok", current
         )
         if directory:
             self._path_edit.setText(directory)
@@ -93,19 +93,19 @@ class SessionSettingsDialog(QDialog):
     def _on_accept(self) -> None:
         path_text = self._path_edit.text().strip()
         if not path_text:
-            QMessageBox.warning(self, "Missing path", "Please specify the target directory.")
+            QMessageBox.warning(self, "Chýba cesta", "Prosím, zadajte cieľový priečinok.")
             return
 
         target = Path(path_text).expanduser()
         if target.exists() and not target.is_dir():
-            QMessageBox.critical(self, "Invalid path", "The target must be a directory.")
+            QMessageBox.critical(self, "Neplatná cesta", "Cieľ musí byť priečinok.")
             return
 
         if not target.exists():
             answer = QMessageBox.question(
                 self,
-                "Create directory?",
-                f"The directory '{target}' does not exist.\nCreate it?",
+                "Vytvoriť priečinok?",
+                f"Priečinok '{target}' neexistuje.\nChcete ho vytvoriť?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.Yes,
             )
@@ -116,8 +116,8 @@ class SessionSettingsDialog(QDialog):
             except Exception as exc:
                 QMessageBox.critical(
                     self,
-                    "Creation failed",
-                    f"Unable to create directory:\n{exc}",
+                    "Vytvorenie zlyhalo",
+                    f"Priečinok sa nepodarilo vytvoriť:\n{exc}",
                 )
                 return
 
@@ -132,7 +132,7 @@ class SessionSettingsDialog(QDialog):
                 ),
             )
         except Exception as exc:  # pragma: no cover - defensive
-            QMessageBox.critical(self, "Update failed", str(exc))
+            QMessageBox.critical(self, "Aktualizácia zlyhala", str(exc))
             return
 
         self.accept()

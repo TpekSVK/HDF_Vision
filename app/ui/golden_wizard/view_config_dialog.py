@@ -81,7 +81,7 @@ class ViewConfigDialog(QDialog):
         self._supports_brightness = "brightness" in controls
         self._supports_sharpness = "sharpness" in controls
 
-        title = "Add View" if mode == "add" else "Edit View"
+        title = "Pridať pohľad" if mode == "add" else "Upraviť pohľad"
         self.setWindowTitle(title)
         self.setModal(True)
 
@@ -150,15 +150,15 @@ class ViewConfigDialog(QDialog):
         self._sharpness_edit.setPlaceholderText("Leave blank to inherit")
         self._stream_mode_combo = QComboBox(camera_group)
         self._stream_mode_combo.addItem("Inherit", None)
-        self._stream_mode_combo.addItem("Master (0)", 0)
-        self._stream_mode_combo.addItem("Trigger (1)", 1)
+        self._stream_mode_combo.addItem("Hlavný režim (0)", 0)
+        self._stream_mode_combo.addItem("Spúšť (1)", 1)
         self._flash_mode_combo = QComboBox(camera_group)
         self._flash_mode_combo.addItem("Inherit", None)
-        self._flash_mode_combo.addItem("OFF (0)", 0)
-        self._flash_mode_combo.addItem("STROBE (1)", 1)
-        self._flash_mode_combo.addItem("TORCH (2)", 2)
+        self._flash_mode_combo.addItem("Vypnuté (0)", 0)
+        self._flash_mode_combo.addItem("Stroboskop (1)", 1)
+        self._flash_mode_combo.addItem("Svetlo natrvalo (2)", 2)
         camera_form.addRow("Camera device:", self._device_edit)
-        camera_form.addRow("Exposure [µs]:", self._exposure_edit)
+        camera_form.addRow("Expozícia [µs]:", self._exposure_edit)
         exposure_hint = self._create_description_label(
             "Prepíše expozičný čas kamery len pre tento view. Prázdna hodnota"
             " znamená zdedenie aktuálneho nastavenia; v multi-view sa použije"
@@ -169,7 +169,7 @@ class ViewConfigDialog(QDialog):
         camera_form.addRow(exposure_hint)
 
         if self._supports_gain:
-            camera_form.addRow("Gain [dB]:", self._gain_edit)
+            camera_form.addRow("Zisk [dB]:", self._gain_edit)
             gain_hint = self._create_description_label(
                 "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
                 " hodnotu z kamery; v multi-view má každé view vlastnú uloženú"
@@ -179,15 +179,15 @@ class ViewConfigDialog(QDialog):
             self._gain_edit.setToolTip(gain_hint.text())
             camera_form.addRow(gain_hint)
 
-        camera_form.addRow("Pixel Format:", self._pixel_format_combo)
+        camera_form.addRow("Formát pixelov:", self._pixel_format_combo)
         if self._supports_gamma:
             camera_form.addRow("Gamma:", self._gamma_edit)
         if self._supports_brightness:
             camera_form.addRow("Brightness:", self._brightness_edit)
         if self._supports_sharpness:
             camera_form.addRow("Sharpness:", self._sharpness_edit)
-        camera_form.addRow("Stream Mode:", self._stream_mode_combo)
-        camera_form.addRow("Flash Mode:", self._flash_mode_combo)
+        camera_form.addRow("Režim streamu:", self._stream_mode_combo)
+        camera_form.addRow("Režim blesku:", self._flash_mode_combo)
         pixel_hint = self._create_description_label(
             "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
             " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
@@ -290,7 +290,7 @@ class ViewConfigDialog(QDialog):
         layout.addWidget(branching_group)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
-        action_text = "Add View" if mode == "add" else "Save"
+        action_text = "Pridať pohľad" if mode == "add" else "Save"
         self._accept_button = button_box.addButton(
             action_text, QDialogButtonBox.AcceptRole
         )

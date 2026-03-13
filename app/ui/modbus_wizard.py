@@ -24,7 +24,7 @@ class ModbusWizard(QDialog):
 
     def __init__(self, modbus: ModbusService, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Modbus Wizard")
+        self.setWindowTitle("Sprievodca Modbus")
         self._modbus = modbus
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(200)
@@ -72,7 +72,7 @@ class ModbusWizard(QDialog):
         self.spin_retry = QSpinBox(box)
         self.spin_retry.setRange(0, 10)
         self.spin_retry.setValue(1)
-        self.chk_enable = QCheckBox("Enable Modbus", box)
+        self.chk_enable = QCheckBox("Zapnúť Modbus", box)
         self.lbl_conn_status = QLabel("–", box)
 
         labels = [
@@ -88,7 +88,7 @@ class ModbusWizard(QDialog):
                 grid.addWidget(QLabel(text, box), row, 0)
             grid.addWidget(widget, row, 1)
 
-        btn_test = QPushButton("Test Connect", box)
+        btn_test = QPushButton("Otestovať pripojenie", box)
         btn_test.clicked.connect(self._on_test_connection)
         row = len(labels)
         grid.addWidget(btn_test, row, 0)
@@ -147,9 +147,9 @@ class ModbusWizard(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        btn_ok = QPushButton("Test OK Pulse", box)
-        btn_nok = QPushButton("Test NOK Pulse", box)
-        btn_hb = QPushButton("Test Heartbeat 3×", box)
+        btn_ok = QPushButton("Otestovať impulz OK", box)
+        btn_nok = QPushButton("Otestovať impulz NOK", box)
+        btn_hb = QPushButton("Otestovať heartbeat 3×", box)
         btn_ok.clicked.connect(self._on_test_ok)
         btn_nok.clicked.connect(self._on_test_nok)
         btn_hb.clicked.connect(self._on_test_heartbeat)
@@ -168,20 +168,20 @@ class ModbusWizard(QDialog):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
         self.spin_trigger = self._coil_spin(box, default=0)
-        grid.addWidget(QLabel("Trigger DI address:", box), 0, 0)
+        grid.addWidget(QLabel("Adresa Trigger DI:", box), 0, 0)
         grid.addWidget(self.spin_trigger, 0, 1)
         layout.addLayout(grid)
 
         status_row = QHBoxLayout()
         status_row.setSpacing(8)
-        status_row.addWidget(QLabel("Live Trigger status:", box))
+        status_row.addWidget(QLabel("Stav Triggeru naživo:", box))
         self.lbl_trigger_status = QLabel("–", box)
         self.lbl_trigger_status.setStyleSheet("color: #bbb;")
         status_row.addWidget(self.lbl_trigger_status)
         status_row.addStretch(1)
         layout.addLayout(status_row)
 
-        btn_now = QPushButton("Read Trigger Now", box)
+        btn_now = QPushButton("Načítať Trigger teraz", box)
         btn_now.clicked.connect(self._refresh_trigger_status)
         layout.addWidget(btn_now, 0, Qt.AlignLeft)
 

@@ -185,23 +185,23 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.export_csv_today)
         actions.addWidget(self.btn_export)
 
-        self.btn_wizard_quick = QPushButton("Golden WIZARD")
+        self.btn_wizard_quick = QPushButton("Sprievodca Golden")
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
 
-        self.btn_flash1_toggle = QPushButton("Flash 1 ON")
+        self.btn_flash1_toggle = QPushButton("Flash 1 ZAPNUTÉ")
         self.btn_flash1_toggle.setCheckable(True)
         self.btn_flash1_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(1, checked))
         actions.addWidget(self.btn_flash1_toggle)
 
-        self.btn_flash2_toggle = QPushButton("Flash 2 ON")
+        self.btn_flash2_toggle = QPushButton("Flash 2 ZAPNUTÉ")
         self.btn_flash2_toggle.setCheckable(True)
         self.btn_flash2_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(2, checked))
         actions.addWidget(self.btn_flash2_toggle)
 
         actions.addStretch(1)
         # Live toggle
-        self.btn_live = QPushButton("Live OFF")
+        self.btn_live = QPushButton("Live vypnuté")
         self.btn_live.setCheckable(True)
         self.btn_live.clicked.connect(self._toggle_live)
         actions.addWidget(self.btn_live)
@@ -354,7 +354,7 @@ class MainWindow(QMainWindow):
 
         power_actions_row.addStretch(1)
         run_root.addWidget(power_actions_container, 0, Qt.AlignLeft | Qt.AlignBottom)
-        # spúšťa sa až pri Live ON v _toggle_live()
+        # spúšťa sa až pri Live zapnuté v _toggle_live()
 
         # inicializuj pohľady a pravý panel
         self._refresh_views()
@@ -366,15 +366,15 @@ class MainWindow(QMainWindow):
         s = QVBoxLayout(self.panel_setup); s.setSpacing(8)
 
         row1 = QHBoxLayout();
-        self.btn_wizard = QPushButton("Golden Wizard", self)
+        self.btn_wizard = QPushButton("Sprievodca Golden", self)
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
-        self.btn_gpio_wizard = QPushButton("GPIO Wizard", self)
+        self.btn_gpio_wizard = QPushButton("Sprievodca GPIO", self)
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
         row1.addWidget(self.btn_gpio_wizard)
 
-        self.btn_modbus_wizard = QPushButton("Modbus Wizard", self)
+        self.btn_modbus_wizard = QPushButton("Sprievodca Modbus", self)
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
         row1.addWidget(self.btn_modbus_wizard)
 
@@ -457,7 +457,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_modbus_flash(self, channel: int, enabled: bool) -> None:
         button = self.btn_flash1_toggle if int(channel) == 1 else self.btn_flash2_toggle
-        button.setText(f"Flash {int(channel)} {'OFF' if enabled else 'ON'}")
+        button.setText(f"Flash {int(channel)} {'VYPNUTÉ' if enabled else 'ZAPNUTÉ'}")
         self.modbus.set_flash(channel, enabled)
         if enabled:
             self.lbl_status.setText(f"Flash {int(channel)} zapnutý")
@@ -1077,7 +1077,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_live(self):
         self.live_enabled = self.btn_live.isChecked()
-        self.btn_live.setText("Live ON" if self.live_enabled else "Live OFF")
+        self.btn_live.setText("Live zapnuté" if self.live_enabled else "Live vypnuté")
         if self.live_enabled:
             self._apply_run_camera_profile()
             self._run_timer.start()
@@ -1300,7 +1300,7 @@ class MainWindow(QMainWindow):
                 if runtime_stats:
                     st = self._merge_stats(st, runtime_stats)
             pose_enabled = getattr(self.tool, "pose_enabled", True)
-            self.sb_pose.setText(f"Pose alignment: {'ON' if pose_enabled else 'OFF'}")
+            self.sb_pose.setText(f"Zarovnanie pozície: {'ZAP' if pose_enabled else 'VYP'}")
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
@@ -1496,7 +1496,7 @@ class MainWindow(QMainWindow):
             name = str(report.get("name") or report.get("id") or "Tool")
             status = str(report.get("status") or "").upper() or "—"
             rows.append((name, status))
-        return rows or [("Info", "Žiadne dáta")]
+        return rows or [("Informácia", "Žiadne dáta")]
 
     def _build_tool_metric_rows(
         self,
@@ -1534,7 +1534,7 @@ class MainWindow(QMainWindow):
             if selection_index is not None and 0 <= selection_index < len(reports):
                 report = reports[selection_index]
         if report is None:
-            return [("Info", "Žiadne dáta")]
+            return [("Informácia", "Žiadne dáta")]
 
         name = str(report.get("name") or tool_id or "Tool")
         status = str(report.get("status") or "").upper() or "—"
@@ -1576,7 +1576,7 @@ class MainWindow(QMainWindow):
         for key in sorted(metrics.keys()):
             rows.append((str(key), self._format_metric_value(metrics[key])))
 
-        return rows or [("Info", "Žiadne dáta")]
+        return rows or [("Informácia", "Žiadne dáta")]
 
     def _format_metric_value(self, value: Any) -> str:
         if value is None:

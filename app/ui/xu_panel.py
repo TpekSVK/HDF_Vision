@@ -7,7 +7,7 @@ class XUPanel(QWidget):
     """
     Ovládanie kamery:
       - V4L2: exposure/gain (UVC štandard)
-      - XU stub: Stream Mode (Master/Trigger), Flash (OFF/STROBE/TORCH), Pixel Format (Y8/Y12)
+      - XU stub: Režim streamu (Master/Trigger), Flash (OFF/STROBE/TORCH), Formát pixelov (Y8/Y12)
     Očakáva self.mw.cam s atribútom .devices[0] (napr. '/dev/video0')
     """
     def __init__(self, mw):
@@ -22,27 +22,27 @@ class XUPanel(QWidget):
         self.gain_db = QSpinBox(); self.gain_db.setRange(0, 48); self.gain_db.setValue(0)
 
         f.addRow(QLabel("<b>V4L2 (UVC štandard)</b>"))
-        f.addRow("Exposure [µs]", self.exp_us)
-        f.addRow("Gain [dB]", self.gain_db)
+        f.addRow("Expozícia [µs]", self.exp_us)
+        f.addRow("Zisk [dB]", self.gain_db)
 
         # --------- XU (vendor) ---------
-        self.stream_mode = QComboBox(); self.stream_mode.addItems(["Master (0)", "Trigger (1)"])
-        self.flash_mode  = QComboBox(); self.flash_mode.addItems(["OFF (0)", "STROBE (1)", "TORCH (2)"])
+        self.stream_mode = QComboBox(); self.stream_mode.addItems(["Hlavný režim (0)", "Spúšť (1)"])
+        self.flash_mode  = QComboBox(); self.flash_mode.addItems(["Vypnuté (0)", "Stroboskop (1)", "Svetlo natrvalo (2)"])
         self.pixfmt      = QComboBox(); self.pixfmt.addItems(["Y8 (GRAY8)", "Y12 (12-bit packed)"])
 
         action_row = QHBoxLayout()
         btn_apply_all = QPushButton("Aplikovať")
         action_row.addWidget(btn_apply_all)
 
-        f.addRow(QLabel("<b>Vendor XU</b> (Stream/Flash/Pixel format)"))
-        f.addRow("Stream Mode", self.stream_mode)
-        f.addRow("Flash Mode", self.flash_mode)
-        f.addRow("Pixel Format", self.pixfmt)
+        f.addRow(QLabel("<b>Vendor XU</b> (stream/blesk/formát pixelov)"))
+        f.addRow("Režim streamu", self.stream_mode)
+        f.addRow("Režim blesku", self.flash_mode)
+        f.addRow("Formát pixelov", self.pixfmt)
         f.addRow("", action_row)
 
         btn_apply_all.clicked.connect(self._apply_all)
 
-        note = QLabel("Pozn.: StreamMode 0=Master, 1=Trigger; Flash 0=OFF,1=Strobe,2=Torch (podľa XU API).")
+        note = QLabel("Pozn.: StreamMode 0=Hlavný režim, 1=Spúšť; Flash 0=Vypnuté, 1=Stroboskop, 2=Svetlo natrvalo (podľa XU API).")
         note.setWordWrap(True)
         f.addRow(note)
 

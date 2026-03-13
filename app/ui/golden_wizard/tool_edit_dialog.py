@@ -59,7 +59,7 @@ class TemplateRoiEditor(QWidget):
         self._editor = ROIEditor(self, show_toolbar=False)
         self._editor.roiChanged.connect(self.roiChanged)
 
-        self._btn_reset = QPushButton("Reset Template ROI", self)
+        self._btn_reset = QPushButton("Obnoviť ROI šablóny", self)
         self._btn_reset.clicked.connect(self._editor.reset_roi)
 
         view_layout = QVBoxLayout(self)
@@ -100,7 +100,7 @@ class AngleRoiEditor(QWidget):
         self._editor = ROIEditor(self, show_toolbar=False)
         self._editor.roiChanged.connect(self.roiChanged)
 
-        self._btn_reset = QPushButton("Reset Angle ROI", self)
+        self._btn_reset = QPushButton("Obnoviť ROI uhla", self)
         self._btn_reset.clicked.connect(self._editor.reset_roi)
 
         view_layout = QVBoxLayout(self)
@@ -444,7 +444,7 @@ class ToolEditDialog(QDialog):
         controls_layout.setContentsMargins(8, 4, 8, 0)
         controls_layout.setSpacing(6)
         controls_layout.addStretch(1)
-        self._btn_restore_defaults = QPushButton("Restore defaults", self._config_tab)
+        self._btn_restore_defaults = QPushButton("Obnoviť predvolené", self._config_tab)
         self._btn_restore_defaults.clicked.connect(self._on_restore_defaults_clicked)
         self._btn_restore_defaults.setEnabled(False)
         controls_layout.addWidget(self._btn_restore_defaults)
@@ -457,7 +457,7 @@ class ToolEditDialog(QDialog):
         config_layout.addWidget(self._form_error_label)
 
         config_layout.addStretch(1)
-        self._tabs.addTab(self._config_tab, "Thresholds & Params")
+        self._tabs.addTab(self._config_tab, "Prahy a parametre")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
@@ -617,7 +617,7 @@ class ToolEditDialog(QDialog):
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(8)
 
-        self._btn_locator_evaluate = QPushButton("Evaluate", panel)
+        self._btn_locator_evaluate = QPushButton("Vyhodnotiť", panel)
         self._btn_locator_evaluate.clicked.connect(self._on_locator_evaluate)
         self._btn_locator_evaluate.setEnabled(self._golden_image is not None)
         controls_layout.addWidget(self._btn_locator_evaluate)
@@ -638,7 +638,7 @@ class ToolEditDialog(QDialog):
 
         before_title = QLabel("Captured frame", panel)
         before_title.setAlignment(Qt.AlignCenter)
-        before_label = QLabel("No preview", panel)
+        before_label = QLabel("Náhľad nie je dostupný", panel)
         before_label.setAlignment(Qt.AlignCenter)
         before_label.setMinimumSize(200, _LOCATOR_PREVIEW_MIN_HEIGHT)
         before_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -646,7 +646,7 @@ class ToolEditDialog(QDialog):
 
         after_title = QLabel("Aligned preview", panel)
         after_title.setAlignment(Qt.AlignCenter)
-        after_label = QLabel("No preview", panel)
+        after_label = QLabel("Náhľad nie je dostupný", panel)
         after_label.setAlignment(Qt.AlignCenter)
         after_label.setMinimumSize(200, _LOCATOR_PREVIEW_MIN_HEIGHT)
         after_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -758,10 +758,10 @@ class ToolEditDialog(QDialog):
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
-        btn_clear = QPushButton("Reset A-B", group)
+        btn_clear = QPushButton("Obnoviť A-B", group)
         btn_clear.clicked.connect(self._edge_anchor_editor.clear_points)
         controls.addWidget(btn_clear)
-        self._btn_edge_auto_detect = QPushButton("Auto detect edge in ROI", group)
+        self._btn_edge_auto_detect = QPushButton("Automaticky nájsť hranu v ROI", group)
         self._btn_edge_auto_detect.clicked.connect(self._on_edge_auto_detect_clicked)
         controls.addWidget(self._btn_edge_auto_detect)
         controls.addStretch(1)
@@ -1135,12 +1135,12 @@ class ToolEditDialog(QDialog):
                 return
             if image is None:
                 label.setPixmap(QPixmap())
-                label.setText("No preview")
+                label.setText("Náhľad nie je dostupný")
                 return
             pixmap = self._pixmap_from_array(image)
             if pixmap is None:
                 label.setPixmap(QPixmap())
-                label.setText("No preview")
+                label.setText("Náhľad nie je dostupný")
                 return
             size = label.size()
             if size.width() > 0 and size.height() > 0:
@@ -1307,7 +1307,7 @@ class ToolEditDialog(QDialog):
             fields_added += self._add_locator_angle_controls(param_values)
 
         if self._param_specs:
-            header = QLabel("Parameters", self)
+            header = QLabel("Parametre", self)
             header.setStyleSheet("font-weight: 600; padding-top: 4px;")
             self._config_form.addRow(header)
             for name, spec in self._param_specs.items():
@@ -1340,7 +1340,7 @@ class ToolEditDialog(QDialog):
                 fields_added += 1
 
         if self._threshold_specs:
-            header = QLabel("Thresholds", self)
+            header = QLabel("Prahy", self)
             header.setStyleSheet("font-weight: 600; padding-top: 8px;")
             self._config_form.addRow(header)
             for name, spec in self._threshold_specs.items():
