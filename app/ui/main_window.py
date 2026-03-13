@@ -518,375 +518,362 @@ class MainWindow(QMainWindow):
             return
         self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
-        self._pause_live_preview_for_trigger()
+        trigger_state = self._prepare_run_trigger()
+        if trigger_state is None:
+            return
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
-            gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
-            base_frame = None
-            recipe_name = self.current_recipe_name()
-
-            try:
-                recipe_cfg = load_recipe_config(recipe_name)
-            except Exception as exc:
-                print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
-                recipe_cfg = None
-
-            if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
-                logging_enabled = bool(
-                    getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
+            if trigger_state["recipe_cfg"] is None:
+                base_frame = self.cam.capture_trigger_frame(
+                    timeout_s=0.8,
+                    trigger_fn=self._send_run_trigger_gpio_pulse,
                 )
-                self._reset_manual_trigger_progress(recipe_name)
-                if base_frame is None:
-                    base_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
                 self._run_legacy_trigger(
                     base_frame,
-                    recipe_name,
-                    logging_enabled=logging_enabled,
+                    trigger_state["recipe_name"],
+                    logging_enabled=trigger_state["logging_enabled"],
                 )
                 return
 
-            if not getattr(recipe_cfg, "regions", None):
-                recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
-            recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
-            logging_enabled = bool(getattr(recipe_cfg, "logging_enabled", True))
+            queue = list(trigger_state["views_to_process"])
+            while queue:
+                spec = queue.pop(0)
+                execution = self._execute_view_trigger(spec, trigger_state)
+                if execution.get("replace_queue") is not None:
+                    queue = execution["replace_queue"]
+                if execution.get("should_break"):
+                    break
 
-            fail_fast = bool(getattr(recipe_cfg.aggregation, "fail_fast", False))
-            run_id = f"{recipe_name}_{uuid.uuid4().hex[:8]}"
-            view_specs: list[dict[str, Any]] = []
-            for index, view in enumerate(recipe_cfg.views):
-                settle_ms = getattr(view, "settle_ms", None)
-                settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
-                if settle_ms is not None and settle_ms < 0:
-                    settle_ms = 0
-                trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").lower()
-                if trigger_mode not in {"timed", "external", "manual"}:
-                    trigger_mode = "timed"
-                interval_ms = getattr(view, "trigger_interval_ms", None)
-                interval_ms = (
-                    int(interval_ms)
-                    if isinstance(interval_ms, Integral) and interval_ms is not None
-                    else None
-                )
-                if interval_ms is not None and interval_ms < 0:
-                    interval_ms = 0
-                frame_source_view_id = (
-                    str(getattr(view, "frame_source_view_id", "") or "").strip() or None
-                )
-                view_specs.append(
-                    {
-                        "index": index,
-                        "view": view,
-                        "settle_ms": settle_ms,
-                        "trigger_mode": trigger_mode,
-                        "interval_ms": interval_ms,
-                        "frame_source_view_id": frame_source_view_id,
-                    }
-                )
-
-            base_camera_state = snapshot_camera_state(self.cam)
-
-            manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
-            all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
-
-            ignored_for_aggregation: set[str] = set()
-
-            if all_manual:
-                cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
-                index_in_cycle = cycle_position % len(manual_specs)
-                current_spec = manual_specs[index_in_cycle]
-                self._manual_trigger_positions[recipe_name] = (
-                    index_in_cycle + 1
-                ) % len(manual_specs)
-                if index_in_cycle == 0:
-                    self._manual_trigger_statuses[recipe_name] = {}
-                    self._reset_view_sequence_state()
-                    per_view_statuses: dict[str, str] = {}
-                else:
-                    per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
-                views_to_process = [current_spec]
-            else:
-                self._reset_view_sequence_state()
-                per_view_statuses = {}
-                views_to_process = view_specs
-                self._reset_manual_trigger_progress(recipe_name)
-
-            last_preview_frame = base_frame
-            self._last_total_cycle_time_ms = None
-            self.sb_recipe_duration.setText("Čas receptu: –")
-            trigger_start_ts = time.monotonic()
-
-            last_view_id: str | None = None
-            captured_frames: dict[str, Any] = {}
-            spec_lookup = {
-                getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
-                for spec in view_specs
-            }
-
-            try:
-                queue = list(views_to_process)
-                while queue:
-                    spec = queue.pop(0)
-                    view = spec["view"]
-                    index = spec["index"]
-                    view_id = getattr(view, "id", None) or f"view_{index+1}"
-                    view_name = getattr(view, "name", view_id)
-                    golden = self._load_view_golden_array(recipe_name, view)
-
-                    source_view_id = spec.get("frame_source_view_id")
-                    view_frame_u8 = None
-                    injected_frame = spec.get("injected_frame")
-                    if injected_frame is not None:
-                        view_frame_u8 = self._clone_frame(injected_frame)
-                    elif source_view_id:
-                        view_frame_u8 = captured_frames.get(source_view_id)
-                        if view_frame_u8 is None:
-                            view_frame_u8 = self._clone_frame(
-                                self._get_last_frame_for_view(source_view_id)
-                            )
-
-                    if view_frame_u8 is None:
-                        profile = getattr(view, "camera_profile", None)
-                        requested_stream_mode = None
-                        if isinstance(base_camera_state, Mapping):
-                            requested_stream_mode = base_camera_state.get("stream_mode")
-                        profile_stream_mode = getattr(profile, "stream_mode", None)
-                        if profile_stream_mode is not None:
-                            requested_stream_mode = profile_stream_mode
-                        self._log_run_trigger_context(
-                            f"RUN trigger capture flow for view={view_id}",
-                            requested_stream_mode=(
-                                int(requested_stream_mode)
-                                if isinstance(requested_stream_mode, Integral)
-                                else None
-                            ),
-                            hid_set="skipped",
-                        )
-                        try:
-                            apply_view_camera_profile(
-                                self.cam,
-                                base_camera_state,
-                                profile,
-                                apply_stream_mode=False,
-                            )
-                        except Exception as exc:
-                            self._logger.exception(
-                                "RUN trigger camera profile apply failed for view=%s", view_id
-                            )
-                            self.lbl_status.setText(
-                                f"{view_name}: {exc}"
-                            )
-                            self._reset_manual_trigger_progress(recipe_name)
-                            return
-
-                        settle_ms = spec["settle_ms"]
-                        trigger_mode = spec["trigger_mode"]
-                        interval_ms = spec["interval_ms"]
-
-                        if settle_ms is not None and settle_ms > 0:
-                            time.sleep(settle_ms / 1000.0)
-
-                        current_stream_mode = None
-                        try:
-                            current_stream_mode = int(self.cam.get_stream_mode())
-                        except Exception:
-                            current_stream_mode = None
-
-                        if current_stream_mode == 1:
-                            view_frame = self.cam.capture_trigger_frame(timeout_s=0.8, trigger_fn=self._send_run_trigger_gpio_pulse)
-                        else:
-                            view_frame = self.cam.last_frame(caller=f"run_manual_trigger::{view_id}")
-
-                        if view_frame is None:
-                            self.lbl_status.setText("Žiadny snímok z kamery.")
-                            self._reset_manual_trigger_progress(recipe_name)
-                            return
-
-                        base_frame = view_frame.copy()
-                        view_frame_u8 = view_frame.copy()
-                    else:
-                        base_frame = view_frame_u8.copy()
-                        settle_ms = spec["settle_ms"]
-                        trigger_mode = spec["trigger_mode"]
-                        interval_ms = spec["interval_ms"]
-
-                    if golden is None:
-                        status = "nok"
-                        reports = []
-                        diagnostics_payload = ["missing_golden"]
-                        combined_metrics = {}
-                        policy_applied = None
-                        result = None
-                        last_preview_frame = view_frame_u8.copy()
-                    else:
-                        view_recipe = RecipeV2(
-                            pose_enabled=recipe_cfg.pose_enabled,
-                            regions=[dict(r) for r in recipe_cfg.regions],
-                            tools=[tool.copy() for tool in getattr(view, "tools", [])],
-                            views=[view.copy()],
-                            aggregation=recipe_cfg.aggregation.copy(),
-                            on_locator_failure=recipe_cfg.on_locator_failure,
-                            export_artifacts=recipe_cfg.export_artifacts,
-                            logging_enabled=recipe_cfg.logging_enabled,
-                        )
-
-                        result = run_pipeline(
-                            golden,
-                            view_frame_u8,
-                            view_recipe,
-                            recipe_name=recipe_name,
-                            notes=f"manual_trigger::{view_id}",
-                        )
-
-                        status = (result.status or "ok").lower()
-                        diagnostics_payload = [
-                            self._simplify_value(diag)
-                            for diag in getattr(result, "diagnostics", []) or []
-                        ]
-                        reports = [
-                            self._serialize_tool_report(report)
-                            for report in result.per_tool
-                        ]
-                        combined_metrics = self._merge_pipeline_metrics(reports)
-                        policy_applied = getattr(result, "policy_applied", None)
-
-                        context_frame = getattr(result.context, "frame_aligned", None)
-                        if context_frame is None:
-                            context_frame = getattr(result.context, "frame", None)
-                        if isinstance(context_frame, np.ndarray):
-                            last_preview_frame = context_frame.copy()
-                        else:
-                            last_preview_frame = view_frame_u8.copy()
-
-                    per_view_statuses[view_id] = status
-                    if all_manual:
-                        self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
-
-                    cycle_time_value = float(result.cycle_time_ms) if result is not None else None
-                    total_cycle_time_value = (time.monotonic() - trigger_start_ts) * 1000.0
-
-                    meta_payload = {
-                        "mode": "manual",
-                        "status": status,
-                        "view_id": view_id,
-                        "view_name": view_name,
-                        "cycle_time_ms": cycle_time_value,
-                        "total_cycle_time_ms": total_cycle_time_value,
-                        "per_tool": reports,
-                        "diagnostics": diagnostics_payload,
-                        "metrics": combined_metrics,
-                        "sequence_statuses": dict(per_view_statuses),
-                    }
-                    if policy_applied:
-                        meta_payload["policy_applied"] = policy_applied
-
-                    if logging_enabled:
-                        artifacts = save_production_result(
-                            view_frame_u8,
-                            meta_payload,
-                            recipe_name,
-                            store_full_nok=True,
-                            nok=status != "ok",
-                            run_id=run_id,
-                            view_id=view_id,
-                        )
-
-                        self._record_run_result(
-                            recipe_name,
-                            status=status,
-                            metrics=combined_metrics,
-                            artifacts=artifacts,
-                        )
-                    else:
-                        self._bump_runtime_stats(
-                            recipe_name,
-                            status=status,
-                            view_id=view_id,
-                            cycle_time_ms=cycle_time_value,
-                        )
-
-                    self._set_last_view_frame(view_id, last_preview_frame)
-                    captured_frames[view_id] = self._clone_frame(view_frame_u8)
-                    last_view_id = view_id
-
-                    self.view_strip.set_status(view_id, status)
-                    self._update_sidebar(
-                        per_tool=reports,
-                        status=status,
-                        cycle_time_ms=cycle_time_value,
-                        total_cycle_time_ms=total_cycle_time_value,
-                        view_id=view_id,
-                    )
-
-                    branch_target_id = None
-                    if bool(getattr(view, "branch_enabled", False)):
-                        if index == 0:
-                            ignored_for_aggregation.add(view_id)
-                        branch_map = dict(getattr(view, "branch_targets", {}) or {})
-                        branch_target_id = branch_map.get(status) or getattr(
-                            view, "branch_default_view_id", None
-                        )
-                        if branch_target_id and branch_target_id != view_id:
-                            forwarded_frame = self._clone_frame(view_frame_u8)
-                            target_spec = spec_lookup.get(branch_target_id)
-                            if target_spec:
-                                queued_spec = dict(target_spec)
-                                queued_spec["injected_frame"] = forwarded_frame
-                                queue = [queued_spec]
-                            else:
-                                queue = []
-
-                    should_break = bool(
-                        fail_fast and status == "nok" and not branch_target_id
-                    )
-
-                    if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
-                        time.sleep(interval_ms / 1000.0)
-
-                    if should_break:
-                        break
-            finally:
-                try:
-                    apply_camera_state(self.cam, base_camera_state, apply_stream_mode=False)
-                except Exception as exc:
-                    self._logger.exception("[Trigger] Obnovenie nastavenia kamery zlyhalo")
-                    print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
-
-            if self._active_view_id and self._active_view_id not in per_view_statuses:
-                self._update_sidebar(view_id=self._active_view_id)
-
-            aggregated_status = aggregate_branching_statuses(
-                recipe_cfg.aggregation, per_view_statuses, ignored_for_aggregation
-            )
-            self._apply_run_status_style(aggregated_status)
-            self._signal_outputs(aggregated_status)
-
-            active_frame = self._get_last_frame_for_view(self._active_view_id)
-            if active_frame is not None:
-                self._last_trigger_frame = self._clone_frame(active_frame)
-                self._last_trigger_view_id = self._active_view_id
-            else:
-                self._last_trigger_frame = self._clone_frame(last_preview_frame)
-                self._last_trigger_view_id = last_view_id
-
-            self._reload_results_strip()
-
-            if not self.live_enabled:
-                self._update_live_view()
-
-            gst_starts_after = int(getattr(self.cam, "gst_start_count", lambda: 0)())
-            gst_restarts = max(0, gst_starts_after - gst_starts_before)
-            self._logger.info(
-                "trigger_click_gst_starts(caller=run_manual_trigger, count=%s)",
-                gst_restarts,
-            )
-            if gst_restarts > 0:
-                self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
+            self._finalize_run_trigger(trigger_state)
 
         except Exception:
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
         finally:
-            self._resume_live_preview_after_trigger()
+            if trigger_state is not None:
+                base_camera_state = trigger_state.get("base_camera_state")
+                if base_camera_state is not None:
+                    try:
+                        apply_camera_state(self.cam, base_camera_state, apply_stream_mode=False)
+                    except Exception as exc:
+                        self._logger.exception("[Trigger] Obnovenie nastavenia kamery zlyhalo")
+                        print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
+            self._resume_live_preview_after_trigger(bool(trigger_state.get("was_live_enabled", False)) if trigger_state else False)
+
+    def _prepare_run_trigger(self) -> dict[str, Any] | None:
+        was_live_enabled = self._pause_live_preview_for_trigger()
+        gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
+        recipe_name = self.current_recipe_name()
+
+        try:
+            recipe_cfg = load_recipe_config(recipe_name)
+        except Exception as exc:
+            print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
+            recipe_cfg = None
+
+        if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
+            self._reset_manual_trigger_progress(recipe_name)
+            return {
+                "was_live_enabled": was_live_enabled,
+                "gst_starts_before": gst_starts_before,
+                "recipe_name": recipe_name,
+                "recipe_cfg": None,
+                "logging_enabled": bool(
+                    getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
+                ),
+            }
+
+        if not getattr(recipe_cfg, "regions", None):
+            recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
+        recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
+
+        view_specs: list[dict[str, Any]] = []
+        for index, view in enumerate(recipe_cfg.views):
+            settle_ms = getattr(view, "settle_ms", None)
+            settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
+            if settle_ms is not None and settle_ms < 0:
+                settle_ms = 0
+            trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").lower()
+            if trigger_mode not in {"timed", "external", "manual"}:
+                trigger_mode = "timed"
+            interval_ms = getattr(view, "trigger_interval_ms", None)
+            interval_ms = (
+                int(interval_ms)
+                if isinstance(interval_ms, Integral) and interval_ms is not None
+                else None
+            )
+            if interval_ms is not None and interval_ms < 0:
+                interval_ms = 0
+            frame_source_view_id = (
+                str(getattr(view, "frame_source_view_id", "") or "").strip() or None
+            )
+            view_specs.append(
+                {
+                    "index": index,
+                    "view": view,
+                    "settle_ms": settle_ms,
+                    "trigger_mode": trigger_mode,
+                    "interval_ms": interval_ms,
+                    "frame_source_view_id": frame_source_view_id,
+                }
+            )
+
+        manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
+        all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
+        if all_manual:
+            cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
+            index_in_cycle = cycle_position % len(manual_specs)
+            current_spec = manual_specs[index_in_cycle]
+            self._manual_trigger_positions[recipe_name] = (index_in_cycle + 1) % len(manual_specs)
+            if index_in_cycle == 0:
+                self._manual_trigger_statuses[recipe_name] = {}
+                self._reset_view_sequence_state()
+                per_view_statuses = {}
+            else:
+                per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
+            views_to_process = [current_spec]
+        else:
+            self._reset_view_sequence_state()
+            per_view_statuses = {}
+            views_to_process = view_specs
+            self._reset_manual_trigger_progress(recipe_name)
+
+        self._last_total_cycle_time_ms = None
+        self.sb_recipe_duration.setText("Čas receptu: –")
+        return {
+            "gst_starts_before": gst_starts_before,
+            "recipe_name": recipe_name,
+            "recipe_cfg": recipe_cfg,
+            "logging_enabled": bool(getattr(recipe_cfg, "logging_enabled", True)),
+            "run_id": f"{recipe_name}_{uuid.uuid4().hex[:8]}",
+            "view_specs": view_specs,
+            "views_to_process": views_to_process,
+            "all_manual": all_manual,
+            "per_view_statuses": per_view_statuses,
+            "ignored_for_aggregation": set(),
+            "last_preview_frame": None,
+            "last_view_id": None,
+            "captured_frames": {},
+            "trigger_start_ts": time.monotonic(),
+            "spec_lookup": {
+                getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
+                for spec in view_specs
+            },
+            "base_camera_state": snapshot_camera_state(self.cam),
+            "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
+        }
+
+    def _execute_view_trigger(self, spec: dict[str, Any], trigger_state: dict[str, Any]) -> dict[str, Any]:
+        recipe_name = trigger_state["recipe_name"]
+        recipe_cfg = trigger_state["recipe_cfg"]
+        base_camera_state = trigger_state["base_camera_state"]
+        captured_frames = trigger_state["captured_frames"]
+        per_view_statuses = trigger_state["per_view_statuses"]
+        all_manual = trigger_state["all_manual"]
+
+        view = spec["view"]
+        index = spec["index"]
+        view_id = getattr(view, "id", None) or f"view_{index+1}"
+        view_name = getattr(view, "name", view_id)
+        trigger_mode = spec["trigger_mode"]
+        settle_ms = spec["settle_ms"]
+        interval_ms = spec["interval_ms"]
+        self._logger.info("active view id: %s", view_id)
+        self._logger.info("trigger mode for current view: %s", trigger_mode)
+
+        golden = self._load_view_golden_array(recipe_name, view)
+        source_view_id = spec.get("frame_source_view_id")
+        view_frame_u8 = None
+        injected_frame = spec.get("injected_frame")
+        if injected_frame is not None:
+            view_frame_u8 = self._clone_frame(injected_frame)
+        elif source_view_id:
+            view_frame_u8 = captured_frames.get(source_view_id)
+            if view_frame_u8 is None:
+                view_frame_u8 = self._clone_frame(self._get_last_frame_for_view(source_view_id))
+
+        if view_frame_u8 is None:
+            profile = getattr(view, "camera_profile", None)
+            requested_stream_mode = None
+            if isinstance(base_camera_state, Mapping):
+                requested_stream_mode = base_camera_state.get("stream_mode")
+            profile_stream_mode = getattr(profile, "stream_mode", None)
+            if profile_stream_mode is not None:
+                requested_stream_mode = profile_stream_mode
+            self._log_run_trigger_context(
+                f"RUN trigger capture flow for view={view_id}",
+                requested_stream_mode=(
+                    int(requested_stream_mode) if isinstance(requested_stream_mode, Integral) else None
+                ),
+                hid_set="skipped",
+            )
+            apply_view_camera_profile(
+                self.cam,
+                base_camera_state,
+                profile,
+                apply_stream_mode=False,
+            )
+
+            if settle_ms is not None and settle_ms > 0:
+                time.sleep(settle_ms / 1000.0)
+
+            view_frame = self.cam.capture_trigger_frame(
+                timeout_s=0.8,
+                trigger_fn=self._send_run_trigger_gpio_pulse,
+            )
+            if view_frame is None:
+                self.lbl_status.setText("Žiadny snímok z kamery.")
+                self._reset_manual_trigger_progress(recipe_name)
+                return {"should_break": True}
+            view_frame_u8 = view_frame.copy()
+
+        if golden is None:
+            status = "nok"
+            reports = []
+            diagnostics_payload = ["missing_golden"]
+            combined_metrics = {}
+            policy_applied = None
+            result = None
+            last_preview_frame = view_frame_u8.copy()
+        else:
+            view_recipe = RecipeV2(
+                pose_enabled=recipe_cfg.pose_enabled,
+                regions=[dict(r) for r in recipe_cfg.regions],
+                tools=[tool.copy() for tool in getattr(view, "tools", [])],
+                views=[view.copy()],
+                aggregation=recipe_cfg.aggregation.copy(),
+                on_locator_failure=recipe_cfg.on_locator_failure,
+                export_artifacts=recipe_cfg.export_artifacts,
+                logging_enabled=recipe_cfg.logging_enabled,
+            )
+            result = run_pipeline(
+                golden,
+                view_frame_u8,
+                view_recipe,
+                recipe_name=recipe_name,
+                notes=f"manual_trigger::{view_id}",
+            )
+            status = (result.status or "ok").lower()
+            diagnostics_payload = [
+                self._simplify_value(diag) for diag in getattr(result, "diagnostics", []) or []
+            ]
+            reports = [self._serialize_tool_report(report) for report in result.per_tool]
+            combined_metrics = self._merge_pipeline_metrics(reports)
+            policy_applied = getattr(result, "policy_applied", None)
+            context_frame = getattr(result.context, "frame_aligned", None)
+            if context_frame is None:
+                context_frame = getattr(result.context, "frame", None)
+            last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
+
+        per_view_statuses[view_id] = status
+        if all_manual:
+            self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
+
+        cycle_time_value = float(result.cycle_time_ms) if result is not None else None
+        total_cycle_time_value = (time.monotonic() - trigger_state["trigger_start_ts"]) * 1000.0
+        meta_payload = {
+            "mode": "manual",
+            "status": status,
+            "view_id": view_id,
+            "view_name": view_name,
+            "cycle_time_ms": cycle_time_value,
+            "total_cycle_time_ms": total_cycle_time_value,
+            "per_tool": reports,
+            "diagnostics": diagnostics_payload,
+            "metrics": combined_metrics,
+            "sequence_statuses": dict(per_view_statuses),
+        }
+        if policy_applied:
+            meta_payload["policy_applied"] = policy_applied
+
+        if trigger_state["logging_enabled"]:
+            artifacts = save_production_result(
+                view_frame_u8,
+                meta_payload,
+                recipe_name,
+                store_full_nok=True,
+                nok=status != "ok",
+                run_id=trigger_state["run_id"],
+                view_id=view_id,
+            )
+            self._record_run_result(recipe_name, status=status, metrics=combined_metrics, artifacts=artifacts)
+        else:
+            self._bump_runtime_stats(
+                recipe_name,
+                status=status,
+                view_id=view_id,
+                cycle_time_ms=cycle_time_value,
+            )
+
+        self._set_last_view_frame(view_id, last_preview_frame)
+        captured_frames[view_id] = self._clone_frame(view_frame_u8)
+        trigger_state["last_preview_frame"] = last_preview_frame
+        trigger_state["last_view_id"] = view_id
+        self.view_strip.set_status(view_id, status)
+        self._update_sidebar(
+            per_tool=reports,
+            status=status,
+            cycle_time_ms=cycle_time_value,
+            total_cycle_time_ms=total_cycle_time_value,
+            view_id=view_id,
+        )
+
+        branch_target_id = None
+        replace_queue = None
+        if bool(getattr(view, "branch_enabled", False)):
+            if index == 0:
+                trigger_state["ignored_for_aggregation"].add(view_id)
+            branch_map = dict(getattr(view, "branch_targets", {}) or {})
+            branch_target_id = branch_map.get(status) or getattr(view, "branch_default_view_id", None)
+            if branch_target_id and branch_target_id != view_id:
+                forwarded_frame = self._clone_frame(view_frame_u8)
+                target_spec = trigger_state["spec_lookup"].get(branch_target_id)
+                if target_spec:
+                    queued_spec = dict(target_spec)
+                    queued_spec["injected_frame"] = forwarded_frame
+                    replace_queue = [queued_spec]
+                else:
+                    replace_queue = []
+
+        should_break = bool(trigger_state["fail_fast"] and status == "nok" and not branch_target_id)
+        if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
+            time.sleep(interval_ms / 1000.0)
+        return {"replace_queue": replace_queue, "should_break": should_break}
+
+    def _finalize_run_trigger(self, trigger_state: dict[str, Any]) -> None:
+        recipe_cfg = trigger_state["recipe_cfg"]
+        per_view_statuses = trigger_state["per_view_statuses"]
+        if self._active_view_id and self._active_view_id not in per_view_statuses:
+            self._update_sidebar(view_id=self._active_view_id)
+
+        aggregated_status = aggregate_branching_statuses(
+            recipe_cfg.aggregation,
+            per_view_statuses,
+            trigger_state["ignored_for_aggregation"],
+        )
+        self._apply_run_status_style(aggregated_status)
+        self._signal_outputs(aggregated_status)
+
+        active_frame = self._get_last_frame_for_view(self._active_view_id)
+        if active_frame is not None:
+            self._last_trigger_frame = self._clone_frame(active_frame)
+            self._last_trigger_view_id = self._active_view_id
+        else:
+            self._last_trigger_frame = self._clone_frame(trigger_state["last_preview_frame"])
+            self._last_trigger_view_id = trigger_state["last_view_id"]
+
+        self._reload_results_strip()
+        if not self.live_enabled:
+            self._update_live_view()
+
+        gst_starts_after = int(getattr(self.cam, "gst_start_count", lambda: 0)())
+        gst_restarts = max(0, gst_starts_after - trigger_state["gst_starts_before"])
+        self._logger.info(
+            "trigger_click_gst_starts(caller=run_manual_trigger, count=%s)",
+            gst_restarts,
+        )
+        if gst_restarts > 0:
+            self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
 
     def _run_legacy_trigger(
         self,
@@ -998,13 +985,17 @@ class MainWindow(QMainWindow):
 
     def _pause_live_preview_for_trigger(self) -> bool:
         was_live_enabled = bool(self.live_enabled)
-        self._logger.debug("preview paused")
+        self._logger.info("run trigger paused preview")
+        if was_live_enabled:
+            self._run_timer.stop()
         self.cam.begin_trigger_capture()
         return was_live_enabled
 
-    def _resume_live_preview_after_trigger(self) -> None:
+    def _resume_live_preview_after_trigger(self, was_live_enabled: bool = False) -> None:
         self.cam.end_trigger_capture()
-        self._logger.debug("preview resumed")
+        if was_live_enabled:
+            self._run_timer.start()
+        self._logger.info("run trigger resumed preview")
 
     def _toggle_live(self):
         self.live_enabled = self.btn_live.isChecked()
