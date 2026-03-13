@@ -1294,6 +1294,7 @@ class GoldenWizard(QDialog):
         self._live_timer.setInterval(50)  # ~20 FPS
         self._live_timer.timeout.connect(self._live_tick)
         self._live_on = False
+        self._runtime_camera_paused_by_wizard = False
 
         # ---- Horná lišta ----
         current_recipe = getattr(self.recipes.tool, "recipe", "default")
@@ -1501,12 +1502,28 @@ class GoldenWizard(QDialog):
         self._refresh_publish_state()
 
     # ---------- Live ----------
+    def _pause_runtime_camera_for_wizard(self) -> None:
+        if self._runtime_camera_paused_by_wizard:
+            return
+        self.cam.pause_for_external()
+        self._runtime_camera_paused_by_wizard = True
+        print("[GoldenWizard] wizard paused runtime camera")
+
+    def _resume_runtime_camera_from_wizard(self) -> None:
+        if not self._runtime_camera_paused_by_wizard:
+            return
+        self.cam.resume_after_external()
+        self._runtime_camera_paused_by_wizard = False
+        print("[GoldenWizard] wizard resumed runtime camera")
+
     def _toggle_live(self, checked: bool):
         if checked:
             try:
-                self.cam.pause_for_external()
+                self._pause_runtime_camera_for_wizard()
             except Exception as e:
-                print("[GoldenWizard] pause_for_external:", e)
+                self._err(f"Live feed sa nepodarilo pripraviť kameru: {e}")
+                self.btn_live.setChecked(False)
+                return
 
 
             # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
@@ -1517,11 +1534,24 @@ class GoldenWizard(QDialog):
                 self._live_timer.start()
                 self._live_on = True
                 self.btn_live.setText("Live ON")
+                print("[GoldenWizard] wizard preview started")
             except Exception as e:
+                self._live_timer.stop()
+                try:
+                    self._lp.stop()
+                except Exception:
+                    pass
+                self._live_on = False
+                self.live_lbl.hide()
+                self.view.show()
+                self.btn_live.setText("Live OFF")
+                try:
+                    self._resume_runtime_camera_from_wizard()
+                except Exception as resume_exc:
+                    print("[GoldenWizard] resume_after_external:", resume_exc)
                 self._err(f"Live feed sa nepodarilo spustiť: {e}")
                 self.btn_live.setChecked(False)
                 self.live_lbl.setText("—")
-                self._live_on = False
         else:
             # Vypnúť live: skryť label, ukázať DrawView
             self._live_timer.stop()
@@ -1529,10 +1559,15 @@ class GoldenWizard(QDialog):
                 self._lp.stop()
             except Exception:
                 pass
+            print("[GoldenWizard] wizard preview stopped")
             self._live_on = False
             self.btn_live.setText("Live OFF")
             self.live_lbl.hide()
             self.view.show()
+            try:
+                self._resume_runtime_camera_from_wizard()
+            except Exception as e:
+                print("[GoldenWizard] resume_after_external:", e)
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()
@@ -1839,12 +1874,6 @@ class GoldenWizard(QDialog):
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
-
-            # po vypnutí live obnov kameru
-            try:
-                self.cam.resume_after_external()
-            except Exception as e:
-                print("[GoldenWizard] resume_after_external:", e)
 
             self._info("Golden zachytený z kamery.")
         except Exception as e:
@@ -2944,11 +2973,11 @@ class GoldenWizard(QDialog):
         try:
             self._live_timer.stop()
             self._lp.stop()
+            print("[GoldenWizard] wizard preview stopped")
         except Exception:
             pass
         try:
-            if bool(getattr(self.cam, "_paused_external", False)):
-                self.cam.resume_after_external()
+            self._resume_runtime_camera_from_wizard()
         except Exception:
             pass
         e.accept()
