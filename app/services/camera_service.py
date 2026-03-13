@@ -78,6 +78,9 @@ class CameraService:
         self._gst_start_count = 0
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
+        self._trigger_capture_active = False
+        self._trigger_state_lock = threading.Lock()
+        self._cap_read_lock = threading.Lock()
 
     def _is_preview_path_active(self) -> bool:
         """
@@ -87,12 +90,16 @@ class CameraService:
         return bool(self._pipeline is not None or self._cap is not None)
 
     def _is_trigger_path_active(self) -> bool:
-        """
-        Trigger path je zatiaľ naviazaný na queue čítanie, ale pripravujeme prechod
-        na blocking read cez OpenCV GStreamer.
-        TODO: queue-based trigger path nahradiť samostatným blocking read trigger path.
-        """
+        """Trigger path je cap.read() flow pre trigger mode capture."""
         return bool(self._is_trigger_mode_active() and self.is_pipeline_open())
+
+    def _set_trigger_capture_active(self, active: bool) -> None:
+        with self._trigger_state_lock:
+            self._trigger_capture_active = bool(active)
+
+    def _is_trigger_capture_active(self) -> bool:
+        with self._trigger_state_lock:
+            return bool(self._trigger_capture_active)
 
     def _normalize_frame_u8(self, frame):
         """Zjednotená normalizácia frame do uint8 grayscale."""
@@ -374,7 +381,14 @@ class CameraService:
 
     def _grab_loop(self):
         while not self._stop.is_set():
-            ok, frame = self._cap.read()
+            if self._is_trigger_capture_active():
+                time.sleep(0.002)
+                continue
+            with self._cap_read_lock:
+                if self._cap is None:
+                    time.sleep(0.005)
+                    continue
+                ok, frame = self._cap.read()
             if not ok:
                 time.sleep(0.005)
                 continue
@@ -450,6 +464,8 @@ class CameraService:
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
     def one_shot(self):
+        """Legacy/fallback snapshot z preview queue/appsink path."""
+        self._logger.debug("one_shot() is legacy preview fallback (queue/appsink)")
         if not self._is_preview_path_active():
             self._logger.debug("one_shot requested while preview path is inactive")
         tries = 0
@@ -497,6 +513,7 @@ class CameraService:
         self._active_pipeline_signature = None
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
+        self._set_trigger_capture_active(False)
         if self._hid is not None:
             try:
                 self._hid.close()
@@ -509,7 +526,9 @@ class CameraService:
     def start_continuous(self):
         """Spustí ľahký kontinuálny zber do ring bufferu (bez GStreamer UI)."""
         if self._t_ring and self._t_ring.is_alive():
+            self._logger.debug("start_continuous skipped: ring loop already running")
             return
+        self._logger.info("start_continuous activated (ring capture is preview-side helper, not trigger path)")
         self._stop_ring.clear()
         self._t_ring = threading.Thread(target=self._loop_ring, daemon=True)
         self._t_ring.start()
@@ -520,7 +539,15 @@ class CameraService:
             if self._cap is None:
                 time.sleep(0.01)
                 continue
-            ok, frame = self._cap.read()
+            if self._is_trigger_capture_active():
+                self._logger.debug("ring capture paused: trigger capture active")
+                time.sleep(0.002)
+                continue
+            with self._cap_read_lock:
+                if self._cap is None:
+                    time.sleep(0.01)
+                    continue
+                ok, frame = self._cap.read()
             if not ok or frame is None:
                 time.sleep(0.002); continue
             frame = self._normalize_frame_u8(frame)
@@ -530,14 +557,28 @@ class CameraService:
 
     def last_frame(self, *, caller: str = "unspecified"):
         """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
-        # TODO: mixed queue + ring capture je prechodový stav medzi preview a trigger architektúrou.
+        if self._is_trigger_path_active() and self._is_trigger_capture_active():
+            self._logger.debug(
+                "last_frame fallback blocked: trigger capture flow active (caller=%s)",
+                caller,
+            )
+            if self._ring:
+                self._log_latest_frame_used(caller)
+                return self._ring[-1]
+            raise RuntimeError("last_frame unavailable during active trigger capture flow")
+
+        if self._is_trigger_path_active():
+            self._logger.debug("last_frame in trigger mode: one_shot legacy fallback disabled (caller=%s)", caller)
         if self._ring:
             self._log_latest_frame_used(caller)
             return self._ring[-1]
+        if self._is_trigger_path_active():
+            raise RuntimeError("No ring frame available in trigger mode")
         self._log_latest_frame_used(caller)
         return self.one_shot()
 
     def stop_continuous(self):
+        self._logger.info("stop_continuous requested")
         try:
             self._stop_ring.set()
         except Exception:
@@ -767,6 +808,7 @@ class CameraService:
         if self._trigger_primed:
             return True
         self._trigger_priming_in_progress = True
+        self._set_trigger_capture_active(True)
         try:
             self._logger.info("trigger priming started")
             if not pipeline_was_open:
@@ -776,8 +818,8 @@ class CameraService:
                 time.sleep(float(settle_delay_s))
             if self._cap is None:
                 raise RuntimeError("Priming failed: OpenCV capture is not available")
-
-            ok, _ = self._cap.read()
+            with self._cap_read_lock:
+                ok, _ = self._cap.read()
             if not ok:
                 raise RuntimeError("Priming failed: cap.read() returned no frame")
             self._logger.info("priming frame discarded via cap.read()")
@@ -785,6 +827,7 @@ class CameraService:
             self._logger.info("camera primed")
             return True
         finally:
+            self._set_trigger_capture_active(False)
             self._trigger_priming_in_progress = False
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
@@ -792,19 +835,26 @@ class CameraService:
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
-        started = time.monotonic()
-        self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-        deadline = started + float(timeout_s)
-        frame = None
-        if self._cap is None:
-            raise RuntimeError("Production capture failed: OpenCV capture is not available")
+        self._set_trigger_capture_active(True)
+        try:
+            started = time.monotonic()
+            self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
+            deadline = started + float(timeout_s)
+            frame = None
+            if self._cap is None:
+                raise RuntimeError("Production capture failed: OpenCV capture is not available")
 
-        while time.monotonic() < deadline:
-            ok, grabbed = self._cap.read()
-            if ok and grabbed is not None:
-                frame = grabbed
-                break
-            time.sleep(0.005)
+            while time.monotonic() < deadline:
+                with self._cap_read_lock:
+                    if self._cap is None:
+                        break
+                    ok, grabbed = self._cap.read()
+                if ok and grabbed is not None:
+                    frame = grabbed
+                    break
+                time.sleep(0.005)
+        finally:
+            self._set_trigger_capture_active(False)
 
         if frame is None:
             raise RuntimeError("No frame received after production trigger")
