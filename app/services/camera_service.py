@@ -79,6 +79,44 @@ class CameraService:
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
 
+    def _is_preview_path_active(self) -> bool:
+        """
+        Preview path je queue/appsink + ring buffer pre UI live náhľad.
+        TODO: mixed queue + ring capture ponechať iba do migrácie trigger path na blocking read model.
+        """
+        return bool(self._pipeline is not None or self._cap is not None)
+
+    def _is_trigger_path_active(self) -> bool:
+        """
+        Trigger path je zatiaľ naviazaný na queue čítanie, ale pripravujeme prechod
+        na blocking read cez OpenCV GStreamer.
+        TODO: queue-based trigger path nahradiť samostatným blocking read trigger path.
+        """
+        return bool(self._is_trigger_mode_active() and self.is_pipeline_open())
+
+    def _normalize_frame_u8(self, frame):
+        """Zjednotená normalizácia frame do uint8 grayscale."""
+        if frame is None:
+            return None
+        if frame.ndim == 3 and frame.shape[2] == 3:
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        elif frame.ndim == 3 and frame.shape[2] == 1:
+            frame = frame[:, :, 0]
+
+        if frame.dtype == np.uint16:
+            maxv = int(frame.max())
+            if maxv <= 0:
+                return np.zeros_like(frame, dtype=np.uint8)
+            if maxv <= 1023:
+                return (frame >> 2).astype(np.uint8)
+            if maxv <= 4095:
+                return (frame >> 4).astype(np.uint8)
+            return cv2.convertScaleAbs(frame, alpha=255.0 / 65535.0)
+
+        if frame.dtype != np.uint8:
+            return cv2.convertScaleAbs(frame)
+        return frame
+
     def _pipeline_signature(self, *, device: str | None = None) -> dict[str, object]:
         dev = device or self.device
         return {
@@ -182,6 +220,9 @@ class CameraService:
         return "GREY"
 
     def _reset_buffers(self):
+        self._logger.debug("reset buffers")
+        self._clear_queue()
+        self._clear_ring()
         self._q = queue.Queue(maxsize=5)
         self._ring = deque(maxlen=5)
 
@@ -201,6 +242,10 @@ class CameraService:
             # GRAY8 by mal byť width*height bajtov
             arr = np.frombuffer(map_info.data, dtype=np.uint8)
             arr = arr.reshape((h, -1))[:, :w].copy()
+            arr = self._normalize_frame_u8(arr)
+            if arr is None:
+                return Gst.FlowReturn.OK
+            # Preview-only path: queue/appsink slúži pre UI/live stream.
             if self._q.full():
                 try:
                     self._q.get_nowait()
@@ -268,6 +313,8 @@ class CameraService:
             self._pipeline = pipeline
             self._loop = loop
             self._mode = "gst"
+            self._logger.debug("backend mode selected=%s device=%s", self._mode, dev)
+            self._logger.debug("pipeline open backend=%s device=%s", self._mode, dev)
 
             def _loop_run():
                 try:
@@ -317,6 +364,8 @@ class CameraService:
 
         self._cap = cap
         self._mode = "v4l2"
+        self._logger.debug("backend mode selected=%s device=%s", self._mode, dev)
+        self._logger.debug("pipeline open backend=%s device=%s", self._mode, dev)
         self._stop.clear()
         self._t = threading.Thread(target=self._grab_loop, daemon=True)
         self._t.start()
@@ -330,21 +379,9 @@ class CameraService:
                 time.sleep(0.005)
                 continue
 
-            # ak príde BGR (niektoré buildy), preveď na greyscale
-            if frame.ndim == 3 and frame.shape[2] == 3:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-            # --- kľúčové: 16-bit -> 8-bit (Y12/Y16 normalizácia) ---
-            if frame.dtype == np.uint16:
-                maxv = int(frame.max())
-                if maxv <= 0:
-                    frame = np.zeros_like(frame, dtype=np.uint8)
-                elif maxv <= 4095:          # typicky Y12
-                    frame = (frame >> 4).astype(np.uint8)
-                elif maxv <= 1023:          # ak by sa objavil 10-bit
-                    frame = (frame >> 2).astype(np.uint8)
-                else:                        # plný 16-bit
-                    frame = cv2.convertScaleAbs(frame, alpha=255.0/65535.0)
+            frame = self._normalize_frame_u8(frame)
+            if frame is None:
+                continue
 
             try:
                 if self._q.full():
@@ -413,6 +450,8 @@ class CameraService:
         raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
 
     def one_shot(self):
+        if not self._is_preview_path_active():
+            self._logger.debug("one_shot requested while preview path is inactive")
         tries = 0
         last = None
         while tries < 3:
@@ -429,6 +468,7 @@ class CameraService:
     def stop(self, *, caller: str = "unspecified"):
         self._log_stop_pipeline(caller)
         self._stop.set()
+        self._logger.debug("pipeline close requested mode=%s", self._mode)
         # V4L2
         if self._cap is not None:
             try:
@@ -453,6 +493,7 @@ class CameraService:
             self._t.join(timeout=1.0)
         self._t = None
         self._mode = None
+        self._logger.debug("pipeline closed")
         self._active_pipeline_signature = None
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
@@ -482,22 +523,14 @@ class CameraService:
             ok, frame = self._cap.read()
             if not ok or frame is None:
                 time.sleep(0.002); continue
-            if frame.ndim == 3 and frame.shape[2] == 1:
-                frame = frame[:, :, 0]
-            if frame.dtype != np.uint8:
-                import cv2
-                f = frame
-                # normalizácia 16->8 (konzistentne)
-                if f.dtype == np.uint16:
-                    # Y12 -> 8-bit
-                    f8 = cv2.convertScaleAbs(f, alpha=255.0/4095.0)
-                else:
-                    f8 = cv2.convertScaleAbs(f)
-                frame = f8
+            frame = self._normalize_frame_u8(frame)
+            if frame is None:
+                continue
             self._ring.append(frame)
 
     def last_frame(self, *, caller: str = "unspecified"):
         """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
+        # TODO: mixed queue + ring capture je prechodový stav medzi preview a trigger architektúrou.
         if self._ring:
             self._log_latest_frame_used(caller)
             return self._ring[-1]
@@ -686,11 +719,19 @@ class CameraService:
         return self._hid
 
     def _clear_queue(self):
+        cleared = 0
         while True:
             try:
                 self._q.get_nowait()
+                cleared += 1
             except queue.Empty:
                 break
+        self._logger.debug("queue clear done dropped=%s", cleared)
+
+    def _clear_ring(self):
+        cleared = len(self._ring)
+        self._ring.clear()
+        self._logger.debug("ring clear done dropped=%s", cleared)
 
     def _is_trigger_mode_active(self) -> bool:
         try:
@@ -743,11 +784,12 @@ class CameraService:
             self._trigger_priming_in_progress = False
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
-        if not self._is_trigger_mode_active():
+        if not self._is_trigger_path_active():
             return self.last_frame(caller="capture_trigger_frame:master")
 
         self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
         self._clear_queue()
+        # TODO: queue-based trigger path je prechodové riešenie; trigger capture presunúť na blocking read model.
         started = time.monotonic()
         self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
         try:
