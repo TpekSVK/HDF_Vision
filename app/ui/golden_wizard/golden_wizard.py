@@ -1525,45 +1525,47 @@ class GoldenWizard(QDialog):
                 self.btn_live.setChecked(False)
                 return
 
-
-            # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
-            self.view.hide()
-            self.live_lbl.show()
+            # Camera lifecycle: oddelené helpery pre štart/stop preview session.
             try:
-                self._lp.start()
-                self._live_timer.start()
-                self._live_on = True
-                self.btn_live.setText("Live ON")
-                print("[GoldenWizard] wizard preview started")
+                self._start_preview_session()
             except Exception as e:
-                self._live_timer.stop()
-                try:
-                    self._lp.stop()
-                except Exception:
-                    pass
-                self._live_on = False
-                self.live_lbl.hide()
-                self.view.show()
-                self.btn_live.setText("Live OFF")
-                try:
-                    self._resume_runtime_camera_from_wizard()
-                except Exception as resume_exc:
-                    print("[GoldenWizard] resume_after_external:", resume_exc)
+                self._stop_preview_session(resume_runtime_camera=True, clear_label=True)
                 self._err(f"Live feed sa nepodarilo spustiť: {e}")
                 self.btn_live.setChecked(False)
-                self.live_lbl.setText("—")
         else:
-            # Vypnúť live: skryť label, ukázať DrawView
-            self._live_timer.stop()
-            try:
-                self._lp.stop()
-            except Exception:
-                pass
+            self._stop_preview_session(resume_runtime_camera=True)
+
+    def _start_preview_session(self) -> None:
+        # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
+        self.view.hide()
+        self.live_lbl.show()
+        self._lp.start()
+        self._live_timer.start()
+        self._live_on = True
+        self.btn_live.setText("Live ON")
+        print("[GoldenWizard] wizard preview started")
+
+    def _stop_preview_session(
+        self,
+        *,
+        resume_runtime_camera: bool,
+        clear_label: bool = False,
+    ) -> None:
+        # Vypnúť live: skryť label, ukázať DrawView
+        self._live_timer.stop()
+        try:
+            self._lp.stop()
+        except Exception:
+            pass
+        if self._live_on:
             print("[GoldenWizard] wizard preview stopped")
-            self._live_on = False
-            self.btn_live.setText("Live OFF")
-            self.live_lbl.hide()
-            self.view.show()
+        self._live_on = False
+        self.btn_live.setText("Live OFF")
+        self.live_lbl.hide()
+        self.view.show()
+        if clear_label:
+            self.live_lbl.setText("—")
+        if resume_runtime_camera:
             try:
                 self._resume_runtime_camera_from_wizard()
             except Exception as e:
@@ -1645,17 +1647,7 @@ class GoldenWizard(QDialog):
         for view in self._views:
             self._view_states.setdefault(view.id, {})
 
-        self._updating_view_selector = True
-        self._view_selector.blockSignals(True)
-        self._view_selector.clear()
-        for view in self._views:
-            label = view.name or view.id or "View"
-            self._view_selector.addItem(label, view.id)
-        self._view_selector.blockSignals(False)
-        self._updating_view_selector = False
-
-        self.btn_remove_view.setEnabled(len(self._views) > 1)
-        self.btn_edit_view.setEnabled(bool(self._views))
+        self._refresh_view_metadata()
 
         target_view_id = select_view_id or self._active_view_id
         if not target_view_id or target_view_id not in valid_ids:
@@ -1993,12 +1985,18 @@ class GoldenWizard(QDialog):
         self._refresh_publish_state()
 
     def _refresh_publish_state(self) -> None:
+        state = self._load_publish_state()
+        self._apply_publish_state(state)
+
+    def _load_publish_state(self) -> dict[str, Any]:
         recipe = self._current_recipe_name()
         try:
             state = self.recipes.publish_state(recipe)
         except Exception:
             state = {"draft_updated_at": None, "published_at": None, "has_unpublished_changes": False}
+        return state
 
+    def _apply_publish_state(self, state: dict[str, Any]) -> None:
         draft_at = state.get("draft_updated_at")
         published_at = state.get("published_at")
         dirty = bool(state.get("has_unpublished_changes"))
@@ -2647,6 +2645,10 @@ class GoldenWizard(QDialog):
         return True
 
     def _on_tool_selection_changed(self) -> None:
+        # Tool editing lifecycle: panel/overlay refresh podľa aktuálneho výberu nástroja.
+        self._refresh_tool_panel_for_selection()
+
+    def _refresh_tool_panel_for_selection(self) -> None:
         recipe = self._current_recipe_name()
         view_id = self._active_view_id
         tools = []
@@ -2674,6 +2676,19 @@ class GoldenWizard(QDialog):
             self._tool_panel.clear()
             self._selected_tool_row = -1
             self.view.set_tool_overlay(None)
+
+    def _refresh_view_metadata(self) -> None:
+        self._updating_view_selector = True
+        self._view_selector.blockSignals(True)
+        self._view_selector.clear()
+        for view in self._views:
+            label = view.name or view.id or "View"
+            self._view_selector.addItem(label, view.id)
+        self._view_selector.blockSignals(False)
+        self._updating_view_selector = False
+
+        self.btn_remove_view.setEnabled(len(self._views) > 1)
+        self.btn_edit_view.setEnabled(bool(self._views))
 
     def _on_tool_param_changed(self, name: str, value: Any) -> None:
         row = getattr(self, "_selected_tool_row", -1)
@@ -2970,14 +2985,5 @@ class GoldenWizard(QDialog):
             if result != QMessageBox.Yes:
                 e.ignore()
                 return
-        try:
-            self._live_timer.stop()
-            self._lp.stop()
-            print("[GoldenWizard] wizard preview stopped")
-        except Exception:
-            pass
-        try:
-            self._resume_runtime_camera_from_wizard()
-        except Exception:
-            pass
+        self._stop_preview_session(resume_runtime_camera=True)
         e.accept()
