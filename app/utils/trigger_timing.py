@@ -55,3 +55,55 @@ def get_safe_trigger_exposure_abs(width: object, height: object, fps: object) ->
     if key is None:
         return 200
     return int(_SAFE_TRIGGER_EXPOSURE_ABS.get(key, 200))
+
+
+def get_trigger_runtime_fps(width: object, height: object, fps: object, pixel_format: object) -> float:
+    """Return effective CU55 runtime fps for timing calculations."""
+    key = _key(width, height, fps)
+    try:
+        requested_fps = max(1.0, float(fps))
+    except Exception:
+        requested_fps = 60.0
+
+    if key is None:
+        return requested_fps
+
+    pix_fmt = str(pixel_format or "Y8").upper()
+    profile_max_fps: dict[str, dict[tuple[int, int], float]] = {
+        "Y8": {
+            (2592, 1944): 30.0,
+            (1920, 1080): 60.0,
+            (1280, 720): 60.0,
+            (640, 480): 112.0,
+        },
+        "Y12": {
+            (2592, 1944): 14.0,
+            (1920, 1080): 30.0,
+            (1280, 720): 60.0,
+            (640, 480): 112.0,
+        },
+    }
+    max_fps = profile_max_fps.get(pix_fmt, {}).get((key[0], key[1]))
+    if max_fps is None:
+        return requested_fps
+    return min(requested_fps, float(max_fps))
+
+
+def get_trigger_frame_time_ms(width: object, height: object, fps: object, pixel_format: object) -> float:
+    runtime_fps = get_trigger_runtime_fps(width, height, fps, pixel_format)
+    return 1000.0 / max(1.0, float(runtime_fps))
+
+
+def get_safe_priming_gap_ms(
+    width: object,
+    height: object,
+    fps: object,
+    pixel_format: object,
+    *,
+    configured_min_priming_gap_ms: float = 5.0,
+    safety_margin_ms: float = 3.0,
+) -> float:
+    """Calculate conservative priming gap: max(frame_time + margin, configured minimum)."""
+    frame_time_ms = get_trigger_frame_time_ms(width, height, fps, pixel_format)
+    base = frame_time_ms + max(0.0, float(safety_margin_ms))
+    return max(base, max(0.0, float(configured_min_priming_gap_ms)))

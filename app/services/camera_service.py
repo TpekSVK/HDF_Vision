@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
-from app.utils.trigger_timing import get_safe_trigger_exposure_abs
+from app.utils.trigger_timing import get_safe_priming_gap_ms, get_safe_trigger_exposure_abs, get_trigger_frame_time_ms, get_trigger_runtime_fps
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -29,9 +29,10 @@ except Exception:
 
 @dataclass(frozen=True)
 class TriggerTiming:
-    exposure_ms: float
+    master_exposure_ms: float
     frame_time_ms: float
     trigger_gap_ms: float
+    priming_gap_ms: float
     pulse_ms: float
     effective_period_ms: float
     timeout_min_ms: float
@@ -850,35 +851,17 @@ class CameraService:
         width = int(self.width or 0)
         height = int(self.height or 0)
         pix_fmt = str(self.pixel_format or "Y8").upper()
-
-        profile_max_fps: dict[str, dict[tuple[int, int], float]] = {
-            "Y8": {
-                (2592, 1944): 30.0,
-                (1920, 1080): 60.0,
-                (1280, 720): 60.0,
-                (640, 480): 112.0,
-            },
-            "Y12": {
-                (2592, 1944): 14.0,
-                (1920, 1080): 30.0,
-                (1280, 720): 60.0,
-                (640, 480): 112.0,
-            },
-        }
-
-        max_fps = profile_max_fps.get(pix_fmt, {}).get((width, height))
-        if max_fps is not None and fps > float(max_fps):
+        runtime_fps = float(get_trigger_runtime_fps(width, height, fps, pix_fmt))
+        if runtime_fps < fps:
             self._logger.warning(
                 "CU55 %s %sx%s trigger profile forcing runtime fps from %.2f to %.2f for timing",
                 pix_fmt,
                 width,
                 height,
                 fps,
-                float(max_fps),
+                runtime_fps,
             )
-            return float(max_fps)
-
-        return fps
+        return runtime_fps
 
     def _compute_trigger_timing(
         self,
@@ -886,21 +869,33 @@ class CameraService:
         trigger_gap_ms: float | None = None,
         pulse_ms: float = 10.0,
         safety_margin_ms: float = 3.0,
+        configured_min_priming_gap_ms: float = 5.0,
     ) -> TriggerTiming:
         runtime_fps = self._trigger_runtime_fps()
-        frame_time_ms = 1000.0 / max(runtime_fps, 1.0)
-        exposure_ms = max(0.0, float(self.exposure_us or 0) / 1000.0)
+        frame_time_ms = float(get_trigger_frame_time_ms(self.width, self.height, runtime_fps, self.pixel_format))
+        master_exposure_ms = max(0.0, float(self.exposure_us or 0) / 1000.0)
         if trigger_gap_ms is None:
-            trigger_gap_ms = max(frame_time_ms, exposure_ms) + float(safety_margin_ms)
+            trigger_gap_ms = frame_time_ms + float(safety_margin_ms)
         trigger_gap_ms = max(0.0, float(trigger_gap_ms))
+        priming_gap_ms = float(
+            get_safe_priming_gap_ms(
+                self.width,
+                self.height,
+                runtime_fps,
+                self.pixel_format,
+                configured_min_priming_gap_ms=float(configured_min_priming_gap_ms),
+                safety_margin_ms=float(safety_margin_ms),
+            )
+        )
         effective_period_ms = max(0.0, float(pulse_ms)) + trigger_gap_ms
-        timeout_min_ms = max(trigger_gap_ms, frame_time_ms)
+        timeout_min_ms = max(trigger_gap_ms, priming_gap_ms, frame_time_ms)
 
         self._logger.info(
-            "trigger_timing exposure_ms=%.2f frame_time_ms=%.2f gap_ms=%.2f pulse_ms=%.2f effective_period_ms=%.2f safety_margin_ms=%.2f "
+            "trigger_timing master_exposure_ms=%.2f frame_time_ms=%.2f priming_gap_ms=%.2f production_gap_ms=%.2f pulse_ms=%.2f effective_period_ms=%.2f safety_margin_ms=%.2f "
             "resolution=%sx%s pixel_format=%s fps=%s runtime_fps=%.2f",
-            exposure_ms,
+            master_exposure_ms,
             frame_time_ms,
+            priming_gap_ms,
             trigger_gap_ms,
             float(pulse_ms),
             effective_period_ms,
@@ -912,17 +907,18 @@ class CameraService:
             runtime_fps,
         )
 
-        if exposure_ms < frame_time_ms:
+        if trigger_gap_ms < frame_time_ms:
             self._logger.warning(
-                "trigger_timing warning: exposure_ms(%.2f) < frame_time_ms(%.2f); banding/uneven exposure may occur",
-                exposure_ms,
+                "trigger_timing warning: trigger_gap_ms(%.2f) < frame_time_ms(%.2f); banding/uneven exposure may occur",
+                trigger_gap_ms,
                 frame_time_ms,
             )
 
         return TriggerTiming(
-            exposure_ms=exposure_ms,
+            master_exposure_ms=master_exposure_ms,
             frame_time_ms=frame_time_ms,
             trigger_gap_ms=trigger_gap_ms,
+            priming_gap_ms=priming_gap_ms,
             pulse_ms=float(pulse_ms),
             effective_period_ms=effective_period_ms,
             timeout_min_ms=timeout_min_ms,
@@ -931,7 +927,7 @@ class CameraService:
 
     def _resolve_trigger_timeout_s(self, configured_timeout_s: float, timing: TriggerTiming) -> float:
         configured_ms = max(1.0, float(configured_timeout_s) * 1000.0)
-        min_ms = max(float(timing.timeout_min_ms), float(timing.frame_time_ms), float(timing.exposure_ms))
+        min_ms = max(float(timing.timeout_min_ms), float(timing.frame_time_ms), float(timing.trigger_gap_ms))
         if configured_ms < min_ms:
             self._logger.warning(
                 "trigger timeout auto-adjusted configured_ms=%.2f minimum_ms=%.2f",
@@ -975,9 +971,13 @@ class CameraService:
         trigger_fn: Callable[[], None] | None,
         timeout_s: float,
         timing: TriggerTiming,
-        priming_gap_ms: float = 1.0,
     ) -> np.ndarray | None:
-        self._logger.info("[TRIGGER] request received")
+        self._logger.info(
+            "[TRIGGER] request received trigger_mode_active=%s priming_gap_ms=%.2f production_gap_ms=%.2f",
+            bool(self._is_trigger_mode_active()),
+            float(timing.priming_gap_ms),
+            float(timing.trigger_gap_ms),
+        )
         self._clear_trigger_sample_state()
 
         self._logger.info("[TRIGGER] priming pulse 1/3")
@@ -985,7 +985,7 @@ class CameraService:
             trigger_fn=trigger_fn,
             note="trigger pulse 1/3 sent",
             timing=timing,
-            gap_ms=priming_gap_ms,
+            gap_ms=float(timing.priming_gap_ms),
         )
         frame_1 = self._wait_for_sample(float(timeout_s))
         if frame_1 is None:
@@ -998,7 +998,7 @@ class CameraService:
             trigger_fn=trigger_fn,
             note="trigger pulse 2/3 sent",
             timing=timing,
-            gap_ms=priming_gap_ms,
+            gap_ms=float(timing.priming_gap_ms),
         )
         frame_2 = self._wait_for_sample(float(timeout_s))
         if frame_2 is None:
