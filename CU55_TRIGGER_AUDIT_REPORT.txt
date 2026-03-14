@@ -1,0 +1,45 @@
+CU55 Trigger Audit Report
+=========================
+
+1) Upravené súbory
+------------------
+- app/services/camera_service.py
+- app/ui/main_window.py
+- README.md
+
+2) Kde sa implementovala trigger session
+----------------------------------------
+- CameraService session API:
+  - enter_trigger_session()
+  - ensure_trigger_session()
+  - capture_trigger_frame()
+  - exit_trigger_session()
+- MainWindow RUN flow:
+  - _enter_run_trigger_session() pri vstupe do RUN a pred trigger workflow
+  - _exit_run_trigger_session() pri odchode zo session (SETUP/wizard)
+  - re-entry session po návrate z wizardov v RUN režime
+
+3) Kde sa implementoval recovery mechanizmus
+--------------------------------------------
+- Level 1 soft recovery pulzy: _attempt_trigger_recovery_pulses()
+- Level 2 re-prime session: _attempt_trigger_reprime()
+- Level 3 reopen pipeline: _attempt_trigger_pipeline_reopen()
+- Level 4 fail: capture_trigger_frame() vyhodí RuntimeError po zlyhaní všetkých úrovní
+
+4) Potenciálne riziká / miesta nestability
+------------------------------------------
+- Ak trigger_fn (GPIO pulse callback) nie je dostupný, CU55 trigger capture je blokovaný (úmyselne), keďže SW trigger je zakázaný.
+- Pri zlyhaní HID komunikácie (set/get stream mode) môže session vstup/overenie zlyhať.
+- Ak iná časť systému získa exkluzívny prístup ku kamere mimo wizard flow, trigger session môže byť prerušiteľná.
+- Aplikácia sa spolieha na dostupnosť otvorenej pipeline počas trigger session; externé zásahy do pipeline stavu môžu narušiť capture.
+
+5) Odporúčania na ďalšie zlepšenia
+----------------------------------
+- Doplniť integračné testy pre trigger session API a recovery úrovne (mocks pre queue/pipeline/HID/GPIO).
+- Zaviesť explicitný session watchdog (telemetria timeoutov, počty recovery pokusov, MTTR).
+- Doplniť rate-limit / debounce na externý trigger vstup pri šume na GPIO.
+- Doplniť health endpoint alebo debug panel so stavmi: stream_mode, pipeline_open, trigger_session_ready.
+
+6) Krátke zhrnutie architektúry
+-------------------------------
+CU55 trigger režim je implementovaný ako session-based architektúra. Kamera sa prepne do TRIGGER módu iba na začiatku session a v tomto režime zostáva počas celej trigger prevádzky. Trigger capture nepoužíva stream mode toggling medzi cyklami a zdieľa jednu otvorenú trigger pipeline. Pri timeoutoch sa spúšťa viacúrovňová recovery stratégia (soft pulzy, re-prime, reopen pipeline) bez prepínania MASTER/TRIGGER, aby sa minimalizovala nestabilita pozorovaná v testoch.
