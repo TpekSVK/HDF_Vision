@@ -431,6 +431,23 @@ class MainWindow(QMainWindow):
         border_color = color if status_key in color_map else None
         self._set_live_view_border(border_color)
 
+    def _manual_trigger_capture_result(self) -> str:
+        status = str(getattr(self.cam, "get_last_trigger_capture_status", lambda: "normal")() or "normal").lower()
+        if status == "recovered":
+            return "recovered"
+        if status == "fail":
+            return "fail"
+        return "normal"
+
+    def _update_manual_trigger_feedback(self, *, force_fail: bool = False) -> None:
+        result = "fail" if force_fail else self._manual_trigger_capture_result()
+        if result == "recovered":
+            self.lbl_status.setText("TRIGGER: RECOVERED SUCCESS")
+        elif result == "fail":
+            self.lbl_status.setText("TRIGGER: FAIL")
+        else:
+            self.lbl_status.setText("TRIGGER: NORMAL SUCCESS")
+
     def _reset_manual_trigger_progress(self, recipe_name: str | None = None) -> None:
         if recipe_name is None:
             self._manual_trigger_positions.clear()
@@ -614,6 +631,7 @@ class MainWindow(QMainWindow):
                     timeout_s=0.8,
                     trigger_fn=self._send_run_trigger_gpio_pulse,
                 )
+                self._update_manual_trigger_feedback()
                 self._log_trigger_cycle(
                     "legacy_capture_done",
                     trigger_mode="legacy",
@@ -638,6 +656,7 @@ class MainWindow(QMainWindow):
             self._finalize_run_trigger(trigger_state)
 
         except Exception:
+            self._update_manual_trigger_feedback(force_fail=True)
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
         finally:
@@ -790,7 +809,9 @@ class MainWindow(QMainWindow):
                 timeout_s=0.8,
                 trigger_fn=self._send_run_trigger_gpio_pulse,
             )
+            self._update_manual_trigger_feedback()
             if view_frame is None:
+                self._update_manual_trigger_feedback(force_fail=True)
                 self.lbl_status.setText("Žiadny snímok z kamery.")
                 self._reset_manual_trigger_progress(recipe_name)
                 return {"should_break": True}
