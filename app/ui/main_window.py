@@ -89,6 +89,7 @@ class MainWindow(QMainWindow):
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
+        self._run_trigger_session_active = False
         # Tool/Recipe
         try:
             if "default" not in self.recipes.list():
@@ -398,6 +399,7 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
+            self._exit_run_trigger_session(restore_master=True)
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
@@ -579,13 +581,29 @@ class MainWindow(QMainWindow):
             "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
         }
 
+    def _enter_run_trigger_session(self) -> None:
+        self._logger.info("enter_trigger_session requested")
+        self.cam.ensure_trigger_session(trigger_fn=self._send_run_trigger_gpio_pulse)
+        self._run_trigger_session_active = True
+
+    def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
+        if not self._run_trigger_session_active and not getattr(self.cam, "is_trigger_session_active", lambda: False)():
+            return
+        self.cam.exit_trigger_session(restore_master=restore_master)
+        self._run_trigger_session_active = False
+
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
         self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
-        trigger_state = self._prepare_run_trigger()
+        try:
+            trigger_state = self._prepare_run_trigger()
+        except Exception as exc:
+            self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
+            self._resume_live_preview_after_trigger(False)
+            return
         if trigger_state is None:
             return
         try:
@@ -623,15 +641,6 @@ class MainWindow(QMainWindow):
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
         finally:
-            if trigger_state is not None:
-                base_camera_state = trigger_state.get("base_camera_state")
-                if base_camera_state is not None:
-                    try:
-                        self._logger.info("restoring base camera state")
-                        apply_camera_state(self.cam, base_camera_state, apply_stream_mode=False)
-                    except Exception as exc:
-                        self._logger.exception("[Trigger] Obnovenie nastavenia kamery zlyhalo")
-                        print(f"[Trigger] Obnovenie nastavenia kamery zlyhalo: {exc}")
             self._resume_live_preview_after_trigger(bool(trigger_state.get("was_live_enabled", False)) if trigger_state else False)
 
     def _prepare_run_trigger(self) -> dict[str, Any] | None:
@@ -640,6 +649,7 @@ class MainWindow(QMainWindow):
         recipe_name = self.current_recipe_name()
         base_camera_state = snapshot_camera_state(self.cam)
         self._logger.info("snapshot camera state taken")
+        self._enter_run_trigger_session()
 
         try:
             recipe_cfg = load_recipe_config(recipe_name)
@@ -1023,6 +1033,7 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def open_wizard(self):
+        self._exit_run_trigger_session(restore_master=False)
         dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
         dlg.resize(1200, 800)
         dlg.exec()
@@ -1033,12 +1044,14 @@ class MainWindow(QMainWindow):
         self._update_sidebar(view_id=self._active_view_id)
 
     def open_gpio_wizard(self):
+        self._exit_run_trigger_session(restore_master=False)
         self.gpio.set_active_recipe(self.current_recipe_name())
         dlg = GPIOWizard(self.gpio, self)
         dlg.resize(720, 520)
         dlg.exec()
 
     def open_modbus_wizard(self):
+        self._exit_run_trigger_session(restore_master=False)
         dlg = ModbusWizard(self.modbus, self)
         dlg.resize(760, 640)
         dlg.exec()
@@ -1054,7 +1067,7 @@ class MainWindow(QMainWindow):
 
     def _pause_live_preview_for_trigger(self) -> bool:
         was_live_enabled = bool(self.live_enabled)
-        self._logger.info("run trigger paused preview")
+        self._logger.info("preview paused")
         self._log_trigger_cycle(
             "preview_pause",
             preview_state="paused",
@@ -1072,7 +1085,7 @@ class MainWindow(QMainWindow):
         elif not self.live_enabled:
             # Po ukončení trigger capture obnov statický preview frame.
             self._update_live_view()
-        self._logger.info("run trigger resumed preview")
+        self._logger.info("preview resumed")
         self._log_trigger_cycle(
             "preview_resume",
             preview_state="resumed",
@@ -1731,7 +1744,7 @@ class MainWindow(QMainWindow):
 
         profile = getattr(view_obj, "camera_profile", None)
         try:
-            apply_view_camera_profile(self.cam, {}, profile)
+            apply_view_camera_profile(self.cam, {}, profile, apply_stream_mode=False)
         except Exception as exc:
             self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
             return
