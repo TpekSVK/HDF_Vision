@@ -847,7 +847,7 @@ class CameraService:
 
     def _trigger_via_hw(self, *, trigger_fn: Callable[[], None] | None, note: str) -> None:
         if trigger_fn is None:
-            raise RuntimeError("HW trigger callback is required for CU55 trigger session")
+            raise RuntimeError("HW GPIO trigger callback is required; software trigger is disabled for CU55")
         trigger_fn()
         self._logger.info("%s", note)
 
@@ -858,7 +858,7 @@ class CameraService:
         settle_delay_s: float = 0.08,
         prime_timeout_s: float = 0.8,
     ) -> bool:
-        self._logger.info("enter_trigger_session requested")
+        self._logger.info("enter_trigger_session")
         if self._paused_external:
             raise RuntimeError("Trigger session blocked: preview session currently owns camera")
 
@@ -869,7 +869,7 @@ class CameraService:
             current_mode = None
         self._logger.info("current mode before session start=%s", current_mode)
 
-        if self._is_cu55_model() and current_mode != int(MODE_TRIGGER):
+        if current_mode != int(MODE_TRIGGER):
             self.set_stream_mode(MODE_TRIGGER)
 
         if not self._is_trigger_mode_active():
@@ -879,7 +879,7 @@ class CameraService:
 
         if not self.is_pipeline_open():
             self.start(caller="enter_trigger_session")
-            self._logger.info("trigger pipeline opened")
+            self._logger.info("pipeline opened")
 
         self._logger.info("trigger pipeline playing")
         self._trigger_session_active = True
@@ -893,6 +893,7 @@ class CameraService:
             self._clear_queue()
             if settle_delay_s > 0:
                 time.sleep(float(settle_delay_s))
+            self._logger.info("trigger settle done")
             for idx in (1, 2):
                 self._trigger_via_hw(trigger_fn=trigger_fn, note=f"prime {idx} sent")
                 prime_frame = self._wait_for_sample(float(prime_timeout_s))
@@ -923,7 +924,7 @@ class CameraService:
         )
 
     def exit_trigger_session(self, *, restore_master: bool = False) -> None:
-        self._logger.info("exit_trigger_session requested")
+        self._logger.info("exit_trigger_session")
         current_mode: int | None = None
         try:
             current_mode = int(self.get_stream_mode())
@@ -1019,14 +1020,14 @@ class CameraService:
         trigger_fn: Callable[[], None] | None,
         timeout_s: float,
     ) -> np.ndarray | None:
-        self._logger.info("trigger pipeline reopen started")
+        self._logger.info("pipeline reopen started")
         try:
             if self.is_pipeline_open():
                 self.stop(caller="trigger_reopen")
             self.start(caller="trigger_reopen")
             self._logger.info("trigger pipeline set PLAYING")
         except Exception:
-            self._logger.exception("trigger pipeline reopen fail")
+            self._logger.exception("pipeline reopen fail")
             return None
 
         settle_s = 0.08
@@ -1039,15 +1040,15 @@ class CameraService:
             prime_frame = self._wait_for_sample(float(timeout_s))
             self._logger.info("reopen prime %s result=%s", idx, bool(prime_frame is not None))
             if prime_frame is None:
-                self._logger.info("trigger pipeline reopen fail")
+                self._logger.info("pipeline reopen fail")
                 return None
 
         self._trigger_via_hw(trigger_fn=trigger_fn, note="reopen production trigger sent")
         frame = self._wait_for_sample(float(timeout_s))
         if frame is None:
-            self._logger.info("trigger pipeline reopen fail")
+            self._logger.info("pipeline reopen fail")
             return None
-        self._logger.info("trigger pipeline reopen success")
+        self._logger.info("pipeline reopen success")
         self._logger.info("session resynchronized")
         return frame
 

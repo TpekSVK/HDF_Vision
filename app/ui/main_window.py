@@ -407,6 +407,11 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
+            try:
+                self._enter_run_trigger_session()
+            except Exception as exc:
+                self._logger.error("enter trigger session on RUN failed: %s", exc)
+                self.lbl_status.setText(f"Trigger session sa nepodarilo spustiť: {exc}")
             if not self.live_enabled:
                 self._apply_run_camera_profile()
 
@@ -1058,6 +1063,11 @@ class MainWindow(QMainWindow):
         dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
         dlg.resize(1200, 800)
         dlg.exec()
+        if self.mode == "RUN":
+            try:
+                self._enter_run_trigger_session()
+            except Exception as exc:
+                self._logger.error("re-enter trigger session after wizard failed: %s", exc)
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
         self._reload_results_strip()
@@ -1070,12 +1080,22 @@ class MainWindow(QMainWindow):
         dlg = GPIOWizard(self.gpio, self)
         dlg.resize(720, 520)
         dlg.exec()
+        if self.mode == "RUN":
+            try:
+                self._enter_run_trigger_session()
+            except Exception as exc:
+                self._logger.error("re-enter trigger session after GPIO wizard failed: %s", exc)
 
     def open_modbus_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
         dlg = ModbusWizard(self.modbus, self)
         dlg.resize(760, 640)
         dlg.exec()
+        if self.mode == "RUN":
+            try:
+                self._enter_run_trigger_session()
+            except Exception as exc:
+                self._logger.error("re-enter trigger session after Modbus wizard failed: %s", exc)
 
     def _reload_results_strip(self) -> None:
         strip = getattr(self, "strip", None)
