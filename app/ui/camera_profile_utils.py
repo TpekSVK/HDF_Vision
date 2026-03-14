@@ -156,7 +156,10 @@ def apply_camera_state(
     applied_controls: list[str] = []
     skipped_controls: list[str] = []
 
-    if "exposure_us" in state and state.get("exposure_us") is not None:
+    stream_mode = state.get("stream_mode")
+    trigger_stream_active = stream_mode is not None and int(stream_mode) == 1
+
+    if "exposure_us" in state and state.get("exposure_us") is not None and not trigger_stream_active:
         if not ({"exposure_time_absolute", "exposure_absolute"} & supported_controls):
             skipped_controls.append("exposure_us")
             _LOGGER.debug("Skipped unsupported V4L2 control: exposure_us")
@@ -166,6 +169,9 @@ def apply_camera_state(
                 applied_controls.append("exposure_us")
             except Exception as exc:
                 _handle_error("Nastavenie expozície zlyhalo", exc)
+    elif "exposure_us" in state and state.get("exposure_us") is not None and trigger_stream_active:
+        skipped_controls.append("exposure_us(trigger_mode)")
+        _LOGGER.info("Skipped exposure_us apply because stream_mode=trigger")
 
     if "gain_db" in state and state.get("gain_db") is not None:
         if "gain" not in supported_controls:

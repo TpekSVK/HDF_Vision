@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.schema import ViewCameraProfile
+from app.utils.trigger_timing import get_default_trigger_gap_ms, get_trigger_min_period_ms
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
@@ -60,6 +61,7 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int] = None,
         trigger_mode: str = "timed",
         trigger_interval_ms: Optional[int] = None,
+        trigger_gap_ms: Optional[int | float] = None,
         available_frame_sources: Sequence[tuple[str, str]] | None = None,
         frame_source_view_id: Optional[str] = None,
         available_branch_targets: Sequence[tuple[str, str]] | None = None,
@@ -85,6 +87,7 @@ class ViewConfigDialog(QDialog):
         self._supports_gamma = "gamma" in controls
         self._supports_brightness = "brightness" in controls
         self._supports_sharpness = "sharpness" in controls
+        self._trigger_pulse_ms = 10.0
 
         title = "Pridať pohľad" if mode == "add" else "Upraviť pohľad"
         self.setWindowTitle(title)
@@ -127,6 +130,7 @@ class ViewConfigDialog(QDialog):
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
+        self._resolution_combo.currentIndexChanged.connect(self._on_stream_mode_changed)
         camera_form.addRow("Resolution:", self._resolution_combo)
         resolution_hint = self._create_description_label(
             "Rozlíšenie, snímková frekvencia a pixel formát pre tento view."
@@ -139,6 +143,9 @@ class ViewConfigDialog(QDialog):
 
         self._exposure_edit = QLineEdit(camera_group)
         self._exposure_edit.setPlaceholderText("Leave blank to inherit")
+        self._trigger_exposure_edit = QLineEdit(camera_group)
+        self._trigger_exposure_edit.setPlaceholderText("Auto default for trigger mode")
+        self._trigger_exposure_edit.textChanged.connect(lambda _text: self._update_trigger_gap_warning())
         self._gain_edit = QLineEdit(camera_group)
         self._gain_edit.setPlaceholderText("Leave blank to inherit")
         self._pixel_format_combo = QComboBox(camera_group)
@@ -157,21 +164,29 @@ class ViewConfigDialog(QDialog):
         self._stream_mode_combo.addItem("Inherit", None)
         self._stream_mode_combo.addItem("Hlavný režim (0)", 0)
         self._stream_mode_combo.addItem("Spúšť (1)", 1)
+        self._stream_mode_combo.currentIndexChanged.connect(self._on_stream_mode_changed)
         self._flash_mode_combo = QComboBox(camera_group)
         self._flash_mode_combo.addItem("Inherit", None)
         self._flash_mode_combo.addItem("Vypnuté (0)", 0)
         self._flash_mode_combo.addItem("Stroboskop (1)", 1)
         self._flash_mode_combo.addItem("Svetlo natrvalo (2)", 2)
         camera_form.addRow("Camera device:", self._device_edit)
-        camera_form.addRow("Expozícia [µs]:", self._exposure_edit)
+        camera_form.addRow("Expozícia - master mode [us]:", self._exposure_edit)
         exposure_hint = self._create_description_label(
-            "Prepíše expozičný čas kamery len pre tento view. Prázdna hodnota"
-            " znamená zdedenie aktuálneho nastavenia; v multi-view sa použije"
-            " vždy pri aktivácii tohto view.",
+            "Platí len pre master mode. V trigger mode sa táto hodnota"
+            " nepoužíva na riadenie jasu.",
             camera_group,
         )
         self._exposure_edit.setToolTip(exposure_hint.text())
         camera_form.addRow(exposure_hint)
+        camera_form.addRow("Expozícia - trigger mode [ms]:", self._trigger_exposure_edit)
+        trigger_exposure_hint = self._create_description_label(
+            "Platí len pre trigger mode. V trigger mode riadi čas medzi"
+            " trigger pulzmi (gap), a tým výsledný jas.",
+            camera_group,
+        )
+        self._trigger_exposure_edit.setToolTip(trigger_exposure_hint.text())
+        camera_form.addRow(trigger_exposure_hint)
 
         if self._supports_gain:
             camera_form.addRow("Zisk [dB]:", self._gain_edit)
@@ -261,6 +276,12 @@ class ViewConfigDialog(QDialog):
         )
         self._frame_source_combo.setToolTip(frame_hint.text())
         timing_form.addRow(frame_hint)
+
+        self._trigger_warning_label = QLabel("", timing_group)
+        self._trigger_warning_label.setWordWrap(True)
+        self._trigger_warning_label.setStyleSheet("color: #a05a00; font-size: 11px;")
+        self._trigger_warning_label.setVisible(False)
+        timing_form.addRow(self._trigger_warning_label)
         layout.addWidget(timing_group)
 
         branching_group = QGroupBox("Vetvenie snímky (voliteľné)", self)
@@ -304,7 +325,7 @@ class ViewConfigDialog(QDialog):
         layout.addWidget(button_box)
 
         self._apply_initial_profile(camera_profile)
-        self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms)
+        self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms, trigger_gap_ms)
         self._apply_initial_frame_source(frame_source_view_id)
         self._apply_initial_branch_targets(
             branch_enabled, branch_targets or {}, branch_default_view_id
@@ -351,6 +372,23 @@ class ViewConfigDialog(QDialog):
             return
 
         try:
+            trigger_gap_ms = self._parse_optional_float(self._trigger_exposure_edit.text())
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Expozícia v trigger mode musí byť číselná hodnota.",
+            )
+            return
+        if trigger_gap_ms is not None and trigger_gap_ms <= 0:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Expozícia v trigger mode musí byť väčšia ako 0 ms.",
+            )
+            return
+
+        try:
             gain_db = self._parse_optional_float(self._gain_edit.text()) if self._supports_gain else None
             gamma = self._parse_optional_float(self._gamma_edit.text()) if self._supports_gamma else None
             brightness = self._parse_optional_float(self._brightness_edit.text()) if self._supports_brightness else None
@@ -389,6 +427,13 @@ class ViewConfigDialog(QDialog):
             interval_ms = None
 
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
+        if self._is_trigger_stream_mode() and trigger_gap_ms is None:
+            resolution = self._selected_resolution_data()
+            trigger_gap_ms = get_default_trigger_gap_ms(
+                resolution.get("width"),
+                resolution.get("height"),
+                resolution.get("fps"),
+            )
 
         self._result = {
             "name": name,
@@ -396,6 +441,7 @@ class ViewConfigDialog(QDialog):
             "settle_ms": settle_ms,
             "trigger_mode": trigger_mode,
             "trigger_interval_ms": interval_ms,
+            "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": self._frame_source_combo.currentData(),
             "branch_enabled": self._branch_enabled_checkbox.isChecked(),
             "branch_targets": self._collect_branch_targets(),
@@ -534,6 +580,7 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int],
         trigger_mode: str,
         trigger_interval_ms: Optional[int],
+        trigger_gap_ms: Optional[float],
     ) -> None:
         if settle_ms is not None:
             self._settle_edit.setText(str(int(settle_ms)))
@@ -547,7 +594,10 @@ class ViewConfigDialog(QDialog):
 
         if trigger_interval_ms is not None:
             self._interval_edit.setText(str(int(trigger_interval_ms)))
+        if trigger_gap_ms is not None:
+            self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
+        self._on_stream_mode_changed()
 
     def _apply_initial_frame_source(
         self, frame_source_view_id: Optional[str]
@@ -609,6 +659,62 @@ class ViewConfigDialog(QDialog):
     def _on_trigger_mode_changed(self) -> None:
         mode = str(self._trigger_mode_combo.currentData() or "timed")
         self._interval_edit.setEnabled(mode == "timed")
+
+    def _selected_resolution_data(self) -> dict[str, Any]:
+        resolution_data = self._resolution_combo.currentData()
+        if isinstance(resolution_data, dict):
+            return dict(resolution_data)
+        current_text = self._resolution_combo.currentText()
+        for label, data in self._available_resolutions:
+            if label == current_text:
+                return dict(data)
+        return {}
+
+    def _is_trigger_stream_mode(self) -> bool:
+        return self._stream_mode_combo.currentData() == 1
+
+    def _on_stream_mode_changed(self) -> None:
+        trigger_stream = self._is_trigger_stream_mode()
+        self._exposure_edit.setEnabled(not trigger_stream)
+        self._trigger_exposure_edit.setEnabled(trigger_stream)
+
+        if trigger_stream and not self._trigger_exposure_edit.text().strip():
+            resolution = self._selected_resolution_data()
+            default_gap = get_default_trigger_gap_ms(
+                resolution.get("width"),
+                resolution.get("height"),
+                resolution.get("fps"),
+            )
+            self._trigger_exposure_edit.setText(str(default_gap).rstrip("0").rstrip("."))
+
+        self._update_trigger_gap_warning()
+
+    def _update_trigger_gap_warning(self) -> None:
+        if not self._is_trigger_stream_mode():
+            self._trigger_warning_label.setVisible(False)
+            return
+        resolution = self._selected_resolution_data()
+        min_period_ms = get_trigger_min_period_ms(
+            resolution.get("width"),
+            resolution.get("height"),
+            resolution.get("fps"),
+        )
+        try:
+            gap_ms = self._parse_optional_float(self._trigger_exposure_edit.text())
+        except ValueError:
+            self._trigger_warning_label.setVisible(False)
+            return
+        if gap_ms is None:
+            self._trigger_warning_label.setVisible(False)
+            return
+        effective_period_ms = float(self._trigger_pulse_ms) + float(gap_ms)
+        if effective_period_ms < float(min_period_ms):
+            self._trigger_warning_label.setText(
+                "Nízka expozícia v trigger mode môže spôsobiť banding alebo nerovnomernú expozíciu."
+            )
+            self._trigger_warning_label.setVisible(True)
+            return
+        self._trigger_warning_label.setVisible(False)
 
     def _build_camera_profile(
         self,

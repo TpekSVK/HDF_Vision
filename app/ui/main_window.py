@@ -43,6 +43,7 @@ from app.ui.camera_profile_utils import (
     resolve_view_camera_state,
     snapshot_camera_state,
 )
+from app.utils.trigger_timing import get_default_trigger_gap_ms
 
 
 class MainWindow(QMainWindow):
@@ -590,6 +591,18 @@ class MainWindow(QMainWindow):
         if trigger_mode != "timed":
             interval_ms = None
 
+        trigger_gap_ms = getattr(view, "trigger_gap_ms", None)
+        trigger_gap_ms = float(trigger_gap_ms) if isinstance(trigger_gap_ms, (int, float)) else None
+        if trigger_gap_ms is not None and trigger_gap_ms <= 0:
+            trigger_gap_ms = None
+
+        profile = getattr(view, "camera_profile", None)
+        width = getattr(profile, "width", None) or getattr(self.cam, "width", None)
+        height = getattr(profile, "height", None) or getattr(self.cam, "height", None)
+        fps = getattr(profile, "fps", None) or getattr(self.cam, "fps", None)
+        if trigger_gap_ms is None:
+            trigger_gap_ms = get_default_trigger_gap_ms(width, height, fps)
+
         frame_source_view_id = str(getattr(view, "frame_source_view_id", "") or "").strip() or None
         return {
             "index": index,
@@ -597,6 +610,7 @@ class MainWindow(QMainWindow):
             "settle_ms": settle_ms,
             "trigger_mode": trigger_mode,
             "interval_ms": interval_ms,
+            "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": frame_source_view_id,
             "branch_enabled": bool(getattr(view, "branch_enabled", False)),
             "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
@@ -605,7 +619,7 @@ class MainWindow(QMainWindow):
 
     def _enter_run_trigger_session(self) -> None:
         self._logger.info("enter_trigger_session requested")
-        self.cam.ensure_trigger_session(trigger_fn=self._send_run_trigger_gpio_pulse)
+        self.cam.ensure_trigger_session(trigger_fn=self._send_run_trigger_gpio_pulse, trigger_gap_ms=20.0, pulse_ms=10.0)
         self._run_trigger_session_active = True
 
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
@@ -635,6 +649,9 @@ class MainWindow(QMainWindow):
                 base_frame = self.cam.capture_trigger_frame(
                     timeout_s=0.8,
                     trigger_fn=self._send_run_trigger_gpio_pulse,
+                    trigger_gap_ms=20.0,
+                    pulse_ms=10.0,
+                    trigger_mode_label="manual_gpio",
                 )
                 self._update_manual_trigger_feedback()
                 self._log_trigger_cycle(
@@ -763,6 +780,7 @@ class MainWindow(QMainWindow):
         trigger_mode = spec["trigger_mode"]
         settle_ms = spec["settle_ms"]
         interval_ms = spec["interval_ms"]
+        trigger_gap_ms = float(spec.get("trigger_gap_ms") or 20.0)
         self._logger.info("active view id: %s", view_id)
         self._logger.info("trigger mode for current view: %s", trigger_mode)
         self._log_trigger_cycle(
@@ -800,6 +818,8 @@ class MainWindow(QMainWindow):
                 hid_set="skipped",
             )
             view_camera_state = resolve_view_camera_state(base_camera_state, profile)
+            if int(view_camera_state.get("stream_mode", 1) or 1) == 1:
+                view_camera_state.pop("exposure_us", None)
             self._logger.info("applying view camera state")
             apply_camera_state(
                 self.cam,
@@ -813,6 +833,9 @@ class MainWindow(QMainWindow):
             view_frame = self.cam.capture_trigger_frame(
                 timeout_s=0.8,
                 trigger_fn=self._send_run_trigger_gpio_pulse,
+                trigger_gap_ms=trigger_gap_ms,
+                pulse_ms=10.0,
+                trigger_mode_label=trigger_mode,
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
