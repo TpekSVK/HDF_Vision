@@ -2251,6 +2251,7 @@ class GoldenWizard(QDialog):
             {},
             profile,
             warn=self._warn,
+            apply_stream_mode=False,
         )
 
     @staticmethod

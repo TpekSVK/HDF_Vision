@@ -201,9 +201,19 @@ def apply_camera_state(
     if skipped_controls:
         _LOGGER.info("Skipped unsupported camera controls: %s", skipped_controls)
 
+    trigger_session_active = False
+    is_trigger_session_active = getattr(camera, "is_trigger_session_active", None)
+    if callable(is_trigger_session_active):
+        try:
+            trigger_session_active = bool(is_trigger_session_active())
+        except Exception:
+            trigger_session_active = False
+
     mode_setters = []
-    if apply_stream_mode:
+    if apply_stream_mode and not trigger_session_active:
         mode_setters.append(("stream_mode", "set_stream_mode"))
+    elif apply_stream_mode and trigger_session_active:
+        _LOGGER.info("Skipped stream_mode apply while trigger session is active")
     if apply_flash_mode:
         mode_setters.append(("flash_mode", "set_flash_mode"))
 

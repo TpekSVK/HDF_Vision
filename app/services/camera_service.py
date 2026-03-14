@@ -78,6 +78,8 @@ class CameraService:
         self._gst_start_count = 0
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
+        self._trigger_session_active = False
+        self._trigger_session_ready = False
         self._trigger_capture_active = False
         self._trigger_capture_depth = 0
         self._trigger_state_lock = threading.Lock()
@@ -631,6 +633,9 @@ class CameraService:
         """Uvoľní zariadenie pre externý klient (Live vo WIZARDe)."""
         if self._paused_external:
             return
+        if self._trigger_session_active:
+            self._logger.info("external preview requested while trigger session active")
+            self.exit_trigger_session(restore_master=False)
         # zapamätaj poslednú config
         self._last_open_args.update({
             "device": self.device,
@@ -823,6 +828,121 @@ class CameraService:
         except Exception:
             return False
 
+    def is_trigger_session_active(self) -> bool:
+        return bool(self._trigger_session_active)
+
+    def _wait_for_sample(self, timeout_s: float) -> np.ndarray | None:
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            remaining = max(0.01, deadline - time.monotonic())
+            try:
+                frame = self._q.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            normalized = self._normalize_frame_u8(frame)
+            if normalized is not None:
+                return normalized
+        return None
+
+    def _trigger_via_hw(self, *, trigger_fn: Callable[[], None] | None, note: str) -> None:
+        if trigger_fn is None:
+            raise RuntimeError("HW trigger callback is required for CU55 trigger session")
+        trigger_fn()
+        self._logger.info("%s", note)
+
+    def enter_trigger_session(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None = None,
+        settle_delay_s: float = 0.08,
+        prime_timeout_s: float = 0.8,
+    ) -> bool:
+        self._logger.info("enter_trigger_session requested")
+        if self._paused_external:
+            raise RuntimeError("Trigger session blocked: preview session currently owns camera")
+
+        current_mode: int | None = None
+        try:
+            current_mode = int(self.get_stream_mode())
+        except Exception:
+            current_mode = None
+        self._logger.info("current mode before session start=%s", current_mode)
+
+        if self._is_cu55_model() and current_mode != int(MODE_TRIGGER):
+            self.set_stream_mode(MODE_TRIGGER)
+
+        if not self._is_trigger_mode_active():
+            self._trigger_session_ready = False
+            raise RuntimeError("Failed to enter trigger session: trigger mode verification failed")
+        self._logger.info("trigger mode verified")
+
+        if not self.is_pipeline_open():
+            self.start(caller="enter_trigger_session")
+            self._logger.info("trigger pipeline opened")
+
+        self._logger.info("trigger pipeline playing")
+        self._trigger_session_active = True
+
+        if self._trigger_session_ready:
+            return True
+
+        self._trigger_priming_in_progress = True
+        self.begin_trigger_capture()
+        try:
+            self._clear_queue()
+            if settle_delay_s > 0:
+                time.sleep(float(settle_delay_s))
+            for idx in (1, 2):
+                self._trigger_via_hw(trigger_fn=trigger_fn, note=f"prime {idx} sent")
+                prime_frame = self._wait_for_sample(float(prime_timeout_s))
+                self._logger.info("prime %s result=%s", idx, bool(prime_frame is not None))
+                if prime_frame is None:
+                    raise RuntimeError(f"Prime {idx} failed: no sample")
+            self._trigger_primed = True
+            self._trigger_session_ready = True
+            self._logger.info("trigger session ready")
+            return True
+        finally:
+            self.end_trigger_capture()
+            self._trigger_priming_in_progress = False
+
+    def ensure_trigger_session(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None = None,
+        settle_delay_s: float = 0.08,
+        prime_timeout_s: float = 0.8,
+    ) -> bool:
+        if self._trigger_session_active and self._trigger_session_ready and self.is_pipeline_open() and self._is_trigger_mode_active():
+            return True
+        return self.enter_trigger_session(
+            trigger_fn=trigger_fn,
+            settle_delay_s=settle_delay_s,
+            prime_timeout_s=prime_timeout_s,
+        )
+
+    def exit_trigger_session(self, *, restore_master: bool = False) -> None:
+        self._logger.info("exit_trigger_session requested")
+        current_mode: int | None = None
+        try:
+            current_mode = int(self.get_stream_mode())
+        except Exception:
+            current_mode = None
+        self._logger.info("current mode before exit=%s", current_mode)
+
+        self._trigger_session_active = False
+        self._trigger_session_ready = False
+        self._trigger_primed = False
+        self._trigger_priming_in_progress = False
+        self.end_trigger_capture()
+        if self.is_pipeline_open():
+            self.stop(caller="exit_trigger_session")
+        self._clear_queue()
+
+        if restore_master and self._is_cu55_model():
+            self.set_stream_mode(0)
+            self._logger.info("switched to master on exit")
+
     def _send_software_trigger(self, *, note: str) -> None:
         hid = self._ensure_hid()
         hid.send_software_trigger()
@@ -841,51 +961,11 @@ class CameraService:
         settle_delay_s: float = 0.05,
         trigger_fn: Callable[[], None] | None = None,
     ) -> bool:
-        if self._paused_external:
-            self._log_trigger_cycle_state(
-                "priming_blocked",
-                preview_paused=True,
-                note="preview session currently owns camera",
-            )
-            raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
-
-        pipeline_was_open = self.is_pipeline_open()
-        if not pipeline_was_open:
-            self.start(caller="trigger_pipeline_open")
-            self._logger.info("trigger pipeline opened")
-        if not self._is_trigger_mode_active():
-            self._trigger_primed = False
-            self._log_trigger_cycle_state(
-                "priming_skipped",
-                fallback="trigger_mode_inactive",
-                note="trigger mode inactive; fallback capture path will be used",
-            )
-            return False
-        if self._trigger_primed:
-            return True
-        self._trigger_priming_in_progress = True
-        self.begin_trigger_capture()
-        try:
-            self._logger.info("trigger priming started")
-            if not pipeline_was_open:
-                time.sleep(0.5)
-            self._fire_trigger(note="priming dummy trigger sent", trigger_fn=trigger_fn)
-            if settle_delay_s > 0:
-                time.sleep(float(settle_delay_s))
-            if self._cap is None:
-                raise RuntimeError("Priming failed: OpenCV capture is not available")
-            with self._cap_read_lock:
-                ok, _ = self._cap.read()
-            if not ok:
-                raise RuntimeError("Priming failed: cap.read() returned no frame")
-            self._logger.info("priming frame discarded via cap.read()")
-            self._trigger_primed = True
-            self._logger.info("camera primed")
-            self._log_trigger_cycle_state("priming_done", trigger_primed=True)
-            return True
-        finally:
-            self.end_trigger_capture()
-            self._trigger_priming_in_progress = False
+        return self.ensure_trigger_session(
+            trigger_fn=trigger_fn,
+            settle_delay_s=settle_delay_s,
+            prime_timeout_s=0.8,
+        )
 
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
         stream_mode: int | None = None
@@ -903,24 +983,7 @@ class CameraService:
             )
             raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
 
-        if not self.is_pipeline_open():
-            self._log_trigger_cycle_state(
-                "capture_guard_failed",
-                stream_mode=stream_mode,
-                note="camera pipeline is not open",
-            )
-            raise RuntimeError("Trigger capture failed: camera is not open (pipeline is closed)")
-
-        if not self._is_trigger_mode_active():
-            self._log_trigger_cycle_state(
-                "capture_fallback",
-                stream_mode=stream_mode,
-                fallback="trigger_mode_inactive",
-                note="trigger mode inactive; using preview/ring fallback frame",
-            )
-            return self.last_frame(caller="capture_trigger_frame:master")
-
-        self.ensure_trigger_pipeline_primed(trigger_fn=trigger_fn)
+        self.ensure_trigger_session(trigger_fn=trigger_fn)
         self._log_trigger_cycle_state(
             "capture_start",
             stream_mode=stream_mode,
@@ -930,31 +993,15 @@ class CameraService:
         self.begin_trigger_capture()
         try:
             started = time.monotonic()
-            self._fire_trigger(note="production trigger sent", trigger_fn=trigger_fn)
-            deadline = started + float(timeout_s)
-            frame = None
-            if self._cap is None:
-                raise RuntimeError("Production capture failed: OpenCV capture is not available")
-
-            while time.monotonic() < deadline:
-                with self._cap_read_lock:
-                    if self._cap is None:
-                        break
-                    ok, grabbed = self._cap.read()
-                if ok and grabbed is not None:
-                    frame = grabbed
-                    break
-                time.sleep(0.005)
+            self._trigger_via_hw(trigger_fn=trigger_fn, note="production trigger sent")
+            frame = self._wait_for_sample(float(timeout_s))
         finally:
             self.end_trigger_capture()
 
         if frame is None:
             raise RuntimeError("No frame received after production trigger")
-        frame = self._normalize_frame_u8(frame)
-        if frame is None:
-            raise RuntimeError("Production capture failed: invalid frame returned")
         latency_ms = (time.monotonic() - started) * 1000.0
-        self._logger.info("production frame received via cap.read()")
+        self._logger.info("production frame received")
         self._logger.info("frame received latency=%.2f ms", latency_ms)
         self._logger.info("frame reused for display+inspection")
         self._log_trigger_cycle_state(
@@ -991,6 +1038,7 @@ class CameraService:
             return
 
         self._trigger_primed = False
+        self._trigger_session_ready = False
 
         restarted = False
         if pipeline_open:
