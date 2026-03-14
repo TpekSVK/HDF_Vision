@@ -80,6 +80,7 @@ class CameraService:
         self._trigger_priming_in_progress = False
         self._trigger_session_active = False
         self._trigger_session_ready = False
+        self._trigger_last_capture_status = "normal"
         self._trigger_capture_active = False
         self._trigger_capture_depth = 0
         self._trigger_state_lock = threading.Lock()
@@ -967,6 +968,89 @@ class CameraService:
             prime_timeout_s=0.8,
         )
 
+    def get_last_trigger_capture_status(self) -> str:
+        return str(getattr(self, "_trigger_last_capture_status", "normal") or "normal")
+
+    def _clear_trigger_sample_state(self) -> None:
+        self._clear_queue()
+        self._clear_ring()
+
+    def _attempt_trigger_recovery_pulses(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None,
+        timeout_s: float,
+        pulses: int = 3,
+    ) -> np.ndarray | None:
+        for idx in range(1, int(pulses) + 1):
+            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"recovery pulse {idx} sent")
+            frame = self._wait_for_sample(float(timeout_s))
+            self._logger.info("recovery pulse %s result=%s", idx, bool(frame is not None))
+            if frame is not None:
+                self._logger.info("session resynchronized")
+                return frame
+        return None
+
+    def _attempt_trigger_reprime(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None,
+        timeout_s: float,
+    ) -> np.ndarray | None:
+        self._logger.info("re-prime started")
+        self._clear_trigger_sample_state()
+        for idx in (1, 2):
+            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"re-prime pulse {idx} sent")
+            prime_frame = self._wait_for_sample(float(timeout_s))
+            self._logger.info("re-prime pulse %s result=%s", idx, bool(prime_frame is not None))
+            if prime_frame is None:
+                self._logger.info("re-prime fail")
+                return None
+        self._trigger_via_hw(trigger_fn=trigger_fn, note="re-prime production trigger sent")
+        frame = self._wait_for_sample(float(timeout_s))
+        self._logger.info("re-prime %s", "success" if frame is not None else "fail")
+        if frame is not None:
+            self._logger.info("session resynchronized")
+        return frame
+
+    def _attempt_trigger_pipeline_reopen(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None,
+        timeout_s: float,
+    ) -> np.ndarray | None:
+        self._logger.info("trigger pipeline reopen started")
+        try:
+            if self.is_pipeline_open():
+                self.stop(caller="trigger_reopen")
+            self.start(caller="trigger_reopen")
+            self._logger.info("trigger pipeline set PLAYING")
+        except Exception:
+            self._logger.exception("trigger pipeline reopen fail")
+            return None
+
+        settle_s = 0.08
+        if settle_s > 0:
+            time.sleep(settle_s)
+
+        self._clear_trigger_sample_state()
+        for idx in (1, 2):
+            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"reopen prime {idx} sent")
+            prime_frame = self._wait_for_sample(float(timeout_s))
+            self._logger.info("reopen prime %s result=%s", idx, bool(prime_frame is not None))
+            if prime_frame is None:
+                self._logger.info("trigger pipeline reopen fail")
+                return None
+
+        self._trigger_via_hw(trigger_fn=trigger_fn, note="reopen production trigger sent")
+        frame = self._wait_for_sample(float(timeout_s))
+        if frame is None:
+            self._logger.info("trigger pipeline reopen fail")
+            return None
+        self._logger.info("trigger pipeline reopen success")
+        self._logger.info("session resynchronized")
+        return frame
+
     def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
         stream_mode: int | None = None
         try:
@@ -993,12 +1077,40 @@ class CameraService:
         self.begin_trigger_capture()
         try:
             started = time.monotonic()
+            self._trigger_last_capture_status = "normal"
+            self._clear_trigger_sample_state()
             self._trigger_via_hw(trigger_fn=trigger_fn, note="production trigger sent")
             frame = self._wait_for_sample(float(timeout_s))
+            if frame is None:
+                self._logger.warning("production trigger timeout")
+                frame = self._attempt_trigger_recovery_pulses(
+                    trigger_fn=trigger_fn,
+                    timeout_s=float(timeout_s),
+                    pulses=3,
+                )
+                if frame is not None:
+                    self._trigger_last_capture_status = "recovered"
+
+            if frame is None:
+                frame = self._attempt_trigger_reprime(
+                    trigger_fn=trigger_fn,
+                    timeout_s=float(timeout_s),
+                )
+                if frame is not None:
+                    self._trigger_last_capture_status = "recovered"
+
+            if frame is None:
+                frame = self._attempt_trigger_pipeline_reopen(
+                    trigger_fn=trigger_fn,
+                    timeout_s=float(timeout_s),
+                )
+                if frame is not None:
+                    self._trigger_last_capture_status = "recovered"
         finally:
             self.end_trigger_capture()
 
         if frame is None:
+            self._trigger_last_capture_status = "fail"
             raise RuntimeError("No frame received after production trigger")
         latency_ms = (time.monotonic() - started) * 1000.0
         self._logger.info("production frame received")
