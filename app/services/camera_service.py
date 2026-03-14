@@ -958,12 +958,8 @@ class CameraService:
         timing: TriggerTiming | None = None,
         gap_ms: float | None = None,
     ) -> None:
+        _ = timing, gap_ms
         self._fire_trigger(note=note, trigger_fn=trigger_fn)
-        timing_ref = timing or self._compute_trigger_timing()
-        gap_value = float(timing_ref.trigger_gap_ms) if gap_ms is None else float(gap_ms)
-        gap_s = max(0.0, gap_value / 1000.0)
-        if gap_s > 0:
-            time.sleep(gap_s)
 
     def _perform_trigger_sequence(
         self,
@@ -985,33 +981,38 @@ class CameraService:
             trigger_fn=trigger_fn,
             note="trigger pulse 1/3 sent",
             timing=timing,
-            gap_ms=float(timing.priming_gap_ms),
+            gap_ms=None,
         )
         frame_1 = self._wait_for_sample(float(timeout_s))
         if frame_1 is None:
             self._logger.warning("[TRIGGER] priming pulse 1/3 timeout")
             return None
         self._logger.info("[TRIGGER] discarded frame #1")
+        priming_gap_s = max(0.0, float(timing.priming_gap_ms) / 1000.0)
+        if priming_gap_s > 0:
+            time.sleep(priming_gap_s)
 
         self._logger.info("[TRIGGER] priming pulse 2/3")
         self._trigger_via_hw(
             trigger_fn=trigger_fn,
             note="trigger pulse 2/3 sent",
             timing=timing,
-            gap_ms=float(timing.priming_gap_ms),
+            gap_ms=None,
         )
         frame_2 = self._wait_for_sample(float(timeout_s))
         if frame_2 is None:
             self._logger.warning("[TRIGGER] priming pulse 2/3 timeout")
             return None
         self._logger.info("[TRIGGER] discarded frame #2")
+        if priming_gap_s > 0:
+            time.sleep(priming_gap_s)
 
         self._logger.info("[TRIGGER] final pulse 3/3")
         self._trigger_via_hw(
             trigger_fn=trigger_fn,
             note="trigger pulse 3/3 sent",
             timing=timing,
-            gap_ms=float(timing.trigger_gap_ms),
+            gap_ms=None,
         )
         frame_3 = self._wait_for_sample(float(timeout_s))
         if frame_3 is None:
