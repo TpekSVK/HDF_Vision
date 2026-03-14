@@ -116,15 +116,16 @@ def test_trigger_defaults_and_safe_exposure_mapping() -> None:
     assert round(get_safe_priming_gap_ms(1280, 720, 60, "Y8"), 2) == 19.67
 
 
-def test_perform_trigger_sequence_discards_priming_frames() -> None:
+def test_perform_trigger_sequence_discards_priming_frames(monkeypatch) -> None:
     cam = _build_camera(1280, 720, 60, "Y8", 8000)
     timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
 
-    calls: list[float] = []
-    cam._clear_trigger_sample_state = lambda: None  # type: ignore[method-assign]
+    events: list[str] = []
+    cam._clear_trigger_sample_state = lambda: events.append("clear")  # type: ignore[method-assign]
 
     def fake_trigger(*, trigger_fn=None, note: str, timing=None, gap_ms=None):
-        calls.append(float(gap_ms))
+        _ = trigger_fn, note, timing, gap_ms
+        events.append("trigger")
 
     samples = iter(
         [
@@ -134,17 +135,53 @@ def test_perform_trigger_sequence_discards_priming_frames() -> None:
         ]
     )
 
+    def fake_wait(_timeout: float):
+        events.append("wait")
+        return next(samples, None)
+
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float):
+        sleeps.append(float(seconds))
+        events.append("sleep")
+
     cam._trigger_via_hw = fake_trigger  # type: ignore[method-assign]
-    cam._wait_for_sample = lambda _timeout: next(samples, None)  # type: ignore[method-assign]
+    cam._wait_for_sample = fake_wait  # type: ignore[method-assign]
+    monkeypatch.setattr("app.services.camera_service.time.sleep", fake_sleep)
 
     frame = cam._perform_trigger_sequence(trigger_fn=None, timeout_s=0.3, timing=timing)
 
     assert frame is not None
     assert int(frame[0, 0]) == 30
-    assert len(calls) == 3
-    assert round(calls[0], 2) == round(timing.priming_gap_ms, 2)
-    assert round(calls[1], 2) == round(timing.priming_gap_ms, 2)
-    assert round(calls[2], 2) == round(timing.trigger_gap_ms, 2)
+    assert events == [
+        "clear",
+        "trigger", "wait", "sleep",
+        "trigger", "wait", "sleep",
+        "trigger", "wait",
+    ]
+    assert len(sleeps) == 2
+    assert round(sleeps[0] * 1000.0, 2) == round(timing.priming_gap_ms, 2)
+    assert round(sleeps[1] * 1000.0, 2) == round(timing.priming_gap_ms, 2)
+
+
+def test_trigger_via_hw_does_not_sleep(monkeypatch) -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+    timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
+
+    fired: list[str] = []
+    cam._fire_trigger = lambda **_kwargs: fired.append("fire")  # type: ignore[method-assign]
+
+    sleep_calls: list[float] = []
+
+    def fake_sleep(seconds: float):
+        sleep_calls.append(float(seconds))
+
+    monkeypatch.setattr("app.services.camera_service.time.sleep", fake_sleep)
+
+    cam._trigger_via_hw(trigger_fn=None, note="test", timing=timing, gap_ms=timing.trigger_gap_ms)
+
+    assert fired == ["fire"]
+    assert sleep_calls == []
 
 
 def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
@@ -171,28 +208,42 @@ def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
     assert called == [(0.8, timing.priming_gap_ms, timing.trigger_gap_ms)]
 
 
-def test_perform_trigger_sequence_returns_none_on_second_pulse_timeout() -> None:
+def test_perform_trigger_sequence_returns_none_on_second_pulse_timeout(monkeypatch) -> None:
     cam = _build_camera(1280, 720, 60, "Y8", 8000)
     timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
 
-    calls: list[float] = []
-    cam._clear_trigger_sample_state = lambda: None  # type: ignore[method-assign]
+    events: list[str] = []
+    cam._clear_trigger_sample_state = lambda: events.append("clear")  # type: ignore[method-assign]
 
     def fake_trigger(*, trigger_fn=None, note: str, timing=None, gap_ms=None):
-        calls.append(float(gap_ms))
+        _ = trigger_fn, note, timing, gap_ms
+        events.append("trigger")
 
     samples = iter([
         np.full((2, 2), 10, dtype=np.uint8),
         None,
     ])
 
+    def fake_wait(_timeout: float):
+        events.append("wait")
+        return next(samples, None)
+
+    sleeps: list[float] = []
+
+    def fake_sleep(seconds: float):
+        sleeps.append(float(seconds))
+        events.append("sleep")
+
     cam._trigger_via_hw = fake_trigger  # type: ignore[method-assign]
-    cam._wait_for_sample = lambda _timeout: next(samples, None)  # type: ignore[method-assign]
+    cam._wait_for_sample = fake_wait  # type: ignore[method-assign]
+    monkeypatch.setattr("app.services.camera_service.time.sleep", fake_sleep)
 
     frame = cam._perform_trigger_sequence(trigger_fn=None, timeout_s=0.3, timing=timing)
 
     assert frame is None
-    assert len(calls) == 2
+    assert events == ["clear", "trigger", "wait", "sleep", "trigger", "wait"]
+    assert len(sleeps) == 1
+    assert round(sleeps[0] * 1000.0, 2) == round(timing.priming_gap_ms, 2)
 
 
 def test_compute_trigger_timing_defaults_production_gap_without_recipe_value() -> None:
