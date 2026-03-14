@@ -29,3 +29,28 @@ Ak production trigger neprinesie frame, aplikácia spúšťa recovery bez prepí
 4. **Fail** (zalogovanie chyby)
 
 Táto architektúra reflektuje reálne správanie CU55: občas po trigri sample nepríde, ale kamera sa vie synchronizovať po ďalších pulzoch bez potreby MASTER/TRIGGER togglingu.
+
+
+## CU55 Trigger Period (overené podľa datasheetu)
+
+Aplikácia používa runtime timing pre CU55 trigger flow podľa rozlíšenia, pixel formátu a FPS.
+
+- `frame_time_ms = 1000 / runtime_fps`
+- `effective_trigger_gap_ms = max(frame_time_ms, exposure_ms) + 3 ms`
+- Pri `exposure_ms < frame_time_ms` sa loguje warning o možnom bandingu / uneven exposure.
+- Ak je timeout kratší než minimum z timing modelu, timeout sa automaticky navýši.
+
+### Profilované maximum FPS pre výpočet trigger period
+
+| Pixel format | Resolution | Runtime max FPS | Minimum trigger period |
+|---|---:|---:|---:|
+| Y8  | 2592x1944 | 30  | 33.33 ms |
+| Y8  | 1920x1080 | 60  | 16.67 ms |
+| Y8  | 1280x720  | 60  | 16.67 ms |
+| Y8  | 640x480   | 112 | 8.93 ms |
+| Y12 | 2592x1944 | 14  | 71.43 ms |
+| Y12 | 1920x1080 | 30  | 33.33 ms |
+| Y12 | 1280x720  | 60  | 16.67 ms |
+| Y12 | 640x480   | 112 | 8.93 ms |
+
+Poznámka: ak je v konfigurácii nastavené vyššie FPS, než povoľuje profil vyššie, timing model použije profilové maximum FPS (pre výpočet trigger period a timeoutov).
