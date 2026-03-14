@@ -69,6 +69,7 @@ from app.models.schema import (
 from app.services.recipe_service import RecipeService
 from app.services.tool_registry import ToolRegistry
 from app.services import settings_service
+from app.utils.trigger_timing import get_default_trigger_gap_ms
 from app.services.tool_service import (
     ToolRunResult,
     run_locator_template_match,
@@ -1835,23 +1836,41 @@ class GoldenWizard(QDialog):
                 if capture_delay_ms > 0:
                     time.sleep(capture_delay_ms / 1000.0)
 
-            # Pri golden capture preferuj frame z kontinuálneho streamu
-            # (rovnaký princíp ako RUN trigger), kde je vyššia šanca
-            # trafiť blesk; one_shot nech je iba fallback.
-            frame = None
-            best_flash_frame = None
-            best_flash_score = float("-inf")
-            deadline = time.monotonic() + 0.18
-            while time.monotonic() < deadline:
-                candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame(caller="golden_wizard_capture")
-                if candidate is not None:
-                    score = float(np.mean(candidate))
-                    if score > best_flash_score:
-                        best_flash_score = score
-                        best_flash_frame = np.asarray(candidate).copy()
-                time.sleep(0.01)
+            stream_mode = None
+            try:
+                stream_mode = int(self.cam.get_stream_mode())
+            except Exception:
+                stream_mode = None
 
-            frame = best_flash_frame
+            # V trigger mode používaj jednotnú 3-pulse trigger sekvenciu
+            # (2x priming discard + 1x finálny frame) rovnako ako RUN cesty.
+            frame = None
+            if stream_mode == 1:
+                active_view = self._view_by_id(self._active_view_id)
+                trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None)
+                if not isinstance(trigger_gap_ms, (int, float)) or float(trigger_gap_ms) <= 0:
+                    trigger_gap_ms = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
+                frame = self.cam.capture_trigger_frame(
+                    timeout_s=0.8,
+                    trigger_gap_ms=float(trigger_gap_ms),
+                    pulse_ms=10.0,
+                    trigger_mode_label="golden_wizard",
+                )
+            else:
+                # Pri master mode preferuj frame z kontinuálneho streamu.
+                best_flash_frame = None
+                best_flash_score = float("-inf")
+                deadline = time.monotonic() + 0.18
+                while time.monotonic() < deadline:
+                    candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame(caller="golden_wizard_capture")
+                    if candidate is not None:
+                        score = float(np.mean(candidate))
+                        if score > best_flash_score:
+                            best_flash_score = score
+                            best_flash_frame = np.asarray(candidate).copy()
+                    time.sleep(0.01)
+
+                frame = best_flash_frame
             if frame is None:
                 frame = self.cam.last_frame(caller="golden_wizard_capture")
             if frame is None:

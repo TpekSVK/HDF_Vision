@@ -9,6 +9,8 @@ if str(ROOT) not in sys.path:  # pragma: no cover - test environment shim
 
 import types
 
+import numpy as np
+
 if "cv2" not in sys.modules:  # pragma: no cover - optional dependency shim
     cv2_stub = types.SimpleNamespace(
         COLOR_BGR2GRAY=0,
@@ -108,3 +110,55 @@ def test_trigger_defaults_and_safe_exposure_mapping() -> None:
     assert get_default_trigger_gap_ms(1280, 720, 60) == 20.0
     assert get_trigger_min_period_ms(1280, 720, 60) == 16.67
     assert get_safe_trigger_exposure_abs(1280, 720, 60) == 200
+
+
+def test_perform_trigger_sequence_discards_priming_frames() -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+    timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
+
+    calls: list[float] = []
+    cam._clear_trigger_sample_state = lambda: None  # type: ignore[method-assign]
+
+    def fake_trigger(*, trigger_fn=None, note: str, timing=None, gap_ms=None):
+        calls.append(float(gap_ms))
+
+    samples = iter(
+        [
+            np.full((2, 2), 10, dtype=np.uint8),
+            np.full((2, 2), 20, dtype=np.uint8),
+            np.full((2, 2), 30, dtype=np.uint8),
+        ]
+    )
+
+    cam._trigger_via_hw = fake_trigger  # type: ignore[method-assign]
+    cam._wait_for_sample = lambda _timeout: next(samples, None)  # type: ignore[method-assign]
+
+    frame = cam._perform_trigger_sequence(trigger_fn=None, timeout_s=0.3, timing=timing)
+
+    assert frame is not None
+    assert int(frame[0, 0]) == 30
+    assert calls == [1.0, 1.0, 20.0]
+
+
+def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+    timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
+    expected = np.full((3, 3), 7, dtype=np.uint8)
+
+    monkeypatch.setattr(cam, "get_stream_mode", lambda: 1)
+    monkeypatch.setattr(cam, "ensure_trigger_session", lambda **_kwargs: True)
+    monkeypatch.setattr(cam, "_compute_trigger_timing", lambda **_kwargs: timing)
+    monkeypatch.setattr(cam, "_resolve_trigger_timeout_s", lambda _timeout, _timing: 0.8)
+
+    called: list[tuple[float, float]] = []
+
+    def fake_sequence(*, trigger_fn=None, timeout_s: float, timing, priming_gap_ms: float = 1.0):
+        called.append((float(timeout_s), float(priming_gap_ms)))
+        return expected
+
+    monkeypatch.setattr(cam, "_perform_trigger_sequence", fake_sequence)
+
+    frame = cam.capture_trigger_frame(trigger_gap_ms=20.0, trigger_mode_label="manual_gpio")
+
+    assert np.array_equal(frame, expected)
+    assert called == [(0.8, 1.0)]

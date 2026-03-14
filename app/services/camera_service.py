@@ -960,15 +960,65 @@ class CameraService:
         trigger_fn: Callable[[], None] | None,
         note: str,
         timing: TriggerTiming | None = None,
+        gap_ms: float | None = None,
     ) -> None:
-        if trigger_fn is None:
-            raise RuntimeError("HW GPIO trigger callback is required; software trigger is disabled for CU55")
-        trigger_fn()
-        self._logger.info("%s", note)
+        self._fire_trigger(note=note, trigger_fn=trigger_fn)
         timing_ref = timing or self._compute_trigger_timing()
-        gap_s = max(0.0, float(timing_ref.trigger_gap_ms) / 1000.0)
+        gap_value = float(timing_ref.trigger_gap_ms) if gap_ms is None else float(gap_ms)
+        gap_s = max(0.0, gap_value / 1000.0)
         if gap_s > 0:
             time.sleep(gap_s)
+
+    def _perform_trigger_sequence(
+        self,
+        *,
+        trigger_fn: Callable[[], None] | None,
+        timeout_s: float,
+        timing: TriggerTiming,
+        priming_gap_ms: float = 1.0,
+    ) -> np.ndarray | None:
+        self._logger.info("[TRIGGER] request received")
+        self._clear_trigger_sample_state()
+
+        self._logger.info("[TRIGGER] priming pulse 1/3")
+        self._trigger_via_hw(
+            trigger_fn=trigger_fn,
+            note="trigger pulse 1/3 sent",
+            timing=timing,
+            gap_ms=priming_gap_ms,
+        )
+        frame_1 = self._wait_for_sample(float(timeout_s))
+        if frame_1 is None:
+            self._logger.warning("[TRIGGER] priming pulse 1/3 timeout")
+            return None
+        self._logger.info("[TRIGGER] discarded frame #1")
+
+        self._logger.info("[TRIGGER] priming pulse 2/3")
+        self._trigger_via_hw(
+            trigger_fn=trigger_fn,
+            note="trigger pulse 2/3 sent",
+            timing=timing,
+            gap_ms=priming_gap_ms,
+        )
+        frame_2 = self._wait_for_sample(float(timeout_s))
+        if frame_2 is None:
+            self._logger.warning("[TRIGGER] priming pulse 2/3 timeout")
+            return None
+        self._logger.info("[TRIGGER] discarded frame #2")
+
+        self._logger.info("[TRIGGER] final pulse 3/3")
+        self._trigger_via_hw(
+            trigger_fn=trigger_fn,
+            note="trigger pulse 3/3 sent",
+            timing=timing,
+            gap_ms=float(timing.trigger_gap_ms),
+        )
+        frame_3 = self._wait_for_sample(float(timeout_s))
+        if frame_3 is None:
+            self._logger.warning("[TRIGGER] final pulse 3/3 timeout")
+            return None
+        self._logger.info("[TRIGGER] accepted frame #3")
+        return frame_3
 
     def _apply_safe_trigger_exposure(self) -> int:
         safe_abs = get_safe_trigger_exposure_abs(self.width, self.height, self.fps)
@@ -1017,29 +1067,12 @@ class CameraService:
         if self._trigger_session_ready:
             return True
 
-        timing = self._compute_trigger_timing(trigger_gap_ms=trigger_gap_ms, pulse_ms=pulse_ms)
-        adjusted_prime_timeout_s = self._resolve_trigger_timeout_s(float(prime_timeout_s), timing)
-
-        self._trigger_priming_in_progress = True
-        self.begin_trigger_capture()
-        try:
-            self._clear_queue()
-            if settle_delay_s > 0:
-                time.sleep(float(settle_delay_s))
-            self._logger.info("trigger settle done")
-            for idx in (1, 2):
-                self._trigger_via_hw(trigger_fn=trigger_fn, note=f"prime {idx} sent", timing=timing)
-                prime_frame = self._wait_for_sample(float(adjusted_prime_timeout_s))
-                self._logger.info("prime %s result=%s", idx, bool(prime_frame is not None))
-                if prime_frame is None:
-                    raise RuntimeError(f"Prime {idx} failed: no sample")
-            self._trigger_primed = True
-            self._trigger_session_ready = True
-            self._logger.info("trigger session ready")
-            return True
-        finally:
-            self.end_trigger_capture()
-            self._trigger_priming_in_progress = False
+        if settle_delay_s > 0:
+            time.sleep(float(settle_delay_s))
+        self._trigger_primed = False
+        self._trigger_session_ready = True
+        self._logger.info("trigger session ready")
+        return True
 
     def ensure_trigger_session(
         self,
@@ -1126,9 +1159,13 @@ class CameraService:
         pulses: int = 3,
     ) -> np.ndarray | None:
         for idx in range(1, int(pulses) + 1):
-            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"recovery pulse {idx} sent", timing=timing)
-            frame = self._wait_for_sample(float(timeout_s))
-            self._logger.info("recovery pulse %s result=%s", idx, bool(frame is not None))
+            self._logger.info("recovery attempt %s/%s", idx, int(pulses))
+            frame = self._perform_trigger_sequence(
+                trigger_fn=trigger_fn,
+                timeout_s=float(timeout_s),
+                timing=timing,
+            )
+            self._logger.info("recovery attempt %s result=%s", idx, bool(frame is not None))
             if frame is not None:
                 self._logger.info("session resynchronized")
                 return frame
@@ -1142,16 +1179,11 @@ class CameraService:
         timing: TriggerTiming,
     ) -> np.ndarray | None:
         self._logger.info("re-prime started")
-        self._clear_trigger_sample_state()
-        for idx in (1, 2):
-            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"re-prime pulse {idx} sent", timing=timing)
-            prime_frame = self._wait_for_sample(float(timeout_s))
-            self._logger.info("re-prime pulse %s result=%s", idx, bool(prime_frame is not None))
-            if prime_frame is None:
-                self._logger.info("re-prime fail")
-                return None
-        self._trigger_via_hw(trigger_fn=trigger_fn, note="re-prime production trigger sent", timing=timing)
-        frame = self._wait_for_sample(float(timeout_s))
+        frame = self._perform_trigger_sequence(
+            trigger_fn=trigger_fn,
+            timeout_s=float(timeout_s),
+            timing=timing,
+        )
         self._logger.info("re-prime %s", "success" if frame is not None else "fail")
         if frame is not None:
             self._logger.info("session resynchronized")
@@ -1178,17 +1210,11 @@ class CameraService:
         if settle_s > 0:
             time.sleep(settle_s)
 
-        self._clear_trigger_sample_state()
-        for idx in (1, 2):
-            self._trigger_via_hw(trigger_fn=trigger_fn, note=f"reopen prime {idx} sent", timing=timing)
-            prime_frame = self._wait_for_sample(float(timeout_s))
-            self._logger.info("reopen prime %s result=%s", idx, bool(prime_frame is not None))
-            if prime_frame is None:
-                self._logger.info("pipeline reopen fail")
-                return None
-
-        self._trigger_via_hw(trigger_fn=trigger_fn, note="reopen production trigger sent", timing=timing)
-        frame = self._wait_for_sample(float(timeout_s))
+        frame = self._perform_trigger_sequence(
+            trigger_fn=trigger_fn,
+            timeout_s=float(timeout_s),
+            timing=timing,
+        )
         if frame is None:
             self._logger.info("pipeline reopen fail")
             return None
@@ -1246,9 +1272,11 @@ class CameraService:
         try:
             started = time.monotonic()
             self._trigger_last_capture_status = "normal"
-            self._clear_trigger_sample_state()
-            self._trigger_via_hw(trigger_fn=trigger_fn, note="production trigger sent", timing=timing)
-            frame = self._wait_for_sample(float(effective_timeout_s))
+            frame = self._perform_trigger_sequence(
+                trigger_fn=trigger_fn,
+                timeout_s=float(effective_timeout_s),
+                timing=timing,
+            )
             if frame is None:
                 self._logger.warning("production trigger timeout")
                 frame = self._attempt_trigger_recovery_pulses(
@@ -1283,6 +1311,7 @@ class CameraService:
         if frame is None:
             self._trigger_last_capture_status = "fail"
             raise RuntimeError("No frame received after production trigger")
+        self._trigger_primed = True
         latency_ms = (time.monotonic() - started) * 1000.0
         self._logger.info("production frame received")
         self._logger.info("frame received latency=%.2f ms", latency_ms)
