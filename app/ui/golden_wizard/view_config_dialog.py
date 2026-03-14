@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Optional, Sequence
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -23,7 +24,7 @@ from app.models.schema import ViewCameraProfile
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
-        "1920x1080@60 Y8",
+        "1920x1080@60 Y8 [BUG: trigger mode momentálne nefunkčné]",
         {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
     ),
     (
@@ -36,6 +37,10 @@ _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     ),
 )
 
+
+_TRIGGER_RESOLUTION_WARNINGS: dict[tuple[int, int, int, str], str] = {
+    (1920, 1080, 60, "Y8"): "BUG: 1920x1080@60 Y8 je momentálne nefunkčné v trigger režime.",
+}
 
 class ViewConfigDialog(QDialog):
     """Dialog that gathers configuration for a recipe view."""
@@ -418,9 +423,13 @@ class ViewConfigDialog(QDialog):
         if current_camera:
             label = self._format_resolution_label(current_camera, prefix="Current: ")
             self._resolution_combo.addItem(label, dict(current_camera))
+            idx = self._resolution_combo.count() - 1
+            self._apply_resolution_warning_style(idx, current_camera)
 
         for label, data in self._available_resolutions:
             self._resolution_combo.addItem(label, dict(data))
+            idx = self._resolution_combo.count() - 1
+            self._apply_resolution_warning_style(idx, data)
 
         profile_obj = camera_profile
         if isinstance(profile_obj, dict):
@@ -440,7 +449,26 @@ class ViewConfigDialog(QDialog):
                 else:
                     label = self._format_resolution_label(target, prefix="Custom: ")
                     self._resolution_combo.addItem(label, target)
-                    self._resolution_combo.setCurrentIndex(self._resolution_combo.count() - 1)
+                    idx = self._resolution_combo.count() - 1
+                    self._apply_resolution_warning_style(idx, target)
+                    self._resolution_combo.setCurrentIndex(idx)
+
+    @staticmethod
+    def _resolution_warning_note(data: dict[str, Any]) -> Optional[str]:
+        key = (
+            int(data.get("width", 0) or 0),
+            int(data.get("height", 0) or 0),
+            int(data.get("fps", 0) or 0),
+            str(data.get("pixel_format", "") or "").upper(),
+        )
+        return _TRIGGER_RESOLUTION_WARNINGS.get(key)
+
+    def _apply_resolution_warning_style(self, index: int, data: dict[str, Any]) -> None:
+        note = self._resolution_warning_note(data)
+        if not note:
+            return
+        self._resolution_combo.setItemData(index, QBrush(QColor("#d12b2b")), Qt.ForegroundRole)
+        self._resolution_combo.setItemData(index, note, Qt.ToolTipRole)
 
     def _match_resolution_index(self, target: dict[str, Any]) -> Optional[int]:
         width = int(target.get("width", 0))

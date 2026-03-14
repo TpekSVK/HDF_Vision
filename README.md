@@ -54,3 +54,10 @@ Aplikácia používa runtime timing pre CU55 trigger flow podľa rozlíšenia, p
 | Y12 | 640x480   | 112 | 8.93 ms |
 
 Poznámka: ak je v konfigurácii nastavené vyššie FPS, než povoľuje profil vyššie, timing model použije profilové maximum FPS (pre výpočet trigger period a timeoutov).
+
+
+### Golden Wizard – aplikovanie expozície a známy bug v trigger režime
+
+- V časti **Pridať/Upraviť pohľad** sa uložená hodnota `Expozícia [µs]` aplikuje ako view-level override vždy pri aktivácii daného view a pred trigger capture flow.
+- Trigger časovanie v RUN režime používa runtime model z tejto sekcie (`frame_time_ms`, `effective_trigger_gap_ms`, timeout auto-extend), takže rozostupy pulzov sú viazané na expozíciu a profil rozlíšenia/pixel formátu.
+- **Known issue:** profil **Y8 1920x1080@60** je momentálne nefunkčný v trigger režime. V Golden Wizard dropdown-e pre Resolution je táto voľba zvýraznená červenou farbou s upozornením.
