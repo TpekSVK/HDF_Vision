@@ -13,6 +13,7 @@ from collections import deque
 from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
+from app.utils.trigger_timing import get_safe_trigger_exposure_abs
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -30,7 +31,9 @@ except Exception:
 class TriggerTiming:
     exposure_ms: float
     frame_time_ms: float
-    effective_trigger_gap_ms: float
+    trigger_gap_ms: float
+    pulse_ms: float
+    effective_period_ms: float
     timeout_min_ms: float
     safety_margin_ms: float
 
@@ -877,19 +880,30 @@ class CameraService:
 
         return fps
 
-    def _compute_trigger_timing(self, *, safety_margin_ms: float = 3.0) -> TriggerTiming:
+    def _compute_trigger_timing(
+        self,
+        *,
+        trigger_gap_ms: float | None = None,
+        pulse_ms: float = 10.0,
+        safety_margin_ms: float = 3.0,
+    ) -> TriggerTiming:
         runtime_fps = self._trigger_runtime_fps()
         frame_time_ms = 1000.0 / max(runtime_fps, 1.0)
         exposure_ms = max(0.0, float(self.exposure_us or 0) / 1000.0)
-        effective_gap_ms = max(frame_time_ms, exposure_ms) + float(safety_margin_ms)
-        timeout_min_ms = effective_gap_ms
+        if trigger_gap_ms is None:
+            trigger_gap_ms = max(frame_time_ms, exposure_ms) + float(safety_margin_ms)
+        trigger_gap_ms = max(0.0, float(trigger_gap_ms))
+        effective_period_ms = max(0.0, float(pulse_ms)) + trigger_gap_ms
+        timeout_min_ms = max(trigger_gap_ms, frame_time_ms)
 
         self._logger.info(
-            "trigger_timing exposure_ms=%.2f frame_time_ms=%.2f effective_trigger_gap_ms=%.2f safety_margin_ms=%.2f "
+            "trigger_timing exposure_ms=%.2f frame_time_ms=%.2f gap_ms=%.2f pulse_ms=%.2f effective_period_ms=%.2f safety_margin_ms=%.2f "
             "resolution=%sx%s pixel_format=%s fps=%s runtime_fps=%.2f",
             exposure_ms,
             frame_time_ms,
-            effective_gap_ms,
+            trigger_gap_ms,
+            float(pulse_ms),
+            effective_period_ms,
             float(safety_margin_ms),
             int(self.width or 0),
             int(self.height or 0),
@@ -908,7 +922,9 @@ class CameraService:
         return TriggerTiming(
             exposure_ms=exposure_ms,
             frame_time_ms=frame_time_ms,
-            effective_trigger_gap_ms=effective_gap_ms,
+            trigger_gap_ms=trigger_gap_ms,
+            pulse_ms=float(pulse_ms),
+            effective_period_ms=effective_period_ms,
             timeout_min_ms=timeout_min_ms,
             safety_margin_ms=float(safety_margin_ms),
         )
@@ -950,9 +966,15 @@ class CameraService:
         trigger_fn()
         self._logger.info("%s", note)
         timing_ref = timing or self._compute_trigger_timing()
-        gap_s = max(0.0, float(timing_ref.effective_trigger_gap_ms) / 1000.0)
+        gap_s = max(0.0, float(timing_ref.trigger_gap_ms) / 1000.0)
         if gap_s > 0:
             time.sleep(gap_s)
+
+    def _apply_safe_trigger_exposure(self) -> int:
+        safe_abs = get_safe_trigger_exposure_abs(self.width, self.height, self.fps)
+        self.set_manual_exposure_us(int(safe_abs))
+        self._logger.info("[CAMERA] safe_trigger_exposure_abs=%s", int(safe_abs))
+        return int(safe_abs)
 
     def enter_trigger_session(
         self,
@@ -960,6 +982,8 @@ class CameraService:
         trigger_fn: Callable[[], None] | None = None,
         settle_delay_s: float = 0.08,
         prime_timeout_s: float = 0.8,
+        trigger_gap_ms: float | None = None,
+        pulse_ms: float = 10.0,
     ) -> bool:
         self._logger.info("enter_trigger_session")
         if self._paused_external:
@@ -980,6 +1004,9 @@ class CameraService:
             raise RuntimeError("Failed to enter trigger session: trigger mode verification failed")
         self._logger.info("trigger mode verified")
 
+        if self._is_cu55_model():
+            self._apply_safe_trigger_exposure()
+
         if not self.is_pipeline_open():
             self.start(caller="enter_trigger_session")
             self._logger.info("pipeline opened")
@@ -990,7 +1017,7 @@ class CameraService:
         if self._trigger_session_ready:
             return True
 
-        timing = self._compute_trigger_timing()
+        timing = self._compute_trigger_timing(trigger_gap_ms=trigger_gap_ms, pulse_ms=pulse_ms)
         adjusted_prime_timeout_s = self._resolve_trigger_timeout_s(float(prime_timeout_s), timing)
 
         self._trigger_priming_in_progress = True
@@ -1020,6 +1047,8 @@ class CameraService:
         trigger_fn: Callable[[], None] | None = None,
         settle_delay_s: float = 0.08,
         prime_timeout_s: float = 0.8,
+        trigger_gap_ms: float | None = None,
+        pulse_ms: float = 10.0,
     ) -> bool:
         if self._trigger_session_active and self._trigger_session_ready and self.is_pipeline_open() and self._is_trigger_mode_active():
             return True
@@ -1027,6 +1056,8 @@ class CameraService:
             trigger_fn=trigger_fn,
             settle_delay_s=settle_delay_s,
             prime_timeout_s=prime_timeout_s,
+            trigger_gap_ms=trigger_gap_ms,
+            pulse_ms=pulse_ms,
         )
 
     def exit_trigger_session(self, *, restore_master: bool = False) -> None:
@@ -1068,11 +1099,15 @@ class CameraService:
         *,
         settle_delay_s: float = 0.05,
         trigger_fn: Callable[[], None] | None = None,
+        trigger_gap_ms: float | None = None,
+        pulse_ms: float = 10.0,
     ) -> bool:
         return self.ensure_trigger_session(
             trigger_fn=trigger_fn,
             settle_delay_s=settle_delay_s,
             prime_timeout_s=0.8,
+            trigger_gap_ms=trigger_gap_ms,
+            pulse_ms=pulse_ms,
         )
 
     def get_last_trigger_capture_status(self) -> str:
@@ -1161,7 +1196,15 @@ class CameraService:
         self._logger.info("session resynchronized")
         return frame
 
-    def capture_trigger_frame(self, *, timeout_s: float = 0.6, trigger_fn: Callable[[], None] | None = None):
+    def capture_trigger_frame(
+        self,
+        *,
+        timeout_s: float = 0.6,
+        trigger_fn: Callable[[], None] | None = None,
+        trigger_gap_ms: float | None = None,
+        pulse_ms: float = 10.0,
+        trigger_mode_label: str = "manual_gpio",
+    ):
         stream_mode: int | None = None
         try:
             stream_mode = int(self.get_stream_mode())
@@ -1177,10 +1220,22 @@ class CameraService:
             )
             raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
 
-        timing = self._compute_trigger_timing()
+        timing = self._compute_trigger_timing(trigger_gap_ms=trigger_gap_ms, pulse_ms=pulse_ms)
+        self._logger.info(
+            "[TRIGGER] mode=%s pulse_ms=%.2f gap_ms=%.2f effective_period_ms=%.2f",
+            str(trigger_mode_label),
+            float(timing.pulse_ms),
+            float(timing.trigger_gap_ms),
+            float(timing.effective_period_ms),
+        )
         effective_timeout_s = self._resolve_trigger_timeout_s(float(timeout_s), timing)
 
-        self.ensure_trigger_session(trigger_fn=trigger_fn, prime_timeout_s=effective_timeout_s)
+        self.ensure_trigger_session(
+            trigger_fn=trigger_fn,
+            prime_timeout_s=effective_timeout_s,
+            trigger_gap_ms=trigger_gap_ms,
+            pulse_ms=pulse_ms,
+        )
         self._log_trigger_cycle_state(
             "capture_start",
             stream_mode=stream_mode,

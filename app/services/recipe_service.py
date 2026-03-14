@@ -134,6 +134,13 @@ class RecipeService:
             return None
         return int(trigger_interval_ms) if trigger_interval_ms is not None else None
 
+    @staticmethod
+    def _normalize_trigger_gap(trigger_gap_ms: float | int | None) -> float | None:
+        if trigger_gap_ms is None:
+            return None
+        value = float(trigger_gap_ms)
+        return value if value > 0 else None
+
     def add_view(
         self,
         name: str,
@@ -146,6 +153,7 @@ class RecipeService:
         settle_ms: int | None = None,
         trigger_mode: str | None = None,
         trigger_interval_ms: int | None = None,
+        trigger_gap_ms: float | int | None = None,
         branch_enabled: bool | None = None,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
@@ -186,6 +194,7 @@ class RecipeService:
         source_settle: Optional[int] = None
         source_trigger_mode: str | None = None
         source_trigger_interval: Optional[int] = None
+        source_trigger_gap: float | None = None
         source_golden: Optional[str] = None
         source_frame_source: Optional[str] = None
         source_branch_enabled: Optional[bool] = None
@@ -204,6 +213,7 @@ class RecipeService:
                 source_settle = source_view.settle_ms
                 source_trigger_mode = source_view.trigger_mode
                 source_trigger_interval = source_view.trigger_interval_ms
+                source_trigger_gap = getattr(source_view, "trigger_gap_ms", None)
                 source_golden = source_view.golden_path
                 source_frame_source = source_view.frame_source_view_id
                 source_branch_enabled = getattr(source_view, "branch_enabled", None)
@@ -230,6 +240,9 @@ class RecipeService:
         target_trigger_interval = self._normalize_trigger_interval(
             target_trigger_mode,
             trigger_interval_ms if trigger_interval_ms is not None else source_trigger_interval,
+        )
+        target_trigger_gap = self._normalize_trigger_gap(
+            trigger_gap_ms if trigger_gap_ms is not None else source_trigger_gap,
         )
 
         target_frame_source = frame_source_view_id
@@ -261,6 +274,7 @@ class RecipeService:
             settle_ms=target_settle,
             trigger_mode=target_trigger_mode,
             trigger_interval_ms=target_trigger_interval,
+            trigger_gap_ms=target_trigger_gap,
             tools=[],
             branch_enabled=target_branch_enabled,
             branch_targets=target_branch_targets,
@@ -300,6 +314,7 @@ class RecipeService:
         settle_ms: int | None,
         trigger_mode: str,
         trigger_interval_ms: int | None,
+        trigger_gap_ms: float | int | None = None,
         branch_enabled: bool = False,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
@@ -323,6 +338,7 @@ class RecipeService:
             normalized_mode,
             trigger_interval_ms,
         )
+        normalized_trigger_gap = self._normalize_trigger_gap(trigger_gap_ms)
 
         updated_view = RecipeView(
             id=view.id,
@@ -333,6 +349,7 @@ class RecipeService:
             settle_ms=settle_ms,
             trigger_mode=normalized_mode,
             trigger_interval_ms=normalized_interval,
+            trigger_gap_ms=normalized_trigger_gap,
             tools=[tool.copy() for tool in view.tools],
             branch_enabled=branch_enabled,
             branch_targets=dict(branch_targets or {}),

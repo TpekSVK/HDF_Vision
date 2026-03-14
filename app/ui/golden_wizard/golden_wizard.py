@@ -2312,6 +2312,9 @@ class GoldenWizard(QDialog):
             trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
             if source_view
             else None,
+            trigger_gap_ms=getattr(source_view, "trigger_gap_ms", None)
+            if source_view
+            else None,
             available_frame_sources=[
                 (view.id, view.name or view.id)
                 for view in existing
@@ -2352,6 +2355,7 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
+                trigger_gap_ms=data.get("trigger_gap_ms"),
                 branch_enabled=bool(data.get("branch_enabled", False)),
                 branch_targets=dict(data.get("branch_targets", {}) or {}),
                 branch_default_view_id=data.get("branch_default_view_id"),
@@ -2385,6 +2389,7 @@ class GoldenWizard(QDialog):
             settle_ms=view.settle_ms,
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
+            trigger_gap_ms=getattr(view, "trigger_gap_ms", None),
             available_frame_sources=[
                 (other.id, other.name or other.id)
                 for other in self._views
@@ -2414,6 +2419,7 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
+                trigger_gap_ms=data.get("trigger_gap_ms"),
                 branch_enabled=bool(data.get("branch_enabled", False)),
                 branch_targets=dict(data.get("branch_targets", {}) or {}),
                 branch_default_view_id=data.get("branch_default_view_id"),

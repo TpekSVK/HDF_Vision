@@ -44,6 +44,7 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
         "settle_ms": "45",
         "trigger_mode": "TIMED",
         "trigger_interval_ms": "150",
+        "trigger_gap_ms": "20.5",
     }
 
     view = RecipeView.from_dict(raw)
@@ -56,11 +57,13 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
     assert view.settle_ms == 45
     assert view.trigger_mode == "timed"
     assert view.trigger_interval_ms == 150
+    assert view.trigger_gap_ms == pytest.approx(20.5)
     assert view.frame_source_view_id == "view_0"
 
     serialized = view.to_dict()
     assert serialized["trigger_mode"] == "timed"
     assert serialized["trigger_interval_ms"] == 150
+    assert serialized["trigger_gap_ms"] == pytest.approx(20.5)
     assert serialized["frame_source_view_id"] == "view_0"
     profile_dict = serialized["camera_profile"]
     assert profile_dict["pixel_format"] == "Y12"
@@ -100,6 +103,7 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         settle_ms=120,
         trigger_mode="timed",
         trigger_interval_ms=250,
+        trigger_gap_ms=20.0,
     )
 
     assert new_view.id == "view_custom"
@@ -108,6 +112,7 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert new_view.camera_profile.pixel_format == "Y12"
     assert new_view.trigger_mode == "timed"
     assert new_view.trigger_interval_ms == 250
+    assert new_view.trigger_gap_ms == pytest.approx(20.0)
     assert new_view.frame_source_view_id is None
 
     updated = service.update_view(
@@ -119,12 +124,14 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         settle_ms=None,
         trigger_mode="external",
         trigger_interval_ms=None,
+        trigger_gap_ms=24,
     )
 
     assert updated.name == "Inspection Updated"
     assert updated.camera_profile is None
     assert updated.trigger_mode == "external"
     assert updated.trigger_interval_ms is None
+    assert updated.trigger_gap_ms == pytest.approx(24.0)
     assert updated.frame_source_view_id == "view_source"
 
     views = {view.id: view for view in service.list_views(recipe_name)}
