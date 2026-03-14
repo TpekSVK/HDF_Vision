@@ -22,6 +22,7 @@ if "cv2" not in sys.modules:  # pragma: no cover - optional dependency shim
 from app.services.camera_service import CameraService
 from app.utils.trigger_timing import (
     get_default_trigger_gap_ms,
+    get_safe_priming_gap_ms,
     get_safe_trigger_exposure_abs,
     get_trigger_min_period_ms,
 )
@@ -41,6 +42,7 @@ def test_compute_trigger_timing_y8_1080p60() -> None:
 
     assert round(timing.frame_time_ms, 2) == 16.67
     assert round(timing.trigger_gap_ms, 2) == 19.67
+    assert timing.priming_gap_ms >= timing.frame_time_ms
 
 
 def test_compute_trigger_timing_y12_1080p_uses_30fps_runtime() -> None:
@@ -104,12 +106,14 @@ def test_compute_trigger_timing_uses_explicit_gap() -> None:
 
     assert round(timing.trigger_gap_ms, 2) == 20.0
     assert round(timing.effective_period_ms, 2) == 30.0
+    assert round(timing.priming_gap_ms, 2) == 19.67
 
 
 def test_trigger_defaults_and_safe_exposure_mapping() -> None:
     assert get_default_trigger_gap_ms(1280, 720, 60) == 20.0
     assert get_trigger_min_period_ms(1280, 720, 60) == 16.67
     assert get_safe_trigger_exposure_abs(1280, 720, 60) == 200
+    assert round(get_safe_priming_gap_ms(1280, 720, 60, "Y8"), 2) == 19.67
 
 
 def test_perform_trigger_sequence_discards_priming_frames() -> None:
@@ -137,7 +141,10 @@ def test_perform_trigger_sequence_discards_priming_frames() -> None:
 
     assert frame is not None
     assert int(frame[0, 0]) == 30
-    assert calls == [1.0, 1.0, 20.0]
+    assert len(calls) == 3
+    assert round(calls[0], 2) == round(timing.priming_gap_ms, 2)
+    assert round(calls[1], 2) == round(timing.priming_gap_ms, 2)
+    assert round(calls[2], 2) == round(timing.trigger_gap_ms, 2)
 
 
 def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
@@ -150,10 +157,10 @@ def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
     monkeypatch.setattr(cam, "_compute_trigger_timing", lambda **_kwargs: timing)
     monkeypatch.setattr(cam, "_resolve_trigger_timeout_s", lambda _timeout, _timing: 0.8)
 
-    called: list[tuple[float, float]] = []
+    called: list[tuple[float, float, float]] = []
 
-    def fake_sequence(*, trigger_fn=None, timeout_s: float, timing, priming_gap_ms: float = 1.0):
-        called.append((float(timeout_s), float(priming_gap_ms)))
+    def fake_sequence(*, trigger_fn=None, timeout_s: float, timing):
+        called.append((float(timeout_s), float(timing.priming_gap_ms), float(timing.trigger_gap_ms)))
         return expected
 
     monkeypatch.setattr(cam, "_perform_trigger_sequence", fake_sequence)
@@ -161,4 +168,37 @@ def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
     frame = cam.capture_trigger_frame(trigger_gap_ms=20.0, trigger_mode_label="manual_gpio")
 
     assert np.array_equal(frame, expected)
-    assert called == [(0.8, 1.0)]
+    assert called == [(0.8, timing.priming_gap_ms, timing.trigger_gap_ms)]
+
+
+def test_perform_trigger_sequence_returns_none_on_second_pulse_timeout() -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+    timing = cam._compute_trigger_timing(trigger_gap_ms=20.0, pulse_ms=10.0)
+
+    calls: list[float] = []
+    cam._clear_trigger_sample_state = lambda: None  # type: ignore[method-assign]
+
+    def fake_trigger(*, trigger_fn=None, note: str, timing=None, gap_ms=None):
+        calls.append(float(gap_ms))
+
+    samples = iter([
+        np.full((2, 2), 10, dtype=np.uint8),
+        None,
+    ])
+
+    cam._trigger_via_hw = fake_trigger  # type: ignore[method-assign]
+    cam._wait_for_sample = lambda _timeout: next(samples, None)  # type: ignore[method-assign]
+
+    frame = cam._perform_trigger_sequence(trigger_fn=None, timeout_s=0.3, timing=timing)
+
+    assert frame is None
+    assert len(calls) == 2
+
+
+def test_compute_trigger_timing_defaults_production_gap_without_recipe_value() -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 200)
+
+    timing = cam._compute_trigger_timing(trigger_gap_ms=None, pulse_ms=10.0)
+
+    assert round(timing.trigger_gap_ms, 2) == 19.67
+    assert timing.trigger_gap_ms >= timing.frame_time_ms
