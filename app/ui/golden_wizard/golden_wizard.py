@@ -1897,6 +1897,8 @@ class GoldenWizard(QDialog):
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
             self._logger.info("[GOLDEN_CAPTURE] frame captured")
+            active_view = self._view_by_id(view_id)
+            frame = apply_view_image_transform(frame, active_view, stage="golden capture")
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()
