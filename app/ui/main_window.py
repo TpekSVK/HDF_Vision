@@ -629,12 +629,88 @@ class MainWindow(QMainWindow):
             "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
         }
 
-    def _enter_run_trigger_session(self) -> None:
-        self._logger.info("[TRIGGER_SESSION] enter")
-        default_gap = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
+    def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
+        view_id = requested_view_id or self._active_view_id
+        if view_id:
+            cached = self._views_by_id.get(view_id)
+            if cached is not None:
+                return cached
+            with suppress(Exception):
+                return self.recipes.get_view(self.current_recipe_name(), view_id)
+
+        with suppress(Exception):
+            views = self.recipes.list_views(self.current_recipe_name())
+            if views:
+                view = views[0]
+                resolved_id = getattr(view, "id", None)
+                if resolved_id:
+                    self._active_view_id = resolved_id
+                return view
+        return None
+
+    def _capture_frame_for_view(
+        self,
+        *,
+        trigger_mode_label: str,
+        master_caller: str,
+        view: Any | None = None,
+        view_id: str | None = None,
+        base_camera_state: Mapping[str, Any] | None = None,
+        settle_ms: int | None = None,
+    ):
+        active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
+        active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
+        self._logger.info("[VIEW_CAPTURE] active_view=%s", active_view_id)
+
+        profile = getattr(active_view, "camera_profile", None) if active_view is not None else None
+        self._logger.info("[VIEW_CAPTURE] applying camera profile")
+        resolved_state = apply_view_camera_profile(
+            self.cam,
+            dict(base_camera_state) if isinstance(base_camera_state, Mapping) else snapshot_camera_state(self.cam),
+            profile,
+        )
+        self._logger.info(
+            "[VIEW_CAPTURE] resolved state width=%s height=%s fps=%s pixel_format=%s exposure=%s",
+            resolved_state.get("width"),
+            resolved_state.get("height"),
+            resolved_state.get("fps"),
+            resolved_state.get("pixel_format"),
+            resolved_state.get("exposure_us"),
+        )
+
+        width = resolved_state.get("width") or getattr(self.cam, "width", None)
+        height = resolved_state.get("height") or getattr(self.cam, "height", None)
+        fps = resolved_state.get("fps") or getattr(self.cam, "fps", None)
+        trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None) if active_view is not None else None
+        if not isinstance(trigger_gap_ms, (Integral, Real)) or float(trigger_gap_ms) <= 0:
+            trigger_gap_ms = get_default_trigger_gap_ms(width, height, fps)
+        trigger_gap_ms = float(trigger_gap_ms)
+        self._logger.info("[VIEW_CAPTURE] resolved trigger_gap_ms=%.2f", trigger_gap_ms)
+
+        mode = self.get_capture_mode()
+        self._logger.info("[VIEW_CAPTURE] capture_mode=%s", mode)
+        if settle_ms is not None and int(settle_ms) > 0:
+            time.sleep(float(settle_ms) / 1000.0)
+
+        if mode == "trigger":
+            self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
+            return self.cam.capture_trigger_frame(
+                timeout_s=0.8,
+                trigger_fn=self._send_run_trigger_gpio_pulse,
+                trigger_gap_ms=trigger_gap_ms,
+                pulse_ms=10.0,
+                trigger_mode_label=trigger_mode_label,
+            )
+        return self.cam.last_frame(caller=master_caller)
+
+    def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
+        gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
+            get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
+        )
+        self._logger.info("[TRIGGER_SESSION] enter trigger_gap_ms=%.2f", gap_ms)
         self.cam.enter_trigger_session(
             trigger_fn=self._send_run_trigger_gpio_pulse,
-            trigger_gap_ms=float(default_gap),
+            trigger_gap_ms=gap_ms,
             pulse_ms=10.0,
         )
         self._run_trigger_session_active = True
@@ -642,13 +718,14 @@ class MainWindow(QMainWindow):
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
         if not self._run_trigger_session_active and not getattr(self.cam, "is_trigger_session_active", lambda: False)():
             if restore_master:
-                self.cam.set_stream_mode(0)
+                self._logger.info("[TRIGGER_SESSION] exit requested restore_master=True")
+                self._logger.info("[TRIGGER_SESSION] restore to master delegated to CameraService")
+                self.cam.exit_trigger_session(restore_master=True)
             return
-        self._logger.info("[TRIGGER_SESSION] exit")
-        self.cam.exit_trigger_session(restore_master=False)
+        self._logger.info("[TRIGGER_SESSION] exit requested restore_master=%s", bool(restore_master))
+        self._logger.info("[TRIGGER_SESSION] restore to master delegated to CameraService")
+        self.cam.exit_trigger_session(restore_master=bool(restore_master))
         self._run_trigger_session_active = False
-        if restore_master:
-            self.cam.set_stream_mode(0)
 
     def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> None:
         # Architecture rule: global runtime owns capture mode transitions.
@@ -706,24 +783,24 @@ class MainWindow(QMainWindow):
         mode = str(getattr(self, "capture_mode", "master") or "master").strip().lower()
         return "trigger" if mode == "trigger" else "master"
 
-    def capture_frame_for_golden(self, *, trigger_gap_ms: float | None = None):
-        mode = self.get_capture_mode()
-        if mode == "trigger":
-            gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
-                get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-            )
-            self._enter_run_trigger_session()
-            return self.cam.capture_trigger_frame(
-                timeout_s=0.8,
-                trigger_fn=self._send_run_trigger_gpio_pulse,
-                trigger_gap_ms=gap_ms,
-                pulse_ms=10.0,
-                trigger_mode_label="golden_wizard",
-            )
-        return self.cam.last_frame(caller="golden_wizard_capture_master")
+    def capture_frame_for_golden(
+        self,
+        *,
+        view_id: str | None = None,
+        trigger_mode_label: str = "golden_wizard",
+    ):
+        self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
+        frame = self._capture_frame_for_view(
+            trigger_mode_label=trigger_mode_label,
+            master_caller="golden_wizard_capture_master",
+            view_id=view_id,
+        )
+        self._logger.info("[GOLDEN_CAPTURE] frame captured")
+        return frame
 
     def _capture_frame_for_trigger(self, *, trigger_mode_label: str, trigger_gap_ms: float | None = None):
         if self.capture_mode == "trigger":
+            self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
             return self.cam.capture_trigger_frame(
                 timeout_s=0.8,
                 trigger_fn=self._send_run_trigger_gpio_pulse,
@@ -880,9 +957,6 @@ class MainWindow(QMainWindow):
         trigger_mode = spec["trigger_mode"]
         settle_ms = spec["settle_ms"]
         interval_ms = spec["interval_ms"]
-        trigger_gap_ms = float(
-            spec.get("trigger_gap_ms") or get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-        )
         self._logger.info("active view id: %s", view_id)
         self._logger.info("trigger mode for current view: %s", trigger_mode)
         self._log_trigger_cycle(
@@ -908,25 +982,17 @@ class MainWindow(QMainWindow):
         frame_received_ts = trigger_requested_ts
 
         if view_frame_u8 is None:
-            profile = getattr(view, "camera_profile", None)
             self._log_run_trigger_context(
                 f"RUN trigger capture flow for view={view_id}",
                 requested_stream_mode=None,
                 hid_set="skipped",
             )
-            self._logger.info("applying view camera state")
-            view_camera_state = apply_view_camera_profile(
-                self.cam,
-                base_camera_state,
-                profile,
-            )
-
-            if settle_ms is not None and settle_ms > 0:
-                time.sleep(settle_ms / 1000.0)
-
-            view_frame = self._capture_frame_for_trigger(
+            view_frame = self._capture_frame_for_view(
                 trigger_mode_label=trigger_mode,
-                trigger_gap_ms=trigger_gap_ms,
+                master_caller="run_manual_trigger_master",
+                view=view,
+                base_camera_state=base_camera_state,
+                settle_ms=settle_ms,
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
