@@ -1304,7 +1304,6 @@ class MainWindow(QMainWindow):
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
         )
-        dlg.resize(1200, 800)
         dlg.exec()
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)
