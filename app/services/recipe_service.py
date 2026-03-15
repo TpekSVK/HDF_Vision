@@ -154,6 +154,7 @@ class RecipeService:
         trigger_mode: str | None = None,
         trigger_interval_ms: int | None = None,
         trigger_gap_ms: float | int | None = None,
+        image_rotation: int | None = None,
         branch_enabled: bool | None = None,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
@@ -197,6 +198,7 @@ class RecipeService:
         source_trigger_gap: float | None = None
         source_golden: Optional[str] = None
         source_frame_source: Optional[str] = None
+        source_image_rotation: int = 0
         source_branch_enabled: Optional[bool] = None
         source_branch_targets: Optional[dict[str, str]] = None
         source_branch_default: Optional[str] = None
@@ -215,6 +217,7 @@ class RecipeService:
                 source_trigger_interval = source_view.trigger_interval_ms
                 source_trigger_gap = getattr(source_view, "trigger_gap_ms", None)
                 source_golden = source_view.golden_path
+                source_image_rotation = int(getattr(source_view, "image_rotation", 0) or 0)
                 source_frame_source = source_view.frame_source_view_id
                 source_branch_enabled = getattr(source_view, "branch_enabled", None)
                 source_branch_targets = getattr(source_view, "branch_targets", None)
@@ -249,6 +252,8 @@ class RecipeService:
         if target_frame_source is None:
             target_frame_source = source_frame_source
 
+        target_image_rotation = image_rotation if image_rotation is not None else source_image_rotation
+
         target_branch_enabled = (
             bool(branch_enabled)
             if branch_enabled is not None
@@ -275,6 +280,7 @@ class RecipeService:
             trigger_mode=target_trigger_mode,
             trigger_interval_ms=target_trigger_interval,
             trigger_gap_ms=target_trigger_gap,
+            image_rotation=int(target_image_rotation or 0),
             tools=[],
             branch_enabled=target_branch_enabled,
             branch_targets=target_branch_targets,
@@ -315,6 +321,7 @@ class RecipeService:
         trigger_mode: str,
         trigger_interval_ms: int | None,
         trigger_gap_ms: float | int | None = None,
+        image_rotation: int = 0,
         branch_enabled: bool = False,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
@@ -350,6 +357,7 @@ class RecipeService:
             trigger_mode=normalized_mode,
             trigger_interval_ms=normalized_interval,
             trigger_gap_ms=normalized_trigger_gap,
+            image_rotation=int(image_rotation or 0),
             tools=[tool.copy() for tool in view.tools],
             branch_enabled=branch_enabled,
             branch_targets=dict(branch_targets or {}),
