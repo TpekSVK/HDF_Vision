@@ -71,6 +71,16 @@ class SessionSettingsDialog(QDialog):
         self._overlay_checkbox.setChecked(bool(self._settings.export_overlay))
         form.addRow("Prekrytie", self._overlay_checkbox)
 
+        self._debug_overlay_checkbox = QCheckBox(
+            "Zobraziť debug overlay výkonu",
+            self,
+        )
+        self._debug_overlay_checkbox.setToolTip("Show performance debug overlay")
+        self._debug_overlay_checkbox.setChecked(
+            bool(self._settings.show_performance_debug_overlay)
+        )
+        form.addRow("Debug overlay", self._debug_overlay_checkbox)
+
         self._artifacts_checkbox.toggled.connect(self._on_artifacts_toggled)
         self._on_artifacts_toggled(self._artifacts_checkbox.isChecked())
 
@@ -130,6 +140,7 @@ class SessionSettingsDialog(QDialog):
                     self._overlay_checkbox.isChecked()
                     and self._artifacts_checkbox.isChecked()
                 ),
+                show_performance_debug_overlay=self._debug_overlay_checkbox.isChecked(),
             )
         except Exception as exc:  # pragma: no cover - defensive
             QMessageBox.critical(self, "Aktualizácia zlyhala", str(exc))

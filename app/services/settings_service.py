@@ -25,6 +25,7 @@ class SessionSettings:
     logging_path: Path = DEFAULT_LOG_DIR
     export_artifacts: bool = True
     export_overlay: bool = True
+    show_performance_debug_overlay: bool = False
 
 
 _CURRENT_SETTINGS = SessionSettings()
@@ -61,7 +62,13 @@ def update_session_settings(**updates: object) -> SessionSettings:
 
     global _CURRENT_SETTINGS
 
-    allowed: set[str] = {"logging_enabled", "logging_path", "export_artifacts", "export_overlay"}
+    allowed: set[str] = {
+        "logging_enabled",
+        "logging_path",
+        "export_artifacts",
+        "export_overlay",
+        "show_performance_debug_overlay",
+    }
     unknown: Iterable[str] = [key for key in updates if key not in allowed]
     if unknown:
         unknown_list = ", ".join(sorted(str(k) for k in unknown))

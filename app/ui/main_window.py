@@ -34,6 +34,8 @@ from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
+from app.services.jetson_stats_service import JetsonStatsService
+from app.services import settings_service
 from app.models.schema import RecipeV2
 from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
@@ -43,6 +45,7 @@ from app.ui.camera_profile_utils import (
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
 from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
+from app.ui.debug_overlay_widget import DebugOverlayWidget
 
 
 class MainWindow(QMainWindow):
@@ -111,6 +114,12 @@ class MainWindow(QMainWindow):
         # ========== Root & Top bar ==========
         root = QWidget(); self.setCentralWidget(root)
         root_layout = QVBoxLayout(root); root_layout.setContentsMargins(10, 10, 10, 10); root_layout.setSpacing(8)
+
+        self._jetson_stats_service = JetsonStatsService(self)
+        self._debug_overlay = DebugOverlayWidget(root)
+        self._debug_overlay.raise_()
+        self._jetson_stats_service.stats_updated.connect(self._debug_overlay.update_stats)
+        self._overlay_enabled = False
 
         top = QHBoxLayout(); top.setSpacing(8)
         title = QLabel("HDF Vision")
@@ -389,6 +398,11 @@ class MainWindow(QMainWindow):
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
         row1.addWidget(self.btn_modbus_wizard)
 
+        self.chk_debug_overlay = QCheckBox("Zobraziť debug overlay výkonu", self)
+        self.chk_debug_overlay.setToolTip("Show performance debug overlay")
+        self.chk_debug_overlay.toggled.connect(self._on_debug_overlay_toggled)
+        row1.addWidget(self.chk_debug_overlay)
+
         row1.addStretch(1)
         s.addLayout(row1)
 
@@ -401,6 +415,7 @@ class MainWindow(QMainWindow):
 
         # Spusť retenciu na pozadí (jednorazovo pri štarte)
         Thread(target=lambda: RetentionService().run_once(verbose=False), daemon=True).start()
+        self._apply_debug_overlay_setting()
 
     # ---------- Helpers ----------
     def current_recipe_name(self) -> str:
@@ -2273,8 +2288,40 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.critical(self, "Chyba", f"Neznáma akcia napájania: {action}")
 
+    def _apply_debug_overlay_setting(self) -> None:
+        settings = settings_service.get_session_settings()
+        enabled = bool(getattr(settings, "show_performance_debug_overlay", False))
+        self.chk_debug_overlay.blockSignals(True)
+        self.chk_debug_overlay.setChecked(enabled)
+        self.chk_debug_overlay.blockSignals(False)
+        self._set_debug_overlay_enabled(enabled)
+
+    def _on_debug_overlay_toggled(self, enabled: bool) -> None:
+        settings_service.update_session_settings(show_performance_debug_overlay=enabled)
+        self._set_debug_overlay_enabled(bool(enabled))
+
+    def _set_debug_overlay_enabled(self, enabled: bool) -> None:
+        if self._overlay_enabled == bool(enabled):
+            return
+        self._overlay_enabled = bool(enabled)
+        if self._overlay_enabled:
+            self._debug_overlay.place_top_left(margin=10)
+            self._debug_overlay.show()
+            self._debug_overlay.raise_()
+            self._jetson_stats_service.start()
+        else:
+            self._jetson_stats_service.stop()
+            self._debug_overlay.hide()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_debug_overlay"):
+            self._debug_overlay.place_top_left(margin=10)
+            self._debug_overlay.raise_()
+
     def closeEvent(self, e):
         try:
+            self._jetson_stats_service.stop()
             self.cam.stop(caller="main_window_close")
             self.gpio.close()
             self.modbus.close()
