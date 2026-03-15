@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:  # pragma: no cover - test environment shim
 import types
 
 import numpy as np
+import pytest
 
 if "cv2" not in sys.modules:  # pragma: no cover - optional dependency shim
     cv2_stub = types.SimpleNamespace(
@@ -190,7 +191,8 @@ def test_capture_trigger_frame_uses_three_pulse_sequence(monkeypatch) -> None:
     expected = np.full((3, 3), 7, dtype=np.uint8)
 
     monkeypatch.setattr(cam, "get_stream_mode", lambda: 1)
-    monkeypatch.setattr(cam, "ensure_trigger_session", lambda **_kwargs: True)
+    cam._trigger_session_active = True
+    cam._trigger_session_ready = True
     monkeypatch.setattr(cam, "_compute_trigger_timing", lambda **_kwargs: timing)
     monkeypatch.setattr(cam, "_resolve_trigger_timeout_s", lambda _timeout, _timing: 0.8)
 
@@ -271,7 +273,8 @@ def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> No
     cam = _build_camera(1280, 720, 60, "Y8", 8000)
 
     monkeypatch.setattr(cam, "get_stream_mode", lambda: 1)
-    monkeypatch.setattr(cam, "ensure_trigger_session", lambda **_kwargs: True)
+    cam._trigger_session_active = True
+    cam._trigger_session_ready = True
 
     seen_gaps: list[float] = []
 
@@ -289,3 +292,13 @@ def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> No
     cam.capture_trigger_frame(trigger_gap_ms=35.0, trigger_mode_label="manual_gpio")
 
     assert seen_gaps[:2] == [20.0, 35.0]
+
+
+def test_capture_trigger_frame_raises_when_session_inactive(monkeypatch) -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+    monkeypatch.setattr(cam, "get_stream_mode", lambda: 1)
+    cam._trigger_session_active = False
+    cam._trigger_session_ready = False
+
+    with pytest.raises(RuntimeError, match="capture_trigger_frame called while trigger mode/session is inactive"):
+        cam.capture_trigger_frame(trigger_gap_ms=20.0, trigger_mode_label="manual_gpio")
