@@ -158,12 +158,10 @@ class MainWindow(QMainWindow):
 
         run_container = QWidget()
         run_container.setObjectName("runContainer")
-        run_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
-        run_container.setMaximumHeight(780)
+        run_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         run = QVBoxLayout(run_container); run.setSpacing(8)
-        run_root.addWidget(run_container, 0, Qt.AlignTop)
-        run_root.addStretch(1)
+        run_root.addWidget(run_container, 1)
 
         # Status + metriky + štatistiky v jednom riadku
         status_container = QWidget()
@@ -242,16 +240,14 @@ class MainWindow(QMainWindow):
 
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
-        preview_container.setMaximumHeight(540)
-        preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         preview_row = QHBoxLayout(preview_container); preview_row.setSpacing(12)
 
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setAlignment(Qt.AlignCenter)
         self.live_view.setMinimumSize(640, 360)
-        self.live_view.setMaximumHeight(720)
-        self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._live_view_base_style = "border-radius: 6px; background:#181818;"
         self._set_live_view_border()
         self.live_view.setContentsMargins(0,0,0,0)
@@ -259,9 +255,8 @@ class MainWindow(QMainWindow):
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
-        self.side_panel.setMaximumHeight(720)
         self.side_panel.setMaximumWidth(420)
-        self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
         self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
 
@@ -309,7 +304,7 @@ class MainWindow(QMainWindow):
         preview_row.setStretch(0, 4)
         preview_row.setStretch(1, 1)
 
-        run.addWidget(preview_container)
+        run.addWidget(preview_container, 1)
 
         # timer pre RUN live view refresh
         self._run_timer = QTimer(self)
