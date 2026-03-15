@@ -8,7 +8,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
@@ -80,6 +80,8 @@ class _ImageView(QGraphicsView):
         self._pan_start = QPoint()
         self._space_pressed = False
         self._pending_fit_to_view = False
+        self._fit_schedule_queued = False
+        self._fit_retry_scheduled = False
 
     # ------------------------------------------------------------------
     # Scene helpers
@@ -99,21 +101,48 @@ class _ImageView(QGraphicsView):
             scene.setSceneRect(QRectF())
         self._current_scale = 1.0
         self.resetTransform()
-        self._pending_fit_to_view = self._pixmap_item is not None
-        self.fit_image_to_view(force=False)
+        self.schedule_fit_to_view(source="set_pixmap")
 
-    def fit_image_to_view(self, *, force: bool = True) -> None:
+    def schedule_fit_to_view(self, *, source: str = "unknown") -> None:
+        self._pending_fit_to_view = self._pixmap_item is not None
+        if not self._pending_fit_to_view:
+            return
+        print(f"[FIT_TO_VIEW] schedule requested source={source}")
+        if self._fit_schedule_queued:
+            return
+        self._fit_schedule_queued = True
+        QTimer.singleShot(0, self._run_scheduled_fit)
+
+    def _run_scheduled_fit(self) -> None:
+        self._fit_schedule_queued = False
+        if not self._pending_fit_to_view:
+            return
+        if self.fit_image_to_view(force=False):
+            print("[FIT_TO_VIEW] applied successfully")
+            self._fit_retry_scheduled = False
+            return
+        if not self._fit_retry_scheduled:
+            self._fit_retry_scheduled = True
+            QTimer.singleShot(30, self._run_scheduled_fit)
+
+    def fit_image_to_view(self, *, force: bool = True) -> bool:
         if self._pixmap_item is None:
             self._pending_fit_to_view = False
-            return
+            return False
         if not force:
             viewport = self.viewport()
             if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
-                return
+                width = 0 if viewport is None else viewport.width()
+                height = 0 if viewport is None else viewport.height()
+                print(
+                    f"[FIT_TO_VIEW] skipped viewport too small width={width} height={height}"
+                )
+                return False
         self._current_scale = 1.0
         self.resetTransform()
         self.fitInView(self._pixmap_item, Qt.KeepAspectRatio)
         self._pending_fit_to_view = False
+        return True
 
     def scene_rect(self) -> QRectF:
         scene = self.scene()
@@ -190,12 +219,12 @@ class _ImageView(QGraphicsView):
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().showEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="showEvent")
 
     def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().resizeEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="resizeEvent")
 
 
 class _ROIView(_ImageView):
@@ -1135,6 +1164,9 @@ class ROIEditor(QWidget):
     def reset_roi(self) -> None:
         self._view.reset_roi()
 
+    def schedule_fit_to_view(self, *, source: str = "roi_editor") -> None:
+        self._view.schedule_fit_to_view(source=source)
+
     def undo(self) -> None:
         self._view.undo()
 
@@ -1352,6 +1384,9 @@ class MaskEditor(QWidget):
 
     def clear(self) -> None:
         self._view.clear_mask()
+
+    def schedule_fit_to_view(self, *, source: str = "mask_editor") -> None:
+        self._view.schedule_fit_to_view(source=source)
 
     def state(self) -> MaskEditorState:
         if self._btn_brush_add.isChecked():
