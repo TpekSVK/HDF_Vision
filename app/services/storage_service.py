@@ -28,6 +28,7 @@ def _load_cfg():
     return dict(_CFG_DEFAULT)
 
 CFG = _load_cfg()
+_RUN_DIR_LOCK = threading.Lock()
 
 # --- Disk guard ---
 def _stat_free_percent(path="/data"):
@@ -41,27 +42,54 @@ def _minimal_mode():
     return _stat_free_percent("/data") < float(CFG.get("disk_guard_min_free_percent", 10))
 
 # --- Helpery cesty ---
-def _ensure_dirs(recipe: str, *, run_id: str | None = None, view_id: str | None = None):
+def get_next_run_index_for_day(date_dir: Path) -> str:
+    """Return next zero-padded 6 digit run index for given /data/runs/YYYYMMDD directory."""
+
+    max_idx = 0
+    if date_dir.exists():
+        for child in date_dir.iterdir():
+            if child.is_dir() and child.name.isdigit():
+                max_idx = max(max_idx, int(child.name))
+    return f"{max_idx + 1:06d}"
+
+
+def _ensure_dirs(recipe: str, *, run_id: str | None = None, view_id: str | None = None, create_run_dir: bool = True):
     base = Path("/data")
     (base / "recipes" / recipe).mkdir(parents=True, exist_ok=True)
-    # runtime dirs: runs/YYYYMMDD/<recipe>/{thumbs,full,meta}
-    day = datetime.now().strftime("%Y%m%d")
-    run_key = str(run_id).strip() if run_id else recipe
-    run_dir = base / "runs" / day / run_key
-    thumbs_dir = run_dir / "thumbs"
-    full_dir = run_dir / "full"
-    meta_dir = run_dir / "meta"
-    if view_id:
-        view_key = str(view_id).strip() or "view"
-        thumbs_dir /= view_key
-        full_dir /= view_key
-        meta_dir /= view_key
-    thumbs_dir.mkdir(parents=True, exist_ok=True)
-    full_dir.mkdir(parents=True, exist_ok=True)
-    meta_dir.mkdir(parents=True, exist_ok=True)
-    # placeholders for future artefacts
-    (run_dir / "aligned").mkdir(parents=True, exist_ok=True)
-    (run_dir / "overlay").mkdir(parents=True, exist_ok=True)
+
+    run_dir = None
+    if create_run_dir:
+        # runtime dirs: runs/YYYYMMDD/<run_idx>/{thumbs,full,meta}
+        day = datetime.now().strftime("%Y%m%d")
+        date_dir = base / "runs" / day
+        date_dir.mkdir(parents=True, exist_ok=True)
+
+        with _RUN_DIR_LOCK:
+            run_idx = get_next_run_index_for_day(date_dir)
+            run_dir = date_dir / run_idx
+            run_dir.mkdir(parents=True, exist_ok=True)
+
+        print(f"[RUN_STORAGE] date={day}")
+        print(f"[RUN_STORAGE] next_run_index={run_idx}")
+        if run_id:
+            print(f"[RUN_STORAGE] run_id={str(run_id)}")
+        print(f"[RUN_STORAGE] path={run_dir}/")
+
+        thumbs_dir = run_dir / "thumbs"
+        full_dir = run_dir / "full"
+        meta_dir = run_dir / "meta"
+        if view_id:
+            view_key = str(view_id).strip() or "view"
+            thumbs_dir /= view_key
+            full_dir /= view_key
+            meta_dir /= view_key
+        thumbs_dir.mkdir(parents=True, exist_ok=True)
+        full_dir.mkdir(parents=True, exist_ok=True)
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        # placeholders for future artefacts
+        (run_dir / "aligned").mkdir(parents=True, exist_ok=True)
+        (run_dir / "overlay").mkdir(parents=True, exist_ok=True)
+
     # validation
     (base / "validation" / "ok").mkdir(parents=True, exist_ok=True)
     (base / "validation" / "nok").mkdir(parents=True, exist_ok=True)
@@ -156,7 +184,7 @@ def save_golden(frame_u8, recipe_name: str, *, golden_path: str | None = None):
     recipe = recipe_name or "default"
     target_name = (golden_path or "golden.png").strip() or "golden.png"
     target_name = Path(target_name).name or "golden.png"
-    _ensure_dirs(recipe)
+    _ensure_dirs(recipe, create_run_dir=False)
     payload = {
         "frame": _to_u8(frame_u8),
         "recipe": recipe,
@@ -169,7 +197,7 @@ def save_golden(frame_u8, recipe_name: str, *, golden_path: str | None = None):
 
 def save_validation_image(frame_u8, ok: bool, recipe_name: str):
     recipe = recipe_name or "default"
-    _ensure_dirs(recipe)
+    _ensure_dirs(recipe, create_run_dir=False)
     # vrátime hneď cesty; zápis ide async
     ts = int(time.time() * 1000)
     base = Path("/data")
