@@ -31,3 +31,21 @@ def test_golden_trigger_mode_has_no_preview_fallbacks() -> None:
     assert "last_frame(" not in trigger_block
     assert "one_shot(" not in trigger_block
     assert "last_frame_u8" not in trigger_block
+
+
+def test_golden_capture_prepares_camera_from_active_view_before_mode_resolution() -> None:
+    source = Path("app/ui/golden_wizard/golden_wizard.py").read_text(encoding="utf-8")
+
+    prepare_call = "self._prepare_camera_for_golden_capture(view_id=self._active_view_id)"
+    mode_marker = "runtime_capture_mode = \"master\""
+
+    assert prepare_call in source
+    assert source.index(prepare_call) < source.index(mode_marker)
+
+
+def test_main_window_wires_shared_prepare_callback_to_wizard() -> None:
+    source = Path("app/ui/main_window.py").read_text(encoding="utf-8")
+
+    assert "prepare_camera_for_golden_capture=self.prepare_camera_for_golden_capture" in source
+    assert "def prepare_camera_for_golden_capture" in source
+    assert "def prepare_camera_for_view_capture" in source

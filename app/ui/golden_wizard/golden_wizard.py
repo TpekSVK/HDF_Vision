@@ -1271,6 +1271,7 @@ class GoldenWizard(QDialog):
         trigger_fn: Optional[Callable[[], None]] = None,
         get_capture_mode: Optional[Callable[[], str]] = None,
         capture_frame_for_golden: Optional[Callable[..., Any]] = None,
+        prepare_camera_for_golden_capture: Optional[Callable[..., dict[str, Any]]] = None,
     ):
         super().__init__(parent)
         self._logger = logging.getLogger(__name__)
@@ -1284,6 +1285,7 @@ class GoldenWizard(QDialog):
         self._trigger_fn = trigger_fn
         self._get_capture_mode = get_capture_mode
         self._capture_frame_for_golden = capture_frame_for_golden
+        self._prepare_camera_for_golden_capture = prepare_camera_for_golden_capture
         self.current_img = None
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -1841,6 +1843,9 @@ class GoldenWizard(QDialog):
                 )
                 if capture_delay_ms > 0:
                     time.sleep(capture_delay_ms / 1000.0)
+
+            if callable(self._prepare_camera_for_golden_capture):
+                self._prepare_camera_for_golden_capture(view_id=self._active_view_id)
 
             runtime_capture_mode = "master"
             if callable(self._get_capture_mode):

@@ -38,9 +38,7 @@ from app.models.schema import RecipeV2
 from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
-    apply_camera_state,
     apply_view_camera_profile,
-    resolve_view_camera_state,
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
@@ -708,6 +706,40 @@ class MainWindow(QMainWindow):
         mode = str(getattr(self, "capture_mode", "master") or "master").strip().lower()
         return "trigger" if mode == "trigger" else "master"
 
+    def prepare_camera_for_view_capture(
+        self,
+        view: Any | None,
+        *,
+        base_camera_state: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        profile = getattr(view, "camera_profile", None) if view is not None else None
+        resolved_base_state = base_camera_state or snapshot_camera_state(self.cam)
+        self._logger.info("applying view camera state")
+        return apply_view_camera_profile(
+            self.cam,
+            resolved_base_state,
+            profile,
+        )
+
+    def prepare_camera_for_golden_capture(self, *, view_id: str | None = None) -> dict[str, Any]:
+        recipe_cfg = load_recipe_config(self.current_recipe_name())
+        views = list(getattr(recipe_cfg, "views", []) or [])
+        if not views:
+            return {}
+
+        target_view_id = str(view_id or self._active_view_id or "").strip()
+        target_view = None
+        if target_view_id:
+            for view in views:
+                candidate_id = str(getattr(view, "id", "") or "").strip()
+                if candidate_id == target_view_id:
+                    target_view = view
+                    break
+        if target_view is None:
+            target_view = views[0]
+
+        return self.prepare_camera_for_view_capture(target_view)
+
     def capture_frame_for_golden(self, *, trigger_gap_ms: float | None = None):
         mode = self.get_capture_mode()
         if mode == "trigger":
@@ -910,17 +942,14 @@ class MainWindow(QMainWindow):
         frame_received_ts = trigger_requested_ts
 
         if view_frame_u8 is None:
-            profile = getattr(view, "camera_profile", None)
             self._log_run_trigger_context(
                 f"RUN trigger capture flow for view={view_id}",
                 requested_stream_mode=None,
                 hid_set="skipped",
             )
-            view_camera_state = resolve_view_camera_state(base_camera_state, profile)
-            self._logger.info("applying view camera state")
-            apply_camera_state(
-                self.cam,
-                view_camera_state,
+            self.prepare_camera_for_view_capture(
+                view,
+                base_camera_state=base_camera_state,
             )
 
             if settle_ms is not None and settle_ms > 0:
@@ -1197,6 +1226,7 @@ class MainWindow(QMainWindow):
             trigger_fn=self._send_run_trigger_gpio_pulse,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
+            prepare_camera_for_golden_capture=self.prepare_camera_for_golden_capture,
         )
         dlg.resize(1200, 800)
         dlg.exec()
