@@ -414,15 +414,30 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
-            self._exit_run_trigger_session(restore_master=True)
+            self._logger.info("[PAGE_SWITCH] from=run to=setup capture_mode=%s", self.capture_mode)
+            if self.capture_mode == "trigger":
+                self._logger.info("[PAGE_SWITCH] cleanup run trigger state without restore_master")
+                self._exit_run_trigger_session(restore_master=False)
+            self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
         else:
+            self._logger.info("[PAGE_SWITCH] from=setup to=run capture_mode=%s", self.capture_mode)
+            self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
-            self._apply_capture_mode(ensure_runtime_ready=True)
+            if self.capture_mode == "trigger":
+                self._enter_run_trigger_session()
+                self.live_enabled = False
+                self.btn_live.setChecked(False)
+                self.btn_live.setEnabled(False)
+                self.btn_live.setText("Live vypnuté")
+            else:
+                self.btn_live.setEnabled(True)
+                if not self.cam.is_pipeline_open():
+                    self.cam.start(caller="page_switch_run_master")
             if not self.live_enabled:
                 self._apply_run_camera_profile()
 
