@@ -463,7 +463,6 @@ class ToolEditDialog(QDialog):
         self._info_label.setStyleSheet("color: #666;")
         self._info_label.setWordWrap(True)
         roi_layout.addWidget(self._info_label)
-        roi_layout.addStretch(1)
 
         self._config_tab = QWidget(self)
         config_layout = QVBoxLayout(self._config_tab)
