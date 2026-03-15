@@ -176,6 +176,7 @@ class DrawView(QGraphicsView):
         self._space_pressed = False
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
+        self._pending_fit_to_view = False
 
         self._bg = None
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
@@ -209,7 +210,8 @@ class DrawView(QGraphicsView):
         self._scene.setSceneRect(rect)
         self._ensure_overlay_pixmap()
         self._update_overlay_pixmap()
-        self._reset_view_transform()
+        self._pending_fit_to_view = True
+        self.fit_image_to_view(force=False)
         self._update_interaction_mode()
 
     def set_shape_type(self, shape: str):
@@ -604,6 +606,8 @@ class DrawView(QGraphicsView):
                 self._scene.setSceneRect(0, 0, w, h)
             self.update()
             self._update_overlay_pixmap()
+            self._pending_fit_to_view = True
+            self.fit_image_to_view(force=False)
 
 
     def _coerce_overlay_items(
@@ -639,16 +643,36 @@ class DrawView(QGraphicsView):
         pixmap_item.setAcceptedMouseButtons(Qt.NoButton)
         self._overlay_pixmap = pixmap_item
 
-    def _reset_view_transform(self) -> None:
+    def fit_image_to_view(self, *, force: bool = True) -> None:
+        if self._bg is None or self._bg.pixmap().isNull():
+            self._pending_fit_to_view = False
+            return
+        if not force:
+            viewport = self.viewport()
+            if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
+                return
         self._panning = False
         self._current_scale = 1.0
         self.resetTransform()
-        if self._bg is not None and not self._bg.pixmap().isNull():
-            self.fitInView(self._bg, Qt.KeepAspectRatio)
+        self.fitInView(self._bg, Qt.KeepAspectRatio)
+        self._pending_fit_to_view = False
         if self._space_pressed:
             self.setCursor(QCursor(Qt.OpenHandCursor))
         else:
             self.setCursor(QCursor(Qt.ArrowCursor))
+
+    def _reset_view_transform(self) -> None:
+        self.fit_image_to_view(force=True)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
 
     def _update_overlay_pixmap(self) -> None:
         if self._bg is None or self._bg.pixmap().isNull():
@@ -730,6 +754,7 @@ class RoiMaskGraphicsView(QGraphicsView):
 
         self._roi_start: Optional[QPointF] = None
         self._roi_rect: Optional[Tuple[int, int, int, int]] = None
+        self._pending_fit_to_view = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -753,6 +778,8 @@ class RoiMaskGraphicsView(QGraphicsView):
         self._ensure_mask_graphics()
         self._mask = np.zeros((pixmap.height(), pixmap.width()), dtype=np.uint8)
         self._update_mask_item()
+        self._pending_fit_to_view = True
+        self.fit_image_to_view(force=False)
 
     def set_mode(self, mode: str) -> None:
         self._mode = self.MODE_MASK if mode == self.MODE_MASK else self.MODE_ROI
@@ -820,6 +847,28 @@ class RoiMaskGraphicsView(QGraphicsView):
         self._mask_history.clear()
         self._update_mask_item()
         self._emit_mask_changed()
+
+    def fit_image_to_view(self, *, force: bool = True) -> None:
+        if self._bg_item is None or self._bg_item.pixmap().isNull():
+            self._pending_fit_to_view = False
+            return
+        if not force:
+            viewport = self.viewport()
+            if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
+                return
+        self.resetTransform()
+        self.fitInView(self._bg_item, Qt.KeepAspectRatio)
+        self._pending_fit_to_view = False
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
 
     # ------------------------------------------------------------------
     # Events
