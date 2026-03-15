@@ -1558,7 +1558,7 @@ class GoldenWizard(QDialog):
 
         self.setSizeGripEnabled(True)
         self.resize(1400, 900)
-        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        self.setWindowState(self.windowState() | Qt.WindowFullScreen)
 
     # ---------- Live ----------
     def _pause_runtime_camera_for_wizard(self) -> None:
