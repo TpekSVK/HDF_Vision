@@ -42,6 +42,7 @@ from app.ui.camera_profile_utils import (
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
+from app.ui.view_utils import apply_view_image_transform
 
 
 class MainWindow(QMainWindow):
@@ -634,6 +635,7 @@ class MainWindow(QMainWindow):
         return {
             "index": index,
             "view": view,
+            "image_rotation": int(getattr(view, "image_rotation", 0) or 0),
             "settle_ms": settle_ms,
             "trigger_mode": trigger_mode,
             "interval_ms": interval_ms,
@@ -672,6 +674,7 @@ class MainWindow(QMainWindow):
         view_id: str | None = None,
         base_camera_state: Mapping[str, Any] | None = None,
         settle_ms: int | None = None,
+        transform_stage: str = "inspection",
     ):
         active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
         active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
@@ -709,14 +712,17 @@ class MainWindow(QMainWindow):
 
         if mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
-            return self.cam.capture_trigger_frame(
+            frame = self.cam.capture_trigger_frame(
                 timeout_s=0.8,
                 trigger_fn=self._send_run_trigger_gpio_pulse,
                 trigger_gap_ms=trigger_gap_ms,
                 pulse_ms=10.0,
                 trigger_mode_label=trigger_mode_label,
             )
-        return self.cam.last_frame(caller=master_caller)
+        else:
+            frame = self.cam.last_frame(caller=master_caller)
+        frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
+        return frame
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
         gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
@@ -809,6 +815,7 @@ class MainWindow(QMainWindow):
             trigger_mode_label=trigger_mode_label,
             master_caller="golden_wizard_capture_master",
             view_id=view_id,
+            transform_stage="golden capture",
         )
         self._logger.info("[GOLDEN_CAPTURE] frame captured")
         return frame
@@ -988,10 +995,12 @@ class MainWindow(QMainWindow):
         injected_frame = spec.get("injected_frame")
         if injected_frame is not None:
             view_frame_u8 = self._clone_frame(injected_frame)
+            view_frame_u8 = apply_view_image_transform(view_frame_u8, view, stage="inspection")
         elif source_view_id:
             view_frame_u8 = captured_frames.get(source_view_id)
             if view_frame_u8 is None:
                 view_frame_u8 = self._clone_frame(self._get_last_frame_for_view(source_view_id))
+            view_frame_u8 = apply_view_image_transform(view_frame_u8, view, stage="inspection")
 
         trigger_requested_ts = time.monotonic()
         frame_received_ts = trigger_requested_ts
@@ -1008,6 +1017,7 @@ class MainWindow(QMainWindow):
                 view=view,
                 base_camera_state=base_camera_state,
                 settle_ms=settle_ms,
+                transform_stage="inspection",
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
@@ -1387,12 +1397,13 @@ class MainWindow(QMainWindow):
                 self.live_view.clear()
                 self.live_view.setText("— aktuálny záber —")
                 return
-            img = src
+            active_view = self._views_by_id.get(self._active_view_id)
+            img = apply_view_image_transform(src, active_view, stage="preview")
             if self.chk_heatmap.isChecked():
                 try:
-                    img = self._make_heatmap_overlay(src)
+                    img = self._make_heatmap_overlay(img)
                 except Exception:
-                    img = src
+                    pass
             self._show_gray_or_bgr(self.live_view, img)
         except Exception:
             pass
