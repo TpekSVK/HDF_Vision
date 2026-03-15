@@ -79,6 +79,7 @@ class _ImageView(QGraphicsView):
         self._panning = False
         self._pan_start = QPoint()
         self._space_pressed = False
+        self._pending_fit_to_view = False
 
     # ------------------------------------------------------------------
     # Scene helpers
@@ -98,9 +99,21 @@ class _ImageView(QGraphicsView):
             scene.setSceneRect(QRectF())
         self._current_scale = 1.0
         self.resetTransform()
-        if self._pixmap_item is not None:
-            self.fitInView(self._pixmap_item, Qt.KeepAspectRatio)
-            self._current_scale = 1.0
+        self._pending_fit_to_view = self._pixmap_item is not None
+        self.fit_image_to_view(force=False)
+
+    def fit_image_to_view(self, *, force: bool = True) -> None:
+        if self._pixmap_item is None:
+            self._pending_fit_to_view = False
+            return
+        if not force:
+            viewport = self.viewport()
+            if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
+                return
+        self._current_scale = 1.0
+        self.resetTransform()
+        self.fitInView(self._pixmap_item, Qt.KeepAspectRatio)
+        self._pending_fit_to_view = False
 
     def scene_rect(self) -> QRectF:
         scene = self.scene()
@@ -173,6 +186,16 @@ class _ImageView(QGraphicsView):
             event.accept()
             return
         super().keyReleaseEvent(event)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
 
 
 class _ROIView(_ImageView):
