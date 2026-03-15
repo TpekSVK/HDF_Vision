@@ -665,6 +665,7 @@ class RecipeView:
     trigger_mode: Literal["timed", "external", "manual"] = "timed"
     trigger_interval_ms: Optional[int] = None
     trigger_gap_ms: Optional[float] = None
+    image_rotation: int = 0
     tools: List[Tool] = field(default_factory=list)
     branch_enabled: bool = False
     branch_targets: dict[str, str] = field(default_factory=dict)
@@ -716,6 +717,14 @@ class RecipeView:
         if self.trigger_gap_ms is not None and self.trigger_gap_ms <= 0:
             self.trigger_gap_ms = None
 
+        try:
+            rotation = int(self.image_rotation)
+        except Exception:
+            rotation = 0
+        if rotation not in {0, 90, 180, 270}:
+            rotation = 0
+        self.image_rotation = rotation
+
         self.branch_enabled = bool(self.branch_enabled)
         normalized_targets: dict[str, str] = {}
         for key, value in dict(self.branch_targets or {}).items():
@@ -757,6 +766,7 @@ class RecipeView:
             "trigger_mode": self.trigger_mode,
             "trigger_interval_ms": self.trigger_interval_ms,
             "trigger_gap_ms": self.trigger_gap_ms,
+            "image_rotation": self.image_rotation,
             "tools": [tool.to_dict() for tool in self.tools],
             "branch_enabled": self.branch_enabled,
             "branch_targets": dict(self.branch_targets),
@@ -779,6 +789,7 @@ class RecipeView:
             trigger_mode=data.get("trigger_mode", "timed"),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             trigger_gap_ms=data.get("trigger_gap_ms"),
+            image_rotation=data.get("image_rotation", 0),
             tools=data.get("tools", []),
             branch_enabled=bool(data.get("branch_enabled", False)),
             branch_targets=data.get("branch_targets", {}),
@@ -799,6 +810,7 @@ class RecipeView:
             trigger_mode=self.trigger_mode,
             trigger_interval_ms=self.trigger_interval_ms,
             trigger_gap_ms=self.trigger_gap_ms,
+            image_rotation=self.image_rotation,
             tools=[tool.copy() for tool in self.tools],
             branch_enabled=self.branch_enabled,
             branch_targets=dict(self.branch_targets),
