@@ -1407,6 +1407,11 @@ class GoldenWizard(QDialog):
         self.btn_test_tool.setEnabled(False)
         self.btn_publish_recipe = QPushButton("Publikovať/Aktualizovať recept")
         self.btn_close_wizard = QPushButton("Zavrieť Golden Wizard")
+        self.btn_close_wizard.setStyleSheet(
+            "QPushButton { background-color: #c62828; color: white; font-weight: 600; }"
+            "QPushButton:hover { background-color: #b71c1c; }"
+            "QPushButton:pressed { background-color: #8e0000; }"
+        )
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
