@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QSpinBox,
     QTabWidget,
@@ -312,6 +313,7 @@ class ToolEditDialog(QDialog):
         self._btn_edge_auto_detect: Optional[QPushButton] = None
 
         self._is_locator_template = self._tool.type == "locator.template_match"
+        self._maximize_on_first_show = True
         self._use_golden_checkbox: Optional[QCheckBox] = None
         self._template_editor: Optional[TemplateRoiEditor] = None
         self._template_container: Optional[QWidget] = None
@@ -386,42 +388,75 @@ class ToolEditDialog(QDialog):
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
 
-        sections_layout = QHBoxLayout()
-        sections_layout.setContentsMargins(0, 0, 0, 0)
-        sections_layout.setSpacing(12)
+        roi_group: Optional[QGroupBox] = None
+        sections_layout: Optional[QHBoxLayout] = None
 
-        has_section = False
-
-        if self._supports_roi and self._roi_editor is not None:
-            roi_group = QGroupBox("Region of interest", roi_tab)
-            roi_group_layout = QVBoxLayout(roi_group)
-            roi_group_layout.setContentsMargins(6, 6, 6, 6)
-            roi_group_layout.setSpacing(6)
-            roi_group_layout.addWidget(self._roi_editor, 1)
-            sections_layout.addWidget(roi_group, 1)
-            has_section = True
-        else:
-            roi_group = None
-
-        if self._supports_mask and self._mask_editor is not None:
-            mask_group = QGroupBox("Ignore mask", roi_tab)
-            mask_group_layout = QVBoxLayout(mask_group)
-            mask_group_layout.setContentsMargins(6, 6, 6, 6)
-            mask_group_layout.setSpacing(6)
-            mask_group_layout.addWidget(self._mask_editor, 1)
-            sections_layout.addWidget(mask_group, 1)
-            has_section = True
-
-        if has_section:
+        if self._is_locator_template:
+            sections_layout = QHBoxLayout()
+            sections_layout.setContentsMargins(0, 0, 0, 0)
+            sections_layout.setSpacing(12)
+            if self._supports_roi and self._roi_editor is not None:
+                roi_group = QGroupBox("Region of interest", roi_tab)
+                roi_group_layout = QVBoxLayout(roi_group)
+                roi_group_layout.setContentsMargins(6, 6, 6, 6)
+                roi_group_layout.setSpacing(6)
+                roi_group_layout.addWidget(self._roi_editor, 1)
+                sections_layout.addWidget(roi_group, 2)
+            else:
+                info = QLabel("Selected tool does not support ROI editing.", roi_tab)
+                info.setStyleSheet("color: #666;")
+                info.setWordWrap(True)
+                roi_layout.addWidget(info)
             roi_layout.addLayout(sections_layout, 1)
+            self._tabs.addTab(roi_tab, "ROI")
+
+            if self._supports_mask and self._mask_editor is not None:
+                mask_tab = QWidget(self)
+                mask_layout = QVBoxLayout(mask_tab)
+                mask_layout.setContentsMargins(0, 0, 0, 0)
+                mask_layout.setSpacing(8)
+                mask_group = QGroupBox("Ignore mask", mask_tab)
+                mask_group_layout = QVBoxLayout(mask_group)
+                mask_group_layout.setContentsMargins(6, 6, 6, 6)
+                mask_group_layout.setSpacing(6)
+                mask_group_layout.addWidget(self._mask_editor, 1)
+                mask_layout.addWidget(mask_group, 1)
+                self._tabs.addTab(mask_tab, "Ignore Mask")
         else:
-            info = QLabel("Selected tool does not support ROI or ignore mask editing.", roi_tab)
-            info.setStyleSheet("color: #666;")
-            info.setWordWrap(True)
-            roi_layout.addWidget(info)
+            if self._supports_roi and self._roi_editor is not None:
+                roi_group = QGroupBox("Region of interest", roi_tab)
+                roi_group_layout = QVBoxLayout(roi_group)
+                roi_group_layout.setContentsMargins(6, 6, 6, 6)
+                roi_group_layout.setSpacing(6)
+                roi_group_layout.addWidget(self._roi_editor, 1)
+                roi_layout.addWidget(roi_group, 1)
+            else:
+                info = QLabel("Selected tool does not support ROI editing.", roi_tab)
+                info.setStyleSheet("color: #666;")
+                info.setWordWrap(True)
+                roi_layout.addWidget(info)
+            self._tabs.addTab(roi_tab, "ROI")
+
+            mask_tab = QWidget(self)
+            mask_layout = QVBoxLayout(mask_tab)
+            mask_layout.setContentsMargins(0, 0, 0, 0)
+            mask_layout.setSpacing(8)
+            if self._supports_mask and self._mask_editor is not None:
+                mask_group = QGroupBox("Ignore mask", mask_tab)
+                mask_group_layout = QVBoxLayout(mask_group)
+                mask_group_layout.setContentsMargins(6, 6, 6, 6)
+                mask_group_layout.setSpacing(6)
+                mask_group_layout.addWidget(self._mask_editor, 1)
+                mask_layout.addWidget(mask_group, 1)
+            else:
+                info = QLabel("Selected tool does not support ignore mask editing.", mask_tab)
+                info.setStyleSheet("color: #666;")
+                info.setWordWrap(True)
+                mask_layout.addWidget(info)
+            self._tabs.addTab(mask_tab, "Ignore Mask")
 
         self._roi_layout = roi_layout
-        self._roi_sections_layout = sections_layout if has_section else None
+        self._roi_sections_layout = sections_layout
         self._roi_group = roi_group
 
         self._info_label = QLabel("", self)
@@ -429,16 +464,25 @@ class ToolEditDialog(QDialog):
         self._info_label.setWordWrap(True)
         roi_layout.addWidget(self._info_label)
         roi_layout.addStretch(1)
-        self._tabs.addTab(roi_tab, "ROI & Mask")
 
         self._config_tab = QWidget(self)
         config_layout = QVBoxLayout(self._config_tab)
         config_layout.setContentsMargins(0, 0, 0, 0)
         config_layout.setSpacing(0)
+
+        form_scroll = QScrollArea(self._config_tab)
+        form_scroll.setWidgetResizable(True)
+        form_scroll.setFrameShape(QScrollArea.NoFrame)
+
+        form_container = QWidget(form_scroll)
+        form_layout = QVBoxLayout(form_container)
+        form_layout.setContentsMargins(0, 0, 0, 0)
+        form_layout.setSpacing(0)
+
         self._config_form = QFormLayout()
         self._config_form.setContentsMargins(8, 8, 8, 8)
         self._config_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        config_layout.addLayout(self._config_form)
+        form_layout.addLayout(self._config_form)
 
         controls_layout = QHBoxLayout()
         controls_layout.setContentsMargins(8, 4, 8, 0)
@@ -448,15 +492,16 @@ class ToolEditDialog(QDialog):
         self._btn_restore_defaults.clicked.connect(self._on_restore_defaults_clicked)
         self._btn_restore_defaults.setEnabled(False)
         controls_layout.addWidget(self._btn_restore_defaults)
-        config_layout.addLayout(controls_layout)
+        form_layout.addLayout(controls_layout)
 
         self._form_error_label = QLabel("", self._config_tab)
         self._form_error_label.setStyleSheet("color: #b03030; padding: 4px 8px 0 8px;")
         self._form_error_label.setWordWrap(True)
         self._form_error_label.setVisible(False)
-        config_layout.addWidget(self._form_error_label)
-
-        config_layout.addStretch(1)
+        form_layout.addWidget(self._form_error_label)
+        form_layout.addStretch(1)
+        form_scroll.setWidget(form_container)
+        config_layout.addWidget(form_scroll, 1)
         self._tabs.addTab(self._config_tab, "Prahy a parametre")
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
@@ -542,7 +587,13 @@ class ToolEditDialog(QDialog):
         if self._tool.type == "edge_profile_deviation":
             self._init_edge_anchor_panel()
 
-        self.resize(900, 640)
+        self.resize(1400, 900)
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        if self._maximize_on_first_show:
+            self._maximize_on_first_show = False
+            self.showMaximized()
 
     def _format_window_title(self, name: Optional[str]) -> str:
         tool_obj = getattr(self, "_tool", None)
