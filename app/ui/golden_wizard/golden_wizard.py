@@ -1886,26 +1886,40 @@ class GoldenWizard(QDialog):
             self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
             view_id = self._active_view_id
             frame = None
+            active_view = self._view_by_id(view_id)
             if callable(self._capture_frame_for_golden):
                 self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
-                active_view = self._view_by_id(view_id)
                 frame = self._capture_frame_for_golden(
                     view_id=view_id,
                     trigger_mode_label="golden_wizard",
-                    image_rotation_override=view_image_rotation(active_view),
+                    image_rotation_override=0,
                 )
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
-            self._logger.info("[GOLDEN_CAPTURE] frame captured")
-            active_view = self._view_by_id(view_id)
+            self._logger.info(
+                "[GOLDEN_CAPTURE] raw frame received shape=%s",
+                None if frame is None else getattr(frame, "shape", None),
+            )
+            self._logger.info(
+                "[GOLDEN_CAPTURE] active view rotation=%s",
+                view_image_rotation(active_view),
+            )
+            self._logger.info("[GOLDEN_CAPTURE] applying final shared view transform before store/display")
             frame = apply_view_image_transform(frame, active_view, stage="golden capture")
+            self._logger.info(
+                "[GOLDEN_CAPTURE] final frame shape=%s",
+                None if frame is None else getattr(frame, "shape", None),
+            )
             self.current_img = frame
+            self._logger.info("[GOLDEN_CAPTURE] stored current_img")
             self._set_pixmap(frame)
+            self._logger.info("[GOLDEN_CAPTURE] pixmap updated")
             self._set_selected_tool_overlay()
             if self._active_view_id:
                 self._view_states.setdefault(self._active_view_id, {})[
                     "golden_image"
                 ] = np.asarray(frame).copy()
+                self._logger.info("[GOLDEN_CAPTURE] stored state golden_image")
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
