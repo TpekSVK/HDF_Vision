@@ -69,7 +69,6 @@ from app.models.schema import (
 from app.services.recipe_service import RecipeService
 from app.services.tool_registry import ToolRegistry
 from app.services import settings_service
-from app.utils.trigger_timing import get_default_trigger_gap_ms
 from app.services.tool_service import (
     ToolRunResult,
     run_locator_template_match,
@@ -83,7 +82,6 @@ from app.ui.view_utils import view_uses_global_golden
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
-    resolve_view_camera_state,
     snapshot_camera_state,
 )
 from app.ui.golden_wizard.form_widgets import (
@@ -1509,6 +1507,7 @@ class GoldenWizard(QDialog):
         self._refresh_view_list(recipe=self._last_recipe, reset_states=True)
         self._sync_locator_policy_ui(self._last_recipe)
         self._sync_logging_ui(self._last_recipe)
+        self._sync_live_policy_ui()
         self._refresh_publish_state()
 
     # ---------- Live ----------
@@ -1529,6 +1528,13 @@ class GoldenWizard(QDialog):
         self._logger.info("wizard_camera_resume done")
 
     def _toggle_live(self, checked: bool):
+        if checked and not self._is_live_allowed_by_capture_mode():
+            self._logger.info("[GOLDEN_CAPTURE] live disabled in trigger mode")
+            self.btn_live.blockSignals(True)
+            self.btn_live.setChecked(False)
+            self.btn_live.blockSignals(False)
+            self._sync_live_policy_ui()
+            return
         if checked:
             try:
                 self._pause_runtime_camera_for_wizard()
@@ -1592,6 +1598,33 @@ class GoldenWizard(QDialog):
         pm = QPixmap.fromImage(qimg.copy()).scaled(self.live_lbl.width(), self.live_lbl.height(),
                                                    Qt.KeepAspectRatio, Qt.SmoothTransformation)
         self.live_lbl.setPixmap(pm)
+
+    def _runtime_capture_mode(self) -> str:
+        mode = "master"
+        if callable(self._get_capture_mode):
+            try:
+                mode = str(self._get_capture_mode() or "master").strip().lower()
+            except Exception:
+                mode = "master"
+        return mode if mode in {"master", "trigger"} else "master"
+
+    def _is_live_allowed_by_capture_mode(self) -> bool:
+        return self._runtime_capture_mode() == "master"
+
+    def _sync_live_policy_ui(self) -> None:
+        allowed = self._is_live_allowed_by_capture_mode()
+        if not allowed and self._live_on:
+            self.btn_live.blockSignals(True)
+            self.btn_live.setChecked(False)
+            self.btn_live.blockSignals(False)
+            self._stop_preview_session(resume_runtime_camera=True)
+        self.btn_live.setEnabled(allowed)
+        if allowed:
+            self.btn_live.setText("Live zapnuté" if self._live_on else "Live vypnuté")
+            self.btn_live.setToolTip("")
+        else:
+            self.btn_live.setText("Live nedostupné v TRIGGER režime")
+            self.btn_live.setToolTip("Live preview je v TRIGGER režime blokovaný.")
 
     # ---------- UI util ----------
     def _set_pixmap(self, img_u8):
@@ -1843,56 +1876,16 @@ class GoldenWizard(QDialog):
                 if capture_delay_ms > 0:
                     time.sleep(capture_delay_ms / 1000.0)
 
-            runtime_capture_mode = "master"
-            if callable(self._get_capture_mode):
-                try:
-                    runtime_capture_mode = str(self._get_capture_mode() or "master").strip().lower()
-                except Exception:
-                    runtime_capture_mode = "master"
-            if runtime_capture_mode not in {"master", "trigger"}:
-                runtime_capture_mode = "master"
-
-            # V trigger mode používaj jednotnú 3-pulse trigger sekvenciu
-            # (2x priming discard + 1x finálny frame) rovnako ako RUN cesty.
-            active_view, _ = self._prepare_camera_from_active_view_for_capture()
+            runtime_capture_mode = self._runtime_capture_mode()
             self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
+            view_id = self._active_view_id
             frame = None
-            if runtime_capture_mode == "trigger":
-                trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None)
-                if not isinstance(trigger_gap_ms, (int, float)) or float(trigger_gap_ms) <= 0:
-                    trigger_gap_ms = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-                self._logger.info("[GOLDEN_CAPTURE] entering trigger session after profile apply")
-                if callable(self._capture_frame_for_golden):
-                    frame = self._capture_frame_for_golden(trigger_gap_ms=float(trigger_gap_ms))
-                else:
-                    frame = self.cam.capture_trigger_frame(
-                        timeout_s=0.8,
-                        trigger_fn=self._trigger_fn,
-                        trigger_gap_ms=float(trigger_gap_ms),
-                        pulse_ms=10.0,
-                        trigger_mode_label="golden_wizard",
-                    )
-            else:
-                # Pri master mode preferuj frame z kontinuálneho streamu.
-                best_flash_frame = None
-                best_flash_score = float("-inf")
-                deadline = time.monotonic() + 0.18
-                while time.monotonic() < deadline:
-                    candidate = self._lp.last_frame_u8() if self._live_on else self.cam.last_frame(caller="golden_wizard_capture")
-                    if candidate is not None:
-                        score = float(np.mean(candidate))
-                        if score > best_flash_score:
-                            best_flash_score = score
-                            best_flash_frame = np.asarray(candidate).copy()
-                    time.sleep(0.01)
-
-                frame = best_flash_frame
-                if frame is None:
-                    frame = self.cam.last_frame(caller="golden_wizard_capture")
-                if frame is None:
-                    frame = self.cam.one_shot()
-                if frame is None and self._live_on:
-                    frame = self._lp.last_frame_u8()
+            if callable(self._capture_frame_for_golden):
+                self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
+                frame = self._capture_frame_for_golden(
+                    view_id=view_id,
+                    trigger_mode_label="golden_wizard",
+                )
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
             self._logger.info("[GOLDEN_CAPTURE] frame captured")
@@ -1906,6 +1899,8 @@ class GoldenWizard(QDialog):
             if self._live_on:
                 self.btn_live.setChecked(False)
                 self._toggle_live(False)  # vypnúť live, prepnúť späť na DrawView
+
+            self._sync_live_policy_ui()
 
             self._info("Golden zachytený z kamery.")
         except Exception as e:
@@ -2288,34 +2283,6 @@ class GoldenWizard(QDialog):
             profile,
             warn=self._warn,
         )
-
-    def _prepare_camera_from_active_view_for_capture(self) -> tuple[Optional[RecipeView], dict[str, Any]]:
-        active_view = self._view_by_id(self._active_view_id)
-        profile = getattr(active_view, "camera_profile", None) if active_view else None
-        base_state = self._snapshot_camera_state()
-        self._logger.info("[GOLDEN_CAPTURE] applying active view camera profile")
-        resolved_state = resolve_view_camera_state(base_state, profile)
-        self._logger.info(
-            "[GOLDEN_CAPTURE] resolved state: device_id=%s width=%s height=%s fps=%s pixel_format=%s exposure=%s gain=%s gamma=%s brightness=%s sharpness=%s flash_mode=%s",
-            resolved_state.get("device_id"),
-            resolved_state.get("width"),
-            resolved_state.get("height"),
-            resolved_state.get("fps"),
-            resolved_state.get("pixel_format"),
-            resolved_state.get("exposure_us"),
-            resolved_state.get("gain_db"),
-            resolved_state.get("gamma"),
-            resolved_state.get("brightness"),
-            resolved_state.get("sharpness"),
-            resolved_state.get("flash_mode"),
-        )
-        apply_view_camera_profile(
-            self.cam,
-            base_state,
-            profile,
-            warn=self._warn,
-        )
-        return active_view, resolved_state
 
     @staticmethod
     def _suggest_view_id(existing: Sequence[RecipeView]) -> str:
