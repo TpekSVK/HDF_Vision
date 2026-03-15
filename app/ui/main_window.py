@@ -649,11 +649,13 @@ class MainWindow(QMainWindow):
     def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
         view_id = requested_view_id or self._active_view_id
         if view_id:
+            with suppress(Exception):
+                view = self.recipes.get_view(self.current_recipe_name(), view_id)
+                self._views_by_id[view_id] = view
+                return view
             cached = self._views_by_id.get(view_id)
             if cached is not None:
                 return cached
-            with suppress(Exception):
-                return self.recipes.get_view(self.current_recipe_name(), view_id)
 
         with suppress(Exception):
             views = self.recipes.list_views(self.current_recipe_name())
@@ -662,6 +664,7 @@ class MainWindow(QMainWindow):
                 resolved_id = getattr(view, "id", None)
                 if resolved_id:
                     self._active_view_id = resolved_id
+                    self._views_by_id[resolved_id] = view
                 return view
         return None
 
@@ -1397,7 +1400,7 @@ class MainWindow(QMainWindow):
                 self.live_view.clear()
                 self.live_view.setText("— aktuálny záber —")
                 return
-            active_view = self._views_by_id.get(self._active_view_id)
+            active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
             img = apply_view_image_transform(src, active_view, stage="preview")
             if self.chk_heatmap.isChecked():
                 try:
