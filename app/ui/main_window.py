@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
-    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication, QLineEdit
+    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
@@ -383,29 +383,6 @@ class MainWindow(QMainWindow):
         row1.addStretch(1)
         s.addLayout(row1)
 
-        debug_row = QHBoxLayout()
-        self.chk_trigger_exposure_debug = QCheckBox("Debug trigger exposure", self.panel_setup)
-        self.chk_trigger_exposure_debug.setChecked(False)
-        self.chk_trigger_exposure_debug.toggled.connect(self._on_trigger_exposure_debug_toggled)
-        debug_row.addWidget(self.chk_trigger_exposure_debug)
-
-        debug_row.addWidget(QLabel("Exposure [us]:", self.panel_setup))
-        self.edt_trigger_exposure_debug = QLineEdit(self.panel_setup)
-        self.edt_trigger_exposure_debug.setPlaceholderText("napr. 200")
-        self.edt_trigger_exposure_debug.setToolTip(
-            "Použije sa iba ak je zapnutý debug checkbox a kamera beží v trigger mode."
-        )
-        self.edt_trigger_exposure_debug.setEnabled(False)
-        self.edt_trigger_exposure_debug.editingFinished.connect(self._on_trigger_exposure_debug_edit_finished)
-        debug_row.addWidget(self.edt_trigger_exposure_debug)
-
-        self.lbl_trigger_exposure_debug_hint = QLabel("", self.panel_setup)
-        self.lbl_trigger_exposure_debug_hint.setStyleSheet("color:#888;")
-        debug_row.addWidget(self.lbl_trigger_exposure_debug_hint)
-        debug_row.addStretch(1)
-        s.addLayout(debug_row)
-
-        self._refresh_setup_trigger_exposure_debug_field()
 
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
@@ -428,7 +405,6 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
             self.mode_btn.setText("▶ RUN")
-            self._refresh_setup_trigger_exposure_debug_field()
         else:
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
@@ -440,48 +416,6 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setText(f"Trigger session sa nepodarilo spustiť: {exc}")
             if not self.live_enabled:
                 self._apply_run_camera_profile()
-
-    def _refresh_setup_trigger_exposure_debug_field(self) -> None:
-        current_exposure = int(getattr(self.cam, "exposure_us", 0) or 0)
-        self.edt_trigger_exposure_debug.setText(str(current_exposure))
-        self.lbl_trigger_exposure_debug_hint.setText(f"aktuálne: {current_exposure} us")
-
-    def _on_trigger_exposure_debug_toggled(self, enabled: bool) -> None:
-        self.edt_trigger_exposure_debug.setEnabled(bool(enabled))
-        if enabled:
-            self._refresh_setup_trigger_exposure_debug_field()
-            self._apply_setup_trigger_exposure_debug_if_active()
-
-    def _on_trigger_exposure_debug_edit_finished(self) -> None:
-        self._apply_setup_trigger_exposure_debug_if_active()
-
-    def _apply_setup_trigger_exposure_debug_if_active(self) -> None:
-        if not bool(getattr(self, "chk_trigger_exposure_debug", None) and self.chk_trigger_exposure_debug.isChecked()):
-            return
-        text = str(self.edt_trigger_exposure_debug.text() or "").strip()
-        if not text:
-            return
-        try:
-            value = int(float(text))
-        except Exception:
-            self.lbl_trigger_exposure_debug_hint.setText("neplatná hodnota")
-            return
-        if value <= 0:
-            self.lbl_trigger_exposure_debug_hint.setText("hodnota musí byť > 0")
-            return
-        try:
-            stream_mode = int(self.cam.get_stream_mode())
-        except Exception:
-            stream_mode = None
-        if stream_mode != 1:
-            self.lbl_trigger_exposure_debug_hint.setText(f"debug pripravený: {value} us (aktivuje sa v trigger mode)")
-            return
-        try:
-            self.cam.set_manual_exposure_us(value)
-            self.lbl_trigger_exposure_debug_hint.setText(f"debug exposure aplikované: {value} us")
-            self._logger.info("trigger debug exposure applied value_us=%s", value)
-        except Exception as exc:
-            self.lbl_trigger_exposure_debug_hint.setText(f"apply zlyhalo: {exc}")
 
     def _set_live_view_border(self, color: str | None = None) -> None:
         border_color = color or "#444"
@@ -692,7 +626,6 @@ class MainWindow(QMainWindow):
             trigger_gap_ms=float(default_gap),
             pulse_ms=10.0,
         )
-        self._apply_setup_trigger_exposure_debug_if_active()
         self._run_trigger_session_active = True
 
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
@@ -708,7 +641,6 @@ class MainWindow(QMainWindow):
         self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
         try:
-            self._apply_setup_trigger_exposure_debug_if_active()
             trigger_state = self._prepare_run_trigger()
         except Exception as exc:
             self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
@@ -1159,7 +1091,13 @@ class MainWindow(QMainWindow):
 
     def open_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
-        dlg = GoldenWizard(self.cam, self.recipes, self, modbus=self.modbus)
+        dlg = GoldenWizard(
+            self.cam,
+            self.recipes,
+            self,
+            modbus=self.modbus,
+            trigger_fn=self._send_run_trigger_gpio_pulse,
+        )
         dlg.resize(1200, 800)
         dlg.exec()
         if self.mode == "RUN":
