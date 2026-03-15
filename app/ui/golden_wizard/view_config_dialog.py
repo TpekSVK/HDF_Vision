@@ -6,16 +6,17 @@ from typing import Any, Optional, Sequence
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QGroupBox,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
+    QScrollArea,
     QWidget,
     QVBoxLayout,
 )
@@ -94,53 +95,59 @@ class ViewConfigDialog(QDialog):
         title = "Pridať pohľad" if mode == "add" else "Upraviť pohľad"
         self.setWindowTitle(title)
         self.setModal(True)
+        self.setMinimumSize(640, 480)
+        screen = QApplication.primaryScreen()
+        max_height = int(screen.availableGeometry().height() * 0.85) if screen else 760
+        self.resize(760, min(760, max_height))
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(12)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
 
-        basic_group = QGroupBox("Základné informácie", self)
+        content_scroll = QScrollArea(self)
+        content_scroll.setWidgetResizable(True)
+        content_scroll.setFrameShape(QScrollArea.NoFrame)
+
+        content_widget = QWidget(content_scroll)
+        content_layout = QVBoxLayout(content_widget)
+        content_layout.setContentsMargins(2, 2, 2, 2)
+        content_layout.setSpacing(8)
+        content_scroll.setWidget(content_widget)
+        layout.addWidget(content_scroll, 1)
+
+        basic_group = QGroupBox("Základné informácie", content_widget)
         basic_form = QFormLayout(basic_group)
-        basic_form.setSpacing(6)
+        self._setup_compact_form(basic_form)
         self._name_edit = QLineEdit(name, basic_group)
         self._name_edit.setPlaceholderText("Názov view (povinné)")
         self._id_label = QLabel(view_id, basic_group)
         self._id_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        basic_form.addRow("Name:", self._name_edit)
-        name_hint = self._create_description_label(
+        name_hint = (
             "Názov view-u, ktorý sa zobrazí v prehľade Golden Wizardu aj v multi-view."
             " Uľahčuje prepínanie medzi náhľadmi, preto by mal byť v rámci receptu"
-            " jedinečný.",
-            basic_group,
+            " jedinečný."
         )
-        self._name_edit.setToolTip(name_hint.text())
-        basic_form.addRow(name_hint)
+        self._add_form_row(basic_form, "Name:", self._name_edit, tooltip=name_hint)
 
-        basic_form.addRow("ID:", self._id_label)
-        id_hint = self._create_description_label(
+        id_hint = (
             "Nemenné systémové ID view-u. Používa sa pri ukladaní golden dát a"
-            " synchronizácii v multi-view, preto sa nemení ani pri premenovaní.",
-            basic_group,
+            " synchronizácii v multi-view, preto sa nemení ani pri premenovaní."
         )
-        self._id_label.setToolTip(id_hint.text())
-        basic_form.addRow(id_hint)
-        layout.addWidget(basic_group)
+        self._add_form_row(basic_form, "ID:", self._id_label, tooltip=id_hint)
+        content_layout.addWidget(basic_group)
 
-        camera_group = QGroupBox("Camera settings pre tento view", self)
+        camera_group = QGroupBox("Nastavenia kamery pre tento view", content_widget)
         camera_form = QFormLayout(camera_group)
-        camera_form.setSpacing(6)
+        self._setup_compact_form(camera_form)
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
-        camera_form.addRow("Resolution:", self._resolution_combo)
-        resolution_hint = self._create_description_label(
+        resolution_hint = (
             "Rozlíšenie, snímková frekvencia a pixel formát pre tento view."
             " Voľba „Inherit“ ponechá parametre z globálnej kamery alebo z"
-            " multi-view profilu; konkrétna voľba ovplyvní iba aktuálny view.",
-            camera_group,
+            " multi-view profilu; konkrétna voľba ovplyvní iba aktuálny view."
         )
-        self._resolution_combo.setToolTip(resolution_hint.text())
-        camera_form.addRow(resolution_hint)
+        self._add_form_row(camera_form, "Resolution:", self._resolution_combo, tooltip=resolution_hint)
 
         self._exposure_edit = QLineEdit(camera_group)
         self._exposure_edit.setPlaceholderText("Leave blank to inherit")
@@ -166,81 +173,62 @@ class ViewConfigDialog(QDialog):
         self._flash_mode_combo.addItem("Vypnuté (0)", 0)
         self._flash_mode_combo.addItem("Stroboskop (1)", 1)
         self._flash_mode_combo.addItem("Svetlo natrvalo (2)", 2)
-        camera_form.addRow("Camera device:", self._device_edit)
-        camera_form.addRow("Expozícia - master mode [us]:", self._exposure_edit)
-        exposure_hint = self._create_description_label(
+        self._add_form_row(camera_form, "Camera device:", self._device_edit)
+        exposure_hint = (
             "Platí len pre master mode. V trigger mode sa táto hodnota"
-            " nepoužíva na riadenie jasu.",
-            camera_group,
+            " nepoužíva na riadenie jasu."
         )
-        self._exposure_edit.setToolTip(exposure_hint.text())
-        camera_form.addRow(exposure_hint)
-        camera_form.addRow("Expozícia - trigger mode [ms]:", self._trigger_exposure_edit)
-        trigger_exposure_hint = self._create_description_label(
+        self._add_form_row(camera_form, "Expozícia - master mode [us]:", self._exposure_edit, tooltip=exposure_hint)
+        trigger_exposure_hint = (
             "Platí len pre trigger mode. V trigger mode riadi čas medzi"
-            " trigger pulzmi (gap), a tým výsledný jas.",
-            camera_group,
+            " trigger pulzmi (gap), a tým výsledný jas."
         )
-        self._trigger_exposure_edit.setToolTip(trigger_exposure_hint.text())
-        camera_form.addRow(trigger_exposure_hint)
+        self._add_form_row(camera_form, "Expozícia - trigger mode [ms]:", self._trigger_exposure_edit, tooltip=trigger_exposure_hint)
 
         if self._supports_gain:
-            camera_form.addRow("Zisk [dB]:", self._gain_edit)
-            gain_hint = self._create_description_label(
+            gain_hint = (
                 "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
                 " hodnotu z kamery; v multi-view má každé view vlastnú uloženú"
-                " kombináciu.",
-                camera_group,
+                " kombináciu."
             )
-            self._gain_edit.setToolTip(gain_hint.text())
-            camera_form.addRow(gain_hint)
+            self._add_form_row(camera_form, "Zisk [dB]:", self._gain_edit, tooltip=gain_hint)
 
-        camera_form.addRow("Formát pixelov:", self._pixel_format_combo)
+        pixel_hint = (
+            "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
+            " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
+            " ovplyvní iba aktuálny view."
+        )
+        self._add_form_row(camera_form, "Formát pixelov:", self._pixel_format_combo, tooltip=pixel_hint)
         if self._supports_gamma:
-            camera_form.addRow("Gamma:", self._gamma_edit)
+            self._add_form_row(camera_form, "Gamma:", self._gamma_edit)
         if self._supports_brightness:
-            camera_form.addRow("Brightness:", self._brightness_edit)
+            self._add_form_row(camera_form, "Brightness:", self._brightness_edit)
         if self._supports_sharpness:
-            camera_form.addRow("Sharpness:", self._sharpness_edit)
-        camera_form.addRow("Režim blesku:", self._flash_mode_combo)
+            self._add_form_row(camera_form, "Sharpness:", self._sharpness_edit)
+        self._add_form_row(camera_form, "Režim blesku:", self._flash_mode_combo)
         self._rotation_combo = QComboBox(camera_group)
         self._rotation_combo.addItem("0°", 0)
         self._rotation_combo.addItem("90°", 90)
         self._rotation_combo.addItem("180°", 180)
         self._rotation_combo.addItem("270°", 270)
-        camera_form.addRow("Rotation / Rotácia snímky:", self._rotation_combo)
-        rotation_hint = self._create_description_label(
-            "Softvérová rotácia obrazu pre tento view pred zobrazením aj spracovaním.",
-            camera_group,
+        rotation_hint = (
+            "Softvérová rotácia obrazu pre tento view pred zobrazením aj spracovaním."
         )
-        self._rotation_combo.setToolTip(rotation_hint.text())
-        camera_form.addRow(rotation_hint)
+        self._add_form_row(camera_form, "Rotácia snímky:", self._rotation_combo, tooltip=rotation_hint)
+        content_layout.addWidget(camera_group)
 
-        pixel_hint = self._create_description_label(
-            "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
-            " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
-            " ovplyvní iba aktuálny view.",
-            camera_group,
-        )
-        self._pixel_format_combo.setToolTip(pixel_hint.text())
-        camera_form.addRow(pixel_hint)
-        layout.addWidget(camera_group)
-
-        timing_group = QGroupBox("Časovanie snímania", self)
+        timing_group = QGroupBox("Časovanie snímania", content_widget)
         timing_form = QFormLayout(timing_group)
-        timing_form.setSpacing(6)
+        self._setup_compact_form(timing_form)
 
         self._settle_edit = QLineEdit(timing_group)
         self._settle_edit.setPlaceholderText("Leave blank to inherit")
-        timing_form.addRow("Settle Time (ms):", self._settle_edit)
-        settle_hint = self._create_description_label(
+        settle_hint = (
             "Čas na ustálenie kamery po prepnutí do view pred zachytením"
             " snímky. Prázdne = zdedená hodnota; v multi-view sa dodrží pri"
-            " každom cykle, keď sa view aktivuje.",
-            timing_group,
+            " každom cykle, keď sa view aktivuje."
         )
-        self._settle_edit.setToolTip(settle_hint.text())
-        timing_form.addRow(settle_hint)
+        self._add_form_row(timing_form, "Settle Time:", self._settle_edit, tooltip=settle_hint)
 
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Timed", "timed")
@@ -249,57 +237,52 @@ class ViewConfigDialog(QDialog):
         self._trigger_mode_combo.currentIndexChanged.connect(
             self._on_trigger_mode_changed
         )
-        timing_form.addRow("Trigger Mode:", self._trigger_mode_combo)
-        trigger_hint = self._create_description_label(
+        trigger_hint = (
             "Určuje, ako sa spúšťa snímanie: Timed používa interný časovač"
             " (v multi-view beží v cykle), External čaká na hardvérový impulz"
-            " a Manual reaguje na TRIGGER tlačidlo alebo GPIO vstup v RUN režime.",
-            timing_group,
+            " a Manual reaguje na TRIGGER tlačidlo alebo GPIO vstup v RUN režime."
         )
-        self._trigger_mode_combo.setToolTip(trigger_hint.text())
-        timing_form.addRow(trigger_hint)
+        self._add_form_row(timing_form, "Trigger Mode:", self._trigger_mode_combo, tooltip=trigger_hint)
 
         self._interval_edit = QLineEdit(timing_group)
         self._interval_edit.setPlaceholderText("Required for Timed mode")
-        timing_form.addRow("Interval (ms):", self._interval_edit)
-        interval_hint = self._create_description_label(
+        interval_hint = (
             "Interval po dokončení snímky v režime Timed. V multi-view určuje, ako"
             " o koľko neskôr sa spustí ďalší view; ostatné view pokračujú podľa svojich"
-            " nastavení.",
-            timing_group,
+            " nastavení."
         )
-        self._interval_edit.setToolTip(interval_hint.text())
-        timing_form.addRow(interval_hint)
+        self._add_form_row(timing_form, "Interval:", self._interval_edit, tooltip=interval_hint)
 
         self._frame_source_combo = QComboBox(timing_group)
         self._frame_source_combo.addItem("Samostatný záber (default)", None)
         for view_id, label in self._available_frame_sources:
             display = label if label else view_id
             self._frame_source_combo.addItem(display, view_id)
-        timing_form.addRow("Zdroj snímky:", self._frame_source_combo)
-        frame_hint = self._create_description_label(
+        frame_hint = (
             "Vyber ID iného view-u, z ktorého sa použije posledný záber namiesto"
-            " spúšťania vlastného triggeru. Prázdne = samostatné snímanie.",
-            timing_group,
+            " spúšťania vlastného triggeru. Prázdne = samostatné snímanie."
         )
-        self._frame_source_combo.setToolTip(frame_hint.text())
-        timing_form.addRow(frame_hint)
+        self._add_form_row(timing_form, "Zdroj snímky:", self._frame_source_combo, tooltip=frame_hint)
 
         self._trigger_warning_label = QLabel("", timing_group)
         self._trigger_warning_label.setWordWrap(True)
         self._trigger_warning_label.setStyleSheet("color: #a05a00; font-size: 11px;")
         self._trigger_warning_label.setVisible(False)
         timing_form.addRow(self._trigger_warning_label)
-        layout.addWidget(timing_group)
+        content_layout.addWidget(timing_group)
 
-        branching_group = QGroupBox("Vetvenie snímky (voliteľné)", self)
+        branching_group = QGroupBox("Vetvenie snímky", content_widget)
         branching_form = QFormLayout(branching_group)
-        branching_form.setSpacing(6)
+        self._setup_compact_form(branching_form)
 
         self._branch_enabled_checkbox = QCheckBox(
             "Povoliť presmerovanie na iný view podľa výsledku", branching_group
         )
         self._branch_enabled_checkbox.setChecked(bool(branch_enabled))
+        self._branch_enabled_checkbox.setToolTip(
+            "Ak je vetvenie zapnuté, podľa statusu prvého nástroja sa vyberie cieľový view."
+            " Ostatné view sa v aktuálnom cykle preskočia."
+        )
         branching_form.addRow(self._branch_enabled_checkbox)
 
         self._branch_ok_combo = self._create_branch_combo(branching_group)
@@ -307,21 +290,15 @@ class ViewConfigDialog(QDialog):
         self._branch_nok_combo = self._create_branch_combo(branching_group)
         self._branch_default_combo = self._create_branch_combo(branching_group)
 
-        branching_form.addRow("Cieľ pre OK:", self._branch_ok_combo)
-        branching_form.addRow("Cieľ pre WARN:", self._branch_warn_combo)
-        branching_form.addRow("Cieľ pre NOK:", self._branch_nok_combo)
-        branching_form.addRow("Základný cieľ (fallback):", self._branch_default_combo)
-
-        branch_hint = self._create_description_label(
-            "Ak je vetvenie zapnuté, podľa statusu prvého nástroja sa vyberie"
-            " cieľový view. Ostatné view sa v aktuálnom cykle preskočia.",
-            branching_group,
-        )
-        branching_form.addRow(branch_hint)
+        self._add_form_row(branching_form, "Cieľ pre OK:", self._branch_ok_combo)
+        self._add_form_row(branching_form, "Cieľ pre WARN:", self._branch_warn_combo)
+        self._add_form_row(branching_form, "Cieľ pre NOK:", self._branch_nok_combo)
+        self._add_form_row(branching_form, "Základný cieľ:", self._branch_default_combo)
         self._branch_enabled_checkbox.stateChanged.connect(
             self._on_branch_enabled_changed
         )
-        layout.addWidget(branching_group)
+        content_layout.addWidget(branching_group)
+        content_layout.addStretch(1)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
         action_text = "Pridať pohľad" if mode == "add" else "Save"
@@ -341,12 +318,24 @@ class ViewConfigDialog(QDialog):
         )
 
     @staticmethod
-    def _create_description_label(text: str, parent: QWidget) -> QLabel:
-        label = QLabel(text, parent)
-        label.setWordWrap(True)
-        label.setStyleSheet("color: #5b5b5b; font-size: 11px;")
-        label.setContentsMargins(0, 0, 0, 6)
-        return label
+    def _setup_compact_form(form: QFormLayout) -> None:
+        form.setSpacing(4)
+        form.setContentsMargins(8, 8, 8, 8)
+        form.setLabelAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+
+    @staticmethod
+    def _add_form_row(
+        form: QFormLayout,
+        label_text: str,
+        field: QWidget,
+        *,
+        tooltip: str | None = None,
+    ) -> None:
+        label = QLabel(label_text)
+        if tooltip:
+            label.setToolTip(tooltip)
+            field.setToolTip(tooltip)
+        form.addRow(label, field)
 
     def view_id(self) -> str:
         return self._view_id
