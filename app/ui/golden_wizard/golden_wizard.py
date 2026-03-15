@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QToolButton,
+    QScrollArea,
 )
 
 import os
@@ -1410,8 +1411,9 @@ class GoldenWizard(QDialog):
 
         # ---- Layout ----
         self._tool_panel = ToolConfigPanel(self)
-        self._tool_panel.setMinimumWidth(280)
-        self._tool_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self._tool_panel.setMinimumWidth(300)
+        self._tool_panel.setMaximumWidth(350)
+        self._tool_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         self.tools_table = ToolsTableWidget(0, 5, self)
         self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
@@ -1459,17 +1461,34 @@ class GoldenWizard(QDialog):
         left_layout.addWidget(self.live_lbl, 1)
         left_layout.addWidget(self.view, 1)
         left_layout.addWidget(tools_label)
-        left_layout.addWidget(self.tools_table)
+        left_layout.addWidget(self.tools_table, 1)
         left_layout.addWidget(self.locator_hint_label)
         left_layout.addWidget(self.locator_policy_banner)
         left_layout.addLayout(buttons)
+        left_layout.setStretch(0, 3)
+        left_layout.setStretch(1, 3)
+        left_layout.setStretch(3, 1)
 
         content_layout.addLayout(left_layout, 3)
-        content_layout.addWidget(self._tool_panel, 2)
+        content_layout.addWidget(self._tool_panel)
+
+        content_widget = QWidget(self)
+        content_widget_layout = QVBoxLayout(content_widget)
+        content_widget_layout.setContentsMargins(0, 0, 0, 0)
+        content_widget_layout.setSpacing(12)
+        content_widget_layout.addLayout(top)
+        content_widget_layout.addLayout(content_layout, 1)
+
+        self._content_scroll = QScrollArea(self)
+        self._content_scroll.setWidgetResizable(True)
+        self._content_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._content_scroll.setWidget(content_widget)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(top)
-        layout.addLayout(content_layout, 1)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(self._content_scroll)
 
         self._tool_panel.clear()
 
