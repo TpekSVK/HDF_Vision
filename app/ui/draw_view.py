@@ -1,5 +1,5 @@
 # app/ui/draw_view.py
-from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, Signal
+from PySide6.QtCore import Qt, QPoint, QPointF, QRectF, QTimer, Signal
 from PySide6.QtGui import (
     QPen,
     QBrush,
@@ -177,6 +177,8 @@ class DrawView(QGraphicsView):
         self.setTransformationAnchor(QGraphicsView.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.AnchorUnderMouse)
         self._pending_fit_to_view = False
+        self._fit_schedule_queued = False
+        self._fit_retry_scheduled = False
 
         self._bg = None
         self._overlay_pixmap: QGraphicsPixmapItem | None = None
@@ -210,8 +212,7 @@ class DrawView(QGraphicsView):
         self._scene.setSceneRect(rect)
         self._ensure_overlay_pixmap()
         self._update_overlay_pixmap()
-        self._pending_fit_to_view = True
-        self.fit_image_to_view(force=False)
+        self.schedule_fit_to_view(source="set_background")
         self._update_interaction_mode()
 
     def set_shape_type(self, shape: str):
@@ -564,6 +565,7 @@ class DrawView(QGraphicsView):
             self.setCursor(QCursor(Qt.OpenHandCursor))
         else:
             self.setCursor(QCursor(Qt.ArrowCursor))
+        return True
 
     def _cancel_pending_drawing(self) -> None:
         if self._drawing_rect and self._rect_item is not None:
@@ -606,8 +608,7 @@ class DrawView(QGraphicsView):
                 self._scene.setSceneRect(0, 0, w, h)
             self.update()
             self._update_overlay_pixmap()
-            self._pending_fit_to_view = True
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="set_background_image")
 
 
     def _coerce_overlay_items(
@@ -643,14 +644,39 @@ class DrawView(QGraphicsView):
         pixmap_item.setAcceptedMouseButtons(Qt.NoButton)
         self._overlay_pixmap = pixmap_item
 
-    def fit_image_to_view(self, *, force: bool = True) -> None:
+    def schedule_fit_to_view(self, *, source: str = "unknown") -> None:
+        self._pending_fit_to_view = self._bg is not None and not self._bg.pixmap().isNull()
+        if not self._pending_fit_to_view:
+            return
+        print(f"[FIT_TO_VIEW] schedule requested source={source}")
+        if self._fit_schedule_queued:
+            return
+        self._fit_schedule_queued = True
+        QTimer.singleShot(0, self._run_scheduled_fit_to_view)
+
+    def _run_scheduled_fit_to_view(self) -> None:
+        self._fit_schedule_queued = False
+        if not self._pending_fit_to_view:
+            return
+        if self.fit_image_to_view(force=False):
+            print("[FIT_TO_VIEW] applied successfully")
+            self._fit_retry_scheduled = False
+            return
+        if not self._fit_retry_scheduled:
+            self._fit_retry_scheduled = True
+            QTimer.singleShot(30, self._run_scheduled_fit_to_view)
+
+    def fit_image_to_view(self, *, force: bool = True) -> bool:
         if self._bg is None or self._bg.pixmap().isNull():
             self._pending_fit_to_view = False
-            return
+            return False
         if not force:
             viewport = self.viewport()
             if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
-                return
+                width = 0 if viewport is None else viewport.width()
+                height = 0 if viewport is None else viewport.height()
+                print(f"[FIT_TO_VIEW] skipped viewport too small width={width} height={height}")
+                return False
         self._panning = False
         self._current_scale = 1.0
         self.resetTransform()
@@ -660,6 +686,7 @@ class DrawView(QGraphicsView):
             self.setCursor(QCursor(Qt.OpenHandCursor))
         else:
             self.setCursor(QCursor(Qt.ArrowCursor))
+        return True
 
     def _reset_view_transform(self) -> None:
         self.fit_image_to_view(force=True)
@@ -667,12 +694,12 @@ class DrawView(QGraphicsView):
     def showEvent(self, event):
         super().showEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="showEvent")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="resizeEvent")
 
     def _update_overlay_pixmap(self) -> None:
         if self._bg is None or self._bg.pixmap().isNull():
@@ -755,6 +782,8 @@ class RoiMaskGraphicsView(QGraphicsView):
         self._roi_start: Optional[QPointF] = None
         self._roi_rect: Optional[Tuple[int, int, int, int]] = None
         self._pending_fit_to_view = False
+        self._fit_schedule_queued = False
+        self._fit_retry_scheduled = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -778,8 +807,7 @@ class RoiMaskGraphicsView(QGraphicsView):
         self._ensure_mask_graphics()
         self._mask = np.zeros((pixmap.height(), pixmap.width()), dtype=np.uint8)
         self._update_mask_item()
-        self._pending_fit_to_view = True
-        self.fit_image_to_view(force=False)
+        self.schedule_fit_to_view(source="set_background")
 
     def set_mode(self, mode: str) -> None:
         self._mode = self.MODE_MASK if mode == self.MODE_MASK else self.MODE_ROI
@@ -848,27 +876,53 @@ class RoiMaskGraphicsView(QGraphicsView):
         self._update_mask_item()
         self._emit_mask_changed()
 
-    def fit_image_to_view(self, *, force: bool = True) -> None:
+    def schedule_fit_to_view(self, *, source: str = "unknown") -> None:
+        self._pending_fit_to_view = self._bg_item is not None and not self._bg_item.pixmap().isNull()
+        if not self._pending_fit_to_view:
+            return
+        print(f"[FIT_TO_VIEW] schedule requested source={source}")
+        if self._fit_schedule_queued:
+            return
+        self._fit_schedule_queued = True
+        QTimer.singleShot(0, self._run_scheduled_fit_to_view)
+
+    def _run_scheduled_fit_to_view(self) -> None:
+        self._fit_schedule_queued = False
+        if not self._pending_fit_to_view:
+            return
+        if self.fit_image_to_view(force=False):
+            print("[FIT_TO_VIEW] applied successfully")
+            self._fit_retry_scheduled = False
+            return
+        if not self._fit_retry_scheduled:
+            self._fit_retry_scheduled = True
+            QTimer.singleShot(30, self._run_scheduled_fit_to_view)
+
+    def fit_image_to_view(self, *, force: bool = True) -> bool:
         if self._bg_item is None or self._bg_item.pixmap().isNull():
             self._pending_fit_to_view = False
-            return
+            return False
         if not force:
             viewport = self.viewport()
             if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
-                return
+                width = 0 if viewport is None else viewport.width()
+                height = 0 if viewport is None else viewport.height()
+                print(f"[FIT_TO_VIEW] skipped viewport too small width={width} height={height}")
+                return False
         self.resetTransform()
         self.fitInView(self._bg_item, Qt.KeepAspectRatio)
         self._pending_fit_to_view = False
+        return True
 
     def showEvent(self, event):
         super().showEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="showEvent")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._pending_fit_to_view:
-            self.fit_image_to_view(force=False)
+            self.schedule_fit_to_view(source="resizeEvent")
 
     # ------------------------------------------------------------------
     # Events

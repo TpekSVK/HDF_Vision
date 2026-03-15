@@ -381,6 +381,9 @@ class ToolEditDialog(QDialog):
 
         self._tabs = QTabWidget(self)
         self._tabs.setDocumentMode(True)
+        self._roi_tab_index: Optional[int] = None
+        self._mask_tab_index: Optional[int] = None
+        self._tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self._tabs, 1)
 
         roi_tab = QWidget(self)
@@ -409,6 +412,7 @@ class ToolEditDialog(QDialog):
                 roi_layout.addWidget(info)
             roi_layout.addLayout(sections_layout, 1)
             self._tabs.addTab(roi_tab, "ROI")
+            self._roi_tab_index = self._tabs.indexOf(roi_tab)
 
             if self._supports_mask and self._mask_editor is not None:
                 mask_tab = QWidget(self)
@@ -422,6 +426,7 @@ class ToolEditDialog(QDialog):
                 mask_group_layout.addWidget(self._mask_editor, 1)
                 mask_layout.addWidget(mask_group, 1)
                 self._tabs.addTab(mask_tab, "Ignore Mask")
+                self._mask_tab_index = self._tabs.indexOf(mask_tab)
         else:
             if self._supports_roi and self._roi_editor is not None:
                 roi_group = QGroupBox("Region of interest", roi_tab)
@@ -436,6 +441,7 @@ class ToolEditDialog(QDialog):
                 info.setWordWrap(True)
                 roi_layout.addWidget(info)
             self._tabs.addTab(roi_tab, "ROI")
+            self._roi_tab_index = self._tabs.indexOf(roi_tab)
 
             mask_tab = QWidget(self)
             mask_layout = QVBoxLayout(mask_tab)
@@ -454,6 +460,7 @@ class ToolEditDialog(QDialog):
                 info.setWordWrap(True)
                 mask_layout.addWidget(info)
             self._tabs.addTab(mask_tab, "Ignore Mask")
+            self._mask_tab_index = self._tabs.indexOf(mask_tab)
 
         self._roi_layout = roi_layout
         self._roi_sections_layout = sections_layout
@@ -564,6 +571,7 @@ class ToolEditDialog(QDialog):
                 self._mask_editor.set_background(self._golden_pixmap)
                 if initial_mask is not None:
                     self._mask_editor.set_mask(initial_mask)
+            self._schedule_active_tab_fit(source="initial_load")
             instructions = [
                 "Scroll to zoom, use the middle mouse button or space + drag to pan."
             ]
@@ -593,6 +601,20 @@ class ToolEditDialog(QDialog):
         if self._maximize_on_first_show:
             self._maximize_on_first_show = False
             self.showMaximized()
+        self._schedule_active_tab_fit(source="showEvent")
+
+    def _schedule_active_tab_fit(self, *, source: str) -> None:
+        current = self._tabs.currentIndex()
+        if self._roi_tab_index is not None and current == self._roi_tab_index and self._roi_editor is not None:
+            print("[FIT_TO_VIEW] tab activated roi")
+            self._roi_editor.schedule_fit_to_view(source=f"tab_roi:{source}")
+            return
+        if self._mask_tab_index is not None and current == self._mask_tab_index and self._mask_editor is not None:
+            print("[FIT_TO_VIEW] tab activated ignore_mask")
+            self._mask_editor.schedule_fit_to_view(source=f"tab_ignore_mask:{source}")
+
+    def _on_tab_changed(self, _index: int) -> None:
+        self._schedule_active_tab_fit(source="currentChanged")
 
     def _format_window_title(self, name: Optional[str]) -> str:
         tool_obj = getattr(self, "_tool", None)

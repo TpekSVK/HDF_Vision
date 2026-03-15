@@ -1685,6 +1685,8 @@ class GoldenWizard(QDialog):
         qimg = QImage(img_u8.data, w, h, w, QImage.Format_Grayscale8)
         pm = QPixmap.fromImage(qimg.copy())
         self.view.set_background(pm)
+        print("[FIT_TO_VIEW] golden wizard initial image fit scheduled")
+        self.view.schedule_fit_to_view(source="golden_wizard_set_pixmap")
 
     def _view_by_id(self, view_id: Optional[str]) -> Optional[RecipeView]:
         if not view_id:
