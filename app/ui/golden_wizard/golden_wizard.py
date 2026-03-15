@@ -83,6 +83,7 @@ from app.ui.view_utils import view_uses_global_golden
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
+    resolve_view_camera_state,
     snapshot_camera_state,
 )
 from app.ui.golden_wizard.form_widgets import (
@@ -1853,12 +1854,14 @@ class GoldenWizard(QDialog):
 
             # V trigger mode používaj jednotnú 3-pulse trigger sekvenciu
             # (2x priming discard + 1x finálny frame) rovnako ako RUN cesty.
+            active_view, _ = self._prepare_camera_from_active_view_for_capture()
+            self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
             frame = None
             if runtime_capture_mode == "trigger":
-                active_view = self._view_by_id(self._active_view_id)
                 trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None)
                 if not isinstance(trigger_gap_ms, (int, float)) or float(trigger_gap_ms) <= 0:
                     trigger_gap_ms = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
+                self._logger.info("[GOLDEN_CAPTURE] entering trigger session after profile apply")
                 if callable(self._capture_frame_for_golden):
                     frame = self._capture_frame_for_golden(trigger_gap_ms=float(trigger_gap_ms))
                 else:
@@ -1892,6 +1895,7 @@ class GoldenWizard(QDialog):
                     frame = self._lp.last_frame_u8()
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
+            self._logger.info("[GOLDEN_CAPTURE] frame captured")
             self.current_img = frame
             self._set_pixmap(frame)
             self._set_selected_tool_overlay()
@@ -2284,6 +2288,34 @@ class GoldenWizard(QDialog):
             profile,
             warn=self._warn,
         )
+
+    def _prepare_camera_from_active_view_for_capture(self) -> tuple[Optional[RecipeView], dict[str, Any]]:
+        active_view = self._view_by_id(self._active_view_id)
+        profile = getattr(active_view, "camera_profile", None) if active_view else None
+        base_state = self._snapshot_camera_state()
+        self._logger.info("[GOLDEN_CAPTURE] applying active view camera profile")
+        resolved_state = resolve_view_camera_state(base_state, profile)
+        self._logger.info(
+            "[GOLDEN_CAPTURE] resolved state: device_id=%s width=%s height=%s fps=%s pixel_format=%s exposure=%s gain=%s gamma=%s brightness=%s sharpness=%s flash_mode=%s",
+            resolved_state.get("device_id"),
+            resolved_state.get("width"),
+            resolved_state.get("height"),
+            resolved_state.get("fps"),
+            resolved_state.get("pixel_format"),
+            resolved_state.get("exposure_us"),
+            resolved_state.get("gain_db"),
+            resolved_state.get("gamma"),
+            resolved_state.get("brightness"),
+            resolved_state.get("sharpness"),
+            resolved_state.get("flash_mode"),
+        )
+        apply_view_camera_profile(
+            self.cam,
+            base_state,
+            profile,
+            warn=self._warn,
+        )
+        return active_view, resolved_state
 
     @staticmethod
     def _suggest_view_id(existing: Sequence[RecipeView]) -> str:

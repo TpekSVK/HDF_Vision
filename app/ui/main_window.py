@@ -38,9 +38,7 @@ from app.models.schema import RecipeV2
 from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.camera_profile_utils import (
-    apply_camera_state,
     apply_view_camera_profile,
-    resolve_view_camera_state,
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
@@ -916,11 +914,11 @@ class MainWindow(QMainWindow):
                 requested_stream_mode=None,
                 hid_set="skipped",
             )
-            view_camera_state = resolve_view_camera_state(base_camera_state, profile)
             self._logger.info("applying view camera state")
-            apply_camera_state(
+            view_camera_state = apply_view_camera_profile(
                 self.cam,
-                view_camera_state,
+                base_camera_state,
+                profile,
             )
 
             if settle_ms is not None and settle_ms > 0:
