@@ -15,7 +15,7 @@ CPU_BLOCK_RE: Final[re.Pattern[str]] = re.compile(r"CPU\s*\[([^\]]+)\]")
 CPU_PERCENT_RE: Final[re.Pattern[str]] = re.compile(r"(\d+)%")
 GPU_RE: Final[re.Pattern[str]] = re.compile(r"GR3D_FREQ\s+(\d+)%")
 RAM_RE: Final[re.Pattern[str]] = re.compile(r"RAM\s+(\d+)/(\d+)MB")
-TEMP_RE: Final[re.Pattern[str]] = re.compile(r"(?:cpu|gpu)@([0-9]+(?:\.[0-9]+)?)C", re.IGNORECASE)
+TEMP_RE: Final[re.Pattern[str]] = re.compile(r"(?:CPU|GPU|cpu|gpu)@([0-9]+(?:\.[0-9]+)?)C")
 
 
 @dataclass(frozen=True)
