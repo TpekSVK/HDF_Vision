@@ -40,7 +40,7 @@ class TriggerTiming:
 
 
 class CameraService:
-    _CU55_TRIGGER_SAFE_EXPOSURE_US = 200
+    _CU55_TRIGGER_SAFE_EXPOSURE_US = 400
 
 
     """

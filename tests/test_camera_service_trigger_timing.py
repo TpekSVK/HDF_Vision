@@ -257,7 +257,7 @@ def test_compute_trigger_timing_defaults_production_gap_without_recipe_value() -
     assert timing.trigger_gap_ms >= timing.frame_time_ms
 
 
-def test_apply_safe_trigger_exposure_is_fixed_200(monkeypatch) -> None:
+def test_apply_safe_trigger_exposure_is_fixed_400(monkeypatch) -> None:
     cam = _build_camera(2592, 1944, 60, "Y12", 70000)
 
     set_values: list[int] = []
@@ -265,8 +265,8 @@ def test_apply_safe_trigger_exposure_is_fixed_200(monkeypatch) -> None:
 
     applied = cam._apply_safe_trigger_exposure()
 
-    assert applied == 200
-    assert set_values == [200]
+    assert applied == 400
+    assert set_values == [400]
 
 
 def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> None:
