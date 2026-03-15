@@ -26,7 +26,7 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QToolButton,
-    QScrollArea,
+    QScrollArea
 )
 
 import os
@@ -1340,6 +1340,7 @@ class GoldenWizard(QDialog):
         self._updating_policy_combo = False
         self._current_locator_failure_policy = "continue_without_alignment"
         self.failure_policy_combo = QComboBox(self)
+        self.failure_policy_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
         self.failure_policy_combo.addItem(
             "Pokračovať bez zarovnania", "continue_without_alignment"
         )
@@ -1362,21 +1363,29 @@ class GoldenWizard(QDialog):
         self._session_settings_button.setAutoRaise(True)
         self._session_settings_button.clicked.connect(self._open_session_settings)
 
-        top = QHBoxLayout()
-        top.addWidget(QLabel("Recept:")); top.addWidget(self.recipe_name)
-        top.addWidget(QLabel("View:", self))
-        top.addWidget(self._view_selector)
-        top.addWidget(self.btn_add_view)
-        top.addWidget(self.btn_edit_view)
-        top.addWidget(self.btn_remove_view)
-        top.addStretch(1)
-        top.addWidget(self.chk_pose)
-        top.addWidget(self.chk_logging)
-        top.addWidget(QLabel("Zlyhanie locatora:", self))
-        top.addWidget(self.failure_policy_combo)
-        top.addWidget(self._session_settings_button)
-        top.addWidget(self.btn_add_tool)
-        top.addWidget(self.btn_live)
+        top_primary = QHBoxLayout()
+        top_primary.setContentsMargins(0, 0, 0, 0)
+        top_primary.setSpacing(8)
+        top_primary.addWidget(QLabel("Recept:"))
+        top_primary.addWidget(self.recipe_name, 1)
+        top_primary.addWidget(QLabel("View:", self))
+        top_primary.addWidget(self._view_selector)
+        top_primary.addWidget(self.btn_add_view)
+        top_primary.addWidget(self.btn_edit_view)
+        top_primary.addWidget(self.btn_remove_view)
+        top_primary.addStretch(1)
+        top_primary.addWidget(self.btn_add_tool)
+        top_primary.addWidget(self.btn_live)
+
+        top_secondary = QHBoxLayout()
+        top_secondary.setContentsMargins(0, 0, 0, 0)
+        top_secondary.setSpacing(8)
+        top_secondary.addWidget(self.chk_pose)
+        top_secondary.addWidget(self.chk_logging)
+        top_secondary.addStretch(1)
+        top_secondary.addWidget(QLabel("Zlyhanie locatora:", self))
+        top_secondary.addWidget(self.failure_policy_combo)
+        top_secondary.addWidget(self._session_settings_button)
 
         # ---- Dva režimy zobrazenia ----
         # 1) Live LABEL (video) – používa sa len pri Live zapnuté
@@ -1387,6 +1396,8 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live vypnuté
         self.view = DrawView(self)
+        self.live_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -1397,6 +1408,8 @@ class GoldenWizard(QDialog):
         self.btn_publish_recipe = QPushButton("Publikovať/Aktualizovať recept")
 
         buttons = QHBoxLayout()
+        buttons.setContentsMargins(0, 0, 0, 0)
+        buttons.setSpacing(8)
         buttons.addWidget(btn_cap_golden)
         buttons.addWidget(btn_load_golden)
         buttons.addStretch(1)
@@ -1404,23 +1417,26 @@ class GoldenWizard(QDialog):
         buttons.addWidget(self.btn_test_tool)
         self._publish_state_label = QLabel("", self)
         self._publish_state_label.setStyleSheet("color: #999; font-style: italic;")
-        self._publish_state_label.setMinimumWidth(160)
+        self._publish_state_label.setMinimumWidth(100)
+        self._publish_state_label.setMaximumWidth(160)
         self._publish_state_label.setAlignment(Qt.AlignCenter)
         buttons.addWidget(self._publish_state_label)
         buttons.addWidget(self.btn_publish_recipe)
 
         # ---- Layout ----
         self._tool_panel = ToolConfigPanel(self)
-        self._tool_panel.setMinimumWidth(300)
-        self._tool_panel.setMaximumWidth(350)
+        self._tool_panel.setMinimumWidth(280)
+        self._tool_panel.setMaximumWidth(320)
         self._tool_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         self.tools_table = ToolsTableWidget(0, 5, self)
         self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
         header = self.tools_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.Stretch)
+        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        header.setStretchLastSection(True)
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tools_table.verticalHeader().setVisible(False)
         self.tools_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tools_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1431,6 +1447,7 @@ class GoldenWizard(QDialog):
         self.tools_table.setDragDropMode(QAbstractItemView.InternalMove)
         self.tools_table.setDragDropOverwriteMode(False)
         self.tools_table.setDefaultDropAction(Qt.MoveAction)
+        self.tools_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         tools_label = QLabel("Nástroje v recepte:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
@@ -1465,24 +1482,30 @@ class GoldenWizard(QDialog):
         left_layout.addWidget(self.locator_hint_label)
         left_layout.addWidget(self.locator_policy_banner)
         left_layout.addLayout(buttons)
-        left_layout.setStretch(0, 3)
-        left_layout.setStretch(1, 3)
-        left_layout.setStretch(3, 1)
+        left_layout.setStretch(0, 5)
+        left_layout.setStretch(1, 5)
+        left_layout.setStretch(3, 2)
 
-        content_layout.addLayout(left_layout, 3)
+        content_layout.addLayout(left_layout, 5)
         content_layout.addWidget(self._tool_panel)
+
+        top_controls = QVBoxLayout()
+        top_controls.setContentsMargins(0, 0, 0, 0)
+        top_controls.setSpacing(6)
+        top_controls.addLayout(top_primary)
+        top_controls.addLayout(top_secondary)
 
         content_widget = QWidget(self)
         content_widget_layout = QVBoxLayout(content_widget)
         content_widget_layout.setContentsMargins(0, 0, 0, 0)
         content_widget_layout.setSpacing(12)
-        content_widget_layout.addLayout(top)
+        content_widget_layout.addLayout(top_controls)
         content_widget_layout.addLayout(content_layout, 1)
 
         self._content_scroll = QScrollArea(self)
         self._content_scroll.setWidgetResizable(True)
         self._content_scroll.setFrameShape(QScrollArea.NoFrame)
-        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self._content_scroll.setWidget(content_widget)
 
@@ -1532,6 +1555,10 @@ class GoldenWizard(QDialog):
         self._sync_logging_ui(self._last_recipe)
         self._sync_live_policy_ui()
         self._refresh_publish_state()
+
+        self.setSizeGripEnabled(True)
+        self.resize(1400, 900)
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     # ---------- Live ----------
     def _pause_runtime_camera_for_wizard(self) -> None:
