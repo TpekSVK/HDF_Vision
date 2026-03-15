@@ -257,16 +257,30 @@ def test_compute_trigger_timing_defaults_production_gap_without_recipe_value() -
     assert timing.trigger_gap_ms >= timing.frame_time_ms
 
 
-def test_apply_safe_trigger_exposure_is_fixed_200(monkeypatch) -> None:
-    cam = _build_camera(2592, 1944, 60, "Y12", 70000)
+@pytest.mark.parametrize(
+    ("width", "height", "fps", "expected"),
+    [
+        (2592, 1944, 30, 400),
+        (1920, 1080, 60, 200),
+        (1280, 720, 60, 200),
+    ],
+)
+def test_apply_safe_trigger_exposure_uses_resolution_defaults(
+    monkeypatch,
+    width: int,
+    height: int,
+    fps: int,
+    expected: int,
+) -> None:
+    cam = _build_camera(width, height, fps, "Y8", 70000)
 
     set_values: list[int] = []
     monkeypatch.setattr(cam, "set_manual_exposure_us", lambda value: set_values.append(int(value)))
 
     applied = cam._apply_safe_trigger_exposure()
 
-    assert applied == 200
-    assert set_values == [200]
+    assert applied == expected
+    assert set_values == [expected]
 
 
 def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> None:
