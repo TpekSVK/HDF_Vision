@@ -255,11 +255,12 @@ class MainWindow(QMainWindow):
         self._live_view_base_style = "border-radius: 6px; background:#181818;"
         self._set_live_view_border()
         self.live_view.setContentsMargins(0,0,0,0)
-        preview_row.addWidget(self.live_view, 1)
+        preview_row.addWidget(self.live_view, 4)
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
         self.side_panel.setMaximumHeight(720)
+        self.side_panel.setMaximumWidth(420)
         self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
         self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
@@ -305,6 +306,8 @@ class MainWindow(QMainWindow):
 
         side.addStretch(1)
         preview_row.addWidget(self.side_panel, 1)
+        preview_row.setStretch(0, 4)
+        preview_row.setStretch(1, 1)
 
         run.addWidget(preview_container)
 
