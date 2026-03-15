@@ -67,6 +67,10 @@ class MainWindow(QMainWindow):
         # Kamera
         self.cam = CameraService()
         self.cam.start(caller="main_window_init")
+        try:
+            self.capture_mode = "trigger" if int(self.cam.get_stream_mode()) == 1 else "master"
+        except Exception:
+            self.capture_mode = "master"
 
         # DB + služby
         self.db = DbService()
@@ -409,11 +413,7 @@ class MainWindow(QMainWindow):
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self.mode_btn.setText("⚙ SETUP")
-            try:
-                self._enter_run_trigger_session()
-            except Exception as exc:
-                self._logger.error("enter trigger session on RUN failed: %s", exc)
-                self.lbl_status.setText(f"Trigger session sa nepodarilo spustiť: {exc}")
+            self._apply_capture_mode(ensure_runtime_ready=True)
             if not self.live_enabled:
                 self._apply_run_camera_profile()
 
@@ -472,6 +472,8 @@ class MainWindow(QMainWindow):
                 state.pop("status", None)
                 state.pop("cycle_time_ms", None)
                 state.pop("total_cycle_time_ms", None)
+                state.pop("capture_time_ms", None)
+                state.pop("processing_time_ms", None)
                 state.pop("combined_metrics", None)
         self._update_metrics_panel()
 
@@ -619,9 +621,9 @@ class MainWindow(QMainWindow):
         }
 
     def _enter_run_trigger_session(self) -> None:
-        self._logger.info("enter_trigger_session requested")
+        self._logger.info("[TRIGGER_SESSION] enter")
         default_gap = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-        self.cam.ensure_trigger_session(
+        self.cam.enter_trigger_session(
             trigger_fn=self._send_run_trigger_gpio_pulse,
             trigger_gap_ms=float(default_gap),
             pulse_ms=10.0,
@@ -630,15 +632,55 @@ class MainWindow(QMainWindow):
 
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
         if not self._run_trigger_session_active and not getattr(self.cam, "is_trigger_session_active", lambda: False)():
+            if restore_master:
+                self.cam.set_stream_mode(0)
             return
-        self.cam.exit_trigger_session(restore_master=restore_master)
+        self._logger.info("[TRIGGER_SESSION] exit")
+        self.cam.exit_trigger_session(restore_master=False)
         self._run_trigger_session_active = False
+        if restore_master:
+            self.cam.set_stream_mode(0)
+
+    def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> None:
+        # Architecture rule: global runtime owns capture mode transitions.
+        # Low-level camera helpers must never switch capture mode implicitly.
+        if self.capture_mode not in {"master", "trigger"}:
+            self.capture_mode = "master"
+        self._logger.info("[CAPTURE_MODE] %s", self.capture_mode)
+
+        try:
+            if self.capture_mode == "trigger":
+                self._enter_run_trigger_session()
+                self.live_enabled = False
+                self.btn_live.setChecked(False)
+                self.btn_live.setEnabled(False)
+                self.btn_live.setText("Live vypnuté")
+            else:
+                self._exit_run_trigger_session(restore_master=True)
+                self.btn_live.setEnabled(True)
+                if ensure_runtime_ready and not self.cam.is_pipeline_open():
+                    self.cam.start(caller="capture_mode_master")
+        except Exception as exc:
+            self._logger.error("apply capture mode failed: %s", exc)
+            self.lbl_status.setText(f"Prepnutie capture mode zlyhalo: {exc}")
+
+    def _capture_frame_for_trigger(self, *, trigger_mode_label: str, trigger_gap_ms: float | None = None):
+        if self.capture_mode == "trigger":
+            return self.cam.capture_trigger_frame(
+                timeout_s=0.8,
+                trigger_fn=self._send_run_trigger_gpio_pulse,
+                trigger_gap_ms=float(trigger_gap_ms) if trigger_gap_ms is not None else float(get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)),
+                pulse_ms=10.0,
+                trigger_mode_label=trigger_mode_label,
+            )
+        return self.cam.last_frame(caller="run_manual_trigger_master")
 
     def manual_trigger(self):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
-        self.modbus.pulse_configured_flashes()
+        if self.capture_mode == "trigger":
+            self.modbus.pulse_configured_flashes()
         self._log_run_trigger_context("RUN trigger start")
         try:
             trigger_state = self._prepare_run_trigger()
@@ -652,13 +694,7 @@ class MainWindow(QMainWindow):
             self._logger.info("trigger_click(caller=run_manual_trigger)")
             self._log_trigger_cycle("cycle_start", preview_state="paused")
             if trigger_state["recipe_cfg"] is None:
-                base_frame = self.cam.capture_trigger_frame(
-                    timeout_s=0.8,
-                    trigger_fn=self._send_run_trigger_gpio_pulse,
-                    trigger_gap_ms=float(get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)),
-                    pulse_ms=10.0,
-                    trigger_mode_label="manual_gpio",
-                )
+                base_frame = self._capture_frame_for_trigger(trigger_mode_label="manual_gpio")
                 self._update_manual_trigger_feedback()
                 self._log_trigger_cycle(
                     "legacy_capture_done",
@@ -696,7 +732,7 @@ class MainWindow(QMainWindow):
         recipe_name = self.current_recipe_name()
         base_camera_state = snapshot_camera_state(self.cam)
         self._logger.info("snapshot camera state taken")
-        self._enter_run_trigger_session()
+        self._logger.info("[CAPTURE_MODE] %s", self.capture_mode)
 
         try:
             recipe_cfg = load_recipe_config(recipe_name)
@@ -810,40 +846,29 @@ class MainWindow(QMainWindow):
             if view_frame_u8 is None:
                 view_frame_u8 = self._clone_frame(self._get_last_frame_for_view(source_view_id))
 
+        trigger_requested_ts = time.monotonic()
+        frame_received_ts = trigger_requested_ts
+
         if view_frame_u8 is None:
             profile = getattr(view, "camera_profile", None)
-            requested_stream_mode = None
-            if isinstance(base_camera_state, Mapping):
-                requested_stream_mode = base_camera_state.get("stream_mode")
-            profile_stream_mode = getattr(profile, "stream_mode", None)
-            if profile_stream_mode is not None:
-                requested_stream_mode = profile_stream_mode
             self._log_run_trigger_context(
                 f"RUN trigger capture flow for view={view_id}",
-                requested_stream_mode=(
-                    int(requested_stream_mode) if isinstance(requested_stream_mode, Integral) else None
-                ),
+                requested_stream_mode=None,
                 hid_set="skipped",
             )
             view_camera_state = resolve_view_camera_state(base_camera_state, profile)
-            if int(view_camera_state.get("stream_mode", 1) or 1) == 1:
-                view_camera_state.pop("exposure_us", None)
             self._logger.info("applying view camera state")
             apply_camera_state(
                 self.cam,
                 view_camera_state,
-                apply_stream_mode=False,
             )
 
             if settle_ms is not None and settle_ms > 0:
                 time.sleep(settle_ms / 1000.0)
 
-            view_frame = self.cam.capture_trigger_frame(
-                timeout_s=0.8,
-                trigger_fn=self._send_run_trigger_gpio_pulse,
-                trigger_gap_ms=trigger_gap_ms,
-                pulse_ms=10.0,
+            view_frame = self._capture_frame_for_trigger(
                 trigger_mode_label=trigger_mode,
+                trigger_gap_ms=trigger_gap_ms,
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
@@ -852,6 +877,9 @@ class MainWindow(QMainWindow):
                 self._reset_manual_trigger_progress(recipe_name)
                 return {"should_break": True}
             view_frame_u8 = view_frame.copy()
+            frame_received_ts = time.monotonic()
+        else:
+            frame_received_ts = time.monotonic()
 
         self._log_trigger_cycle(
             "view_capture_done",
@@ -904,14 +932,19 @@ class MainWindow(QMainWindow):
         if all_manual:
             self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
 
+        result_time_ts = time.monotonic()
         cycle_time_value = float(result.cycle_time_ms) if result is not None else None
-        total_cycle_time_value = (time.monotonic() - trigger_state["trigger_start_ts"]) * 1000.0
+        total_cycle_time_value = (result_time_ts - trigger_state["trigger_start_ts"]) * 1000.0
+        capture_time_value = (frame_received_ts - trigger_requested_ts) * 1000.0
+        processing_time_value = (result_time_ts - frame_received_ts) * 1000.0
         meta_payload = {
             "mode": "manual",
             "status": status,
             "view_id": view_id,
             "view_name": view_name,
             "cycle_time_ms": cycle_time_value,
+            "capture_time_ms": capture_time_value,
+            "processing_time_ms": processing_time_value,
             "total_cycle_time_ms": total_cycle_time_value,
             "per_tool": reports,
             "diagnostics": diagnostics_payload,
@@ -949,6 +982,8 @@ class MainWindow(QMainWindow):
             per_tool=reports,
             status=status,
             cycle_time_ms=cycle_time_value,
+            capture_time_ms=capture_time_value,
+            processing_time_ms=processing_time_value,
             total_cycle_time_ms=total_cycle_time_value,
             view_id=view_id,
         )
@@ -1101,10 +1136,7 @@ class MainWindow(QMainWindow):
         dlg.resize(1200, 800)
         dlg.exec()
         if self.mode == "RUN":
-            try:
-                self._enter_run_trigger_session()
-            except Exception as exc:
-                self._logger.error("re-enter trigger session after wizard failed: %s", exc)
+            self._apply_capture_mode(ensure_runtime_ready=True)
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._refresh_views()
         self._reload_results_strip()
@@ -1118,10 +1150,7 @@ class MainWindow(QMainWindow):
         dlg.resize(720, 520)
         dlg.exec()
         if self.mode == "RUN":
-            try:
-                self._enter_run_trigger_session()
-            except Exception as exc:
-                self._logger.error("re-enter trigger session after GPIO wizard failed: %s", exc)
+            self._apply_capture_mode(ensure_runtime_ready=True)
 
     def open_modbus_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
@@ -1129,10 +1158,7 @@ class MainWindow(QMainWindow):
         dlg.resize(760, 640)
         dlg.exec()
         if self.mode == "RUN":
-            try:
-                self._enter_run_trigger_session()
-            except Exception as exc:
-                self._logger.error("re-enter trigger session after Modbus wizard failed: %s", exc)
+            self._apply_capture_mode(ensure_runtime_ready=True)
 
     def _reload_results_strip(self) -> None:
         strip = getattr(self, "strip", None)
@@ -1153,11 +1179,13 @@ class MainWindow(QMainWindow):
         )
         if was_live_enabled:
             self._run_timer.stop()
-        self.cam.begin_trigger_capture()
+        if self.capture_mode == "trigger":
+            self.cam.begin_trigger_capture()
         return was_live_enabled
 
     def _resume_live_preview_after_trigger(self, was_live_enabled: bool = False) -> None:
-        self.cam.end_trigger_capture()
+        if self.capture_mode == "trigger":
+            self.cam.end_trigger_capture()
         if was_live_enabled:
             self._run_timer.start()
         elif not self.live_enabled:
@@ -1171,6 +1199,11 @@ class MainWindow(QMainWindow):
         )
 
     def _toggle_live(self):
+        if self.capture_mode != "master":
+            self.live_enabled = False
+            self.btn_live.setChecked(False)
+            self.btn_live.setText("Live vypnuté")
+            return
         self.live_enabled = self.btn_live.isChecked()
         self.btn_live.setText("Live zapnuté" if self.live_enabled else "Live vypnuté")
         if self.live_enabled:
@@ -1191,7 +1224,8 @@ class MainWindow(QMainWindow):
         print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
-        self.modbus.pulse_configured_flashes()
+        if self.capture_mode == "trigger":
+            self.modbus.pulse_configured_flashes()
         self.external_triggered.emit()
 
     def _update_live_view(self):
@@ -1375,6 +1409,8 @@ class MainWindow(QMainWindow):
         *,
         status: str | None = None,
         cycle_time_ms: float | None = None,
+        capture_time_ms: float | None = None,
+        processing_time_ms: float | None = None,
         total_cycle_time_ms: float | None = None,
         view_id: str | None = None,
     ):
@@ -1435,6 +1471,10 @@ class MainWindow(QMainWindow):
                 state["cycle_time_ms"] = cycle_time_ms
                 if active_view == self._active_view_id:
                     self._last_cycle_time_ms = cycle_time_ms
+            if capture_time_ms is not None:
+                state["capture_time_ms"] = capture_time_ms
+            if processing_time_ms is not None:
+                state["processing_time_ms"] = processing_time_ms
 
             if per_tool is not None:
                 state["combined_metrics"] = self._merge_pipeline_metrics(per_tool)
@@ -1537,6 +1577,8 @@ class MainWindow(QMainWindow):
             status = state.get("status")
             cycle_time = state.get("cycle_time_ms")
             total_cycle_time = state.get("total_cycle_time_ms")
+            capture_time = state.get("capture_time_ms")
+            processing_time = state.get("processing_time_ms")
 
             if active_view == self._active_view_id:
                 self._last_tool_reports = reports
@@ -1556,12 +1598,12 @@ class MainWindow(QMainWindow):
                 total_cycle_time = self._last_total_cycle_time_ms
 
             selection = self.cmb_tool.currentData()
-            if not reports and status is None and cycle_time is None and total_cycle_time is None:
+            if not reports and status is None and cycle_time is None and total_cycle_time is None and capture_time is None and processing_time is None:
                 self._set_metrics_rows([])
                 return
 
             if selection is None:
-                rows = self._build_summary_rows(reports, status, cycle_time, total_cycle_time)
+                rows = self._build_summary_rows(reports, status, cycle_time, total_cycle_time, capture_time, processing_time)
             else:
                 rows = self._build_tool_metric_rows(selection, reports)
             self._set_metrics_rows(rows)
@@ -1574,14 +1616,20 @@ class MainWindow(QMainWindow):
         status: str | None,
         cycle_time_ms: float | None,
         total_cycle_time_ms: float | None,
+        capture_time_ms: float | None,
+        processing_time_ms: float | None,
     ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
         if status:
             rows.append(("Celkový status", str(status).upper()))
         if cycle_time_ms is not None:
-            rows.append(("Cyklus [ms]", self._format_metric_value(cycle_time_ms)))
+            rows.append(("Cycle Time [ms]", self._format_metric_value(cycle_time_ms)))
+        if capture_time_ms is not None:
+            rows.append(("Capture Time [ms]", self._format_metric_value(capture_time_ms)))
+        if processing_time_ms is not None:
+            rows.append(("Processing Time [ms]", self._format_metric_value(processing_time_ms)))
         if total_cycle_time_ms is not None:
-            rows.append(("Celkový čas testu [ms]", self._format_metric_value(total_cycle_time_ms)))
+            rows.append(("Total Cycle Time [ms]", self._format_metric_value(total_cycle_time_ms)))
         for report in reports:
             name = str(report.get("name") or report.get("id") or "Tool")
             status = str(report.get("status") or "").upper() or "—"
@@ -1788,7 +1836,7 @@ class MainWindow(QMainWindow):
     def _apply_run_camera_profile(self, view_id: str | None = None) -> None:
         """Apply the camera profile for the active recipe view when in RUN mode."""
 
-        if self.mode != "RUN" or self.live_enabled:
+        if self.mode != "RUN" or (self.capture_mode == "master" and self.live_enabled):
             return
 
         try:
@@ -1822,7 +1870,7 @@ class MainWindow(QMainWindow):
 
         profile = getattr(view_obj, "camera_profile", None)
         try:
-            apply_view_camera_profile(self.cam, {}, profile, apply_stream_mode=False)
+            apply_view_camera_profile(self.cam, {}, profile)
         except Exception as exc:
             self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
             return

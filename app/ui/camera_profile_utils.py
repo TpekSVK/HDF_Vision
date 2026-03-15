@@ -63,7 +63,6 @@ def resolve_view_camera_state(
             "gamma",
             "brightness",
             "sharpness",
-            "stream_mode",
             "flash_mode",
         ):
             if key in base and base.get(key) is not None:
@@ -82,7 +81,6 @@ def resolve_view_camera_state(
             "gamma",
             "brightness",
             "sharpness",
-            "stream_mode",
             "flash_mode",
         ):
             value = getattr(profile_obj, key)
@@ -108,7 +106,7 @@ def snapshot_camera_state(camera: Any) -> dict[str, Any]:
     if state.get("pixel_format") is not None:
         state["pixel_format"] = str(state["pixel_format"]).strip().upper()
 
-    for key, getter in (("stream_mode", "get_stream_mode"), ("flash_mode", "get_flash_mode")):
+    for key, getter in (("flash_mode", "get_flash_mode"),):
         method = getattr(camera, getter, None)
         if callable(method):
             try:
@@ -124,7 +122,6 @@ def apply_camera_state(
     state: Mapping[str, Any] | None,
     *,
     warn: Callable[[str], None] | None = None,
-    apply_stream_mode: bool = True,
     apply_flash_mode: bool = True,
 ) -> None:
     """Apply fully resolved camera state to ``camera`` consistently."""
@@ -156,10 +153,7 @@ def apply_camera_state(
     applied_controls: list[str] = []
     skipped_controls: list[str] = []
 
-    stream_mode = state.get("stream_mode")
-    trigger_stream_active = stream_mode is not None and int(stream_mode) == 1
-
-    if "exposure_us" in state and state.get("exposure_us") is not None and not trigger_stream_active:
+    if "exposure_us" in state and state.get("exposure_us") is not None:
         if not ({"exposure_time_absolute", "exposure_absolute"} & supported_controls):
             skipped_controls.append("exposure_us")
             _LOGGER.debug("Skipped unsupported V4L2 control: exposure_us")
@@ -169,10 +163,6 @@ def apply_camera_state(
                 applied_controls.append("exposure_us")
             except Exception as exc:
                 _handle_error("Nastavenie expozície zlyhalo", exc)
-    elif "exposure_us" in state and state.get("exposure_us") is not None and trigger_stream_active:
-        skipped_controls.append("exposure_us(trigger_mode)")
-        _LOGGER.info("Skipped exposure_us apply because stream_mode=trigger")
-
     if "gain_db" in state and state.get("gain_db") is not None:
         if "gain" not in supported_controls:
             skipped_controls.append("gain")
@@ -207,19 +197,7 @@ def apply_camera_state(
     if skipped_controls:
         _LOGGER.info("Skipped unsupported camera controls: %s", skipped_controls)
 
-    trigger_session_active = False
-    is_trigger_session_active = getattr(camera, "is_trigger_session_active", None)
-    if callable(is_trigger_session_active):
-        try:
-            trigger_session_active = bool(is_trigger_session_active())
-        except Exception:
-            trigger_session_active = False
-
     mode_setters = []
-    if apply_stream_mode and not trigger_session_active:
-        mode_setters.append(("stream_mode", "set_stream_mode"))
-    elif apply_stream_mode and trigger_session_active:
-        _LOGGER.info("Skipped stream_mode apply while trigger session is active")
     if apply_flash_mode:
         mode_setters.append(("flash_mode", "set_flash_mode"))
 
@@ -240,7 +218,6 @@ def apply_view_camera_profile(
     profile: ViewCameraProfile | Mapping[str, Any] | str | None,
     *,
     warn: Callable[[str], None] | None = None,
-    apply_stream_mode: bool = True,
     apply_flash_mode: bool = True,
 ) -> dict[str, Any]:
     """Resolve and apply per-view camera profile."""
@@ -250,7 +227,6 @@ def apply_view_camera_profile(
         camera,
         state,
         warn=warn,
-        apply_stream_mode=apply_stream_mode,
         apply_flash_mode=apply_flash_mode,
     )
     return state

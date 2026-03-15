@@ -130,7 +130,6 @@ class ViewConfigDialog(QDialog):
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
-        self._resolution_combo.currentIndexChanged.connect(self._on_stream_mode_changed)
         camera_form.addRow("Resolution:", self._resolution_combo)
         resolution_hint = self._create_description_label(
             "Rozlíšenie, snímková frekvencia a pixel formát pre tento view."
@@ -160,11 +159,6 @@ class ViewConfigDialog(QDialog):
         self._brightness_edit.setPlaceholderText("Leave blank to inherit")
         self._sharpness_edit = QLineEdit(camera_group)
         self._sharpness_edit.setPlaceholderText("Leave blank to inherit")
-        self._stream_mode_combo = QComboBox(camera_group)
-        self._stream_mode_combo.addItem("Inherit", None)
-        self._stream_mode_combo.addItem("Hlavný režim (0)", 0)
-        self._stream_mode_combo.addItem("Spúšť (1)", 1)
-        self._stream_mode_combo.currentIndexChanged.connect(self._on_stream_mode_changed)
         self._flash_mode_combo = QComboBox(camera_group)
         self._flash_mode_combo.addItem("Inherit", None)
         self._flash_mode_combo.addItem("Vypnuté (0)", 0)
@@ -206,7 +200,6 @@ class ViewConfigDialog(QDialog):
             camera_form.addRow("Brightness:", self._brightness_edit)
         if self._supports_sharpness:
             camera_form.addRow("Sharpness:", self._sharpness_edit)
-        camera_form.addRow("Režim streamu:", self._stream_mode_combo)
         camera_form.addRow("Režim blesku:", self._flash_mode_combo)
         pixel_hint = self._create_description_label(
             "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
@@ -427,7 +420,7 @@ class ViewConfigDialog(QDialog):
             interval_ms = None
 
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
-        if self._is_trigger_stream_mode() and trigger_gap_ms is None:
+        if trigger_gap_ms is None:
             resolution = self._selected_resolution_data()
             trigger_gap_ms = get_default_trigger_gap_ms(
                 resolution.get("width"),
@@ -566,10 +559,6 @@ class ViewConfigDialog(QDialog):
                 self._brightness_edit.setText(str(profile_obj.brightness))
             if self._supports_sharpness and profile_obj.sharpness is not None:
                 self._sharpness_edit.setText(str(profile_obj.sharpness))
-            if profile_obj.stream_mode is not None:
-                index = self._stream_mode_combo.findData(profile_obj.stream_mode)
-                if index >= 0:
-                    self._stream_mode_combo.setCurrentIndex(index)
             if profile_obj.flash_mode is not None:
                 index = self._flash_mode_combo.findData(profile_obj.flash_mode)
                 if index >= 0:
@@ -597,7 +586,7 @@ class ViewConfigDialog(QDialog):
         if trigger_gap_ms is not None:
             self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
-        self._on_stream_mode_changed()
+        self._update_trigger_gap_warning()
 
     def _apply_initial_frame_source(
         self, frame_source_view_id: Optional[str]
@@ -670,29 +659,7 @@ class ViewConfigDialog(QDialog):
                 return dict(data)
         return {}
 
-    def _is_trigger_stream_mode(self) -> bool:
-        return self._stream_mode_combo.currentData() == 1
-
-    def _on_stream_mode_changed(self) -> None:
-        trigger_stream = self._is_trigger_stream_mode()
-        self._exposure_edit.setEnabled(not trigger_stream)
-        self._trigger_exposure_edit.setEnabled(trigger_stream)
-
-        if trigger_stream and not self._trigger_exposure_edit.text().strip():
-            resolution = self._selected_resolution_data()
-            default_gap = get_default_trigger_gap_ms(
-                resolution.get("width"),
-                resolution.get("height"),
-                resolution.get("fps"),
-            )
-            self._trigger_exposure_edit.setText(str(default_gap).rstrip("0").rstrip("."))
-
-        self._update_trigger_gap_warning()
-
     def _update_trigger_gap_warning(self) -> None:
-        if not self._is_trigger_stream_mode():
-            self._trigger_warning_label.setVisible(False)
-            return
         resolution = self._selected_resolution_data()
         min_period_ms = get_trigger_min_period_ms(
             resolution.get("width"),
@@ -749,9 +716,6 @@ class ViewConfigDialog(QDialog):
             data["brightness"] = brightness
         if self._supports_sharpness and sharpness is not None:
             data["sharpness"] = sharpness
-        stream_mode = self._stream_mode_combo.currentData()
-        if stream_mode is not None:
-            data["stream_mode"] = int(stream_mode)
         flash_mode = self._flash_mode_combo.currentData()
         if flash_mode is not None:
             data["flash_mode"] = int(flash_mode)

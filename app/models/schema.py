@@ -524,7 +524,6 @@ class ViewCameraProfile:
     gamma: Optional[float] = None
     brightness: Optional[float] = None
     sharpness: Optional[float] = None
-    stream_mode: Optional[int] = None
     flash_mode: Optional[int] = None
 
     def __post_init__(self) -> None:
@@ -536,7 +535,6 @@ class ViewCameraProfile:
         self.height = self._coerce_int(self.height)
         self.fps = self._coerce_int(self.fps)
         self.exposure_us = self._coerce_int(self.exposure_us)
-        self.stream_mode = self._coerce_int(self.stream_mode)
         self.flash_mode = self._coerce_int(self.flash_mode)
         self.gain_db = self._coerce_float(self.gain_db)
         self.gamma = self._coerce_float(self.gamma)
@@ -579,7 +577,6 @@ class ViewCameraProfile:
                 self.gamma,
                 self.brightness,
                 self.sharpness,
-                self.stream_mode,
                 self.flash_mode,
                 self.device_id,
             )
@@ -597,7 +594,6 @@ class ViewCameraProfile:
             gamma=self.gamma,
             brightness=self.brightness,
             sharpness=self.sharpness,
-            stream_mode=self.stream_mode,
             flash_mode=self.flash_mode,
         )
 
@@ -623,8 +619,6 @@ class ViewCameraProfile:
             data["brightness"] = float(self.brightness)
         if self.sharpness is not None:
             data["sharpness"] = float(self.sharpness)
-        if self.stream_mode is not None:
-            data["stream_mode"] = int(self.stream_mode)
         if self.flash_mode is not None:
             data["flash_mode"] = int(self.flash_mode)
         return data
@@ -649,7 +643,6 @@ class ViewCameraProfile:
                 gamma=value.get("gamma"),
                 brightness=value.get("brightness"),
                 sharpness=value.get("sharpness"),
-                stream_mode=value.get("stream_mode"),
                 flash_mode=value.get("flash_mode"),
             )
             return None if profile.is_empty() else profile

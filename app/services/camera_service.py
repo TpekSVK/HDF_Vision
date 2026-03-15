@@ -1040,7 +1040,7 @@ class CameraService:
         trigger_gap_ms: float | None = None,
         pulse_ms: float = 10.0,
     ) -> bool:
-        self._logger.info("enter_trigger_session")
+        self._logger.info("[TRIGGER_SESSION] enter")
         if self._paused_external:
             raise RuntimeError("Trigger session blocked: preview session currently owns camera")
 
@@ -1099,7 +1099,7 @@ class CameraService:
         )
 
     def exit_trigger_session(self, *, restore_master: bool = False) -> None:
-        self._logger.info("exit_trigger_session")
+        self._logger.info("[TRIGGER_SESSION] exit")
         current_mode: int | None = None
         try:
             current_mode = int(self.get_stream_mode())
@@ -1261,12 +1261,11 @@ class CameraService:
         )
         effective_timeout_s = self._resolve_trigger_timeout_s(float(timeout_s), timing)
 
-        self.ensure_trigger_session(
-            trigger_fn=trigger_fn,
-            prime_timeout_s=effective_timeout_s,
-            trigger_gap_ms=trigger_gap_ms,
-            pulse_ms=pulse_ms,
-        )
+        if not self._is_trigger_mode_active() or not self._trigger_session_active or not self._trigger_session_ready:
+            raise RuntimeError(
+                "capture_trigger_frame called while trigger mode/session is inactive"
+            )
+
         self._log_trigger_cycle_state(
             "capture_start",
             stream_mode=stream_mode,
