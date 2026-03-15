@@ -600,7 +600,7 @@ class ToolEditDialog(QDialog):
         super().showEvent(event)
         if self._maximize_on_first_show:
             self._maximize_on_first_show = False
-            self.showMaximized()
+            self.showFullScreen()
         self._schedule_active_tab_fit(source="showEvent")
 
     def _schedule_active_tab_fit(self, *, source: str) -> None:
