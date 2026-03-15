@@ -13,7 +13,12 @@ from collections import deque
 from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
-from app.utils.trigger_timing import get_safe_priming_gap_ms, get_trigger_frame_time_ms, get_trigger_runtime_fps
+from app.utils.trigger_timing import (
+    get_safe_priming_gap_ms,
+    get_safe_trigger_exposure_abs,
+    get_trigger_frame_time_ms,
+    get_trigger_runtime_fps,
+)
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -40,8 +45,6 @@ class TriggerTiming:
 
 
 class CameraService:
-    _CU55_TRIGGER_SAFE_EXPOSURE_US = 400
-
 
     """
     Unified capture služba:
@@ -1026,9 +1029,15 @@ class CameraService:
         return frame_3
 
     def _apply_safe_trigger_exposure(self) -> int:
-        safe_abs = int(self._CU55_TRIGGER_SAFE_EXPOSURE_US)
+        safe_abs = int(get_safe_trigger_exposure_abs(self.width, self.height, self.fps))
         self.set_manual_exposure_us(int(safe_abs))
-        self._logger.info("[CAMERA] safe_trigger_exposure_abs=%s", int(safe_abs))
+        self._logger.info(
+            "[CAMERA] safe_trigger_exposure_abs=%s (resolution=%sx%s@%s)",
+            int(safe_abs),
+            int(self.width),
+            int(self.height),
+            int(self.fps),
+        )
         return int(safe_abs)
 
     def enter_trigger_session(
