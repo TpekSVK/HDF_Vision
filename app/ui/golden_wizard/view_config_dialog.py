@@ -68,6 +68,7 @@ class ViewConfigDialog(QDialog):
         branch_enabled: bool = False,
         branch_targets: Optional[dict[str, str]] = None,
         branch_default_view_id: Optional[str] = None,
+        image_rotation: int = 0,
     ) -> None:
         super().__init__(parent)
         self._mode = mode
@@ -88,6 +89,7 @@ class ViewConfigDialog(QDialog):
         self._supports_brightness = "brightness" in controls
         self._supports_sharpness = "sharpness" in controls
         self._trigger_pulse_ms = 10.0
+        self._image_rotation = 0
 
         title = "Pridať pohľad" if mode == "add" else "Upraviť pohľad"
         self.setWindowTitle(title)
@@ -201,6 +203,19 @@ class ViewConfigDialog(QDialog):
         if self._supports_sharpness:
             camera_form.addRow("Sharpness:", self._sharpness_edit)
         camera_form.addRow("Režim blesku:", self._flash_mode_combo)
+        self._rotation_combo = QComboBox(camera_group)
+        self._rotation_combo.addItem("0°", 0)
+        self._rotation_combo.addItem("90°", 90)
+        self._rotation_combo.addItem("180°", 180)
+        self._rotation_combo.addItem("270°", 270)
+        camera_form.addRow("Rotation / Rotácia snímky:", self._rotation_combo)
+        rotation_hint = self._create_description_label(
+            "Softvérová rotácia obrazu pre tento view pred zobrazením aj spracovaním.",
+            camera_group,
+        )
+        self._rotation_combo.setToolTip(rotation_hint.text())
+        camera_form.addRow(rotation_hint)
+
         pixel_hint = self._create_description_label(
             "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
             " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
@@ -318,6 +333,7 @@ class ViewConfigDialog(QDialog):
         layout.addWidget(button_box)
 
         self._apply_initial_profile(camera_profile)
+        self._apply_initial_rotation(image_rotation)
         self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms, trigger_gap_ms)
         self._apply_initial_frame_source(frame_source_view_id)
         self._apply_initial_branch_targets(
@@ -436,6 +452,7 @@ class ViewConfigDialog(QDialog):
             "trigger_interval_ms": interval_ms,
             "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": self._frame_source_combo.currentData(),
+            "image_rotation": int(self._rotation_combo.currentData() or 0),
             "branch_enabled": self._branch_enabled_checkbox.isChecked(),
             "branch_targets": self._collect_branch_targets(),
             "branch_default_view_id": self._branch_default_combo.currentData(),
@@ -587,6 +604,18 @@ class ViewConfigDialog(QDialog):
             self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
         self._update_trigger_gap_warning()
+
+    def _apply_initial_rotation(self, image_rotation: int) -> None:
+        try:
+            rotation = int(image_rotation)
+        except Exception:
+            rotation = 0
+        if rotation not in {0, 90, 180, 270}:
+            rotation = 0
+        self._image_rotation = rotation
+        index = self._rotation_combo.findData(rotation)
+        if index >= 0:
+            self._rotation_combo.setCurrentIndex(index)
 
     def _apply_initial_frame_source(
         self, frame_source_view_id: Optional[str]

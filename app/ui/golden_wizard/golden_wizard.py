@@ -78,7 +78,10 @@ from app.services.golden_wizard_logic import (
     _SUPPORTED_FORM_FIELD_TYPES,
     _validate_params_and_thresholds,
 )
-from app.ui.view_utils import view_uses_global_golden
+from app.ui.view_utils import (
+    apply_view_image_transform,
+    view_uses_global_golden,
+)
 from app.ui.camera_profile_utils import (
     apply_camera_state,
     apply_view_camera_profile,
@@ -1591,6 +1594,8 @@ class GoldenWizard(QDialog):
 
     def _live_tick(self):
         img = self._lp.last_frame_u8()
+        view = self._view_by_id(self._active_view_id)
+        img = apply_view_image_transform(img, view, stage="preview")
         if img is None:
             return
         h, w = img.shape[:2]
@@ -2353,6 +2358,7 @@ class GoldenWizard(QDialog):
             frame_source_view_id=getattr(source_view, "frame_source_view_id", None)
             if source_view
             else None,
+            image_rotation=getattr(source_view, "image_rotation", 0) if source_view else 0,
             available_branch_targets=[
                 (view.id, view.name or view.id)
                 for view in existing
@@ -2386,6 +2392,7 @@ class GoldenWizard(QDialog):
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),
+                image_rotation=int(data.get("image_rotation", 0) or 0),
                 branch_enabled=bool(data.get("branch_enabled", False)),
                 branch_targets=dict(data.get("branch_targets", {}) or {}),
                 branch_default_view_id=data.get("branch_default_view_id"),
@@ -2426,6 +2433,7 @@ class GoldenWizard(QDialog):
                 if other.id and other.id != view.id
             ],
             frame_source_view_id=getattr(view, "frame_source_view_id", None),
+            image_rotation=getattr(view, "image_rotation", 0),
             available_branch_targets=[
                 (other.id, other.name or other.id)
                 for other in self._views
@@ -2450,6 +2458,7 @@ class GoldenWizard(QDialog):
                 trigger_mode=data.get("trigger_mode"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),
+                image_rotation=int(data.get("image_rotation", 0) or 0),
                 branch_enabled=bool(data.get("branch_enabled", False)),
                 branch_targets=dict(data.get("branch_targets", {}) or {}),
                 branch_default_view_id=data.get("branch_default_view_id"),
@@ -2857,6 +2866,8 @@ class GoldenWizard(QDialog):
                 self._tool_panel.show_test_error(message)
                 return
 
+            active_view = self._view_by_id(self._active_view_id)
+            frame = apply_view_image_transform(frame, active_view, stage="inspection")
             frame_array = np.asarray(frame)
 
             preceding_tools = [tool.copy() for tool in tools if tool.order < target_tool.order]
