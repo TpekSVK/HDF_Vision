@@ -107,6 +107,7 @@ docker run --rm -it \
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
+  -v /usr/bin/tegrastats:/usr/bin/tegrastats:ro \
   -v /dev/bus/usb:/dev/bus/usb \
   -v /data:/data \
   -v "$(pwd)/app":/workspace/app \
