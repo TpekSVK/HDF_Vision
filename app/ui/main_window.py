@@ -42,7 +42,7 @@ from app.ui.camera_profile_utils import (
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
-from app.ui.view_utils import apply_view_image_transform
+from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
 
 
 class MainWindow(QMainWindow):
@@ -678,6 +678,7 @@ class MainWindow(QMainWindow):
         base_camera_state: Mapping[str, Any] | None = None,
         settle_ms: int | None = None,
         transform_stage: str = "inspection",
+        image_rotation_override: int | None = None,
     ):
         active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
         active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
@@ -724,7 +725,16 @@ class MainWindow(QMainWindow):
             )
         else:
             frame = self.cam.last_frame(caller=master_caller)
-        frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
+        if image_rotation_override is not None:
+            frame = apply_view_rotation(
+                frame,
+                int(image_rotation_override),
+                context=str(active_view_id or "n/a"),
+            )
+            if transform_stage:
+                self._logger.info("[VIEW_ROTATION] applied before %s", transform_stage)
+        else:
+            frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
         return frame
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
@@ -812,6 +822,7 @@ class MainWindow(QMainWindow):
         *,
         view_id: str | None = None,
         trigger_mode_label: str = "golden_wizard",
+        image_rotation_override: int | None = None,
     ):
         self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
         frame = self._capture_frame_for_view(
@@ -819,6 +830,7 @@ class MainWindow(QMainWindow):
             master_caller="golden_wizard_capture_master",
             view_id=view_id,
             transform_stage="golden capture",
+            image_rotation_override=image_rotation_override,
         )
         self._logger.info("[GOLDEN_CAPTURE] frame captured")
         return frame

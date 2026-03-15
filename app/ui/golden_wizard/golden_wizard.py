@@ -80,6 +80,7 @@ from app.services.golden_wizard_logic import (
 )
 from app.ui.view_utils import (
     apply_view_image_transform,
+    view_image_rotation,
     view_uses_global_golden,
 )
 from app.ui.camera_profile_utils import (
@@ -1887,9 +1888,11 @@ class GoldenWizard(QDialog):
             frame = None
             if callable(self._capture_frame_for_golden):
                 self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
+                active_view = self._view_by_id(view_id)
                 frame = self._capture_frame_for_golden(
                     view_id=view_id,
                     trigger_mode_label="golden_wizard",
+                    image_rotation_override=view_image_rotation(active_view),
                 )
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
