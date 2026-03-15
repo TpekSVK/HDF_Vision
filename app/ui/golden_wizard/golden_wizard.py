@@ -1406,6 +1406,12 @@ class GoldenWizard(QDialog):
         self.btn_test_tool = QPushButton("Otestovať")
         self.btn_test_tool.setEnabled(False)
         self.btn_publish_recipe = QPushButton("Publikovať/Aktualizovať recept")
+        self.btn_close_wizard = QPushButton("Zavrieť Golden Wizard")
+        self.btn_close_wizard.setStyleSheet(
+            "QPushButton { background-color: #c62828; color: white; font-weight: 600; }"
+            "QPushButton:hover { background-color: #b71c1c; }"
+            "QPushButton:pressed { background-color: #8e0000; }"
+        )
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -1422,6 +1428,7 @@ class GoldenWizard(QDialog):
         self._publish_state_label.setAlignment(Qt.AlignCenter)
         buttons.addWidget(self._publish_state_label)
         buttons.addWidget(self.btn_publish_recipe)
+        buttons.addWidget(self.btn_close_wizard)
 
         # ---- Layout ----
         self._tool_panel = ToolConfigPanel(self)
@@ -1521,6 +1528,7 @@ class GoldenWizard(QDialog):
         self.btn_save_tool.clicked.connect(self._save_tool_draft)
         self.btn_test_tool.clicked.connect(self._trigger_test_shortcut)
         self.btn_publish_recipe.clicked.connect(self._publish_recipe)
+        self.btn_close_wizard.clicked.connect(self.close)
         self.recipe_name.editingFinished.connect(self._on_recipe_changed)
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
         self.tools_table.rowsReordered.connect(self._on_tools_reordered)
