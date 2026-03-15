@@ -2868,6 +2868,8 @@ class GoldenWizard(QDialog):
                 self._tool_panel.show_test_error(message)
                 return
 
+            active_view = self._view_by_id(self._active_view_id)
+            frame = apply_view_image_transform(frame, active_view, stage="inspection")
             frame_array = np.asarray(frame)
 
             preceding_tools = [tool.copy() for tool in tools if tool.order < target_tool.order]

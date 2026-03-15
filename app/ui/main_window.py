@@ -855,6 +855,8 @@ class MainWindow(QMainWindow):
             self._log_trigger_cycle("cycle_start", preview_state="paused")
             if trigger_state["recipe_cfg"] is None:
                 base_frame = self._capture_frame_for_trigger(trigger_mode_label="manual_gpio")
+                active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
+                base_frame = apply_view_image_transform(base_frame, active_view, stage="inspection")
                 self._update_manual_trigger_feedback()
                 self._log_trigger_cycle(
                     "legacy_capture_done",
@@ -1078,6 +1080,8 @@ class MainWindow(QMainWindow):
             context_frame = getattr(result.context, "frame_aligned", None)
             if context_frame is None:
                 context_frame = getattr(result.context, "frame", None)
+            if isinstance(context_frame, np.ndarray):
+                context_frame = apply_view_image_transform(context_frame, view, stage="preview")
             last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
 
         per_view_statuses[view_id] = status
