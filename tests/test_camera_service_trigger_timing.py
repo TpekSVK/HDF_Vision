@@ -161,7 +161,7 @@ def test_perform_trigger_sequence_discards_priming_frames(monkeypatch) -> None:
     ]
     assert len(sleeps) == 2
     assert round(sleeps[0] * 1000.0, 2) == round(timing.priming_gap_ms, 2)
-    assert round(sleeps[1] * 1000.0, 2) == round(timing.priming_gap_ms, 2)
+    assert round(sleeps[1] * 1000.0, 2) == round(timing.trigger_gap_ms, 2)
 
 
 def test_trigger_via_hw_does_not_sleep(monkeypatch) -> None:
@@ -253,3 +253,39 @@ def test_compute_trigger_timing_defaults_production_gap_without_recipe_value() -
 
     assert round(timing.trigger_gap_ms, 2) == 19.67
     assert timing.trigger_gap_ms >= timing.frame_time_ms
+
+
+def test_apply_safe_trigger_exposure_is_fixed_200(monkeypatch) -> None:
+    cam = _build_camera(2592, 1944, 60, "Y12", 70000)
+
+    set_values: list[int] = []
+    monkeypatch.setattr(cam, "set_manual_exposure_us", lambda value: set_values.append(int(value)))
+
+    applied = cam._apply_safe_trigger_exposure()
+
+    assert applied == 200
+    assert set_values == [200]
+
+
+def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> None:
+    cam = _build_camera(1280, 720, 60, "Y8", 8000)
+
+    monkeypatch.setattr(cam, "get_stream_mode", lambda: 1)
+    monkeypatch.setattr(cam, "ensure_trigger_session", lambda **_kwargs: True)
+
+    seen_gaps: list[float] = []
+
+    original_compute = cam._compute_trigger_timing
+    def patched_compute(**kwargs):
+        gap = float(kwargs.get("trigger_gap_ms") or 0.0)
+        seen_gaps.append(gap)
+        return original_compute(**kwargs)
+
+    monkeypatch.setattr(cam, "_compute_trigger_timing", patched_compute)
+    monkeypatch.setattr(cam, "_resolve_trigger_timeout_s", lambda _timeout, _timing: 0.8)
+    monkeypatch.setattr(cam, "_perform_trigger_sequence", lambda **_kwargs: np.full((1, 1), 1, dtype=np.uint8))
+
+    cam.capture_trigger_frame(trigger_gap_ms=20.0, trigger_mode_label="manual_gpio")
+    cam.capture_trigger_frame(trigger_gap_ms=35.0, trigger_mode_label="manual_gpio")
+
+    assert seen_gaps[:2] == [20.0, 35.0]

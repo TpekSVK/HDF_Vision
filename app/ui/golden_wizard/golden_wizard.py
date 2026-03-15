@@ -33,7 +33,7 @@ import time
 import math
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Sequence
 from functools import partial
 
 import numpy as np
@@ -1268,6 +1268,7 @@ class GoldenWizard(QDialog):
         parent=None,
         *,
         modbus: "ModbusService | None" = None,
+        trigger_fn: Optional[Callable[[], None]] = None,
     ):
         super().__init__(parent)
         self._logger = logging.getLogger(__name__)
@@ -1278,6 +1279,7 @@ class GoldenWizard(QDialog):
         self.cam = camera
         self.recipes = recipes
         self.modbus = modbus
+        self._trigger_fn = trigger_fn
         self.current_img = None
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -1852,6 +1854,7 @@ class GoldenWizard(QDialog):
                     trigger_gap_ms = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
                 frame = self.cam.capture_trigger_frame(
                     timeout_s=0.8,
+                    trigger_fn=self._trigger_fn,
                     trigger_gap_ms=float(trigger_gap_ms),
                     pulse_ms=10.0,
                     trigger_mode_label="golden_wizard",
@@ -1871,12 +1874,12 @@ class GoldenWizard(QDialog):
                     time.sleep(0.01)
 
                 frame = best_flash_frame
-            if frame is None:
-                frame = self.cam.last_frame(caller="golden_wizard_capture")
-            if frame is None:
-                frame = self.cam.one_shot()
-            if frame is None and self._live_on:
-                frame = self._lp.last_frame_u8()
+                if frame is None:
+                    frame = self.cam.last_frame(caller="golden_wizard_capture")
+                if frame is None:
+                    frame = self.cam.one_shot()
+                if frame is None and self._live_on:
+                    frame = self._lp.last_frame_u8()
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
             self.current_img = frame

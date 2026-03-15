@@ -13,7 +13,7 @@ from collections import deque
 from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
-from app.utils.trigger_timing import get_safe_priming_gap_ms, get_safe_trigger_exposure_abs, get_trigger_frame_time_ms, get_trigger_runtime_fps
+from app.utils.trigger_timing import get_safe_priming_gap_ms, get_trigger_frame_time_ms, get_trigger_runtime_fps
 
 # --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
 _GST_OK = False
@@ -40,6 +40,9 @@ class TriggerTiming:
 
 
 class CameraService:
+    _CU55_TRIGGER_SAFE_EXPOSURE_US = 200
+
+
     """
     Unified capture služba:
       - preferuje GStreamer (v4l2src -> GRAY8 -> appsink)
@@ -989,6 +992,7 @@ class CameraService:
             return None
         self._logger.info("[TRIGGER] discarded frame #1")
         priming_gap_s = max(0.0, float(timing.priming_gap_ms) / 1000.0)
+        production_gap_s = max(0.0, float(timing.trigger_gap_ms) / 1000.0)
         if priming_gap_s > 0:
             time.sleep(priming_gap_s)
 
@@ -1004,8 +1008,8 @@ class CameraService:
             self._logger.warning("[TRIGGER] priming pulse 2/3 timeout")
             return None
         self._logger.info("[TRIGGER] discarded frame #2")
-        if priming_gap_s > 0:
-            time.sleep(priming_gap_s)
+        if production_gap_s > 0:
+            time.sleep(production_gap_s)
 
         self._logger.info("[TRIGGER] final pulse 3/3")
         self._trigger_via_hw(
@@ -1022,7 +1026,7 @@ class CameraService:
         return frame_3
 
     def _apply_safe_trigger_exposure(self) -> int:
-        safe_abs = get_safe_trigger_exposure_abs(self.width, self.height, self.fps)
+        safe_abs = int(self._CU55_TRIGGER_SAFE_EXPOSURE_US)
         self.set_manual_exposure_us(int(safe_abs))
         self._logger.info("[CAMERA] safe_trigger_exposure_abs=%s", int(safe_abs))
         return int(safe_abs)
