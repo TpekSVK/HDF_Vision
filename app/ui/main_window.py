@@ -376,6 +376,14 @@ class MainWindow(QMainWindow):
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
 
+        row1.addSpacing(12)
+        row1.addWidget(QLabel("Capture Mode (global):", self))
+        self.cmb_capture_mode = QComboBox(self)
+        self.cmb_capture_mode.addItem("MASTER", "master")
+        self.cmb_capture_mode.addItem("TRIGGER", "trigger")
+        self.cmb_capture_mode.currentIndexChanged.connect(self._on_capture_mode_ui_changed)
+        row1.addWidget(self.cmb_capture_mode)
+
         self.btn_gpio_wizard = QPushButton("Sprievodca GPIO", self)
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
         row1.addWidget(self.btn_gpio_wizard)
@@ -390,6 +398,9 @@ class MainWindow(QMainWindow):
 
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
+
+        self._sync_capture_mode_ui()
+        self._apply_capture_mode(ensure_runtime_ready=True)
 
         # Spusť retenciu na pozadí (jednorazovo pri štarte)
         Thread(target=lambda: RetentionService().run_once(verbose=False), daemon=True).start()
@@ -647,6 +658,7 @@ class MainWindow(QMainWindow):
         if self.capture_mode not in {"master", "trigger"}:
             self.capture_mode = "master"
         self._logger.info("[CAPTURE_MODE] %s", self.capture_mode)
+        self._sync_capture_mode_ui()
 
         try:
             if self.capture_mode == "trigger":
@@ -663,6 +675,54 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._logger.error("apply capture mode failed: %s", exc)
             self.lbl_status.setText(f"Prepnutie capture mode zlyhalo: {exc}")
+
+    def _sync_capture_mode_ui(self) -> None:
+        cmb = getattr(self, "cmb_capture_mode", None)
+        if cmb is None:
+            return
+        expected = "trigger" if self.capture_mode == "trigger" else "master"
+        index = cmb.findData(expected)
+        if index < 0:
+            return
+        if cmb.currentIndex() == index:
+            return
+        cmb.blockSignals(True)
+        try:
+            cmb.setCurrentIndex(index)
+        finally:
+            cmb.blockSignals(False)
+
+    def _on_capture_mode_ui_changed(self, index: int) -> None:
+        requested = str(self.cmb_capture_mode.itemData(index) or "master").strip().lower()
+        if requested not in {"master", "trigger"}:
+            requested = "master"
+        self._logger.info("[CAPTURE_MODE_UI] requested=%s", requested)
+        if requested == self.capture_mode:
+            self._logger.info("[CAPTURE_MODE_UI] applied=%s", self.capture_mode)
+            return
+        self.capture_mode = requested
+        self._apply_capture_mode(ensure_runtime_ready=True)
+        self._logger.info("[CAPTURE_MODE_UI] applied=%s", self.capture_mode)
+
+    def get_capture_mode(self) -> str:
+        mode = str(getattr(self, "capture_mode", "master") or "master").strip().lower()
+        return "trigger" if mode == "trigger" else "master"
+
+    def capture_frame_for_golden(self, *, trigger_gap_ms: float | None = None):
+        mode = self.get_capture_mode()
+        if mode == "trigger":
+            gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
+                get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
+            )
+            self._enter_run_trigger_session()
+            return self.cam.capture_trigger_frame(
+                timeout_s=0.8,
+                trigger_fn=self._send_run_trigger_gpio_pulse,
+                trigger_gap_ms=gap_ms,
+                pulse_ms=10.0,
+                trigger_mode_label="golden_wizard",
+            )
+        return self.cam.last_frame(caller="golden_wizard_capture_master")
 
     def _capture_frame_for_trigger(self, *, trigger_mode_label: str, trigger_gap_ms: float | None = None):
         if self.capture_mode == "trigger":
@@ -1125,13 +1185,18 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def open_wizard(self):
-        self._exit_run_trigger_session(restore_master=False)
+        if self.capture_mode == "master":
+            self._exit_run_trigger_session(restore_master=False)
+        else:
+            self._apply_capture_mode(ensure_runtime_ready=True)
         dlg = GoldenWizard(
             self.cam,
             self.recipes,
             self,
             modbus=self.modbus,
             trigger_fn=self._send_run_trigger_gpio_pulse,
+            get_capture_mode=self.get_capture_mode,
+            capture_frame_for_golden=self.capture_frame_for_golden,
         )
         dlg.resize(1200, 800)
         dlg.exec()

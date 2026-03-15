@@ -1269,6 +1269,8 @@ class GoldenWizard(QDialog):
         *,
         modbus: "ModbusService | None" = None,
         trigger_fn: Optional[Callable[[], None]] = None,
+        get_capture_mode: Optional[Callable[[], str]] = None,
+        capture_frame_for_golden: Optional[Callable[..., Any]] = None,
     ):
         super().__init__(parent)
         self._logger = logging.getLogger(__name__)
@@ -1280,6 +1282,8 @@ class GoldenWizard(QDialog):
         self.recipes = recipes
         self.modbus = modbus
         self._trigger_fn = trigger_fn
+        self._get_capture_mode = get_capture_mode
+        self._capture_frame_for_golden = capture_frame_for_golden
         self.current_img = None
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -1838,27 +1842,33 @@ class GoldenWizard(QDialog):
                 if capture_delay_ms > 0:
                     time.sleep(capture_delay_ms / 1000.0)
 
-            stream_mode = None
-            try:
-                stream_mode = int(self.cam.get_stream_mode())
-            except Exception:
-                stream_mode = None
+            runtime_capture_mode = "master"
+            if callable(self._get_capture_mode):
+                try:
+                    runtime_capture_mode = str(self._get_capture_mode() or "master").strip().lower()
+                except Exception:
+                    runtime_capture_mode = "master"
+            if runtime_capture_mode not in {"master", "trigger"}:
+                runtime_capture_mode = "master"
 
             # V trigger mode používaj jednotnú 3-pulse trigger sekvenciu
             # (2x priming discard + 1x finálny frame) rovnako ako RUN cesty.
             frame = None
-            if stream_mode == 1:
+            if runtime_capture_mode == "trigger":
                 active_view = self._view_by_id(self._active_view_id)
                 trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None)
                 if not isinstance(trigger_gap_ms, (int, float)) or float(trigger_gap_ms) <= 0:
                     trigger_gap_ms = get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-                frame = self.cam.capture_trigger_frame(
-                    timeout_s=0.8,
-                    trigger_fn=self._trigger_fn,
-                    trigger_gap_ms=float(trigger_gap_ms),
-                    pulse_ms=10.0,
-                    trigger_mode_label="golden_wizard",
-                )
+                if callable(self._capture_frame_for_golden):
+                    frame = self._capture_frame_for_golden(trigger_gap_ms=float(trigger_gap_ms))
+                else:
+                    frame = self.cam.capture_trigger_frame(
+                        timeout_s=0.8,
+                        trigger_fn=self._trigger_fn,
+                        trigger_gap_ms=float(trigger_gap_ms),
+                        pulse_ms=10.0,
+                        trigger_mode_label="golden_wizard",
+                    )
             else:
                 # Pri master mode preferuj frame z kontinuálneho streamu.
                 best_flash_frame = None
