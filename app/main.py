@@ -1,9 +1,11 @@
 from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
 from app.ui.main_window import MainWindow
 import sys
 from app.ui.theme import DARK_STYLE
 
 def main():
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLE)
     w = MainWindow()

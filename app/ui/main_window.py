@@ -94,6 +94,10 @@ class MainWindow(QMainWindow):
         self._runtime_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._views_by_id: dict[str, Any] = {}
         self._active_view_id: str | None = None
+        self._run_preview_mode = "auto"
+        self._run_effective_preview_mode = "single"
+        self._run_grid_tiles_by_view_id: dict[str, QWidget] = {}
+        self._run_grid_labels_by_view_id: dict[str, QLabel] = {}
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._run_trigger_session_active = False
@@ -231,6 +235,15 @@ class MainWindow(QMainWindow):
         self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
         actions.addWidget(self.cmb_tool)
 
+        self.lbl_preview_mode = QLabel("Zobrazenie:")
+        actions.addWidget(self.lbl_preview_mode)
+        self.cmb_preview_mode = QComboBox()
+        self.cmb_preview_mode.addItem("Automaticky", "auto")
+        self.cmb_preview_mode.addItem("Grid", "grid")
+        self.cmb_preview_mode.addItem("Jedno view", "single")
+        self.cmb_preview_mode.currentIndexChanged.connect(self._on_preview_mode_changed)
+        actions.addWidget(self.cmb_preview_mode)
+
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
 
@@ -261,6 +274,13 @@ class MainWindow(QMainWindow):
         self._set_live_view_border()
         self.live_view.setContentsMargins(0,0,0,0)
         preview_row.addWidget(self.live_view, 4)
+
+        self.run_grid_container = QWidget()
+        self.run_grid_layout = QGridLayout(self.run_grid_container)
+        self.run_grid_layout.setContentsMargins(0, 0, 0, 0)
+        self.run_grid_layout.setSpacing(8)
+        self.run_grid_container.hide()
+        preview_row.addWidget(self.run_grid_container, 4)
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
@@ -1306,6 +1326,7 @@ class MainWindow(QMainWindow):
             self._update_live_view()
 
     def open_wizard(self):
+        self._ensure_fullscreen()
         if self.capture_mode == "master":
             self._exit_run_trigger_session(restore_master=False)
         else:
@@ -1319,7 +1340,12 @@ class MainWindow(QMainWindow):
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
         )
+        screen = self.windowHandle().screen() if self.windowHandle() else QApplication.primaryScreen()
+        if screen is not None:
+            dlg.setGeometry(screen.geometry())
+        dlg.showFullScreen()
         dlg.exec()
+        self._ensure_fullscreen()
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)
         self._reset_manual_trigger_progress(self.current_recipe_name())
@@ -1327,6 +1353,12 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
+
+    def _ensure_fullscreen(self) -> None:
+        screen = self.windowHandle().screen() if self.windowHandle() else QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        self.showFullScreen()
 
     def open_gpio_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
@@ -1413,9 +1445,113 @@ class MainWindow(QMainWindow):
             self.modbus.pulse_configured_flashes()
         self.external_triggered.emit()
 
+    def _on_preview_mode_changed(self) -> None:
+        mode = self.cmb_preview_mode.currentData()
+        self._run_preview_mode = mode if mode in {"auto", "grid", "single"} else "auto"
+        self._rebuild_run_preview_layout()
+        self._update_live_view()
+
+    def _resolve_effective_preview_mode(self) -> str:
+        if self._run_preview_mode == "grid":
+            return "grid"
+        if self._run_preview_mode == "single":
+            return "single"
+        view_count = len(self._views_by_id)
+        return "grid" if view_count >= 2 else "single"
+
+    def _grid_column_count(self, views_count: int) -> int:
+        if views_count <= 4:
+            return 2
+        return 3
+
+    def _rebuild_run_preview_layout(self) -> None:
+        mode = self._resolve_effective_preview_mode()
+        self._run_effective_preview_mode = mode
+
+        while self.run_grid_layout.count():
+            item = self.run_grid_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self._run_grid_tiles_by_view_id.clear()
+        self._run_grid_labels_by_view_id.clear()
+
+        if mode == "single":
+            self.live_view.show()
+            self.run_grid_container.hide()
+            return
+
+        self.live_view.hide()
+        self.run_grid_container.show()
+        view_items = list(self._views_by_id.items())
+        columns = self._grid_column_count(len(view_items))
+
+        for index, (view_id, view) in enumerate(view_items):
+            tile = QWidget(self.run_grid_container)
+            tile_layout = QVBoxLayout(tile)
+            tile_layout.setContentsMargins(8, 8, 8, 8)
+            tile_layout.setSpacing(6)
+
+            name = str(getattr(view, "name", None) or view_id or "View")
+            title_label = QLabel(name)
+            title_label.setStyleSheet("color:#ddd; font-weight:600;")
+            tile_layout.addWidget(title_label)
+
+            preview_label = QLabel("— aktuálny záber —")
+            preview_label.setAlignment(Qt.AlignCenter)
+            preview_label.setMinimumSize(220, 140)
+            preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            preview_label.setStyleSheet("border-radius: 6px; background:#181818; color:#888;")
+            tile_layout.addWidget(preview_label, 1)
+
+            tile.mousePressEvent = lambda _event, selected_view=view_id: self._on_view_selected_view(selected_view)
+
+            row = index // columns
+            col = index % columns
+            self.run_grid_layout.addWidget(tile, row, col)
+
+            self._run_grid_tiles_by_view_id[view_id] = tile
+            self._run_grid_labels_by_view_id[view_id] = preview_label
+
+        self._refresh_run_grid_selection()
+        self._update_run_grid_contents()
+
+    def _refresh_run_grid_selection(self) -> None:
+        for view_id, tile in self._run_grid_tiles_by_view_id.items():
+            active = view_id == self._active_view_id
+            border = "#33dd66" if active else "#333"
+            tile.setStyleSheet(f"border:2px solid {border}; border-radius:8px; background:#101010;")
+
+    def _update_run_grid_contents(self) -> None:
+        if self._run_effective_preview_mode != "grid":
+            return
+
+        for view_id, label in self._run_grid_labels_by_view_id.items():
+            src = self.cam.last_frame(caller=f"run_grid_view_{view_id}") if self.live_enabled else self._get_last_frame_for_view(view_id)
+            if src is None:
+                src = self._last_trigger_frame
+            if src is None:
+                label.clear()
+                label.setText("— aktuálny záber —")
+                continue
+
+            target_view = self._views_by_id.get(view_id)
+            img = apply_view_image_transform(src, target_view, stage="preview")
+            if self.chk_heatmap.isChecked() and view_id == self._active_view_id:
+                try:
+                    img = self._make_heatmap_overlay(img)
+                except Exception:
+                    pass
+            self._show_gray_or_bgr(label, img)
+            label.setText("")
+
     def _update_live_view(self):
         try:
             if self.cam.is_trigger_capture_in_progress():
+                return
+            if self._run_effective_preview_mode == "grid":
+                self._update_run_grid_contents()
                 return
             # Zdroj podľa live stavu
             if self.live_enabled:
@@ -2086,8 +2222,10 @@ class MainWindow(QMainWindow):
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
+        self._rebuild_run_preview_layout()
         if self.mode == "RUN" and not self.live_enabled:
             self._apply_run_camera_profile(self._active_view_id)
+            self._update_live_view()
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -2165,6 +2303,7 @@ class MainWindow(QMainWindow):
             return
         self._active_view_id = view_id
         self.view_strip.set_active(view_id)
+        self._refresh_run_grid_selection()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=view_id)
         self._reload_results_strip()

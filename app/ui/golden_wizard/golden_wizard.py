@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QToolButton,
-    QScrollArea
+    QScrollArea,
+    QApplication
 )
 
 import os
@@ -1566,7 +1567,13 @@ class GoldenWizard(QDialog):
 
         self.setSizeGripEnabled(True)
         self.resize(1400, 900)
-        self.setWindowState(self.windowState() | Qt.WindowFullScreen)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        screen = self.windowHandle().screen() if self.windowHandle() else QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
+        self.showFullScreen()
 
     # ---------- Live ----------
     def _pause_runtime_camera_for_wizard(self) -> None:
