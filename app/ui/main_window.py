@@ -201,12 +201,12 @@ class MainWindow(QMainWindow):
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
 
-        self.btn_flash1_toggle = QPushButton("Flash 1 ZAPNUTÉ")
+        self.btn_flash1_toggle = QPushButton("Svetlo 1 ZAPNUŤ")
         self.btn_flash1_toggle.setCheckable(True)
         self.btn_flash1_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(1, checked))
         actions.addWidget(self.btn_flash1_toggle)
 
-        self.btn_flash2_toggle = QPushButton("Flash 2 ZAPNUTÉ")
+        self.btn_flash2_toggle = QPushButton("Svetlo 2 ZAPNUŤ")
         self.btn_flash2_toggle.setCheckable(True)
         self.btn_flash2_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(2, checked))
         actions.addWidget(self.btn_flash2_toggle)
@@ -523,7 +523,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_modbus_flash(self, channel: int, enabled: bool) -> None:
         button = self.btn_flash1_toggle if int(channel) == 1 else self.btn_flash2_toggle
-        button.setText(f"Flash {int(channel)} {'VYPNUTÉ' if enabled else 'ZAPNUTÉ'}")
+        button.setText(f"Svetlo {int(channel)} {'VYPNUŤ' if enabled else 'ZAPNUŤ'}")
         self.modbus.set_flash(channel, enabled)
         if enabled:
             self.lbl_status.setText(f"Flash {int(channel)} zapnutý")
