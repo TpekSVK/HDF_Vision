@@ -96,6 +96,7 @@ class MainWindow(QMainWindow):
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
+        self._pending_trigger_source: str | None = None
         self._run_trigger_session_active = False
         # Tool/Recipe
         try:
@@ -692,6 +693,7 @@ class MainWindow(QMainWindow):
         settle_ms: int | None = None,
         transform_stage: str = "inspection",
         image_rotation_override: int | None = None,
+        capture_request_source: str = "manual",
     ):
         active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
         active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
@@ -723,7 +725,20 @@ class MainWindow(QMainWindow):
         self._logger.info("[VIEW_CAPTURE] resolved trigger_gap_ms=%.2f", trigger_gap_ms)
 
         mode = self.get_capture_mode()
-        self._logger.info("[VIEW_CAPTURE] capture_mode=%s", mode)
+        flash_called = self._pulse_flash_for_capture_request(
+            source=capture_request_source,
+            active_view_id=str(active_view_id) if active_view_id is not None else None,
+            settle_ms=settle_ms,
+            capture_mode=mode,
+        )
+        self._logger.info(
+            "[VIEW_CAPTURE] frame_capture_start source=%s flash_called=%s capture_mode=%s active_view_id=%s settle_ms=%s",
+            capture_request_source,
+            flash_called,
+            mode,
+            active_view_id,
+            settle_ms,
+        )
         if settle_ms is not None and int(settle_ms) > 0:
             time.sleep(float(settle_ms) / 1000.0)
 
@@ -749,6 +764,51 @@ class MainWindow(QMainWindow):
         else:
             frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
         return frame
+
+    def _pulse_flash_for_capture_request(
+        self,
+        *,
+        source: str,
+        active_view_id: str | None,
+        settle_ms: int | None,
+        capture_mode: str,
+    ) -> bool:
+        cfg = self.modbus.get_config()
+        flash_configured = bool(
+            getattr(cfg, "enabled", False)
+            and (
+                int(getattr(cfg, "flash1_coil", -1)) >= 0
+                or int(getattr(cfg, "flash2_coil", -1)) >= 0
+            )
+        )
+        if not flash_configured:
+            self._logger.info(
+                "[FLASH_CAPTURE_REQUEST] source=%s flash_called=no reason=not_configured capture_mode=%s active_view_id=%s settle_ms=%s",
+                source,
+                capture_mode,
+                active_view_id,
+                settle_ms,
+            )
+            return False
+        try:
+            self.modbus.pulse_configured_flashes()
+        except Exception:
+            self._logger.exception(
+                "[FLASH_CAPTURE_REQUEST] source=%s flash_called=no reason=error capture_mode=%s active_view_id=%s settle_ms=%s",
+                source,
+                capture_mode,
+                active_view_id,
+                settle_ms,
+            )
+            return False
+        self._logger.info(
+            "[FLASH_CAPTURE_REQUEST] source=%s flash_called=yes capture_mode=%s active_view_id=%s settle_ms=%s",
+            source,
+            capture_mode,
+            active_view_id,
+            settle_ms,
+        )
+        return True
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
         gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
@@ -848,7 +908,20 @@ class MainWindow(QMainWindow):
         self._logger.info("[GOLDEN_CAPTURE] frame captured")
         return frame
 
-    def _capture_frame_for_trigger(self, *, trigger_mode_label: str, trigger_gap_ms: float | None = None):
+    def _capture_frame_for_trigger(
+        self,
+        *,
+        trigger_mode_label: str,
+        trigger_gap_ms: float | None = None,
+        capture_request_source: str = "manual",
+    ):
+        mode = self.get_capture_mode()
+        self._pulse_flash_for_capture_request(
+            source=capture_request_source,
+            active_view_id=self._active_view_id,
+            settle_ms=None,
+            capture_mode=mode,
+        )
         if self.capture_mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
             return self.cam.capture_trigger_frame(
@@ -860,15 +933,16 @@ class MainWindow(QMainWindow):
             )
         return self.cam.last_frame(caller="run_manual_trigger_master")
 
-    def manual_trigger(self):
+    def manual_trigger(self, trigger_source: str | None = None):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
-        if self.capture_mode == "trigger":
-            self.modbus.pulse_configured_flashes()
+        resolved_source = str(trigger_source or self._pending_trigger_source or "manual").strip().lower()
+        self._pending_trigger_source = None
+        self._logger.info("[CAPTURE_REQUEST] source=%s capture_mode=%s", resolved_source, self.get_capture_mode())
         self._log_run_trigger_context("RUN trigger start")
         try:
-            trigger_state = self._prepare_run_trigger()
+            trigger_state = self._prepare_run_trigger(trigger_source=resolved_source)
         except Exception as exc:
             self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
             self._resume_live_preview_after_trigger(False)
@@ -879,7 +953,10 @@ class MainWindow(QMainWindow):
             self._logger.info("trigger_click(caller=run_manual_trigger)")
             self._log_trigger_cycle("cycle_start", preview_state="paused")
             if trigger_state["recipe_cfg"] is None:
-                base_frame = self._capture_frame_for_trigger(trigger_mode_label="manual_gpio")
+                base_frame = self._capture_frame_for_trigger(
+                    trigger_mode_label="manual_gpio",
+                    capture_request_source=resolved_source,
+                )
                 active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
                 base_frame = apply_view_image_transform(base_frame, active_view, stage="inspection")
                 self._update_manual_trigger_feedback()
@@ -913,7 +990,7 @@ class MainWindow(QMainWindow):
         finally:
             self._resume_live_preview_after_trigger(bool(trigger_state.get("was_live_enabled", False)) if trigger_state else False)
 
-    def _prepare_run_trigger(self) -> dict[str, Any] | None:
+    def _prepare_run_trigger(self, *, trigger_source: str) -> dict[str, Any] | None:
         was_live_enabled = self._pause_live_preview_for_trigger()
         gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
         recipe_name = self.current_recipe_name()
@@ -938,6 +1015,7 @@ class MainWindow(QMainWindow):
                     getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
                 ),
                 "base_camera_state": base_camera_state,
+                "trigger_source": trigger_source,
             }
 
         if not getattr(recipe_cfg, "regions", None):
@@ -991,6 +1069,7 @@ class MainWindow(QMainWindow):
                 for spec in view_specs
             },
             "base_camera_state": base_camera_state,
+            "trigger_source": trigger_source,
             "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
         }
 
@@ -1048,6 +1127,7 @@ class MainWindow(QMainWindow):
                 base_camera_state=base_camera_state,
                 settle_ms=settle_ms,
                 transform_stage="inspection",
+                capture_request_source=trigger_state.get("trigger_source", "manual"),
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
@@ -1409,8 +1489,7 @@ class MainWindow(QMainWindow):
         print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
-        if self.capture_mode == "trigger":
-            self.modbus.pulse_configured_flashes()
+        self._pending_trigger_source = str(source or "external").strip().lower()
         self.external_triggered.emit()
 
     def _update_live_view(self):
