@@ -898,10 +898,17 @@ class MainWindow(QMainWindow):
         image_rotation_override: int | None = None,
     ):
         self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
+        active_view = self._resolve_active_capture_view(requested_view_id=view_id)
+        settle_ms = getattr(active_view, "settle_ms", None) if active_view is not None else None
+        settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
+        if settle_ms is not None and settle_ms < 0:
+            settle_ms = 0
         frame = self._capture_frame_for_view(
             trigger_mode_label=trigger_mode_label,
             master_caller="golden_wizard_capture_master",
+            view=active_view,
             view_id=view_id,
+            settle_ms=settle_ms,
             transform_stage="golden capture",
             image_rotation_override=image_rotation_override,
         )
