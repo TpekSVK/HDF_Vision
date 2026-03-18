@@ -31,3 +31,11 @@ def test_golden_trigger_mode_has_no_preview_fallbacks() -> None:
     assert "last_frame(" not in trigger_block
     assert "one_shot(" not in trigger_block
     assert "last_frame_u8" not in trigger_block
+
+
+def test_golden_capture_passes_active_view_settle_ms() -> None:
+    source = Path("app/ui/main_window.py").read_text(encoding="utf-8")
+
+    assert 'active_view = self._resolve_active_capture_view(requested_view_id=view_id)' in source
+    assert 'settle_ms = getattr(active_view, "settle_ms", None) if active_view is not None else None' in source
+    assert 'settle_ms=settle_ms,' in source
