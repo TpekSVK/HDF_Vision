@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
-    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication
+    QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication,
+    QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSettings
 from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
@@ -298,7 +299,14 @@ class MainWindow(QMainWindow):
 
         # Posledné meranie (TRIGGER)
         side.addWidget(QLabel("— Posledné meranie —"))
+        self.metrics_scroll = QScrollArea()
+        self.metrics_scroll.setWidgetResizable(True)
+        self.metrics_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.metrics_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.metrics_scroll.setFrameShape(QFrame.NoFrame)
+        self.metrics_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         self.metrics_container = QWidget()
+        self.metrics_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
         self.metrics_layout = QGridLayout(self.metrics_container)
         self.metrics_layout.setContentsMargins(0, 0, 0, 0)
         self.metrics_layout.setSpacing(4)
@@ -307,7 +315,8 @@ class MainWindow(QMainWindow):
         self._metrics_placeholder = QLabel("Žiadne dáta")
         self._metrics_placeholder.setStyleSheet("color:#777;")
         self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
-        side.addWidget(self.metrics_container)
+        self.metrics_scroll.setWidget(self.metrics_container)
+        side.addWidget(self.metrics_scroll, 1)
 
         side.addStretch(1)
         preview_row.addWidget(self.side_panel, 1)
@@ -1768,12 +1777,14 @@ class MainWindow(QMainWindow):
                 else:
                     widget.deleteLater()
             self._metrics_widgets.clear()
+            self.metrics_container.adjustSize()
 
             if not rows:
                 self._metrics_placeholder.setParent(self.metrics_container)
                 self._metrics_placeholder.setText("Žiadne dáta")
                 self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
                 self._metrics_placeholder.show()
+                self.metrics_container.adjustSize()
                 return
 
             self._metrics_placeholder.hide()
@@ -1784,6 +1795,8 @@ class MainWindow(QMainWindow):
                 self.metrics_layout.addWidget(name_label, row_index, 0)
                 self.metrics_layout.addWidget(value_label, row_index, 1)
                 self._metrics_widgets.extend([name_label, value_label])
+
+            self.metrics_container.adjustSize()
 
     def _record_run_result(
         self,
