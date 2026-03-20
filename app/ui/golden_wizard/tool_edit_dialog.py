@@ -547,17 +547,18 @@ class ToolEditDialog(QDialog):
             initial_roi = self._tool.roi.rect()
 
         initial_mask: Optional[np.ndarray] = None
-        mask_value = params_values.get("ignore_mask") if isinstance(params_values, dict) else None
-        if isinstance(mask_value, ToolMask):
-            initial_mask = mask_value.value
-        elif mask_value is not None:
-            try:
-                mask_obj = ToolMask.from_obj(mask_value)
-                initial_mask = mask_obj.value
-            except Exception:  # pragma: no cover - defensive
-                initial_mask = None
-        elif self._tool.ignore_mask.value is not None:
+        if self._tool.ignore_mask.value is not None:
             initial_mask = np.asarray(self._tool.ignore_mask.value)
+        else:
+            mask_value = params_values.get("ignore_mask") if isinstance(params_values, dict) else None
+            if isinstance(mask_value, ToolMask):
+                initial_mask = mask_value.value
+            elif mask_value is not None:
+                try:
+                    mask_obj = ToolMask.from_obj(mask_value)
+                    initial_mask = mask_obj.value
+                except Exception:  # pragma: no cover - defensive
+                    initial_mask = None
 
         if self._mask_editor is not None:
             self._mask_editor.set_roi_overlay(initial_roi)

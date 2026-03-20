@@ -354,14 +354,14 @@ class Tool:
             view_id=str(data.get("view_id", "")),
         )
 
-    def copy(self) -> "Tool":
+    def copy(self, *, copy_mask: bool = True) -> "Tool":
         return Tool(
             type=self.type,
             name=self.name,
             enabled=self.enabled,
             order=self.order,
             roi=self.roi.copy(),
-            ignore_mask=self.ignore_mask.copy(),
+            ignore_mask=self.ignore_mask.copy() if copy_mask else ToolMask(self.ignore_mask.value),
             params=self.params.copy(),
             thresholds=self.thresholds.copy(),
             template_roi=self.template_roi.copy(),
