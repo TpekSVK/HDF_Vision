@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -74,6 +75,7 @@ class LatencyTracker:
 
 
 _LATENCY_TRACKER = LatencyTracker()
+logger = logging.getLogger(__name__)
 
 
 def record_tool_latency(tool_id: str, latency_ms: float) -> None:
@@ -664,9 +666,12 @@ def _validate_params(tool: Tool) -> None:
 
 
 def _apply_regions_from_params(tool: Tool) -> None:
-    """Synchronize ``tool.roi`` and ``tool.ignore_mask`` from stored params."""
+    """Synchronize runtime ROI and lazily hydrate ignore mask from stored params."""
 
+    debug_timing = logger.isEnabledFor(logging.DEBUG)
+    start_time = time.perf_counter() if debug_timing else 0.0
     params_values = dict(getattr(tool.params, "values", {}) or {})
+    mask_loaded_from_params = False
 
     if "roi" in params_values:
         try:
@@ -674,11 +679,33 @@ def _apply_regions_from_params(tool: Tool) -> None:
         except Exception:
             tool.roi = ToolRoi()
 
-    if "ignore_mask" in params_values:
+    if tool.ignore_mask.value is None and "ignore_mask" in params_values:
+        decode_start = time.perf_counter() if debug_timing else 0.0
         try:
             tool.ignore_mask = ToolMask.from_obj(params_values.get("ignore_mask"))
+            mask_loaded_from_params = tool.ignore_mask.value is not None
         except Exception:
             tool.ignore_mask = ToolMask(None)
+        if debug_timing and mask_loaded_from_params:
+            logger.debug(
+                "ignore_mask fallback decoded tool=%s took=%.2fms",
+                tool.name or tool.type,
+                (time.perf_counter() - decode_start) * 1000.0,
+            )
+
+    if debug_timing:
+        logger.debug(
+            "_apply_regions_from_params tool=%s mask_source=%s took=%.2fms",
+            tool.name or tool.type,
+            "params_fallback" if mask_loaded_from_params else ("runtime" if tool.ignore_mask.value is not None else "none"),
+            (time.perf_counter() - start_time) * 1000.0,
+        )
+
+
+def _make_report_tool_copy(tool: Tool) -> Tool:
+    """Create a lightweight tool copy for pipeline reports without duplicating large masks."""
+
+    return tool.copy(copy_mask=False)
 
 
 class PipelineOrchestrator:
@@ -842,9 +869,10 @@ class PipelineOrchestrator:
             diagnostics.append(diag_entry)
             record_tool_latency(str(tool_id), float(result.latency_ms))
 
+            report_start = time.perf_counter() if logger.isEnabledFor(logging.DEBUG) else 0.0
             per_tool.append(
                 PipelineToolReport(
-                    tool=tool.copy(),
+                    tool=_make_report_tool_copy(tool),
                     tool_id=str(tool_id),
                     order=int(tool_order),
                     status=result.status,
@@ -854,6 +882,12 @@ class PipelineOrchestrator:
                     overlay_items=tool_overlay_items,
                 )
             )
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "PipelineToolReport created tool=%s took=%.2fms",
+                    tool.name or tool.type,
+                    (time.perf_counter() - report_start) * 1000.0,
+                )
 
             if self._is_locator(tool):
                 locator_found = bool(metrics.get("found", diag_data.get("found", True)))
@@ -1063,8 +1097,9 @@ class PipelineOrchestrator:
             diagnostics.append(diag_entry)
             record_tool_latency(str(tool_id), float(result.latency_ms))
 
+            report_start = time.perf_counter() if logger.isEnabledFor(logging.DEBUG) else 0.0
             report = PipelineToolReport(
-                tool=tool.copy(),
+                tool=_make_report_tool_copy(tool),
                 tool_id=str(tool_id),
                 order=int(tool_order),
                 status=result.status,
@@ -1074,6 +1109,12 @@ class PipelineOrchestrator:
                 overlay_items=tool_overlay_items,
             )
             per_tool.append(report)
+            if logger.isEnabledFor(logging.DEBUG):
+                logger.debug(
+                    "PipelineToolReport created tool=%s took=%.2fms",
+                    tool.name or tool.type,
+                    (time.perf_counter() - report_start) * 1000.0,
+                )
 
             if self._is_locator(tool):
                 diag_data = diagnostics_payload if isinstance(diagnostics_payload, dict) else {}
