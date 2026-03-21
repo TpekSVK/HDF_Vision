@@ -228,6 +228,12 @@ class SSIMTool(BaseTool):
         T_total = runner_context.T_total
         frame_is_aligned = runner_context.frame_is_aligned
 
+        ignore_mask = (
+            tool.ignore_mask.value
+            if isinstance(tool, Tool) and tool.ignore_mask.value is not None
+            else None
+        )
+
         result, diagnostics = run_ssim_tool(
             golden,
             frame,
@@ -237,6 +243,7 @@ class SSIMTool(BaseTool):
             T_total=T_total,
             frame_is_aligned=frame_is_aligned,
             tool_id=str(tool_id),
+            ignore_mask=ignore_mask,
         )
         self.last_diagnostics = diagnostics
         return result
@@ -2013,6 +2020,7 @@ def run_ssim_tool(
     T_total: np.ndarray | None,
     frame_is_aligned: bool,
     tool_id: str = "ssim",
+    ignore_mask: np.ndarray | None = None,
 ) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Compute SSIM within ROI, honoring optional locator alignment."""
 
@@ -2046,12 +2054,44 @@ def run_ssim_tool(
             frame_u8 = imaging.warp_by_translation_u8(frame_orig_u8, -dx_total, -dy_total)
         virtual_alignment = True
 
+    mask_note: str | None = None
+    include_mask_full: np.ndarray | None = None
+    ignore_mask_pixels = 0
+    effective_mask_pixels = int(gw * gh)
+    if ignore_mask is not None:
+        try:
+            mask_arr = np.asarray(ignore_mask)
+            if mask_arr.ndim > 2:
+                mask_arr = np.squeeze(mask_arr)
+            if mask_arr.ndim != 2:
+                raise ValueError(f"expected 2D mask, got ndim={mask_arr.ndim}")
+            mask_h = min(mask_arr.shape[0], gh)
+            mask_w = min(mask_arr.shape[1], gw)
+            if mask_h <= 0 or mask_w <= 0:
+                raise ValueError("mask has no overlap with evaluated image")
+            mask_u8 = np.zeros((gh, gw), dtype=np.uint8)
+            mask_u8[:mask_h, :mask_w] = (mask_arr[:mask_h, :mask_w] > 0).astype(np.uint8) * 255
+            include_mask_full = np.where(mask_u8 > 0, 0, 255).astype(np.uint8)
+            ignore_mask_pixels = int(np.count_nonzero(mask_u8))
+            effective_mask_pixels = int(np.count_nonzero(include_mask_full))
+            if mask_arr.shape[:2] != (gh, gw):
+                mask_note = f"ignore_mask_shape_adjusted:{tuple(mask_arr.shape[:2])}->{(gh, gw)}"
+        except Exception as exc:
+            include_mask_full = None
+            ignore_mask_pixels = 0
+            effective_mask_pixels = int(gw * gh)
+            mask_note = f"ignore_mask_ignored:{exc}"
+
     x, y, w, h = roi_rect
     golden_crop = golden_u8[y : y + h, x : x + w]
     frame_crop = frame_u8[y : y + h, x : x + w]
+    include_mask_crop = None
+    if include_mask_full is not None:
+        include_mask_crop = include_mask_full[y : y + h, x : x + w]
+        effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
 
     with imaging.time_block("ssim", timings):
-        ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop))
+        ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop, mask_u8=include_mask_crop))
     metrics = {"ssim": float(ssim_val)}
     status = status_from_metrics("ssim", metrics, thresholds_dict)
     diagnostics = {
@@ -2061,7 +2101,14 @@ def run_ssim_tool(
         "ssim_min": ssim_min,
         "dx_total": dx_total,
         "dy_total": dy_total,
+        "ignore_mask_used": include_mask_crop is not None,
+        "ignore_mask_pixels": int(ignore_mask_pixels),
+        "effective_mask_pixels": int(effective_mask_pixels),
     }
+    if effective_mask_pixels == 0:
+        diagnostics["mask_note"] = "effective_mask_area=0"
+    elif mask_note is not None:
+        diagnostics["mask_note"] = mask_note
     if timings:
         diagnostics["timings_ms"] = {
             entry.name: float(entry.elapsed_ms) for entry in timings
