@@ -2054,41 +2054,41 @@ def run_ssim_tool(
             frame_u8 = imaging.warp_by_translation_u8(frame_orig_u8, -dx_total, -dy_total)
         virtual_alignment = True
 
-    mask_note: str | None = None
-    include_mask_full: np.ndarray | None = None
-    ignore_mask_pixels = 0
-    effective_mask_pixels = int(gw * gh)
-    if ignore_mask is not None:
-        try:
-            mask_arr = np.asarray(ignore_mask)
-            if mask_arr.ndim > 2:
-                mask_arr = np.squeeze(mask_arr)
-            if mask_arr.ndim != 2:
-                raise ValueError(f"expected 2D mask, got ndim={mask_arr.ndim}")
-            mask_h = min(mask_arr.shape[0], gh)
-            mask_w = min(mask_arr.shape[1], gw)
-            if mask_h <= 0 or mask_w <= 0:
-                raise ValueError("mask has no overlap with evaluated image")
-            mask_u8 = np.zeros((gh, gw), dtype=np.uint8)
-            mask_u8[:mask_h, :mask_w] = (mask_arr[:mask_h, :mask_w] > 0).astype(np.uint8) * 255
-            include_mask_full = np.where(mask_u8 > 0, 0, 255).astype(np.uint8)
-            ignore_mask_pixels = int(np.count_nonzero(mask_u8))
-            effective_mask_pixels = int(np.count_nonzero(include_mask_full))
-            if mask_arr.shape[:2] != (gh, gw):
-                mask_note = f"ignore_mask_shape_adjusted:{tuple(mask_arr.shape[:2])}->{(gh, gw)}"
-        except Exception as exc:
-            include_mask_full = None
-            ignore_mask_pixels = 0
-            effective_mask_pixels = int(gw * gh)
-            mask_note = f"ignore_mask_ignored:{exc}"
-
     x, y, w, h = roi_rect
     golden_crop = golden_u8[y : y + h, x : x + w]
     frame_crop = frame_u8[y : y + h, x : x + w]
-    include_mask_crop = None
-    if include_mask_full is not None:
-        include_mask_crop = include_mask_full[y : y + h, x : x + w]
-        effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
+
+    mask_note: str | None = None
+    include_mask_crop: np.ndarray | None = None
+    ignore_mask_pixels = 0
+    effective_mask_pixels = int(w * h)
+    if ignore_mask is not None:
+        try:
+            with imaging.time_block("prepare_ignore_mask", timings):
+                mask_arr = np.asarray(ignore_mask)
+                if mask_arr.ndim > 2:
+                    mask_arr = np.squeeze(mask_arr)
+                if mask_arr.ndim != 2:
+                    raise ValueError(f"expected 2D mask, got ndim={mask_arr.ndim}")
+
+                roi_mask_h = min(h, max(0, mask_arr.shape[0] - y))
+                roi_mask_w = min(w, max(0, mask_arr.shape[1] - x))
+                if roi_mask_h > 0 and roi_mask_w > 0:
+                    mask_crop_bool = mask_arr[y : y + roi_mask_h, x : x + roi_mask_w] > 0
+                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
+                    include_mask_crop[:roi_mask_h, :roi_mask_w][mask_crop_bool] = 0
+                    ignore_mask_pixels = int(np.count_nonzero(mask_crop_bool))
+                    effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
+                else:
+                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
+
+                if mask_arr.shape[:2] != (gh, gw):
+                    mask_note = f"ignore_mask_shape_adjusted:{tuple(mask_arr.shape[:2])}->{(gh, gw)}"
+        except Exception as exc:
+            include_mask_crop = None
+            ignore_mask_pixels = 0
+            effective_mask_pixels = int(w * h)
+            mask_note = f"ignore_mask_ignored:{exc}"
 
     with imaging.time_block("ssim", timings):
         ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop, mask_u8=include_mask_crop))
