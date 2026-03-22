@@ -144,7 +144,8 @@ class EdgeAnchorEditor(QWidget):
         self._next_target: str = "a"
         self._roi_rect: Optional[tuple[int, int, int, int]] = None
         self._detected_line: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
-        self.setMinimumHeight(220)
+        self.setMinimumHeight(260)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
@@ -807,19 +808,30 @@ class ToolEditDialog(QDialog):
         self._update_edge_anchor_status(pa, pb)
 
     def _init_edge_anchor_panel(self) -> None:
-        if getattr(self, "_roi_sections_layout", None) is None:
+        parent_layout = getattr(self, "_roi_sections_layout", None)
+        use_sections_layout = parent_layout is not None
+        if parent_layout is None:
+            parent_layout = getattr(self, "_roi_layout", None)
+        if parent_layout is None:
             return
-        group = QGroupBox("Anchor points A-B", self)
+
+        group = QGroupBox("Body A-B", self)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(8, 8, 8, 8)
         group_layout.setSpacing(6)
 
-        hint = QLabel("Vyber body A a B kliknutím do golden snímky. Body sa ukladajú do parametrov point_a/point_b.", group)
+        hint = QLabel(
+            "Najprv nastav ROI oblasť. Potom klikni do obrázka pre bod A a následne pre bod B. "
+            "Medzi A-B sa bude sledovať priamkovosť/rovinatosť hrany.",
+            group,
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #666;")
         group_layout.addWidget(hint)
 
         self._edge_anchor_editor = EdgeAnchorEditor(group)
+        self._edge_anchor_editor.setMinimumHeight(260)
+        self._edge_anchor_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         if self._golden_pixmap is not None:
             self._edge_anchor_editor.set_background(self._golden_pixmap)
         params_values = dict(getattr(self._tool.params, "values", {}) or {})
@@ -836,7 +848,7 @@ class ToolEditDialog(QDialog):
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
-        btn_clear = QPushButton("Obnoviť A-B", group)
+        btn_clear = QPushButton("Vymazať A-B", group)
         btn_clear.clicked.connect(self._edge_anchor_editor.clear_points)
         controls.addWidget(btn_clear)
         self._btn_edge_auto_detect = QPushButton("Automaticky nájsť hranu v ROI", group)
@@ -850,7 +862,14 @@ class ToolEditDialog(QDialog):
         group_layout.addWidget(self._edge_anchor_status)
         self._update_edge_anchor_status(pa, pb)
 
-        self._roi_sections_layout.addWidget(group, 1)
+        if use_sections_layout:
+            parent_layout.addWidget(group, 1)
+        else:
+            info_index = parent_layout.indexOf(self._info_label) if self._info_label is not None else -1
+            if info_index >= 0:
+                parent_layout.insertWidget(info_index, group, 1)
+            else:
+                parent_layout.addWidget(group, 1)
 
     def _detect_edge_line_in_roi(self) -> tuple[bool, str]:
         if self._edge_anchor_editor is None:
