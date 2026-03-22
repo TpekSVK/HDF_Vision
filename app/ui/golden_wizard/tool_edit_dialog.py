@@ -1023,31 +1023,45 @@ class ToolEditDialog(QDialog):
         mode_label = QLabel("Režim odhadu uhla", group)
         form_layout.addRow(mode_label, self._angle_mode_combo)
 
+        angle_roi_section = QWidget(group)
+        angle_roi_section_layout = QVBoxLayout(angle_roi_section)
+        angle_roi_section_layout.setContentsMargins(0, 0, 0, 0)
+        angle_roi_section_layout.setSpacing(6)
+
         angle_roi_hint = QLabel(
             "Edge-based (fast): nakresli malé ROI na golden snímke okolo jednej výraznej hrany. "
             "Táto oblasť sa použije iba na odhad uhla/rotácie. Vyber krátku, kontrastnú a stabilnú "
             "hranu – nie celý diel.",
-            group,
+            angle_roi_section,
         )
         angle_roi_hint.setWordWrap(True)
-        form_layout.addRow(angle_roi_hint)
+        angle_roi_section_layout.addWidget(angle_roi_hint)
 
-        angle_roi_label = QLabel("ROI pre odhad uhla", group)
-        self._angle_roi_editor = AngleRoiEditor(group)
-        self._angle_roi_editor.setMinimumHeight(180)
+        angle_roi_group = QGroupBox("ROI pre odhad uhla", angle_roi_section)
+        angle_roi_group_layout = QVBoxLayout(angle_roi_group)
+        angle_roi_group_layout.setContentsMargins(8, 8, 8, 8)
+        angle_roi_group_layout.setSpacing(6)
+
+        self._angle_roi_editor = AngleRoiEditor(angle_roi_group)
+        self._angle_roi_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._angle_roi_editor.setMinimumSize(300, 200)
+        self._angle_roi_editor.setMinimumHeight(250)
         if self._golden_pixmap is not None:
             self._angle_roi_editor.set_background(self._golden_pixmap)
         angle_roi_rect = self._rect_from_any(param_values.get("angle_roi"))
         if angle_roi_rect:
             self._angle_roi_editor.set_roi(angle_roi_rect)
-        angle_roi_container = QWidget(group)
-        angle_roi_layout = QVBoxLayout(angle_roi_container)
-        angle_roi_layout.setContentsMargins(0, 0, 0, 0)
-        angle_roi_layout.setSpacing(4)
-        angle_roi_layout.addWidget(self._angle_roi_editor)
-        form_layout.addRow(angle_roi_label, angle_roi_container)
-        self._angle_roi_container = angle_roi_container
-        self._angle_field_rows["angle_roi"] = (angle_roi_label, angle_roi_container)
+        angle_roi_group_layout.addWidget(self._angle_roi_editor, 1)
+        angle_roi_section_layout.addWidget(angle_roi_group, 1)
+        group_layout.addWidget(angle_roi_section, 1)
+
+        self._angle_roi_container = angle_roi_section
+        self._angle_field_rows["angle_roi"] = (angle_roi_section, angle_roi_section)
+
+        params_form_layout = QFormLayout()
+        params_form_layout.setContentsMargins(0, 0, 0, 0)
+        params_form_layout.setSpacing(6)
+        group_layout.addLayout(params_form_layout)
 
         def _add_angle_field(field_name: str) -> Optional[QWidget]:
             spec = self._locator_angle_specs.get(field_name)
@@ -1069,7 +1083,7 @@ class ToolEditDialog(QDialog):
                 widget.setToolTip(tooltip)
                 label_widget.setToolTip(tooltip)
                 container.setToolTip(tooltip)
-            form_layout.addRow(label_widget, container)
+            params_form_layout.addRow(label_widget, container)
             self._connect_field_signals(widget, spec, kind="param", name=field_name)
             self._angle_field_rows[field_name] = (label_widget, container)
             return widget
