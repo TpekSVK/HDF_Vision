@@ -15,6 +15,10 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
+    QGraphicsEllipseItem,
+    QGraphicsLineItem,
+    QGraphicsRectItem,
+    QGraphicsSimpleTextItem,
     QGroupBox,
     QHBoxLayout,
     QLineEdit,
@@ -33,7 +37,7 @@ from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi, ToolThreshold
 from app.services.live_preview_service import LivePreviewService
 from app.services.tool_registry import ToolRegistry
 from app.services.tool_service import ToolRunResult, run_locator_template_match
-from app.ui.roi_mask_editor import MaskEditor, ROIEditor
+from app.ui.roi_mask_editor import MaskEditor, ROIEditor, _ImageView
 
 from .form_widgets import (
     _SUPPORTED_FORM_FIELD_TYPES,
@@ -131,44 +135,91 @@ class AngleRoiEditor(QWidget):
         self._btn_reset.setEnabled(bool(enabled))
 
 
-class EdgeAnchorEditor(QWidget):
+class EdgeAnchorEditor(_ImageView):
     """Simple point editor for selecting A-B anchors directly on golden image."""
 
     pointsChanged = Signal(object, object)
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
-        self._pixmap: Optional[QPixmap] = None
         self._point_a: Optional[tuple[float, float]] = None
         self._point_b: Optional[tuple[float, float]] = None
         self._next_target: str = "a"
         self._roi_rect: Optional[tuple[int, int, int, int]] = None
         self._detected_line: Optional[tuple[tuple[float, float], tuple[float, float]]] = None
+        self._roi_item: Optional[QGraphicsRectItem] = None
+        self._segment_item: Optional[QGraphicsLineItem] = None
+        self._line_item: Optional[QGraphicsLineItem] = None
+        self._point_a_item: Optional[QGraphicsEllipseItem] = None
+        self._point_b_item: Optional[QGraphicsEllipseItem] = None
+        self._point_a_label: Optional[QGraphicsSimpleTextItem] = None
+        self._point_b_label: Optional[QGraphicsSimpleTextItem] = None
         self.setMinimumHeight(260)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMouseTracking(True)
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
-        self._pixmap = pixmap
-        self.update()
+        self.set_pixmap(pixmap)
+        self._roi_item = None
+        self._segment_item = None
+        self._line_item = None
+        self._point_a_item = None
+        self._point_b_item = None
+        self._point_a_label = None
+        self._point_b_label = None
+        self.set_roi_rect(self._roi_rect)
+        self.set_detected_line(self._detected_line)
+        self.set_points(self._point_a, self._point_b)
 
     def set_roi_rect(self, roi_rect: Optional[tuple[int, int, int, int]]) -> None:
         self._roi_rect = roi_rect
-        self.update()
+        scene = self.scene()
+        if scene is None:
+            return
+        if self._roi_item is not None:
+            scene.removeItem(self._roi_item)
+            self._roi_item = None
+        if roi_rect is None:
+            return
+        rx, ry, rw, rh = roi_rect
+        self._roi_item = scene.addRect(
+            float(rx),
+            float(ry),
+            float(rw),
+            float(rh),
+            QPen(QColor(80, 230, 120), 2, Qt.DashLine),
+        )
+        self._roi_item.setZValue(5)
 
     def set_detected_line(
         self,
         line: Optional[tuple[tuple[float, float], tuple[float, float]]],
     ) -> None:
         self._detected_line = line
-        self.update()
+        scene = self.scene()
+        if scene is None:
+            return
+        if self._line_item is not None:
+            scene.removeItem(self._line_item)
+            self._line_item = None
+        if line is None:
+            return
+        p1, p2 = line
+        self._line_item = scene.addLine(
+            float(p1[0]),
+            float(p1[1]),
+            float(p2[0]),
+            float(p2[1]),
+            QPen(QColor(255, 235, 59), 2),
+        )
+        self._line_item.setZValue(7)
 
     def clear_points(self) -> None:
         self._point_a = None
         self._point_b = None
         self._next_target = "a"
-        self.pointsChanged.emit(self._point_a, self._point_b)
-        self.update()
+        self.set_detected_line(None)
+        self.set_points(self._point_a, self._point_b)
 
     def set_points(
         self,
@@ -178,109 +229,83 @@ class EdgeAnchorEditor(QWidget):
         self._point_a = point_a
         self._point_b = point_b
         self._next_target = "a" if point_a is None else ("b" if point_b is None else "a")
+        scene = self.scene()
+        if scene is not None:
+            for item in (
+                self._point_a_item,
+                self._point_b_item,
+                self._point_a_label,
+                self._point_b_label,
+            ):
+                if item is not None:
+                    scene.removeItem(item)
+            self._point_a_item = None
+            self._point_b_item = None
+            self._point_a_label = None
+            self._point_b_label = None
+            if self._segment_item is not None:
+                scene.removeItem(self._segment_item)
+                self._segment_item = None
+            if point_a is not None:
+                x, y = point_a
+                self._point_a_item = scene.addEllipse(
+                    float(x) - 5.0,
+                    float(y) - 5.0,
+                    10.0,
+                    10.0,
+                    QPen(QColor(255, 110, 110), 2),
+                    QColor(255, 110, 110),
+                )
+                self._point_a_item.setZValue(10)
+                self._point_a_label = scene.addSimpleText("A")
+                self._point_a_label.setBrush(QColor(255, 110, 110))
+                self._point_a_label.setPos(float(x) + 8.0, float(y) - 18.0)
+                self._point_a_label.setZValue(11)
+            if point_b is not None:
+                x, y = point_b
+                self._point_b_item = scene.addEllipse(
+                    float(x) - 5.0,
+                    float(y) - 5.0,
+                    10.0,
+                    10.0,
+                    QPen(QColor(110, 170, 255), 2),
+                    QColor(110, 170, 255),
+                )
+                self._point_b_item.setZValue(10)
+                self._point_b_label = scene.addSimpleText("B")
+                self._point_b_label.setBrush(QColor(110, 170, 255))
+                self._point_b_label.setPos(float(x) + 8.0, float(y) - 18.0)
+                self._point_b_label.setZValue(11)
+            if point_a is not None and point_b is not None:
+                self._segment_item = scene.addLine(
+                    float(point_a[0]),
+                    float(point_a[1]),
+                    float(point_b[0]),
+                    float(point_b[1]),
+                    QPen(QColor(255, 210, 110), 2),
+                )
+                self._segment_item.setZValue(9)
         self.pointsChanged.emit(self._point_a, self._point_b)
-        self.update()
 
     def points(self) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
         return self._point_a, self._point_b
 
-    def _image_rect(self) -> Optional[QRectF]:
-        if self._pixmap is None or self._pixmap.isNull():
-            return None
-        pw = float(self._pixmap.width())
-        ph = float(self._pixmap.height())
-        ww = float(max(1, self.width()))
-        wh = float(max(1, self.height()))
-        scale = min(ww / pw, wh / ph)
-        rw = pw * scale
-        rh = ph * scale
-        ox = (ww - rw) * 0.5
-        oy = (wh - rh) * 0.5
-        return QRectF(ox, oy, rw, rh)
-
-    def _widget_from_image(self, point: tuple[float, float], rect: QRectF) -> QPointF:
-        assert self._pixmap is not None
-        x = rect.left() + (float(point[0]) / max(1.0, float(self._pixmap.width()))) * rect.width()
-        y = rect.top() + (float(point[1]) / max(1.0, float(self._pixmap.height()))) * rect.height()
-        return QPointF(x, y)
-
-    def _image_from_widget(self, pos: QPointF, rect: QRectF) -> Optional[tuple[float, float]]:
-        if self._pixmap is None or rect.width() <= 0 or rect.height() <= 0:
-            return None
-        if not rect.contains(pos):
-            return None
-        xn = (pos.x() - rect.left()) / rect.width()
-        yn = (pos.y() - rect.top()) / rect.height()
-        x = float(np.clip(xn * self._pixmap.width(), 0.0, max(0.0, self._pixmap.width() - 1.0)))
-        y = float(np.clip(yn * self._pixmap.height(), 0.0, max(0.0, self._pixmap.height() - 1.0)))
-        return x, y
-
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.button() != Qt.LeftButton:
-            super().mousePressEvent(event)
-            return
-        rect = self._image_rect()
-        if rect is None:
-            return
-        point = self._image_from_widget(event.position(), rect)
-        if point is None:
-            return
-        if self._next_target == "a":
-            self._point_a = point
-            self._next_target = "b"
-        else:
-            self._point_b = point
-            self._next_target = "a"
-        self.pointsChanged.emit(self._point_a, self._point_b)
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(20, 20, 20))
-
-        rect = self._image_rect()
-        if self._pixmap is None or self._pixmap.isNull() or rect is None:
-            painter.setPen(QColor(180, 180, 180))
-            painter.drawText(self.rect(), Qt.AlignCenter, "Golden image not available")
-            return
-
-        painter.drawPixmap(rect.toRect(), self._pixmap)
-        painter.setPen(QPen(QColor(110, 110, 110), 1, Qt.DashLine))
-        painter.drawRect(rect)
-
-        if self._roi_rect is not None:
-            rx, ry, rw, rh = self._roi_rect
-            roi_tl = self._widget_from_image((float(rx), float(ry)), rect)
-            roi_br = self._widget_from_image((float(rx + rw), float(ry + rh)), rect)
-            roi_rect = QRectF(roi_tl, roi_br).normalized()
-            painter.setPen(QPen(QColor(80, 230, 120), 2, Qt.DashLine))
-            painter.drawRect(roi_rect)
-
-        if self._detected_line is not None:
-            p1_img, p2_img = self._detected_line
-            p1 = self._widget_from_image(p1_img, rect)
-            p2 = self._widget_from_image(p2_img, rect)
-            painter.setPen(QPen(QColor(255, 235, 59), 2))
-            painter.drawLine(p1, p2)
-
-        def _draw_point(pt: tuple[float, float], label: str, color: QColor) -> QPointF:
-            wp = self._widget_from_image(pt, rect)
-            painter.setPen(QPen(color, 2))
-            painter.setBrush(color)
-            painter.drawEllipse(wp, 5.0, 5.0)
-            painter.setPen(QPen(color, 1))
-            painter.drawText(wp + QPointF(8.0, -8.0), label)
-            return wp
-
-        wp_a: Optional[QPointF] = None
-        wp_b: Optional[QPointF] = None
-        if self._point_a is not None:
-            wp_a = _draw_point(self._point_a, "A", QColor(255, 110, 110))
-        if self._point_b is not None:
-            wp_b = _draw_point(self._point_b, "B", QColor(110, 170, 255))
-        if wp_a is not None and wp_b is not None:
-            painter.setPen(QPen(QColor(255, 210, 110), 2))
-            painter.drawLine(wp_a, wp_b)
+        if event.button() == Qt.LeftButton and not self._space_pressed:
+            scene_rect = self.scene_rect()
+            point = self.mapToScene(event.position().toPoint())
+            if scene_rect.contains(point):
+                if self._next_target == "a":
+                    self._point_a = (point.x(), point.y())
+                    self._next_target = "b"
+                else:
+                    self._point_b = (point.x(), point.y())
+                    self._next_target = "a"
+                self.set_detected_line(None)
+                self.set_points(self._point_a, self._point_b)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
 
 
@@ -383,6 +408,7 @@ class ToolEditDialog(QDialog):
         self._tabs = QTabWidget(self)
         self._tabs.setDocumentMode(True)
         self._roi_tab_index: Optional[int] = None
+        self._edge_anchor_tab_index: Optional[int] = None
         self._mask_tab_index: Optional[int] = None
         self._tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self._tabs, 1)
@@ -391,6 +417,8 @@ class ToolEditDialog(QDialog):
         roi_layout = QVBoxLayout(roi_tab)
         roi_layout.setContentsMargins(0, 0, 0, 0)
         roi_layout.setSpacing(8)
+        edge_tab: Optional[QWidget] = None
+        edge_layout: Optional[QVBoxLayout] = None
 
         roi_group: Optional[QGroupBox] = None
         sections_layout: Optional[QHBoxLayout] = None
@@ -414,6 +442,14 @@ class ToolEditDialog(QDialog):
             roi_layout.addLayout(sections_layout, 1)
             self._tabs.addTab(roi_tab, "ROI")
             self._roi_tab_index = self._tabs.indexOf(roi_tab)
+
+            if self._tool.type == "edge_profile_deviation":
+                edge_tab = QWidget(self)
+                edge_layout = QVBoxLayout(edge_tab)
+                edge_layout.setContentsMargins(0, 0, 0, 0)
+                edge_layout.setSpacing(8)
+                self._tabs.addTab(edge_tab, "Body A-B")
+                self._edge_anchor_tab_index = self._tabs.indexOf(edge_tab)
 
             if self._supports_mask and self._mask_editor is not None:
                 mask_tab = QWidget(self)
@@ -444,6 +480,14 @@ class ToolEditDialog(QDialog):
             self._tabs.addTab(roi_tab, "ROI")
             self._roi_tab_index = self._tabs.indexOf(roi_tab)
 
+            if self._tool.type == "edge_profile_deviation":
+                edge_tab = QWidget(self)
+                edge_layout = QVBoxLayout(edge_tab)
+                edge_layout.setContentsMargins(0, 0, 0, 0)
+                edge_layout.setSpacing(8)
+                self._tabs.addTab(edge_tab, "Body A-B")
+                self._edge_anchor_tab_index = self._tabs.indexOf(edge_tab)
+
             mask_tab = QWidget(self)
             mask_layout = QVBoxLayout(mask_tab)
             mask_layout.setContentsMargins(0, 0, 0, 0)
@@ -466,6 +510,7 @@ class ToolEditDialog(QDialog):
         self._roi_layout = roi_layout
         self._roi_sections_layout = sections_layout
         self._roi_group = roi_group
+        self._edge_anchor_layout = edge_layout
 
         self._info_label = QLabel("", self)
         self._info_label.setStyleSheet("color: #666;")
@@ -615,6 +660,10 @@ class ToolEditDialog(QDialog):
         if self._roi_tab_index is not None and current == self._roi_tab_index and self._roi_editor is not None:
             print("[FIT_TO_VIEW] tab activated roi")
             self._roi_editor.schedule_fit_to_view(source=f"tab_roi:{source}")
+            return
+        if self._edge_anchor_tab_index is not None and current == self._edge_anchor_tab_index and self._edge_anchor_editor is not None:
+            print("[FIT_TO_VIEW] tab activated edge_anchor")
+            self._edge_anchor_editor.schedule_fit_to_view(source=f"tab_edge_anchor:{source}")
             return
         if self._mask_tab_index is not None and current == self._mask_tab_index and self._mask_editor is not None:
             print("[FIT_TO_VIEW] tab activated ignore_mask")
@@ -808,10 +857,7 @@ class ToolEditDialog(QDialog):
         self._update_edge_anchor_status(pa, pb)
 
     def _init_edge_anchor_panel(self) -> None:
-        parent_layout = getattr(self, "_roi_sections_layout", None)
-        use_sections_layout = parent_layout is not None
-        if parent_layout is None:
-            parent_layout = getattr(self, "_roi_layout", None)
+        parent_layout = getattr(self, "_edge_anchor_layout", None)
         if parent_layout is None:
             return
 
@@ -861,15 +907,7 @@ class ToolEditDialog(QDialog):
         self._edge_anchor_status.setStyleSheet("color: #444;")
         group_layout.addWidget(self._edge_anchor_status)
         self._update_edge_anchor_status(pa, pb)
-
-        if use_sections_layout:
-            parent_layout.addWidget(group, 1)
-        else:
-            info_index = parent_layout.indexOf(self._info_label) if self._info_label is not None else -1
-            if info_index >= 0:
-                parent_layout.insertWidget(info_index, group, 1)
-            else:
-                parent_layout.addWidget(group, 1)
+        parent_layout.addWidget(group, 1)
 
     def _detect_edge_line_in_roi(self) -> tuple[bool, str]:
         if self._edge_anchor_editor is None:
