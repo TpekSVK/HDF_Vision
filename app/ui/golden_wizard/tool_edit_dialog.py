@@ -521,6 +521,7 @@ class ToolEditDialog(QDialog):
 
         self._golden_pixmap = self._pixmap_from_array(golden_image)
         params_values = dict(getattr(self._tool.params, "values", {}) or {})
+        initial_angle_roi = self._rect_from_any(params_values.get("angle_roi"))
 
         initial_roi: Optional[tuple[int, int, int, int]] = None
         roi_value = params_values.get("roi") if isinstance(params_values, dict) else None
@@ -572,6 +573,10 @@ class ToolEditDialog(QDialog):
                 self._mask_editor.set_background(self._golden_pixmap)
                 if initial_mask is not None:
                     self._mask_editor.set_mask(initial_mask)
+            if self._angle_roi_editor is not None:
+                self._angle_roi_editor.set_background(self._golden_pixmap)
+                if initial_angle_roi is not None:
+                    self._angle_roi_editor.set_roi(initial_angle_roi)
             self._schedule_active_tab_fit(source="initial_load")
             instructions = [
                 "Scroll to zoom, use the middle mouse button or space + drag to pan."
@@ -996,7 +1001,7 @@ class ToolEditDialog(QDialog):
         if not self._is_locator_template or not self._locator_angle_specs:
             return 0
 
-        group = QGroupBox("Angle estimation", self)
+        group = QGroupBox("Odhad uhla", self)
         group_layout = QVBoxLayout(group)
         group_layout.setContentsMargins(8, 8, 8, 8)
         group_layout.setSpacing(6)
@@ -1015,10 +1020,19 @@ class ToolEditDialog(QDialog):
         if index >= 0:
             self._angle_mode_combo.setCurrentIndex(index)
         self._angle_mode_combo.currentIndexChanged.connect(self._on_angle_mode_changed)
-        mode_label = QLabel("Angle estimation mode", group)
+        mode_label = QLabel("Režim odhadu uhla", group)
         form_layout.addRow(mode_label, self._angle_mode_combo)
 
-        angle_roi_label = QLabel("Angle ROI", group)
+        angle_roi_hint = QLabel(
+            "Edge-based (fast): nakresli malé ROI na golden snímke okolo jednej výraznej hrany. "
+            "Táto oblasť sa použije iba na odhad uhla/rotácie. Vyber krátku, kontrastnú a stabilnú "
+            "hranu – nie celý diel.",
+            group,
+        )
+        angle_roi_hint.setWordWrap(True)
+        form_layout.addRow(angle_roi_hint)
+
+        angle_roi_label = QLabel("ROI pre odhad uhla", group)
         self._angle_roi_editor = AngleRoiEditor(group)
         self._angle_roi_editor.setMinimumHeight(180)
         if self._golden_pixmap is not None:
