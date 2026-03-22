@@ -2071,19 +2071,38 @@ def run_ssim_tool(
                 if mask_arr.ndim != 2:
                     raise ValueError(f"expected 2D mask, got ndim={mask_arr.ndim}")
 
-                roi_mask_h = min(h, max(0, mask_arr.shape[0] - y))
-                roi_mask_w = min(w, max(0, mask_arr.shape[1] - x))
-                if roi_mask_h > 0 and roi_mask_w > 0:
-                    mask_crop_bool = mask_arr[y : y + roi_mask_h, x : x + roi_mask_w] > 0
-                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
-                    include_mask_crop[:roi_mask_h, :roi_mask_w][mask_crop_bool] = 0
-                    ignore_mask_pixels = int(np.count_nonzero(mask_crop_bool))
-                    effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
-                else:
-                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
+                mask_shape = tuple(mask_arr.shape[:2])
+                ignore_mask_crop_bool: np.ndarray | None = None
 
-                if mask_arr.shape[:2] != (gh, gw):
-                    mask_note = f"ignore_mask_shape_adjusted:{tuple(mask_arr.shape[:2])}->{(gh, gw)}"
+                if mask_shape == (gh, gw):
+                    ignore_mask_crop_bool = mask_arr[y : y + h, x : x + w] > 0
+                    mask_note = "ignore_mask_space=global"
+                elif mask_shape == (h, w):
+                    ignore_mask_crop_bool = mask_arr > 0
+                    mask_note = "ignore_mask_space=roi_local"
+                else:
+                    overlap_h = min(h, mask_arr.shape[0])
+                    overlap_w = min(w, mask_arr.shape[1])
+                    if overlap_h > 0 and overlap_w > 0:
+                        ignore_mask_crop_bool = mask_arr[:overlap_h, :overlap_w] > 0
+                        mask_note = (
+                            "ignore_mask_space=fallback_roi_local_overlap:"
+                            f"mask_shape={mask_shape},overlap={(overlap_h, overlap_w)}"
+                        )
+                    else:
+                        include_mask_crop = None
+                        mask_note = (
+                            "ignore_mask_ignored:no_roi_overlap:"
+                            f"mask_shape={mask_shape},roi_shape={(h, w)}"
+                        )
+
+                if ignore_mask_crop_bool is not None:
+                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
+                    crop_h, crop_w = ignore_mask_crop_bool.shape[:2]
+                    roi_view = include_mask_crop[:crop_h, :crop_w]
+                    roi_view[ignore_mask_crop_bool] = 0
+                    ignore_mask_pixels = int(np.count_nonzero(ignore_mask_crop_bool))
+                    effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
         except Exception as exc:
             include_mask_crop = None
             ignore_mask_pixels = 0
