@@ -21,6 +21,7 @@ from app.models.schema import (
 )
 from app.tools.light_presence import LightPresenceCheckTool
 from app.tools.light_transmission import LightTransmissionCheckTool
+from app.tools.presence_absence import PresenceAbsenceCheckTool
 
 logger = logging.getLogger(__name__)
 
@@ -551,6 +552,128 @@ def _register_default_tools() -> None:
                     "key": "threshold",
                     "priority": 5,
                     "description": "Použitý binárny prah",
+                },
+                {
+                    "key": "latency_ms",
+                    "unit": "ms",
+                    "priority": 1,
+                    "description": "Čas behu",
+                },
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "presence_absence",
+        factory=lambda: PresenceAbsenceCheckTool(),
+        meta={
+            "name": "Prítomnosť / neprítomnosť",
+            "description": "Detekcia prítomnosti objektu podľa plochy svetlých alebo tmavých pixelov v ROI.",
+            "category": "Presence",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "catalog_label": "Prítomnosť / neprítomnosť",
+            "catalog_short": "Binarizácia ROI + plocha objektu s podporou svetlej aj tmavej polarity.",
+            "catalog_tooltip": "Detekcia prítomnosti objektu podľa plochy svetlých alebo tmavých pixelov v ROI.",
+            "schema": {
+                "params": {
+                    "polarity": {
+                        "type": "enum",
+                        "default": "bright",
+                        "label": "Polarita objektu",
+                        "description": "Určuje, či je objekt v ROI svetlý alebo tmavý.",
+                        "choices": [
+                            ("bright", "Svetlý objekt"),
+                            ("dark", "Tmavý objekt"),
+                        ],
+                    },
+                    "binary_threshold": {
+                        "type": "int",
+                        "default": 128,
+                        "min": 0,
+                        "max": 255,
+                        "step": 1,
+                        "required": True,
+                        "label": "Binary threshold",
+                        "description": "Prahová hodnota pre binarizáciu (0 – 255).",
+                    },
+                    "gaussian_blur_kernel": {
+                        "type": "enum",
+                        "default": 0,
+                        "label": "Gaussian blur",
+                        "description": "Voliteľný Gaussian blur pred binarizáciou.",
+                        "choices": [
+                            (0, "Vypnuté"),
+                            (3, "3×3"),
+                            (5, "5×5"),
+                        ],
+                    },
+                    "presence_mode": {
+                        "type": "enum",
+                        "default": "present_when_area_in_range",
+                        "label": "Vyhodnotenie",
+                        "description": "Režim vyhodnotenia prítomnosti objektu.",
+                        "choices": [
+                            ("present_when_area_in_range", "Objekt je prítomný, keď plocha je v limite"),
+                        ],
+                    },
+                },
+                "thresholds": {
+                    "min_area_px": {
+                        "type": "int",
+                        "default": 100,
+                        "min": 0,
+                        "required": True,
+                        "label": "Min. area [px]",
+                        "description": "Minimálny počet foreground pixelov potrebný pre OK.",
+                    },
+                    "max_area_px": {
+                        "type": "int",
+                        "default": 100_000,
+                        "min": 0,
+                        "required": True,
+                        "label": "Max. area [px]",
+                        "description": "Maximálny počet foreground pixelov povolený pre OK.",
+                    },
+                    "min_fill_ratio": {
+                        "type": "float",
+                        "default": 0.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "required": True,
+                        "label": "Min. fill ratio",
+                        "description": "Minimálny podiel foreground pixelov voči effective area.",
+                    },
+                    "max_fill_ratio": {
+                        "type": "float",
+                        "default": 1.0,
+                        "min": 0.0,
+                        "max": 1.0,
+                        "step": 0.01,
+                        "required": True,
+                        "label": "Max. fill ratio",
+                        "description": "Maximálny podiel foreground pixelov voči effective area.",
+                    },
+                },
+            },
+            "metrics_spec": [
+                {
+                    "key": "area_px",
+                    "unit": "px",
+                    "priority": 10,
+                    "description": "Počet foreground pixelov",
+                },
+                {
+                    "key": "fill_ratio",
+                    "priority": 8,
+                    "description": "Podiel foreground pixelov voči effective area",
+                },
+                {
+                    "key": "effective_pixels",
+                    "unit": "px",
+                    "priority": 5,
+                    "description": "Počet validných pixelov po zohľadnení ignore masky",
                 },
                 {
                     "key": "latency_ms",

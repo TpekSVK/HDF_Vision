@@ -6,6 +6,7 @@ from .ncc import NCCTool
 from .edge import EdgeChangeTool
 from .edge_profile_deviation import EdgeProfileDeviationTool
 from .light_presence import LightPresenceCheckTool
+from .presence_absence import PresenceAbsenceCheckTool
 from .light_transmission import LightTransmissionCheckTool
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "EdgeChangeTool",
     "EdgeProfileDeviationTool",
     "LightPresenceCheckTool",
+    "PresenceAbsenceCheckTool",
     "LightTransmissionCheckTool",
 ]
