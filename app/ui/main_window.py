@@ -311,8 +311,8 @@ class MainWindow(QMainWindow):
         self.metrics_layout = QGridLayout(self.metrics_container)
         self.metrics_layout.setContentsMargins(0, 0, 0, 0)
         self.metrics_layout.setSpacing(4)
-        self.metrics_layout.setColumnStretch(0, 1)
-        self.metrics_layout.setColumnStretch(1, 0)
+        self.metrics_layout.setColumnStretch(0, 2)
+        self.metrics_layout.setColumnStretch(1, 1)
         self.metrics_layout.setColumnMinimumWidth(1, 110)
         self._metrics_widgets: list[QLabel] = []
         self._metric_name_labels: list[tuple[QLabel, str]] = []
@@ -1873,11 +1873,13 @@ class MainWindow(QMainWindow):
                 name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 name_label.setWordWrap(False)
                 name_label.setToolTip(full_label)
-                name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+                name_label.setMaximumWidth(240)
+                name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 value_label = QLabel(value_text if value_text else "-")
                 value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                value_label.setMinimumWidth(80)
-                value_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
+                value_label.setWordWrap(False)
+                value_label.setMinimumWidth(110)
+                value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
                 self.metrics_layout.addWidget(name_label, row_index, 0)
                 self.metrics_layout.addWidget(value_label, row_index, 1)
                 self._metrics_widgets.extend([name_label, value_label])
@@ -1896,6 +1898,7 @@ class MainWindow(QMainWindow):
         available = viewport_width - reserved - spacing - margins.left() - margins.right()
         target_width = max(80, available)
         for label, full_text in self._metric_name_labels:
+            label.setMaximumWidth(target_width)
             metrics = label.fontMetrics()
             elided = metrics.elidedText(full_text, Qt.ElideRight, target_width)
             label.setText(elided)
@@ -2532,6 +2535,7 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_debug_overlay"):
             self._debug_overlay.place_top_left(margin=10)
             self._debug_overlay.raise_()
+        self._refresh_metric_name_elision()
 
     def closeEvent(self, e):
         try:
