@@ -140,11 +140,11 @@ class ModbusService:
         self._client: Optional[ModbusTcpClient] = None
         self._client_config_key: Optional[Tuple[str, int, float, int]] = None
         self.last_error: str = ""
-        self._trigger_callbacks: list[Callable[[], None]] = []
+        self._trigger_callbacks: list[Callable[[int], None]] = []
         self._trigger_monitor_stop = threading.Event()
         self._trigger_monitor_thread: threading.Thread | None = None
-        self._last_trigger_level: Optional[bool] = None
-        self._last_trigger_edge_ts: float = 0.0
+        self._last_trigger_levels: dict[int, bool] = {}
+        self._last_trigger_edge_ts: dict[int, float] = {}
 
         self._restart_trigger_monitor()
 
@@ -470,20 +470,35 @@ class ModbusService:
         return results
 
     # Trigger monitoring ------------------------------------------------
-    def register_trigger_callback(self, callback: Callable[[], None]) -> None:
+    def register_trigger_callback(self, callback: Callable[[int], None]) -> None:
         if callback not in self._trigger_callbacks:
             self._trigger_callbacks.append(callback)
 
-    def unregister_trigger_callback(self, callback: Callable[[], None]) -> None:
+    def unregister_trigger_callback(self, callback: Callable[[int], None]) -> None:
         try:
             self._trigger_callbacks.remove(callback)
         except ValueError:
             pass
 
+    def _iter_monitored_trigger_inputs(self, config: ModbusConfig) -> list[tuple[int, int]]:
+        addresses = list(config.request_di_addresses or [])
+        if len(addresses) < _REQUEST_DI_COUNT:
+            addresses.extend([-1] * (_REQUEST_DI_COUNT - len(addresses)))
+        elif len(addresses) > _REQUEST_DI_COUNT:
+            addresses = addresses[:_REQUEST_DI_COUNT]
+
+        monitored: list[tuple[int, int]] = []
+        for idx, raw_address in enumerate(addresses):
+            address = int(raw_address)
+            if address < 0:
+                continue
+            monitored.append((idx + 1, address))
+        return monitored
+
     def _restart_trigger_monitor(self) -> None:
         self._stop_trigger_monitor()
         cfg = self.get_config()
-        if not cfg.enabled or cfg.trigger_di is None or int(cfg.trigger_di) < 0:
+        if not cfg.enabled or not self._iter_monitored_trigger_inputs(cfg):
             return
         self._trigger_monitor_stop = threading.Event()
         self._trigger_monitor_thread = threading.Thread(
@@ -498,31 +513,47 @@ class ModbusService:
         if thread and thread.is_alive():
             thread.join(timeout=0.5)
         self._trigger_monitor_thread = None
-        self._last_trigger_level = None
-        self._last_trigger_edge_ts = 0.0
+        self._last_trigger_levels = {}
+        self._last_trigger_edge_ts = {}
 
     def _poll_trigger_input(self) -> None:
         debounce_seconds = 0.05
         while not self._trigger_monitor_stop.wait(0.01):
             cfg = self.get_config()
-            if not cfg.enabled or cfg.trigger_di is None or int(cfg.trigger_di) < 0:
+            monitored_inputs = self._iter_monitored_trigger_inputs(cfg)
+            if not cfg.enabled or not monitored_inputs:
+                self._last_trigger_levels = {}
+                self._last_trigger_edge_ts = {}
                 continue
-            level = self.read_discrete_input(cfg.trigger_di, config=cfg)
-            if level is None:
-                continue
-            now = time.monotonic()
-            last_level = self._last_trigger_level if self._last_trigger_level is not None else level
-            if not last_level and level:
-                if now - self._last_trigger_edge_ts >= debounce_seconds:
-                    self._last_trigger_edge_ts = now
-                    self._fire_trigger_callbacks()
-            self._last_trigger_level = level
 
-    def _fire_trigger_callbacks(self) -> None:
+            active_indexes = {input_index for input_index, _ in monitored_inputs}
+            for stale_index in set(self._last_trigger_levels) - active_indexes:
+                self._last_trigger_levels.pop(stale_index, None)
+                self._last_trigger_edge_ts.pop(stale_index, None)
+
+            for input_index, address in monitored_inputs:
+                level = self.read_discrete_input(address, config=cfg)
+                if level is None:
+                    continue
+                now = time.monotonic()
+                last_level = self._last_trigger_levels.get(input_index, level)
+                if not last_level and level:
+                    last_edge_ts = self._last_trigger_edge_ts.get(input_index, 0.0)
+                    if now - last_edge_ts >= debounce_seconds:
+                        self._last_trigger_edge_ts[input_index] = now
+                        self._fire_trigger_callbacks(input_index)
+                self._last_trigger_levels[input_index] = level
+
+    def _fire_trigger_callbacks(self, input_index: int) -> None:
         callbacks = list(self._trigger_callbacks)
         for callback in callbacks:
             try:
-                callback()
+                callback(input_index)
+            except TypeError:
+                try:
+                    callback()
+                except Exception:
+                    pass
             except Exception:
                 pass
 

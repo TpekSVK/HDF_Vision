@@ -98,6 +98,7 @@ class MainWindow(QMainWindow):
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._pending_trigger_source: str | None = None
+        self._pending_modbus_input_index: int | None = None
         self._run_trigger_session_active = False
         # Tool/Recipe
         try:
@@ -655,6 +656,19 @@ class MainWindow(QMainWindow):
             trigger_gap_ms = get_default_trigger_gap_ms(width, height, fps)
 
         frame_source_view_id = str(getattr(view, "frame_source_view_id", "") or "").strip() or None
+        external_trigger_mode = str(
+            getattr(view, "external_trigger_mode", "sequential") or "sequential"
+        ).strip().lower()
+        if external_trigger_mode not in {"sequential", "explicit"}:
+            external_trigger_mode = "sequential"
+        external_request_input_raw = getattr(view, "external_request_input", None)
+        external_request_input = (
+            int(external_request_input_raw)
+            if isinstance(external_request_input_raw, Integral)
+            else None
+        )
+        if external_request_input is not None and not (1 <= external_request_input <= 8):
+            external_request_input = None
         return {
             "index": index,
             "view": view,
@@ -664,10 +678,36 @@ class MainWindow(QMainWindow):
             "interval_ms": interval_ms,
             "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": frame_source_view_id,
+            "external_trigger_mode": external_trigger_mode,
+            "external_request_input": external_request_input,
             "branch_enabled": bool(getattr(view, "branch_enabled", False)),
             "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
             "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
         }
+
+    def _resolve_explicit_modbus_view(
+        self,
+        *,
+        view_specs: list[dict[str, Any]],
+        input_index: int,
+    ) -> dict[str, Any] | None:
+        matching_specs: list[dict[str, Any]] = []
+        for spec in view_specs:
+            if spec.get("trigger_mode") != "external":
+                continue
+            if spec.get("external_trigger_mode") != "explicit":
+                continue
+            if spec.get("external_request_input") != input_index:
+                continue
+            matching_specs.append(spec)
+        if not matching_specs:
+            return None
+        if len(matching_specs) > 1:
+            self._logger.warning(
+                "Multiple explicit Modbus views mapped to input=%s; using first in recipe order.",
+                input_index,
+            )
+        return matching_specs[0]
 
     def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
         view_id = requested_view_id or self._active_view_id
@@ -954,11 +994,16 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
         resolved_source = str(trigger_source or self._pending_trigger_source or "manual").strip().lower()
+        modbus_input_index = self._pending_modbus_input_index
         self._pending_trigger_source = None
+        self._pending_modbus_input_index = None
         self._logger.info("[CAPTURE_REQUEST] source=%s capture_mode=%s", resolved_source, self.get_capture_mode())
         self._log_run_trigger_context("RUN trigger start")
         try:
-            trigger_state = self._prepare_run_trigger(trigger_source=resolved_source)
+            trigger_state = self._prepare_run_trigger(
+                trigger_source=resolved_source,
+                modbus_input_index=modbus_input_index,
+            )
         except Exception as exc:
             self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
             self._resume_live_preview_after_trigger(False)
@@ -1006,7 +1051,12 @@ class MainWindow(QMainWindow):
         finally:
             self._resume_live_preview_after_trigger(bool(trigger_state.get("was_live_enabled", False)) if trigger_state else False)
 
-    def _prepare_run_trigger(self, *, trigger_source: str) -> dict[str, Any] | None:
+    def _prepare_run_trigger(
+        self,
+        *,
+        trigger_source: str,
+        modbus_input_index: int | None = None,
+    ) -> dict[str, Any] | None:
         was_live_enabled = self._pause_live_preview_for_trigger()
         gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
         recipe_name = self.current_recipe_name()
@@ -1045,7 +1095,21 @@ class MainWindow(QMainWindow):
 
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
-        if all_manual:
+        explicit_modbus_spec = None
+        if trigger_source == "modbus" and isinstance(modbus_input_index, Integral):
+            input_index = int(modbus_input_index)
+            if 1 <= input_index <= 8:
+                explicit_modbus_spec = self._resolve_explicit_modbus_view(
+                    view_specs=view_specs,
+                    input_index=input_index,
+                )
+
+        if explicit_modbus_spec is not None:
+            self._reset_view_sequence_state()
+            per_view_statuses = {}
+            views_to_process = [explicit_modbus_spec]
+            self._reset_manual_trigger_progress(recipe_name)
+        elif all_manual:
             cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
             index_in_cycle = cycle_position % len(manual_specs)
             current_spec = manual_specs[index_in_cycle]
@@ -1086,6 +1150,7 @@ class MainWindow(QMainWindow):
             },
             "base_camera_state": base_camera_state,
             "trigger_source": trigger_source,
+            "modbus_input_index": int(modbus_input_index) if modbus_input_index is not None else None,
             "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
         }
 
@@ -1498,14 +1563,20 @@ class MainWindow(QMainWindow):
     def _handle_gpio_trigger(self):
         self._handle_external_trigger("GPIO")
 
-    def _handle_modbus_trigger(self):
-        self._handle_external_trigger("Modbus")
+    def _handle_modbus_trigger(self, input_index: int | None = None):
+        self._handle_external_trigger("Modbus", modbus_input_index=input_index)
 
-    def _handle_external_trigger(self, source: str) -> None:
+    def _handle_external_trigger(self, source: str, *, modbus_input_index: int | None = None) -> None:
         print(f"[RUN] {source} trigger received, mode={self.mode}")
         if self.mode != "RUN":
             return
-        self._pending_trigger_source = str(source or "external").strip().lower()
+        resolved_source = str(source or "external").strip().lower()
+        self._pending_trigger_source = resolved_source
+        if resolved_source == "modbus" and isinstance(modbus_input_index, Integral):
+            parsed_input = int(modbus_input_index)
+            self._pending_modbus_input_index = parsed_input if 1 <= parsed_input <= 8 else None
+        else:
+            self._pending_modbus_input_index = None
         self.external_triggered.emit()
 
     def _update_live_view(self):
