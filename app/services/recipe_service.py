@@ -14,6 +14,8 @@ from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
 
+_UNSET = object()
+
 class RecipeService:
     def __init__(self, base_dir="/data", db: DbService | None = None):
         self.base = Path(base_dir)
@@ -152,6 +154,8 @@ class RecipeService:
         camera_profile: ViewCameraProfile | dict | str | None = None,
         settle_ms: int | None = None,
         trigger_mode: str | None = None,
+        external_trigger_mode: str | None | object = _UNSET,
+        external_request_input: int | None | object = _UNSET,
         trigger_interval_ms: int | None = None,
         trigger_gap_ms: float | int | None = None,
         image_rotation: int | None = None,
@@ -194,6 +198,8 @@ class RecipeService:
         source_camera: ViewCameraProfile | dict | str | None = None
         source_settle: Optional[int] = None
         source_trigger_mode: str | None = None
+        source_external_trigger_mode: str | None = None
+        source_external_request_input: int | None = None
         source_trigger_interval: Optional[int] = None
         source_trigger_gap: float | None = None
         source_golden: Optional[str] = None
@@ -214,6 +220,12 @@ class RecipeService:
                     source_camera = profile
                 source_settle = source_view.settle_ms
                 source_trigger_mode = source_view.trigger_mode
+                source_external_trigger_mode = getattr(
+                    source_view, "external_trigger_mode", None
+                )
+                source_external_request_input = getattr(
+                    source_view, "external_request_input", None
+                )
                 source_trigger_interval = source_view.trigger_interval_ms
                 source_trigger_gap = getattr(source_view, "trigger_gap_ms", None)
                 source_golden = source_view.golden_path
@@ -240,6 +252,16 @@ class RecipeService:
 
         target_settle = settle_ms if settle_ms is not None else source_settle
         target_trigger_mode = self._normalize_trigger_mode(trigger_mode or source_trigger_mode)
+        target_external_trigger_mode = (
+            external_trigger_mode
+            if external_trigger_mode is not _UNSET
+            else source_external_trigger_mode
+        )
+        target_external_request_input = (
+            external_request_input
+            if external_request_input is not _UNSET
+            else source_external_request_input
+        )
         target_trigger_interval = self._normalize_trigger_interval(
             target_trigger_mode,
             trigger_interval_ms if trigger_interval_ms is not None else source_trigger_interval,
@@ -278,6 +300,8 @@ class RecipeService:
             camera_profile=camera_payload,
             settle_ms=target_settle,
             trigger_mode=target_trigger_mode,
+            external_trigger_mode=target_external_trigger_mode,
+            external_request_input=target_external_request_input,
             trigger_interval_ms=target_trigger_interval,
             trigger_gap_ms=target_trigger_gap,
             image_rotation=int(target_image_rotation or 0),
@@ -319,6 +343,8 @@ class RecipeService:
         camera_profile: ViewCameraProfile | dict | str | None,
         settle_ms: int | None,
         trigger_mode: str,
+        external_trigger_mode: str | None = None,
+        external_request_input: int | None = None,
         trigger_interval_ms: int | None,
         trigger_gap_ms: float | int | None = None,
         image_rotation: int = 0,
@@ -355,6 +381,8 @@ class RecipeService:
             camera_profile=camera_payload,
             settle_ms=settle_ms,
             trigger_mode=normalized_mode,
+            external_trigger_mode=external_trigger_mode,
+            external_request_input=external_request_input,
             trigger_interval_ms=normalized_interval,
             trigger_gap_ms=normalized_trigger_gap,
             image_rotation=int(image_rotation or 0),

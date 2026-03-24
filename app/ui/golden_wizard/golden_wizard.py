@@ -2419,6 +2419,12 @@ class GoldenWizard(QDialog):
             supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=source_view.settle_ms if source_view else None,
             trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
+            external_trigger_mode=getattr(source_view, "external_trigger_mode", None)
+            if source_view
+            else None,
+            external_request_input=getattr(source_view, "external_request_input", None)
+            if source_view
+            else None,
             trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
             if source_view
             else None,
@@ -2465,6 +2471,8 @@ class GoldenWizard(QDialog):
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
+                external_trigger_mode=data.get("external_trigger_mode"),
+                external_request_input=data.get("external_request_input"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),
                 image_rotation=int(data.get("image_rotation", 0) or 0),
@@ -2500,6 +2508,8 @@ class GoldenWizard(QDialog):
             supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=view.settle_ms,
             trigger_mode=getattr(view, "trigger_mode", "timed"),
+            external_trigger_mode=getattr(view, "external_trigger_mode", None),
+            external_request_input=getattr(view, "external_request_input", None),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
             trigger_gap_ms=getattr(view, "trigger_gap_ms", None),
             available_frame_sources=[
@@ -2531,6 +2541,8 @@ class GoldenWizard(QDialog):
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 trigger_mode=data.get("trigger_mode"),
+                external_trigger_mode=data.get("external_trigger_mode"),
+                external_request_input=data.get("external_request_input"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),
                 image_rotation=int(data.get("image_rotation", 0) or 0),

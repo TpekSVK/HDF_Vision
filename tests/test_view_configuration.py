@@ -77,6 +77,53 @@ def test_recipe_view_accepts_profile_string():
     assert serialized["camera_profile"] == "factory_default"
 
 
+def test_recipe_view_external_trigger_submode_normalization():
+    timed_view = RecipeView.from_dict(
+        {
+            "id": "view_timed",
+            "name": "Timed",
+            "trigger_mode": "timed",
+            "external_trigger_mode": "explicit",
+            "external_request_input": 4,
+        }
+    )
+    assert timed_view.external_trigger_mode is None
+    assert timed_view.external_request_input is None
+
+    legacy_external = RecipeView.from_dict(
+        {"id": "view_ext_legacy", "name": "Legacy", "trigger_mode": "external"}
+    )
+    assert legacy_external.external_trigger_mode == "sequential"
+    assert legacy_external.external_request_input is None
+
+    invalid_external = RecipeView.from_dict(
+        {
+            "id": "view_ext_invalid",
+            "name": "Invalid",
+            "trigger_mode": "external",
+            "external_trigger_mode": "wrong",
+            "external_request_input": 99,
+        }
+    )
+    assert invalid_external.external_trigger_mode == "sequential"
+    assert invalid_external.external_request_input is None
+
+    explicit_external = RecipeView.from_dict(
+        {
+            "id": "view_ext_explicit",
+            "name": "Explicit",
+            "trigger_mode": "external",
+            "external_trigger_mode": "explicit",
+            "external_request_input": "3",
+        }
+    )
+    assert explicit_external.external_trigger_mode == "explicit"
+    assert explicit_external.external_request_input == 3
+    serialized = explicit_external.to_dict()
+    assert serialized["external_trigger_mode"] == "explicit"
+    assert serialized["external_request_input"] == 3
+
+
 def test_recipe_service_add_and_update_view(tmp_path: Path):
     base_dir = tmp_path / "data"
     base_dir.mkdir(parents=True, exist_ok=True)
@@ -125,6 +172,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         camera_profile=None,
         settle_ms=None,
         trigger_mode="external",
+        external_trigger_mode="explicit",
+        external_request_input=2,
         trigger_interval_ms=None,
         trigger_gap_ms=24,
         image_rotation=270,
@@ -133,6 +182,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert updated.name == "Inspection Updated"
     assert updated.camera_profile is None
     assert updated.trigger_mode == "external"
+    assert updated.external_trigger_mode == "explicit"
+    assert updated.external_request_input == 2
     assert updated.trigger_interval_ms is None
     assert updated.trigger_gap_ms == pytest.approx(24.0)
     assert updated.frame_source_view_id == "view_source"
