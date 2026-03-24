@@ -1874,9 +1874,9 @@ class MainWindow(QMainWindow):
                 name_label.setWordWrap(False)
                 name_label.setToolTip(full_label)
                 name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-                value_label = QLabel(value_text)
+                value_label = QLabel(value_text if value_text else "-")
                 value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                value_label.setMinimumWidth(110)
+                value_label.setMinimumWidth(80)
                 value_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
                 self.metrics_layout.addWidget(name_label, row_index, 0)
                 self.metrics_layout.addWidget(value_label, row_index, 1)
@@ -2080,9 +2080,10 @@ class MainWindow(QMainWindow):
         if latency_value is not None:
             rows.append(("Čas [ms]", self._format_metric_value(latency_value)))
 
-        metrics = {}
+        metrics: dict[str, Any] = {}
         if isinstance(report.get("metrics"), Mapping):
             metrics = dict(report["metrics"])
+        print("METRICS:", metrics)
         metrics.pop("latency_ms", None)
 
         tool_type = str(report.get("type") or selection_map.get("type") or "")
@@ -2096,17 +2097,22 @@ class MainWindow(QMainWindow):
                 ),
             )
             for spec in spec_entries:
-                key = getattr(spec, "key", "")
-                if not key or key not in metrics:
+                key = str(getattr(spec, "key", "") or "").strip()
+                if not key:
+                    continue
+                value = metrics.get(key)
+                if key not in metrics:
                     continue
                 label = (getattr(spec, "description", "") or key or "Metric").strip()
                 unit = getattr(spec, "unit", None)
                 if unit:
                     label = f"{label} [{unit}]"
-                rows.append((label, self._format_metric_value(metrics.pop(key))))
+                rows.append((label, "-" if value is None else self._format_metric_value(value)))
+                metrics.pop(key, None)
 
         for key in sorted(metrics.keys()):
-            rows.append((str(key), self._format_metric_value(metrics[key])))
+            value = metrics.get(key)
+            rows.append((str(key), "-" if value is None else self._format_metric_value(value)))
 
         return rows or [("Informácia", "Žiadne dáta")]
 
