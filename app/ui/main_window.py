@@ -311,8 +311,11 @@ class MainWindow(QMainWindow):
         self.metrics_layout = QGridLayout(self.metrics_container)
         self.metrics_layout.setContentsMargins(0, 0, 0, 0)
         self.metrics_layout.setSpacing(4)
-        self.metrics_layout.setColumnStretch(1, 1)
+        self.metrics_layout.setColumnStretch(0, 1)
+        self.metrics_layout.setColumnStretch(1, 0)
+        self.metrics_layout.setColumnMinimumWidth(1, 110)
         self._metrics_widgets: list[QLabel] = []
+        self._metric_name_labels: list[tuple[QLabel, str]] = []
         self._metrics_placeholder = QLabel("Žiadne dáta")
         self._metrics_placeholder.setStyleSheet("color:#777;")
         self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
@@ -435,6 +438,10 @@ class MainWindow(QMainWindow):
     @property
     def active_view_id(self) -> str | None:
         return self._active_view_id
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_metric_name_elision()
 
     # ---------- UI akcie ----------
     def toggle_mode(self):
@@ -1848,6 +1855,7 @@ class MainWindow(QMainWindow):
                 else:
                     widget.deleteLater()
             self._metrics_widgets.clear()
+            self._metric_name_labels.clear()
             self.metrics_container.adjustSize()
 
             if not rows:
@@ -1860,14 +1868,37 @@ class MainWindow(QMainWindow):
 
             self._metrics_placeholder.hide()
             for row_index, (label_text, value_text) in enumerate(rows):
-                name_label = QLabel(label_text)
+                full_label = str(label_text)
+                name_label = QLabel(full_label)
+                name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                name_label.setWordWrap(False)
+                name_label.setToolTip(full_label)
+                name_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
                 value_label = QLabel(value_text)
                 value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                value_label.setMinimumWidth(110)
+                value_label.setSizePolicy(QSizePolicy.Minimum, QSizePolicy.Preferred)
                 self.metrics_layout.addWidget(name_label, row_index, 0)
                 self.metrics_layout.addWidget(value_label, row_index, 1)
                 self._metrics_widgets.extend([name_label, value_label])
+                self._metric_name_labels.append((name_label, full_label))
 
+            self._refresh_metric_name_elision()
             self.metrics_container.adjustSize()
+
+    def _refresh_metric_name_elision(self) -> None:
+        if not self._metric_name_labels:
+            return
+        viewport_width = self.metrics_scroll.viewport().width()
+        spacing = self.metrics_layout.horizontalSpacing()
+        margins = self.metrics_layout.contentsMargins()
+        reserved = self.metrics_layout.columnMinimumWidth(1)
+        available = viewport_width - reserved - spacing - margins.left() - margins.right()
+        target_width = max(80, available)
+        for label, full_text in self._metric_name_labels:
+            metrics = label.fontMetrics()
+            elided = metrics.elidedText(full_text, Qt.ElideRight, target_width)
+            label.setText(elided)
 
     def _record_run_result(
         self,
@@ -2028,6 +2059,13 @@ class MainWindow(QMainWindow):
             if selection_index is not None and 0 <= selection_index < len(reports):
                 report = reports[selection_index]
         if report is None:
+            selection_name = str(selection_map.get("name") or "").strip().lower()
+            if selection_name:
+                report = next(
+                    (r for r in reports if str(r.get("name") or "").strip().lower() == selection_name),
+                    None,
+                )
+        if report is None:
             return [("Informácia", "Žiadne dáta")]
 
         name = str(report.get("name") or tool_id or "Tool")
@@ -2047,7 +2085,7 @@ class MainWindow(QMainWindow):
             metrics = dict(report["metrics"])
         metrics.pop("latency_ms", None)
 
-        tool_type = str(report.get("type") or "")
+        tool_type = str(report.get("type") or selection_map.get("type") or "")
         definition = ToolRegistry.get_tool_definition(tool_type) if tool_type else None
         if definition is not None:
             spec_entries = sorted(
