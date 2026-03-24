@@ -61,6 +61,8 @@ class ViewConfigDialog(QDialog):
         supported_v4l2_controls: Optional[set[str]] = None,
         settle_ms: Optional[int] = None,
         trigger_mode: str = "timed",
+        external_trigger_mode: Optional[str] = None,
+        external_request_input: Optional[int] = None,
         trigger_interval_ms: Optional[int] = None,
         trigger_gap_ms: Optional[int | float] = None,
         available_frame_sources: Sequence[tuple[str, str]] | None = None,
@@ -244,6 +246,22 @@ class ViewConfigDialog(QDialog):
         )
         self._add_form_row(timing_form, "Trigger Mode:", self._trigger_mode_combo, tooltip=trigger_hint)
 
+        self._external_mode_label = QLabel("Externý režim:")
+        self._external_mode_combo = QComboBox(timing_group)
+        self._external_mode_combo.addItem("Sekvenčné", "sequential")
+        self._external_mode_combo.addItem("Explicitné", "explicit")
+        self._external_mode_combo.currentIndexChanged.connect(
+            self._on_external_mode_changed
+        )
+        timing_form.addRow(self._external_mode_label, self._external_mode_combo)
+
+        self._external_input_label = QLabel("Externý vstup:")
+        self._external_input_combo = QComboBox(timing_group)
+        self._external_input_combo.addItem("Nepoužité", None)
+        for input_idx in range(1, 9):
+            self._external_input_combo.addItem(f"Vstup {input_idx}", input_idx)
+        timing_form.addRow(self._external_input_label, self._external_input_combo)
+
         self._interval_edit = QLineEdit(timing_group)
         self._interval_edit.setPlaceholderText("Required for Timed mode")
         interval_hint = (
@@ -311,7 +329,14 @@ class ViewConfigDialog(QDialog):
 
         self._apply_initial_profile(camera_profile)
         self._apply_initial_rotation(image_rotation)
-        self._apply_initial_timing(settle_ms, trigger_mode, trigger_interval_ms, trigger_gap_ms)
+        self._apply_initial_timing(
+            settle_ms,
+            trigger_mode,
+            external_trigger_mode,
+            external_request_input,
+            trigger_interval_ms,
+            trigger_gap_ms,
+        )
         self._apply_initial_frame_source(frame_source_view_id)
         self._apply_initial_branch_targets(
             branch_enabled, branch_targets or {}, branch_default_view_id
@@ -424,6 +449,16 @@ class ViewConfigDialog(QDialog):
         if trigger_mode != "timed":
             interval_ms = None
 
+        external_mode: Optional[str] = None
+        external_input: Optional[int] = None
+        if trigger_mode == "external":
+            external_mode = str(self._external_mode_combo.currentData() or "sequential")
+            if external_mode not in {"sequential", "explicit"}:
+                external_mode = "sequential"
+            if external_mode == "explicit":
+                selected_input = self._external_input_combo.currentData()
+                external_input = int(selected_input) if selected_input is not None else None
+
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
         if trigger_gap_ms is None:
             resolution = self._selected_resolution_data()
@@ -438,6 +473,8 @@ class ViewConfigDialog(QDialog):
             "camera_profile": profile,
             "settle_ms": settle_ms,
             "trigger_mode": trigger_mode,
+            "external_trigger_mode": external_mode,
+            "external_request_input": external_input,
             "trigger_interval_ms": interval_ms,
             "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": self._frame_source_combo.currentData(),
@@ -574,6 +611,8 @@ class ViewConfigDialog(QDialog):
         self,
         settle_ms: Optional[int],
         trigger_mode: str,
+        external_trigger_mode: Optional[str],
+        external_request_input: Optional[int],
         trigger_interval_ms: Optional[int],
         trigger_gap_ms: Optional[float],
     ) -> None:
@@ -587,11 +626,26 @@ class ViewConfigDialog(QDialog):
         if index >= 0:
             self._trigger_mode_combo.setCurrentIndex(index)
 
+        normalized_external_mode = str(external_trigger_mode or "").strip().lower()
+        if normalized_mode != "external":
+            normalized_external_mode = "sequential"
+        elif normalized_external_mode not in {"sequential", "explicit"}:
+            normalized_external_mode = "sequential"
+        external_mode_idx = self._external_mode_combo.findData(normalized_external_mode)
+        if external_mode_idx >= 0:
+            self._external_mode_combo.setCurrentIndex(external_mode_idx)
+
+        if external_request_input in {1, 2, 3, 4, 5, 6, 7, 8}:
+            external_input_idx = self._external_input_combo.findData(int(external_request_input))
+            if external_input_idx >= 0:
+                self._external_input_combo.setCurrentIndex(external_input_idx)
+
         if trigger_interval_ms is not None:
             self._interval_edit.setText(str(int(trigger_interval_ms)))
         if trigger_gap_ms is not None:
             self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
+        self._on_external_mode_changed()
         self._update_trigger_gap_warning()
 
     def _apply_initial_rotation(self, image_rotation: int) -> None:
@@ -666,6 +720,27 @@ class ViewConfigDialog(QDialog):
     def _on_trigger_mode_changed(self) -> None:
         mode = str(self._trigger_mode_combo.currentData() or "timed")
         self._interval_edit.setEnabled(mode == "timed")
+        external_active = mode == "external"
+        self._external_mode_combo.setEnabled(external_active)
+        self._external_mode_label.setVisible(external_active)
+        self._external_mode_combo.setVisible(external_active)
+        if not external_active:
+            ext_mode_idx = self._external_mode_combo.findData("sequential")
+            if ext_mode_idx >= 0:
+                self._external_mode_combo.setCurrentIndex(ext_mode_idx)
+        self._on_external_mode_changed()
+
+    def _on_external_mode_changed(self) -> None:
+        trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
+        external_mode = str(self._external_mode_combo.currentData() or "sequential")
+        explicit_active = trigger_mode == "external" and external_mode == "explicit"
+        self._external_input_combo.setEnabled(explicit_active)
+        self._external_input_label.setVisible(trigger_mode == "external")
+        self._external_input_combo.setVisible(trigger_mode == "external")
+        if not explicit_active:
+            unused_idx = self._external_input_combo.findData(None)
+            if unused_idx >= 0:
+                self._external_input_combo.setCurrentIndex(unused_idx)
 
     def _selected_resolution_data(self) -> dict[str, Any]:
         resolution_data = self._resolution_combo.currentData()

@@ -663,6 +663,8 @@ class RecipeView:
     camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
     trigger_mode: Literal["timed", "external", "manual"] = "timed"
+    external_trigger_mode: Optional[str] = None
+    external_request_input: Optional[int] = None
     trigger_interval_ms: Optional[int] = None
     trigger_gap_ms: Optional[float] = None
     image_rotation: int = 0
@@ -700,6 +702,30 @@ class RecipeView:
         if mode not in {"timed", "external", "manual"}:
             mode = "timed"
         self.trigger_mode = cast(Literal["timed", "external", "manual"], mode)
+
+        raw_external_mode = (
+            str(self.external_trigger_mode).strip().lower()
+            if self.external_trigger_mode is not None
+            else None
+        )
+        if self.trigger_mode != "external":
+            self.external_trigger_mode = None
+            self.external_request_input = None
+        else:
+            if not raw_external_mode:
+                raw_external_mode = "sequential"
+            if raw_external_mode not in {"sequential", "explicit"}:
+                raw_external_mode = "sequential"
+            self.external_trigger_mode = raw_external_mode
+
+            if self.external_trigger_mode != "explicit":
+                self.external_request_input = None
+            else:
+                try:
+                    input_value = int(self.external_request_input) if self.external_request_input is not None else None
+                except Exception:
+                    input_value = None
+                self.external_request_input = input_value if input_value in {1, 2, 3, 4, 5, 6, 7, 8} else None
 
         if self.trigger_interval_ms is not None:
             try:
@@ -764,6 +790,8 @@ class RecipeView:
             "camera_profile": camera_profile,
             "settle_ms": self.settle_ms,
             "trigger_mode": self.trigger_mode,
+            "external_trigger_mode": self.external_trigger_mode,
+            "external_request_input": self.external_request_input,
             "trigger_interval_ms": self.trigger_interval_ms,
             "trigger_gap_ms": self.trigger_gap_ms,
             "image_rotation": self.image_rotation,
@@ -787,6 +815,8 @@ class RecipeView:
             camera_profile=data.get("camera_profile"),
             settle_ms=data.get("settle_ms"),
             trigger_mode=data.get("trigger_mode", "timed"),
+            external_trigger_mode=data.get("external_trigger_mode"),
+            external_request_input=data.get("external_request_input"),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             trigger_gap_ms=data.get("trigger_gap_ms"),
             image_rotation=data.get("image_rotation", 0),
@@ -808,6 +838,8 @@ class RecipeView:
             camera_profile=camera_profile,
             settle_ms=self.settle_ms,
             trigger_mode=self.trigger_mode,
+            external_trigger_mode=self.external_trigger_mode,
+            external_request_input=self.external_request_input,
             trigger_interval_ms=self.trigger_interval_ms,
             trigger_gap_ms=self.trigger_gap_ms,
             image_rotation=self.image_rotation,
