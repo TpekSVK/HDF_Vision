@@ -28,7 +28,7 @@ class ModbusWizard(QDialog):
         self._modbus = modbus
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(200)
-        self._poll_timer.timeout.connect(self._refresh_trigger_status)
+        self._poll_timer.timeout.connect(self._refresh_inputs_status)
         self._init_ui()
         self._load_from_config(modbus.get_config())
 
@@ -167,25 +167,24 @@ class ModbusWizard(QDialog):
         grid = QGridLayout()
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(6)
-        self.spin_trigger = self._coil_spin(box, default=0)
-        grid.addWidget(QLabel("Adresa Trigger DI:", box), 0, 0)
-        grid.addWidget(self.spin_trigger, 0, 1)
+        self.spin_request_inputs: list[QSpinBox] = []
+        self.lbl_request_input_statuses: list[QLabel] = []
+        for idx in range(8):
+            spin = self._coil_spin(box, default=0 if idx == 0 else -1)
+            lbl_status = QLabel("–", box)
+            lbl_status.setStyleSheet("color: #bbb;")
+            self.spin_request_inputs.append(spin)
+            self.lbl_request_input_statuses.append(lbl_status)
+            grid.addWidget(QLabel(f"Vstup {idx + 1} DI adresa:", box), idx, 0)
+            grid.addWidget(spin, idx, 1)
+            grid.addWidget(lbl_status, idx, 2)
         layout.addLayout(grid)
 
-        status_row = QHBoxLayout()
-        status_row.setSpacing(8)
-        status_row.addWidget(QLabel("Stav Triggeru naživo:", box))
-        self.lbl_trigger_status = QLabel("–", box)
-        self.lbl_trigger_status.setStyleSheet("color: #bbb;")
-        status_row.addWidget(self.lbl_trigger_status)
-        status_row.addStretch(1)
-        layout.addLayout(status_row)
-
-        btn_now = QPushButton("Načítať Trigger teraz", box)
-        btn_now.clicked.connect(self._refresh_trigger_status)
+        btn_now = QPushButton("Načítať vstupy teraz", box)
+        btn_now.clicked.connect(self._refresh_inputs_status)
         layout.addWidget(btn_now, 0, Qt.AlignLeft)
 
-        hint = QLabel("Obnovuje sa každých ~200 ms počas otvoreného dialógu.", box)
+        hint = QLabel("Stavy vstupov sa obnovujú každých ~200 ms počas otvoreného dialógu.", box)
         hint.setStyleSheet("color: #777;")
         layout.addWidget(hint)
         return box
@@ -217,7 +216,11 @@ class ModbusWizard(QDialog):
         self.spin_flash2_pulse.setValue(int(config.flash2_pulse_ms))
         self.spin_pulse_len.setValue(int(config.pulse_length_ms))
         self.spin_heartbeat_period.setValue(int(config.heartbeat_period_ms))
-        self.spin_trigger.setValue(int(config.trigger_di))
+        addresses = list(config.request_di_addresses or [])
+        if len(addresses) < len(self.spin_request_inputs):
+            addresses.extend([-1] * (len(self.spin_request_inputs) - len(addresses)))
+        for idx, spin in enumerate(self.spin_request_inputs):
+            spin.setValue(int(addresses[idx]))
 
     def _collect_config(self) -> ModbusConfig:
         cfg = ModbusConfig(
@@ -238,7 +241,7 @@ class ModbusWizard(QDialog):
             flash2_pulse_ms=int(self.spin_flash2_pulse.value()),
             pulse_length_ms=int(self.spin_pulse_len.value()),
             heartbeat_period_ms=int(self.spin_heartbeat_period.value()),
-            trigger_di=int(self.spin_trigger.value()),
+            request_di_addresses=[int(spin.value()) for spin in self.spin_request_inputs],
         )
         return cfg
 
@@ -268,15 +271,25 @@ class ModbusWizard(QDialog):
         success = self._modbus.heartbeat_pulse(cfg.heartbeat_coil, count=3, period_ms=cfg.heartbeat_period_ms, config=cfg)
         self._set_status(self.lbl_conn_status, "Heartbeat test running" if success else (self._modbus.last_error or "Error"), ok=success)
 
-    def _refresh_trigger_status(self) -> None:
+    def _refresh_inputs_status(self) -> None:
         cfg = self._collect_config()
-        value = self._modbus.read_discrete_input(cfg.trigger_di, config=cfg)
-        if value is None:
-            self._set_status(self.lbl_trigger_status, self._modbus.last_error or "–", ok=False)
-        elif value:
-            self._set_status(self.lbl_trigger_status, "HIGH", ok=True)
-        else:
-            self._set_status(self.lbl_trigger_status, "LOW", ok=True)
+        results = self._modbus.read_configured_discrete_inputs(config=cfg)
+        for idx, lbl_status in enumerate(self.lbl_request_input_statuses):
+            item = results[idx] if idx < len(results) else None
+            if not item:
+                self._set_status(lbl_status, "Error", ok=False)
+                continue
+            if bool(item.get("disabled")):
+                lbl_status.setText("Disabled")
+                lbl_status.setStyleSheet("color: #bbb;")
+                continue
+            value = item.get("value")
+            if value is None:
+                self._set_status(lbl_status, "Error", ok=False)
+            elif bool(value):
+                self._set_status(lbl_status, "ON", ok=True)
+            else:
+                self._set_status(lbl_status, "OFF", ok=True)
 
     def _on_accept(self) -> None:
         cfg = self._collect_config()
