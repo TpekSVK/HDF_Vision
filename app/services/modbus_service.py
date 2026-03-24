@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -25,6 +25,8 @@ __all__ = [
 
 
 _CONFIG_PATH = Path("/data/modbus_config.json")
+_REQUEST_DI_COUNT = 8
+_DEFAULT_REQUEST_DI_ADDRESSES = [0] + ([-1] * (_REQUEST_DI_COUNT - 1))
 
 
 @dataclass
@@ -48,7 +50,9 @@ class ModbusConfig:
     pulse_length_ms: int = 200
     heartbeat_period_ms: int = 1000
 
-    trigger_di: int = 0
+    request_di_addresses: list[int] = field(
+        default_factory=lambda: list(_DEFAULT_REQUEST_DI_ADDRESSES)
+    )
 
     @classmethod
     def from_dict(cls, data: dict[str, object]) -> "ModbusConfig":
@@ -57,6 +61,18 @@ class ModbusConfig:
                 return int(value)
             except Exception:
                 return default
+
+        def _parse_request_di_addresses(raw: object) -> list[int]:
+            values: list[int] = list(_DEFAULT_REQUEST_DI_ADDRESSES)
+            if isinstance(raw, list):
+                for idx in range(min(len(raw), _REQUEST_DI_COUNT)):
+                    values[idx] = _to_int(raw[idx], values[idx])
+            return values
+
+        has_request_di_addresses = isinstance(data.get("request_di_addresses"), list)
+        request_di_addresses = _parse_request_di_addresses(data.get("request_di_addresses"))
+        if not has_request_di_addresses and "trigger_di" in data:
+            request_di_addresses[0] = _to_int(data.get("trigger_di"), request_di_addresses[0])
 
         return cls(
             host=str(data.get("host", cls.host)).strip() or cls.host,
@@ -91,11 +107,28 @@ class ModbusConfig:
                 data.get("heartbeat_period_ms", cls.heartbeat_period_ms),
                 cls.heartbeat_period_ms,
             ),
-            trigger_di=_to_int(data.get("trigger_di", cls.trigger_di), cls.trigger_di),
+            request_di_addresses=request_di_addresses,
         )
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+    @property
+    def trigger_di(self) -> int:
+        if not self.request_di_addresses:
+            return -1
+        return int(self.request_di_addresses[0])
+
+    @trigger_di.setter
+    def trigger_di(self, value: int) -> None:
+        parsed = int(value)
+        if not self.request_di_addresses:
+            self.request_di_addresses = list(_DEFAULT_REQUEST_DI_ADDRESSES)
+        self.request_di_addresses[0] = parsed
+        if len(self.request_di_addresses) < _REQUEST_DI_COUNT:
+            self.request_di_addresses.extend([-1] * (_REQUEST_DI_COUNT - len(self.request_di_addresses)))
+        elif len(self.request_di_addresses) > _REQUEST_DI_COUNT:
+            self.request_di_addresses = self.request_di_addresses[:_REQUEST_DI_COUNT]
 
 
 class ModbusService:
@@ -400,6 +433,41 @@ class ModbusService:
             return bool(response.bits[0])
         except Exception:
             return None
+
+    def read_configured_discrete_inputs(
+        self, *, config: Optional[ModbusConfig] = None
+    ) -> list[dict[str, object]]:
+        cfg = config or self.get_config()
+        addresses = list(cfg.request_di_addresses or [])
+        if len(addresses) < _REQUEST_DI_COUNT:
+            addresses.extend([-1] * (_REQUEST_DI_COUNT - len(addresses)))
+        elif len(addresses) > _REQUEST_DI_COUNT:
+            addresses = addresses[:_REQUEST_DI_COUNT]
+
+        results: list[dict[str, object]] = []
+        for address in addresses:
+            addr = int(address)
+            if addr < 0:
+                results.append(
+                    {
+                        "address": addr,
+                        "disabled": True,
+                        "value": None,
+                        "error": None,
+                    }
+                )
+                continue
+
+            value = self.read_discrete_input(addr, config=cfg)
+            results.append(
+                {
+                    "address": addr,
+                    "disabled": False,
+                    "value": value,
+                    "error": None if value is not None else (self.last_error or "Read failed"),
+                }
+            )
+        return results
 
     # Trigger monitoring ------------------------------------------------
     def register_trigger_callback(self, callback: Callable[[], None]) -> None:
