@@ -35,6 +35,7 @@ from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
+from app.services.pico_service import PicoService
 from app.services.jetson_stats_service import JetsonStatsService
 from app.services import settings_service
 from app.models.schema import RecipeV2
@@ -83,6 +84,8 @@ class MainWindow(QMainWindow):
         self.gpio = GPIOService()
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
         self.modbus = ModbusService()
+        self.pico = PicoService()
+        self.pico.connect()
         self.modbus.register_trigger_callback(self._handle_modbus_trigger)
         self.external_triggered.connect(self.manual_trigger)
 
@@ -203,16 +206,6 @@ class MainWindow(QMainWindow):
         self.btn_wizard_quick = QPushButton("Sprievodca Golden")
         self.btn_wizard_quick.clicked.connect(self.open_wizard)
         actions.addWidget(self.btn_wizard_quick)
-
-        self.btn_flash1_toggle = QPushButton("Svetlo 1 ZAPNUŤ")
-        self.btn_flash1_toggle.setCheckable(True)
-        self.btn_flash1_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(1, checked))
-        actions.addWidget(self.btn_flash1_toggle)
-
-        self.btn_flash2_toggle = QPushButton("Svetlo 2 ZAPNUŤ")
-        self.btn_flash2_toggle.setCheckable(True)
-        self.btn_flash2_toggle.toggled.connect(lambda checked: self._toggle_modbus_flash(2, checked))
-        actions.addWidget(self.btn_flash2_toggle)
 
         actions.addStretch(1)
         # Live toggle
@@ -539,14 +532,34 @@ class MainWindow(QMainWindow):
         self.gpio.signal_result(status)
         self.modbus.signal_result(status)
 
-    def _toggle_modbus_flash(self, channel: int, enabled: bool) -> None:
-        button = self.btn_flash1_toggle if int(channel) == 1 else self.btn_flash2_toggle
-        button.setText(f"Svetlo {int(channel)} {'VYPNUŤ' if enabled else 'ZAPNUŤ'}")
-        self.modbus.set_flash(channel, enabled)
-        if enabled:
-            self.lbl_status.setText(f"Flash {int(channel)} zapnutý")
-        else:
-            self.lbl_status.setText(f"Flash {int(channel)} vypnutý")
+    def _publish_recipe_flash_to_pico(self, recipe_name: str) -> tuple[bool, str]:
+        mapping = self.recipes.build_pico_flash_mapping(recipe_name, published=True)
+        if not self.pico.is_available() and not self.pico.connect():
+            return False, self.pico.last_error or "Pico nie je dostupné"
+        ok_cfg = self.pico.configure_recipe_views(mapping)
+        ok_save = self.pico.save() if ok_cfg else False
+        if ok_cfg and ok_save:
+            return True, "Flash config uložený"
+        return False, self.pico.last_error or "Synchronizácia Pico zlyhala"
+
+    def _handle_master_flash_capture_flow(
+        self,
+        *,
+        view: Any | None,
+        capture_request_source: str,
+    ) -> None:
+        flash_delay_ms = max(0, int(getattr(view, "flash_delay_ms", 0) or 0))
+        settle_ms = max(0, int(getattr(view, "settle_ms", 0) or 0))
+        source = str(capture_request_source or "manual").strip().lower()
+        is_external_request = source in {"modbus", "modbus_input", "external", "gpio_external"}
+        view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
+        if not is_external_request:
+            fired = self.pico.fire(str(view_id))
+            if not fired:
+                self._logger.warning("[PICO] fire failed view=%s error=%s", view_id, self.pico.last_error)
+        wait_ms = flash_delay_ms + settle_ms
+        if wait_ms > 0:
+            time.sleep(wait_ms / 1000.0)
 
     def _run_trigger_context(self, *, requested_stream_mode: int | None = None) -> dict[str, Any]:
         current_stream_mode: int | None = None
@@ -781,21 +794,19 @@ class MainWindow(QMainWindow):
         self._logger.info("[VIEW_CAPTURE] resolved trigger_gap_ms=%.2f", trigger_gap_ms)
 
         mode = self.get_capture_mode()
-        flash_called = self._pulse_flash_for_capture_request(
-            source=capture_request_source,
-            active_view_id=str(active_view_id) if active_view_id is not None else None,
-            settle_ms=settle_ms,
-            capture_mode=mode,
-        )
+        if mode == "master":
+            self._handle_master_flash_capture_flow(
+                view=active_view,
+                capture_request_source=capture_request_source,
+            )
         self._logger.info(
-            "[VIEW_CAPTURE] frame_capture_start source=%s flash_called=%s capture_mode=%s active_view_id=%s settle_ms=%s",
+            "[VIEW_CAPTURE] frame_capture_start source=%s capture_mode=%s active_view_id=%s settle_ms=%s",
             capture_request_source,
-            flash_called,
             mode,
             active_view_id,
             settle_ms,
         )
-        if settle_ms is not None and int(settle_ms) > 0:
+        if mode == "trigger" and settle_ms is not None and int(settle_ms) > 0:
             time.sleep(float(settle_ms) / 1000.0)
 
         if mode == "trigger":
@@ -820,51 +831,6 @@ class MainWindow(QMainWindow):
         else:
             frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
         return frame
-
-    def _pulse_flash_for_capture_request(
-        self,
-        *,
-        source: str,
-        active_view_id: str | None,
-        settle_ms: int | None,
-        capture_mode: str,
-    ) -> bool:
-        cfg = self.modbus.get_config()
-        flash_configured = bool(
-            getattr(cfg, "enabled", False)
-            and (
-                int(getattr(cfg, "flash1_coil", -1)) >= 0
-                or int(getattr(cfg, "flash2_coil", -1)) >= 0
-            )
-        )
-        if not flash_configured:
-            self._logger.info(
-                "[FLASH_CAPTURE_REQUEST] source=%s flash_called=no reason=not_configured capture_mode=%s active_view_id=%s settle_ms=%s",
-                source,
-                capture_mode,
-                active_view_id,
-                settle_ms,
-            )
-            return False
-        try:
-            self.modbus.pulse_configured_flashes()
-        except Exception:
-            self._logger.exception(
-                "[FLASH_CAPTURE_REQUEST] source=%s flash_called=no reason=error capture_mode=%s active_view_id=%s settle_ms=%s",
-                source,
-                capture_mode,
-                active_view_id,
-                settle_ms,
-            )
-            return False
-        self._logger.info(
-            "[FLASH_CAPTURE_REQUEST] source=%s flash_called=yes capture_mode=%s active_view_id=%s settle_ms=%s",
-            source,
-            capture_mode,
-            active_view_id,
-            settle_ms,
-        )
-        return True
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
         gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
@@ -952,6 +918,7 @@ class MainWindow(QMainWindow):
         view_id: str | None = None,
         trigger_mode_label: str = "golden_wizard",
         image_rotation_override: int | None = None,
+        capture_request_source: str = "golden_wizard",
     ):
         self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
         active_view = self._resolve_active_capture_view(requested_view_id=view_id)
@@ -967,6 +934,7 @@ class MainWindow(QMainWindow):
             settle_ms=settle_ms,
             transform_stage="golden capture",
             image_rotation_override=image_rotation_override,
+            capture_request_source=capture_request_source,
         )
         self._logger.info("[GOLDEN_CAPTURE] frame captured")
         return frame
@@ -979,12 +947,12 @@ class MainWindow(QMainWindow):
         capture_request_source: str = "manual",
     ):
         mode = self.get_capture_mode()
-        self._pulse_flash_for_capture_request(
-            source=capture_request_source,
-            active_view_id=self._active_view_id,
-            settle_ms=None,
-            capture_mode=mode,
-        )
+        active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
+        if mode == "master":
+            self._handle_master_flash_capture_flow(
+                view=active_view,
+                capture_request_source=capture_request_source,
+            )
         if self.capture_mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
             return self.cam.capture_trigger_frame(
@@ -1483,9 +1451,11 @@ class MainWindow(QMainWindow):
             self.recipes,
             self,
             modbus=self.modbus,
+            pico=self.pico,
             trigger_fn=self._send_run_trigger_gpio_pulse,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
+            publish_flash_to_pico=self._publish_recipe_flash_to_pico,
         )
         dlg.exec()
         if self.mode == "RUN":
