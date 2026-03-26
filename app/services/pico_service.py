@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import Iterable
@@ -136,15 +137,29 @@ class PicoService:
             return [self._configured_port]
         return sorted(glob.glob("/dev/ttyACM*"))
 
-    def _normalize_target(self, value: str | int) -> str:
-        text = str(value).strip()
+    def _normalize_target(self, value: str | int) -> str | None:
+        if isinstance(value, int):
+            channel = int(value)
+            return f"V{channel}" if channel in {1, 2} else None
+
+        text = str(value or "").strip()
         if not text:
-            return "V1"
-        if text.upper().startswith("V"):
-            return text.upper()
-        if text.isdigit():
-            return f"V{text}"
-        return text.upper()
+            return None
+
+        upper = text.upper()
+        if upper in {"V1", "V2"}:
+            return upper
+
+        normalized = upper
+        if normalized.startswith("VIEW"):
+            normalized = normalized[4:]
+        normalized = normalized.replace("_", "")
+
+        match = re.search(r"([12])", normalized)
+        if not match:
+            return None
+        channel = int(match.group(1))
+        return f"V{channel}" if channel in {1, 2} else None
 
     def _send_command(self, command: str) -> tuple[bool, str]:
         if not self.connect():
