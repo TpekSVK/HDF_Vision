@@ -662,6 +662,8 @@ class RecipeView:
     frame_source_view_id: Optional[str] = None
     camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
+    flash_delay_ms: int = 0
+    flash_pulse_ms: int = 200
     trigger_mode: Literal["timed", "external", "manual"] = "timed"
     external_trigger_mode: Optional[str] = None
     external_request_input: Optional[int] = None
@@ -697,6 +699,18 @@ class RecipeView:
                 self.settle_ms = int(self.settle_ms)
             except Exception:
                 self.settle_ms = None
+        try:
+            self.flash_delay_ms = int(self.flash_delay_ms)
+        except Exception:
+            self.flash_delay_ms = 0
+        if self.flash_delay_ms < 0:
+            self.flash_delay_ms = 0
+        try:
+            self.flash_pulse_ms = int(self.flash_pulse_ms)
+        except Exception:
+            self.flash_pulse_ms = 200
+        if self.flash_pulse_ms <= 0:
+            self.flash_pulse_ms = 200
 
         mode = str(self.trigger_mode or "timed").strip().lower()
         if mode not in {"timed", "external", "manual"}:
@@ -789,6 +803,8 @@ class RecipeView:
             "frame_source_view_id": self.frame_source_view_id,
             "camera_profile": camera_profile,
             "settle_ms": self.settle_ms,
+            "flash_delay_ms": int(self.flash_delay_ms),
+            "flash_pulse_ms": int(self.flash_pulse_ms),
             "trigger_mode": self.trigger_mode,
             "external_trigger_mode": self.external_trigger_mode,
             "external_request_input": self.external_request_input,
@@ -814,6 +830,8 @@ class RecipeView:
             frame_source_view_id=data.get("frame_source_view_id"),
             camera_profile=data.get("camera_profile"),
             settle_ms=data.get("settle_ms"),
+            flash_delay_ms=data.get("flash_delay_ms", 0),
+            flash_pulse_ms=data.get("flash_pulse_ms", 200),
             trigger_mode=data.get("trigger_mode", "timed"),
             external_trigger_mode=data.get("external_trigger_mode"),
             external_request_input=data.get("external_request_input"),
@@ -837,6 +855,8 @@ class RecipeView:
             frame_source_view_id=self.frame_source_view_id,
             camera_profile=camera_profile,
             settle_ms=self.settle_ms,
+            flash_delay_ms=self.flash_delay_ms,
+            flash_pulse_ms=self.flash_pulse_ms,
             trigger_mode=self.trigger_mode,
             external_trigger_mode=self.external_trigger_mode,
             external_request_input=self.external_request_input,

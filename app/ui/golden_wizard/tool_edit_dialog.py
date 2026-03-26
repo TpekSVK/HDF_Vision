@@ -319,6 +319,8 @@ class ToolEditDialog(QDialog):
         meta,
         camera_service=None,
         live_preview: Optional[LivePreviewService] = None,
+        capture_frame_for_view=None,
+        active_view_id: str | None = None,
         parent=None,
     ):
         super().__init__(parent)
@@ -329,6 +331,8 @@ class ToolEditDialog(QDialog):
         self._meta_caps = getattr(meta, "meta", meta)
         self._camera_service = camera_service
         self._live_preview = live_preview
+        self._capture_frame_for_view = capture_frame_for_view
+        self._active_view_id = active_view_id
         self._golden_image: Optional[np.ndarray] = None if golden_image is None else np.asarray(golden_image).copy()
         self._golden_pixmap: Optional[QPixmap] = None
         self._locator_template_specs: dict[str, dict[str, Any]] = {}
@@ -1317,7 +1321,17 @@ class ToolEditDialog(QDialog):
             return
 
         frame: Optional[np.ndarray] = None
-        if self._live_preview is not None:
+        if callable(self._capture_frame_for_view):
+            try:
+                frame = self._capture_frame_for_view(
+                    view_id=self._active_view_id,
+                    trigger_mode_label="tool_edit_test",
+                    image_rotation_override=0,
+                    capture_request_source="tool_edit_test",
+                )
+            except Exception as exc:
+                self._set_locator_message(f"Capture failed: {exc}")
+        if frame is None and self._live_preview is not None:
             try:
                 frame = self._live_preview.last_frame_u8()
             except Exception as exc:  # pragma: no cover - defensive
