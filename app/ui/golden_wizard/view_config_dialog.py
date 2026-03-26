@@ -60,6 +60,8 @@ class ViewConfigDialog(QDialog):
         camera_model: Optional[str] = None,
         supported_v4l2_controls: Optional[set[str]] = None,
         settle_ms: Optional[int] = None,
+        flash_delay_ms: int = 0,
+        flash_pulse_ms: int = 200,
         trigger_mode: str = "timed",
         external_trigger_mode: Optional[str] = None,
         external_request_input: Optional[int] = None,
@@ -232,6 +234,14 @@ class ViewConfigDialog(QDialog):
         )
         self._add_form_row(timing_form, "Settle Time:", self._settle_edit, tooltip=settle_hint)
 
+        self._flash_delay_edit = QLineEdit(timing_group)
+        self._flash_delay_edit.setPlaceholderText("0")
+        self._add_form_row(timing_form, "Flash delay [ms]:", self._flash_delay_edit)
+
+        self._flash_pulse_edit = QLineEdit(timing_group)
+        self._flash_pulse_edit.setPlaceholderText("200")
+        self._add_form_row(timing_form, "Flash pulse [ms]:", self._flash_pulse_edit)
+
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Timed", "timed")
         self._trigger_mode_combo.addItem("External Trigger", "external")
@@ -331,6 +341,8 @@ class ViewConfigDialog(QDialog):
         self._apply_initial_rotation(image_rotation)
         self._apply_initial_timing(
             settle_ms,
+            flash_delay_ms,
+            flash_pulse_ms,
             trigger_mode,
             external_trigger_mode,
             external_request_input,
@@ -382,6 +394,22 @@ class ViewConfigDialog(QDialog):
                 "Invalid input",
                 "Settle Time must be an integer value.",
             )
+            return
+        try:
+            flash_delay_ms = int(self._flash_delay_edit.text().strip() or "0")
+            flash_pulse_ms = int(self._flash_pulse_edit.text().strip() or "200")
+        except ValueError:
+            QMessageBox.critical(
+                self,
+                "Invalid input",
+                "Flash delay/pulse musia byť celé čísla.",
+            )
+            return
+        if flash_delay_ms < 0:
+            QMessageBox.critical(self, "Invalid input", "Flash delay musí byť >= 0 ms.")
+            return
+        if flash_pulse_ms <= 0:
+            QMessageBox.critical(self, "Invalid input", "Flash pulse musí byť > 0 ms.")
             return
 
         try:
@@ -472,6 +500,8 @@ class ViewConfigDialog(QDialog):
             "name": name,
             "camera_profile": profile,
             "settle_ms": settle_ms,
+            "flash_delay_ms": flash_delay_ms,
+            "flash_pulse_ms": flash_pulse_ms,
             "trigger_mode": trigger_mode,
             "external_trigger_mode": external_mode,
             "external_request_input": external_input,
@@ -610,6 +640,8 @@ class ViewConfigDialog(QDialog):
     def _apply_initial_timing(
         self,
         settle_ms: Optional[int],
+        flash_delay_ms: int,
+        flash_pulse_ms: int,
         trigger_mode: str,
         external_trigger_mode: Optional[str],
         external_request_input: Optional[int],
@@ -618,6 +650,8 @@ class ViewConfigDialog(QDialog):
     ) -> None:
         if settle_ms is not None:
             self._settle_edit.setText(str(int(settle_ms)))
+        self._flash_delay_edit.setText(str(max(0, int(flash_delay_ms or 0))))
+        self._flash_pulse_edit.setText(str(max(1, int(flash_pulse_ms or 200))))
 
         normalized_mode = str(trigger_mode or "timed").strip().lower()
         if normalized_mode not in {"timed", "external", "manual"}:

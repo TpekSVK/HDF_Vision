@@ -153,6 +153,8 @@ class RecipeService:
         frame_source_view_id: str | None = None,
         camera_profile: ViewCameraProfile | dict | str | None = None,
         settle_ms: int | None = None,
+        flash_delay_ms: int | None = None,
+        flash_pulse_ms: int | None = None,
         trigger_mode: str | None = None,
         external_trigger_mode: str | None | object = _UNSET,
         external_request_input: int | None | object = _UNSET,
@@ -197,6 +199,8 @@ class RecipeService:
         source_tools: List[Tool] = []
         source_camera: ViewCameraProfile | dict | str | None = None
         source_settle: Optional[int] = None
+        source_flash_delay_ms: int = 0
+        source_flash_pulse_ms: int = 200
         source_trigger_mode: str | None = None
         source_external_trigger_mode: str | None = None
         source_external_request_input: int | None = None
@@ -219,6 +223,8 @@ class RecipeService:
                 else:
                     source_camera = profile
                 source_settle = source_view.settle_ms
+                source_flash_delay_ms = int(getattr(source_view, "flash_delay_ms", 0) or 0)
+                source_flash_pulse_ms = int(getattr(source_view, "flash_pulse_ms", 200) or 200)
                 source_trigger_mode = source_view.trigger_mode
                 source_external_trigger_mode = getattr(
                     source_view, "external_trigger_mode", None
@@ -251,6 +257,12 @@ class RecipeService:
             camera_payload = target_camera
 
         target_settle = settle_ms if settle_ms is not None else source_settle
+        target_flash_delay = (
+            int(flash_delay_ms) if flash_delay_ms is not None else int(source_flash_delay_ms)
+        )
+        target_flash_pulse = (
+            int(flash_pulse_ms) if flash_pulse_ms is not None else int(source_flash_pulse_ms)
+        )
         target_trigger_mode = self._normalize_trigger_mode(trigger_mode or source_trigger_mode)
         target_external_trigger_mode = (
             external_trigger_mode
@@ -299,6 +311,8 @@ class RecipeService:
             frame_source_view_id=target_frame_source,
             camera_profile=camera_payload,
             settle_ms=target_settle,
+            flash_delay_ms=max(0, int(target_flash_delay)),
+            flash_pulse_ms=max(1, int(target_flash_pulse)),
             trigger_mode=target_trigger_mode,
             external_trigger_mode=target_external_trigger_mode,
             external_request_input=target_external_request_input,
@@ -342,6 +356,8 @@ class RecipeService:
         frame_source_view_id: str | None,
         camera_profile: ViewCameraProfile | dict | str | None,
         settle_ms: int | None,
+        flash_delay_ms: int | None = None,
+        flash_pulse_ms: int | None = None,
         trigger_mode: str,
         external_trigger_mode: str | None = None,
         external_request_input: int | None = None,
@@ -380,6 +396,8 @@ class RecipeService:
             frame_source_view_id=frame_source_view_id,
             camera_profile=camera_payload,
             settle_ms=settle_ms,
+            flash_delay_ms=max(0, int(flash_delay_ms if flash_delay_ms is not None else getattr(view, "flash_delay_ms", 0))),
+            flash_pulse_ms=max(1, int(flash_pulse_ms if flash_pulse_ms is not None else getattr(view, "flash_pulse_ms", 200))),
             trigger_mode=normalized_mode,
             external_trigger_mode=external_trigger_mode,
             external_request_input=external_request_input,
@@ -510,6 +528,16 @@ class RecipeService:
             "published_at": state.get("published_at"),
             "has_unpublished_changes": self.has_unpublished_changes(name),
         }
+
+    def build_pico_flash_mapping(self, name: str, *, published: bool = True) -> dict[str, dict[str, int]]:
+        recipe = self._load_published_recipe_config(name) if published else self._load_recipe_config(name)
+        mapping: dict[str, dict[str, int]] = {}
+        for view in recipe.views:
+            mapping[view.id] = {
+                "delay_ms": max(0, int(getattr(view, "flash_delay_ms", 0) or 0)),
+                "pulse_ms": max(1, int(getattr(view, "flash_pulse_ms", 200) or 200)),
+            }
+        return mapping
 
     def mark_draft_updated(self, name: str) -> None:
         self.db.mark_recipe_draft_updated(name)

@@ -105,6 +105,7 @@ from app.ui.golden_wizard.view_config_dialog import (
 
 if TYPE_CHECKING:
     from app.services.modbus_service import ModbusService
+    from app.services.pico_service import PicoService
 
 
 class ToolsTableWidget(QTableWidget):
@@ -1272,9 +1273,11 @@ class GoldenWizard(QDialog):
         parent=None,
         *,
         modbus: "ModbusService | None" = None,
+        pico: "PicoService | None" = None,
         trigger_fn: Optional[Callable[[], None]] = None,
         get_capture_mode: Optional[Callable[[], str]] = None,
         capture_frame_for_golden: Optional[Callable[..., Any]] = None,
+        publish_flash_to_pico: Optional[Callable[[str], tuple[bool, str]]] = None,
     ):
         super().__init__(parent)
         self._logger = logging.getLogger(__name__)
@@ -1285,9 +1288,11 @@ class GoldenWizard(QDialog):
         self.cam = camera
         self.recipes = recipes
         self.modbus = modbus
+        self.pico = pico
         self._trigger_fn = trigger_fn
         self._get_capture_mode = get_capture_mode
         self._capture_frame_for_golden = capture_frame_for_golden
+        self._publish_flash_to_pico = publish_flash_to_pico
         self.current_img = None
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -1930,14 +1935,6 @@ class GoldenWizard(QDialog):
     # ---------- Akcie ----------
     def _capture_golden(self):
         try:
-            if self.modbus is not None:
-                self.modbus.pulse_configured_flashes()
-                capture_delay_ms = self.modbus.recommended_flash_capture_delay_ms(
-                    post_flash_guard_ms=0
-                )
-                if capture_delay_ms > 0:
-                    time.sleep(capture_delay_ms / 1000.0)
-
             runtime_capture_mode = self._runtime_capture_mode()
             self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
             view_id = self._active_view_id
@@ -1949,6 +1946,7 @@ class GoldenWizard(QDialog):
                     view_id=view_id,
                     trigger_mode_label="golden_wizard",
                     image_rotation_override=0,
+                    capture_request_source="golden_wizard",
                 )
             if frame is None:
                 raise RuntimeError("Frame z kamery nie je dostupný.")
@@ -2085,6 +2083,13 @@ class GoldenWizard(QDialog):
         except Exception as exc:
             self._err(f"Publikovanie receptu zlyhalo: {exc}")
             return
+        pico_note = ""
+        if callable(self._publish_flash_to_pico):
+            ok_pico, msg_pico = self._publish_flash_to_pico(recipe)
+            if ok_pico:
+                pico_note = f"\nPico sync: {msg_pico}"
+            else:
+                pico_note = f"\nPico warning: {msg_pico}"
         self._record_saved_snapshot(recipe, self._active_view_id)
         self._refresh_tools_table()
         message = "Recept publikovaný."
@@ -2092,6 +2097,8 @@ class GoldenWizard(QDialog):
             message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
         if assets_message:
             message += f"\n{assets_message}"
+        if pico_note:
+            message += pico_note
         self._info(message)
         try:
             self.recipes.load(recipe)
@@ -2418,6 +2425,12 @@ class GoldenWizard(QDialog):
             camera_model=self._camera_model(),
             supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=source_view.settle_ms if source_view else None,
+            flash_delay_ms=int(getattr(source_view, "flash_delay_ms", 0) or 0)
+            if source_view
+            else 0,
+            flash_pulse_ms=int(getattr(source_view, "flash_pulse_ms", 200) or 200)
+            if source_view
+            else 200,
             trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
             external_trigger_mode=getattr(source_view, "external_trigger_mode", None)
             if source_view
@@ -2470,6 +2483,8 @@ class GoldenWizard(QDialog):
                 frame_source_view_id=data.get("frame_source_view_id"),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
+                flash_delay_ms=data.get("flash_delay_ms"),
+                flash_pulse_ms=data.get("flash_pulse_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
                 external_request_input=data.get("external_request_input"),
@@ -2507,6 +2522,8 @@ class GoldenWizard(QDialog):
             camera_model=self._camera_model(),
             supported_v4l2_controls=self._camera_v4l2_controls(),
             settle_ms=view.settle_ms,
+            flash_delay_ms=int(getattr(view, "flash_delay_ms", 0) or 0),
+            flash_pulse_ms=int(getattr(view, "flash_pulse_ms", 200) or 200),
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             external_trigger_mode=getattr(view, "external_trigger_mode", None),
             external_request_input=getattr(view, "external_request_input", None),
@@ -2540,6 +2557,8 @@ class GoldenWizard(QDialog):
                 frame_source_view_id=data.get("frame_source_view_id"),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
+                flash_delay_ms=data.get("flash_delay_ms"),
+                flash_pulse_ms=data.get("flash_pulse_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
                 external_request_input=data.get("external_request_input"),
@@ -2937,17 +2956,16 @@ class GoldenWizard(QDialog):
 
             frame: Optional[np.ndarray] = None
             capture_errors: list[str] = []
-            if self._live_on:
+            if callable(self._capture_frame_for_golden):
                 try:
-                    frame = self._lp.last_frame_u8()
-                except Exception as exc:  # pragma: no cover - defensive
-                    capture_errors.append(f"Live preview zlyhal: {exc}")
-            if frame is None:
-                try:
-                    frame = self.cam.one_shot()
-                except Exception as exc:  # pragma: no cover - fallback
+                    frame = self._capture_frame_for_golden(
+                        view_id=view_id,
+                        trigger_mode_label="golden_tool_test",
+                        image_rotation_override=0,
+                        capture_request_source="tool_test",
+                    )
+                except Exception as exc:
                     capture_errors.append(f"Zachytenie zlyhalo: {exc}")
-
             if frame is None:
                 message = capture_errors[-1] if capture_errors else "Frame nie je dostupný."
                 self._tool_panel.show_test_error(message)
@@ -3083,6 +3101,8 @@ class GoldenWizard(QDialog):
                 meta,
                 camera_service=self.cam,
                 live_preview=getattr(self, "_lp", None),
+                capture_frame_for_view=self._capture_frame_for_golden,
+                active_view_id=self._active_view_id,
                 parent=self,
             )
             if dialog.exec() != QDialog.Accepted:

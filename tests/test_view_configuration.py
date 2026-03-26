@@ -42,6 +42,8 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
             "gain_db": "4.5",
         },
         "settle_ms": "45",
+        "flash_delay_ms": "30",
+        "flash_pulse_ms": "180",
         "trigger_mode": "TIMED",
         "trigger_interval_ms": "150",
         "trigger_gap_ms": "20.5",
@@ -55,6 +57,8 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
     assert view.camera_profile.exposure_us == 9000
     assert view.camera_profile.gain_db == pytest.approx(4.5)
     assert view.settle_ms == 45
+    assert view.flash_delay_ms == 30
+    assert view.flash_pulse_ms == 180
     assert view.trigger_mode == "timed"
     assert view.trigger_interval_ms == 150
     assert view.trigger_gap_ms == pytest.approx(20.5)
@@ -62,6 +66,8 @@ def test_recipe_view_normalizes_camera_profile_and_trigger():
 
     serialized = view.to_dict()
     assert serialized["trigger_mode"] == "timed"
+    assert serialized["flash_delay_ms"] == 30
+    assert serialized["flash_pulse_ms"] == 180
     assert serialized["trigger_interval_ms"] == 150
     assert serialized["trigger_gap_ms"] == pytest.approx(20.5)
     assert serialized["frame_source_view_id"] == "view_0"
@@ -148,6 +154,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         frame_source_view_id=None,
         camera_profile=profile,
         settle_ms=120,
+        flash_delay_ms=25,
+        flash_pulse_ms=190,
         trigger_mode="timed",
         trigger_interval_ms=250,
         trigger_gap_ms=20.0,
@@ -159,6 +167,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert isinstance(new_view.camera_profile, ViewCameraProfile)
     assert new_view.camera_profile.pixel_format == "Y12"
     assert new_view.trigger_mode == "timed"
+    assert new_view.flash_delay_ms == 25
+    assert new_view.flash_pulse_ms == 190
     assert new_view.trigger_interval_ms == 250
     assert new_view.trigger_gap_ms == pytest.approx(20.0)
     assert new_view.frame_source_view_id is None
@@ -171,6 +181,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
         frame_source_view_id="view_source",
         camera_profile=None,
         settle_ms=None,
+        flash_delay_ms=10,
+        flash_pulse_ms=140,
         trigger_mode="external",
         external_trigger_mode="explicit",
         external_request_input=2,
@@ -182,6 +194,8 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert updated.name == "Inspection Updated"
     assert updated.camera_profile is None
     assert updated.trigger_mode == "external"
+    assert updated.flash_delay_ms == 10
+    assert updated.flash_pulse_ms == 140
     assert updated.external_trigger_mode == "explicit"
     assert updated.external_request_input == 2
     assert updated.trigger_interval_ms is None
@@ -227,6 +241,36 @@ def test_view_branching_serialization_roundtrip():
     assert serialized["branch_enabled"] is True
     assert serialized["branch_targets"] == {"ok": "view_1", "nok": "view_2"}
     assert serialized["branch_default_view_id"] == "view_fallback"
+
+
+def test_recipe_service_builds_pico_flash_mapping(tmp_path: Path):
+    service = RecipeService(base_dir=str(tmp_path / "data"))
+    service.create("demo")
+    views = service.list_views("demo")
+    target = views[0]
+    service.update_view(
+        "demo",
+        target.id,
+        view_name=target.name,
+        frame_source_view_id=target.frame_source_view_id,
+        camera_profile=target.camera_profile,
+        settle_ms=target.settle_ms,
+        flash_delay_ms=44,
+        flash_pulse_ms=166,
+        trigger_mode=target.trigger_mode,
+        external_trigger_mode=getattr(target, "external_trigger_mode", None),
+        external_request_input=getattr(target, "external_request_input", None),
+        trigger_interval_ms=getattr(target, "trigger_interval_ms", None),
+        trigger_gap_ms=getattr(target, "trigger_gap_ms", None),
+        image_rotation=getattr(target, "image_rotation", 0),
+        branch_enabled=bool(getattr(target, "branch_enabled", False)),
+        branch_targets=dict(getattr(target, "branch_targets", {}) or {}),
+        branch_default_view_id=getattr(target, "branch_default_view_id", None),
+    )
+
+    mapping = service.build_pico_flash_mapping("demo", published=False)
+    assert mapping[target.id]["delay_ms"] == 44
+    assert mapping[target.id]["pulse_ms"] == 166
 
 
 def test_resolve_camera_state_inherits_base_configuration():
