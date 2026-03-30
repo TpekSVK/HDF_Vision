@@ -643,6 +643,47 @@ class CameraService:
         self._log_latest_frame_used(caller)
         return self.one_shot()
 
+    def discard_frames(self, count: int = 3, *, caller: str = "") -> int:
+        """Best-effort flush starších frame-ov pred finálnym odberom v master flow."""
+        discard_count = max(0, int(count))
+        if discard_count <= 0:
+            self._logger.debug("[FRAME_FLUSH] skipped reason=non_positive_count count=%s caller=%s", count, caller)
+            return 0
+        if self._cap is None:
+            self._logger.debug("[FRAME_FLUSH] skipped reason=capture_not_ready caller=%s", caller)
+            return 0
+        if self._is_trigger_path_active():
+            self._logger.debug("[FRAME_FLUSH] skipped because capture_mode=trigger caller=%s", caller)
+            return 0
+
+        discarded = 0
+        try:
+            with self._cap_read_lock:
+                cap = self._cap
+                if cap is None:
+                    self._logger.debug("[FRAME_FLUSH] skipped reason=capture_not_ready caller=%s", caller)
+                    return 0
+                for _ in range(discard_count):
+                    ok, frame = cap.read()
+                    if not ok or frame is None:
+                        break
+                    frame_u8 = self._normalize_frame_u8(frame)
+                    if frame_u8 is None:
+                        continue
+                    self._ring.append(frame_u8)
+                    discarded += 1
+        except Exception as exc:
+            self._logger.warning("[FRAME_FLUSH] failed reason=%s caller=%s", exc, caller)
+            return discarded
+
+        self._logger.debug(
+            "[FRAME_FLUSH] mode=master discard_count=%s discarded=%s caller=%s",
+            discard_count,
+            discarded,
+            caller,
+        )
+        return discarded
+
     def stop_continuous(self):
         self._logger.info("stop_continuous requested")
         try:

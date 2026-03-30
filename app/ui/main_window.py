@@ -819,6 +819,7 @@ class MainWindow(QMainWindow):
                 trigger_mode_label=trigger_mode_label,
             )
         else:
+            self.cam.discard_frames(3, caller=master_caller)
             frame = self.cam.last_frame(caller=master_caller)
         if image_rotation_override is not None:
             frame = apply_view_rotation(
