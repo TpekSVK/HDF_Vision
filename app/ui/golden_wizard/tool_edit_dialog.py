@@ -1,6 +1,9 @@
 """Dialog for editing tool configuration within the Golden Wizard."""
 from __future__ import annotations
 
+import json
+import time
+from pathlib import Path
 from typing import Any, Optional
 
 import cv2
@@ -47,6 +50,19 @@ from .form_widgets import (
     _set_form_widget_value,
 )
 from app.services.golden_wizard_logic import _validate_params_and_thresholds
+from app.services.presence_absence_v2_service import (
+    build_model,
+    compute_roi_hash,
+    ensure_assets_dirs,
+    evaluate_sample,
+    load_model,
+    load_samples,
+    resolve_assets_dir,
+    save_model,
+    save_sample,
+)
+from app.utils.tool_identity import compute_tool_identity
+from .presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
 
 _ROI_MASK_SECTION_MIN_WIDTH = 360
 _ROI_MASK_SECTION_MIN_HEIGHT = 280
@@ -321,6 +337,8 @@ class ToolEditDialog(QDialog):
         live_preview: Optional[LivePreviewService] = None,
         capture_frame_for_view=None,
         active_view_id: str | None = None,
+        recipe_name: str | None = None,
+        base_dir: str = "/data",
         parent=None,
     ):
         super().__init__(parent)
@@ -333,6 +351,8 @@ class ToolEditDialog(QDialog):
         self._live_preview = live_preview
         self._capture_frame_for_view = capture_frame_for_view
         self._active_view_id = active_view_id
+        self._recipe_name = recipe_name
+        self._base_dir = base_dir
         self._golden_image: Optional[np.ndarray] = None if golden_image is None else np.asarray(golden_image).copy()
         self._golden_pixmap: Optional[QPixmap] = None
         self._locator_template_specs: dict[str, dict[str, Any]] = {}
@@ -343,6 +363,15 @@ class ToolEditDialog(QDialog):
         self._btn_edge_auto_detect: Optional[QPushButton] = None
 
         self._is_locator_template = self._tool.type == "locator.template_match"
+        self._is_presence_v2 = self._tool.type == "presence.absence_v2"
+        self._learning_status_label: Optional[QLabel] = None
+        self._learning_counts_label: Optional[QLabel] = None
+        self._learning_model_label: Optional[QLabel] = None
+        self._learning_warning_label: Optional[QLabel] = None
+        self._learning_result_label: Optional[QLabel] = None
+        self._learning_preview_label: Optional[QLabel] = None
+        self._learning_tab_index: Optional[int] = None
+        self._recommended_thresholds: dict[str, float] = {}
         self._maximize_on_first_show = True
         self._use_golden_checkbox: Optional[QCheckBox] = None
         self._template_editor: Optional[TemplateRoiEditor] = None
@@ -560,6 +589,11 @@ class ToolEditDialog(QDialog):
         config_layout.addWidget(form_scroll, 1)
         self._tabs.addTab(self._config_tab, "Prahy a parametre")
 
+        if self._is_presence_v2:
+            self._learning_tab = self._build_presence_v2_learning_tab()
+            self._tabs.addTab(self._learning_tab, "Učenie")
+            self._learning_tab_index = self._tabs.indexOf(self._learning_tab)
+
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
@@ -649,6 +683,9 @@ class ToolEditDialog(QDialog):
             self._init_locator_template_panel()
         if self._tool.type == "edge_profile_deviation":
             self._init_edge_anchor_panel()
+
+        if self._is_presence_v2:
+            self._refresh_presence_v2_learning_state()
 
         self.resize(1400, 900)
 
@@ -1384,6 +1421,272 @@ class ToolEditDialog(QDialog):
         self._update_locator_metrics(tool_result, diagnostics)
         self._update_locator_preview(frame_u8, aligned)
 
+    def _build_presence_v2_learning_tab(self) -> QWidget:
+        tab = QWidget(self)
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+
+        status_group = QGroupBox("Stav učenia", tab)
+        status_layout = QVBoxLayout(status_group)
+        self._learning_status_label = QLabel("Stav: Nenaučené", status_group)
+        self._learning_counts_label = QLabel("OK snímky: 0 | NOK snímky: 0", status_group)
+        self._learning_model_label = QLabel("Model: nepripravený", status_group)
+        self._learning_warning_label = QLabel("", status_group)
+        self._learning_warning_label.setStyleSheet("color: #b36b00;")
+        self._learning_warning_label.setWordWrap(True)
+        status_layout.addWidget(self._learning_status_label)
+        status_layout.addWidget(self._learning_counts_label)
+        status_layout.addWidget(self._learning_model_label)
+        status_layout.addWidget(self._learning_warning_label)
+        layout.addWidget(status_group)
+
+        sample_group = QGroupBox("Zber vzoriek", tab)
+        sample_layout = QHBoxLayout(sample_group)
+        btn_ok = QPushButton("Zbierať OK snímky", sample_group)
+        btn_ok.clicked.connect(lambda: self._open_presence_v2_capture("ok"))
+        btn_nok = QPushButton("Zbierať NOK snímky", sample_group)
+        btn_nok.clicked.connect(lambda: self._open_presence_v2_capture("nok"))
+        sample_layout.addWidget(btn_ok)
+        sample_layout.addWidget(btn_nok)
+        sample_layout.addStretch(1)
+        layout.addWidget(sample_group)
+
+        model_group = QGroupBox("Prepočet modelu", tab)
+        model_layout = QHBoxLayout(model_group)
+        self._btn_recompute_model = QPushButton("Prepočítať model", model_group)
+        self._btn_recompute_model.clicked.connect(self._recompute_presence_v2_model)
+        btn_apply = QPushButton("Použiť odporúčané tolerancie", model_group)
+        btn_apply.clicked.connect(self._apply_presence_v2_recommended_thresholds)
+        model_layout.addWidget(self._btn_recompute_model)
+        model_layout.addWidget(btn_apply)
+        model_layout.addStretch(1)
+        layout.addWidget(model_group)
+
+        test_group = QGroupBox("Test datasetu", tab)
+        test_layout = QVBoxLayout(test_group)
+        btn_test = QPushButton("Otestovať na vzorkách", test_group)
+        btn_test.clicked.connect(self._test_presence_v2_dataset)
+        self._learning_result_label = QLabel("", test_group)
+        self._learning_result_label.setWordWrap(True)
+        test_layout.addWidget(btn_test)
+        test_layout.addWidget(self._learning_result_label)
+        layout.addWidget(test_group)
+
+        diag_group = QGroupBox("Diagnostika / preview", tab)
+        diag_layout = QVBoxLayout(diag_group)
+        self._learning_preview_label = QLabel("Preview nie je dostupný", diag_group)
+        self._learning_preview_label.setAlignment(Qt.AlignCenter)
+        self._learning_preview_label.setMinimumHeight(220)
+        self._learning_preview_label.setStyleSheet("background:#111;color:#888;border:1px solid #444;")
+        diag_layout.addWidget(self._learning_preview_label)
+        layout.addWidget(diag_group, 1)
+        return tab
+
+    def _presence_v2_assets_dir(self) -> Optional[Path]:
+        if not self._recipe_name or not self._active_view_id:
+            return None
+        identity, _, _ = compute_tool_identity(self._tool)
+        return resolve_assets_dir(self._base_dir, self._recipe_name, self._active_view_id, identity)
+
+    def _presence_v2_capture_frame(self) -> Optional[np.ndarray]:
+        if callable(self._capture_frame_for_view):
+            return self._capture_frame_for_view(
+                view_id=self._active_view_id,
+                trigger_mode_label="presence_v2_learning",
+                image_rotation_override=0,
+                capture_request_source="presence_v2_learning",
+            )
+        return None
+
+    def _presence_v2_crop_roi(self, frame: np.ndarray) -> Optional[np.ndarray]:
+        roi = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
+        if roi is None:
+            return None
+        x, y, w, h = roi
+        arr = np.asarray(frame)
+        if arr.ndim == 3:
+            arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
+        ih, iw = arr.shape[:2]
+        x0 = max(0, min(iw - 1, int(x)))
+        y0 = max(0, min(ih - 1, int(y)))
+        x1 = max(0, min(iw, int(x + w)))
+        y1 = max(0, min(ih, int(y + h)))
+        if x1 <= x0 or y1 <= y0:
+            return None
+        return arr[y0:y1, x0:x1].copy()
+
+    def _open_presence_v2_capture(self, mode: str) -> None:
+        assets_dir = self._presence_v2_assets_dir()
+        if assets_dir is None:
+            QMessageBox.warning(self, "Učenie", "Nie je dostupný recipe/view kontext pre uloženie datasetu.")
+            return
+        params = dict(self._tool.params.values or {})
+        dialog = PresenceV2SampleCaptureDialog(
+            title="Zber OK snímok" if mode == "ok" else "Zber NOK snímok",
+            capture_fn=self._presence_v2_capture_frame,
+            crop_fn=self._presence_v2_crop_roi,
+            default_mode=str(params.get("capture_mode_default", "manual") or "manual"),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        dirs = ensure_assets_dirs(assets_dir)
+        saved = 0
+        for sample in dialog.samples():
+            save_sample(sample, dirs["ok" if mode == "ok" else "nok"])
+            saved += 1
+        if saved:
+            QMessageBox.information(self, "Učenie", f"Uložené vzorky: {saved}")
+        self._refresh_presence_v2_learning_state()
+
+    def _refresh_presence_v2_learning_state(self) -> None:
+        if not self._is_presence_v2:
+            return
+        assets_dir = self._presence_v2_assets_dir()
+        ok_count = 0
+        nok_count = 0
+        model_ready = False
+        invalidated = bool((self._tool.params.values or {}).get("reference_model_invalidated", False))
+        if assets_dir is not None:
+            dirs = ensure_assets_dirs(assets_dir)
+            ok_count = len(load_samples(dirs["ok"]))
+            nok_count = len(load_samples(dirs["nok"]))
+            model_ready = bool(load_model(dirs["model"])) and not invalidated
+        params = dict(self._tool.params.values or {})
+        params["sample_count_ok"] = int(ok_count)
+        params["sample_count_nok"] = int(nok_count)
+        params.setdefault("reference_assets_dir", str(assets_dir) if assets_dir else "")
+        params["reference_model_ready"] = bool(model_ready)
+        self._tool.params = ToolParams(params)
+
+        min_ok = int(params.get("min_ok_samples", 15) or 15)
+        if self._learning_counts_label is not None:
+            self._learning_counts_label.setText(f"OK snímky: {ok_count} | NOK snímky: {nok_count}")
+        if self._learning_model_label is not None:
+            self._learning_model_label.setText("Model: pripravený" if model_ready else "Model: nepripravený")
+        if self._learning_status_label is not None:
+            if invalidated:
+                status = "Neplatné po zmene ROI"
+            elif model_ready and ok_count >= min_ok:
+                status = "Pripravené"
+            elif ok_count > 0:
+                status = "Málo dát"
+            else:
+                status = "Nenaučené"
+            self._learning_status_label.setText(f"Stav: {status}")
+        if self._learning_warning_label is not None:
+            self._learning_warning_label.setText(
+                "ROI sa zmenilo – je potrebné nové učenie modelu."
+                if invalidated
+                else ""
+            )
+        if hasattr(self, "_btn_recompute_model") and self._btn_recompute_model is not None:
+            has_roi = (self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()) is not None
+            self._btn_recompute_model.setEnabled(has_roi and ok_count >= min_ok)
+
+    def _recompute_presence_v2_model(self) -> None:
+        assets_dir = self._presence_v2_assets_dir()
+        if assets_dir is None:
+            return
+        dirs = ensure_assets_dirs(assets_dir)
+        ok_samples = load_samples(dirs["ok"])
+        if not ok_samples:
+            QMessageBox.warning(self, "Učenie", "Nie sú dostupné OK vzorky.")
+            return
+        params = dict(self._tool.params.values or {})
+        polarity = str(params.get("polarity", "any") or "any")
+        median, mad, recommended, warnings = build_model(ok_samples, polarity=polarity)
+        stats = {
+            "model_method": "median_mad",
+            "polarity": polarity,
+            "created_at": int(time.time()),
+            "sample_count_ok": len(ok_samples),
+            "sample_count_nok": len(load_samples(dirs["nok"])),
+            "recommended_thresholds": recommended,
+            "warnings": warnings,
+            "roi_hash": params.get("roi_hash", ""),
+            "image_shape": list(median.shape),
+            "tool_type": self._tool.type,
+            "tool_name": self._tool.name,
+            "view_id": self._active_view_id,
+        }
+        save_model(dirs["model"], median, mad, stats)
+        self._recommended_thresholds = {k: float(v) for k, v in recommended.items()}
+        params["reference_model_ready"] = True
+        params["reference_model_invalidated"] = False
+        self._tool.params = ToolParams(params)
+        if self._learning_result_label is not None:
+            self._learning_result_label.setText(
+                f"Model prepočítaný z {len(ok_samples)} OK vzoriek. Odporúčané prahy: {recommended}.\n"
+                + ("\n".join(warnings) if warnings else "")
+            )
+        if self._learning_preview_label is not None:
+            pix = self._pixmap_from_array(np.clip(median, 0, 255).astype(np.uint8))
+            if pix is not None:
+                self._learning_preview_label.setPixmap(pix.scaled(self._learning_preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        self._refresh_presence_v2_learning_state()
+
+    def _apply_presence_v2_recommended_thresholds(self) -> None:
+        if not self._recommended_thresholds:
+            assets_dir = self._presence_v2_assets_dir()
+            if assets_dir is not None:
+                model = load_model(ensure_assets_dirs(assets_dir)["model"])
+                if model is not None:
+                    self._recommended_thresholds = dict(model.stats.get("recommended_thresholds", {}) or {})
+        if not self._recommended_thresholds:
+            QMessageBox.warning(self, "Učenie", "Odporúčané tolerancie nie sú dostupné.")
+            return
+        thresholds = dict(self._tool.thresholds.values or {})
+        for key in ("score_threshold", "total_area_threshold", "min_blob_area"):
+            if key in self._recommended_thresholds:
+                thresholds[key] = float(self._recommended_thresholds[key])
+        self._tool.thresholds = ToolThresholds(thresholds)
+        self._build_config_form()
+        QMessageBox.information(self, "Učenie", "Odporúčané tolerancie boli aplikované.")
+
+    def _test_presence_v2_dataset(self) -> None:
+        assets_dir = self._presence_v2_assets_dir()
+        if assets_dir is None:
+            return
+        dirs = ensure_assets_dirs(assets_dir)
+        model = load_model(dirs["model"])
+        if model is None:
+            QMessageBox.warning(self, "Učenie", "Model nie je pripravený.")
+            return
+        thresholds = dict(self._tool.thresholds.values or {})
+        params = dict(self._tool.params.values or {})
+        pol = str(params.get("polarity", "any") or "any")
+
+        ok_samples = load_samples(dirs["ok"])
+        nok_samples = load_samples(dirs["nok"])
+        ok_true = ok_false = nok_true = nok_false = 0
+        for sample in ok_samples:
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            if res["status"] == "ok":
+                ok_true += 1
+            else:
+                ok_false += 1
+        for sample in nok_samples:
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            if res["status"] == "nok":
+                nok_true += 1
+            else:
+                nok_false += 1
+        total = ok_true + ok_false + nok_true + nok_false
+        acc = (ok_true + nok_true) / total if total else 0.0
+        fpr = ok_false / max(1, (ok_true + ok_false))
+        fnr = nok_false / max(1, (nok_true + nok_false))
+        message = (
+            f"OK správne: {ok_true}\nOK chybne ako NOK: {ok_false}\n"
+            f"NOK správne: {nok_true}\nNOK chybne ako OK: {nok_false}\n"
+            f"Accuracy: {acc:.3f}\nFalse positive rate: {fpr:.3f}\nFalse negative rate: {fnr:.3f}"
+        )
+        if not nok_samples:
+            message += "\nNOK validácia nebola dostupná."
+        if self._learning_result_label is not None:
+            self._learning_result_label.setText(message)
+
     def result_tool(self) -> Tool:
         return self._tool.copy()
 
@@ -1422,6 +1725,20 @@ class ToolEditDialog(QDialog):
         else:
             self._tool.ignore_mask = ToolMask(None)
             params_values.pop("ignore_mask", None)
+
+        if self._is_presence_v2:
+            roi_hash_new = compute_roi_hash(
+                self._tool.roi.rect(),
+                self._tool.ignore_mask.value if self._tool.ignore_mask.value is not None else None,
+            )
+            previous_hash = str(params_values.get("roi_hash", "") or "")
+            params_values["roi_hash"] = roi_hash_new
+            assets_dir = self._presence_v2_assets_dir()
+            if assets_dir is not None:
+                params_values["reference_assets_dir"] = str(assets_dir)
+            if previous_hash and previous_hash != roi_hash_new:
+                params_values["reference_model_ready"] = False
+                params_values["reference_model_invalidated"] = True
 
         self._tool.params = ToolParams(params_values)
 

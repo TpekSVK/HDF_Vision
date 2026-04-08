@@ -3103,6 +3103,8 @@ class GoldenWizard(QDialog):
                 live_preview=getattr(self, "_lp", None),
                 capture_frame_for_view=self._capture_frame_for_golden,
                 active_view_id=self._active_view_id,
+                recipe_name=recipe,
+                base_dir="/data",
                 parent=self,
             )
             if dialog.exec() != QDialog.Accepted:

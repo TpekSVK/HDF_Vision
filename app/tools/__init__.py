@@ -18,6 +18,7 @@ from .presence_absence import (
     ToolContext as PresenceAbsenceContext,
     ToolResult as PresenceAbsenceResult,
 )
+from .presence_absence_v2 import PresenceAbsenceV2Tool
 
 ToolContext = LightPresenceContext
 ToolResult = LightPresenceResult
@@ -35,6 +36,7 @@ __all__ = [
     "PresenceAbsenceCheckParams",
     "PresenceAbsenceContext",
     "PresenceAbsenceResult",
+    "PresenceAbsenceV2Tool",
     "ToolContext",
     "ToolResult",
 ]
