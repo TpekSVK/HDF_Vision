@@ -7,6 +7,7 @@ from .edge import EdgeChangeTool
 from .edge_profile_deviation import EdgeProfileDeviationTool
 from .light_presence import LightPresenceCheckTool
 from .presence_absence import PresenceAbsenceCheckTool
+from .presence_absence_v2 import PresenceAbsenceV2Tool
 from .light_transmission import LightTransmissionCheckTool
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "EdgeProfileDeviationTool",
     "LightPresenceCheckTool",
     "PresenceAbsenceCheckTool",
+    "PresenceAbsenceV2Tool",
     "LightTransmissionCheckTool",
 ]

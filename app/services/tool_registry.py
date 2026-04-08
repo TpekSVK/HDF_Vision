@@ -22,6 +22,7 @@ from app.models.schema import (
 from app.tools.light_presence import LightPresenceCheckTool
 from app.tools.light_transmission import LightTransmissionCheckTool
 from app.tools.presence_absence import PresenceAbsenceCheckTool
+from app.tools.presence_absence_v2 import PresenceAbsenceV2Tool
 
 logger = logging.getLogger(__name__)
 
@@ -681,6 +682,53 @@ def _register_default_tools() -> None:
                     "priority": 1,
                     "description": "Čas behu",
                 },
+            ],
+        },
+    )
+
+
+    ToolRegistry.register(
+        "presence.absence_v2",
+        factory=lambda: PresenceAbsenceV2Tool(),
+        meta={
+            "name": "Prítomnosť/neprítomnosť V2",
+            "description": "Experimentálny štatistický model prítomnosti/neprítomnosti z viacerých OK vzoriek.",
+            "category": "Presence",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "reference_mode": {"type": "enum", "default": "statistical_golden", "choices": [("statistical_golden", "Štatistický golden")], "label": "Referenčný režim"},
+                    "capture_mode_default": {"type": "enum", "default": "manual", "choices": [("manual", "Manuálne"), ("auto", "Automaticky")], "label": "Predvolený zber"},
+                    "model_method": {"type": "enum", "default": "median_mad", "choices": [("median_mad", "Median + MAD")], "label": "Metóda modelu"},
+                    "polarity": {"type": "enum", "default": "any", "choices": [("any", "Akákoľvek"), ("darker_only", "Iba stmavnutie"), ("brighter_only", "Iba zosvetlenie")], "label": "Polarita"},
+                    "min_ok_samples": {"type": "int", "default": 15, "min": 5, "max": 500, "label": "Minimum OK vzoriek"},
+                    "recommended_ok_samples": {"type": "int", "default": 30, "min": 5, "max": 500, "label": "Odporúčané OK vzorky"},
+                    "use_nok_for_validation": {"type": "bool", "default": True, "label": "Použiť NOK pre validáciu"},
+                    "auto_apply_recommended_thresholds": {"type": "bool", "default": False, "label": "Auto aplikovať odporúčané"},
+                    "reference_model_ready": {"type": "bool", "default": False, "label": "Model pripravený"},
+                    "reference_model_invalidated": {"type": "bool", "default": False, "label": "Model neplatný"},
+                    "sample_count_ok": {"type": "int", "default": 0, "min": 0, "max": 9999, "label": "Počet OK vzoriek"},
+                    "sample_count_nok": {"type": "int", "default": 0, "min": 0, "max": 9999, "label": "Počet NOK vzoriek"},
+                    "reference_assets_dir": {"type": "text", "default": "", "label": "Assets dir"},
+                    "roi_hash": {"type": "text", "default": "", "label": "ROI hash"},
+                },
+                "thresholds": {
+                    "score_threshold": {"type": "float", "default": 4.0, "min": 0.1, "label": "Score threshold"},
+                    "total_area_threshold": {"type": "float", "default": 50.0, "min": 0.0, "label": "Anomálna plocha"},
+                    "min_blob_area": {"type": "float", "default": 10.0, "min": 0.0, "label": "Min. blob area"},
+                },
+            },
+            "metrics_spec": [
+                {"key": "anomaly_score", "priority": 10, "description": "Maximálne robustné skóre"},
+                {"key": "anomaly_area", "unit": "px", "priority": 9, "description": "Anomálna plocha"},
+                {"key": "blob_count", "priority": 8, "description": "Počet blobov"},
+                {"key": "max_deviation", "priority": 7, "description": "Max odchýlka"},
+                {"key": "mean_deviation", "priority": 6, "description": "Priemerná odchýlka"},
+                {"key": "model_ready", "priority": 5, "description": "Pripravenosť modelu"},
+                {"key": "ok_sample_count", "priority": 4, "description": "Počet OK vzoriek"},
+                {"key": "nok_sample_count", "priority": 3, "description": "Počet NOK vzoriek"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
     )
