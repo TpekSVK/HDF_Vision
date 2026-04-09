@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,14 @@ class PresenceV2Model:
     median: np.ndarray
     mad: np.ndarray
     stats: dict[str, Any]
+
+
+@dataclass(slots=True)
+class PresenceV2BuildInfo:
+    total_ok_samples: int
+    used_ok_samples: int
+    ignored_ok_samples: int
+    target_shape: tuple[int, int] | None
 
 
 def _as_gray_u8(image: np.ndarray) -> np.ndarray:
@@ -56,6 +65,22 @@ def ensure_assets_dirs(base_dir: Path) -> dict[str, Path]:
     return {"ok": ok_dir, "nok": nok_dir, "model": model_dir, "thumbs": thumbs_dir}
 
 
+def reset_learning_assets(base_dir: Path) -> tuple[bool, str | None]:
+    try:
+        dirs = ensure_assets_dirs(base_dir)
+        for key in ("ok", "nok", "model"):
+            root = dirs[key]
+            for entry in root.iterdir():
+                if entry.is_dir():
+                    shutil.rmtree(entry, ignore_errors=False)
+                else:
+                    entry.unlink(missing_ok=True)
+        ensure_assets_dirs(base_dir)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+
+
 def save_sample(sample: np.ndarray, target_dir: Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time() * 1000)
@@ -76,8 +101,51 @@ def load_samples(sample_dir: Path) -> list[np.ndarray]:
     return samples
 
 
-def build_model(ok_samples: list[np.ndarray], *, polarity: str, eps: float = 1.0) -> tuple[np.ndarray, np.ndarray, dict[str, float], list[str]]:
-    stack = np.stack([_as_gray_u8(sample).astype(np.float32) for sample in ok_samples], axis=0)
+def _split_samples_by_shape(
+    samples: list[np.ndarray],
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> tuple[list[np.ndarray], list[np.ndarray], tuple[int, int] | None]:
+    if not samples:
+        return [], [], None
+
+    converted = [_as_gray_u8(sample) for sample in samples]
+    if expected_shape is None:
+        counts: dict[tuple[int, int], int] = {}
+        for sample in converted:
+            shape = tuple(int(x) for x in sample.shape[:2])
+            counts[shape] = counts.get(shape, 0) + 1
+        expected_shape = max(counts.items(), key=lambda item: item[1])[0]
+
+    compatible: list[np.ndarray] = []
+    incompatible: list[np.ndarray] = []
+    for sample in converted:
+        if tuple(int(x) for x in sample.shape[:2]) == tuple(expected_shape):
+            compatible.append(sample)
+        else:
+            incompatible.append(sample)
+    return compatible, incompatible, expected_shape
+
+
+def build_model(
+    ok_samples: list[np.ndarray],
+    *,
+    polarity: str,
+    eps: float = 1.0,
+    min_ok_samples: int = 1,
+    expected_shape: tuple[int, int] | None = None,
+) -> tuple[np.ndarray, np.ndarray, dict[str, float], list[str], PresenceV2BuildInfo]:
+    if not ok_samples:
+        raise ValueError("Nie sú dostupné OK vzorky pre výpočet modelu.")
+
+    compatible, incompatible, target_shape = _split_samples_by_shape(ok_samples, expected_shape=expected_shape)
+    if len(compatible) < int(min_ok_samples):
+        raise ValueError(
+            f"Po odfiltrovaní nekompatibilných vzoriek ostalo len {len(compatible)} OK snímok. "
+            f"Minimum je {int(min_ok_samples)}."
+        )
+
+    stack = np.stack([sample.astype(np.float32) for sample in compatible], axis=0)
     median = np.median(stack, axis=0)
     mad = np.median(np.abs(stack - median[None, :, :]), axis=0) + float(eps)
 
@@ -103,8 +171,19 @@ def build_model(ok_samples: list[np.ndarray], *, polarity: str, eps: float = 1.0
         warnings.append("OK dataset má vysokú variabilitu anomálneho skóre.")
     if area_mad > 50:
         warnings.append("OK dataset má vysokú variabilitu anomálnej plochy.")
+    if incompatible:
+        warnings.append(
+            f"Ignorované {len(incompatible)} staré OK snímky, lebo majú iný rozmer po zmene ROI."
+        )
 
-    return median.astype(np.float32), mad.astype(np.float32), recommended, warnings
+    info = PresenceV2BuildInfo(
+        total_ok_samples=len(ok_samples),
+        used_ok_samples=len(compatible),
+        ignored_ok_samples=len(incompatible),
+        target_shape=target_shape,
+    )
+
+    return median.astype(np.float32), mad.astype(np.float32), recommended, warnings, info
 
 
 def evaluate_sample(
