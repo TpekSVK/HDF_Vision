@@ -57,6 +57,7 @@ from app.services.presence_absence_v2_service import (
     evaluate_sample,
     load_model,
     load_samples,
+    reset_learning_assets,
     resolve_assets_dir,
     save_model,
     save_sample,
@@ -1456,9 +1457,12 @@ class ToolEditDialog(QDialog):
         model_layout = QHBoxLayout(model_group)
         self._btn_recompute_model = QPushButton("Prepočítať model", model_group)
         self._btn_recompute_model.clicked.connect(self._recompute_presence_v2_model)
+        btn_reset_learning = QPushButton("Resetovať učenie", model_group)
+        btn_reset_learning.clicked.connect(self._confirm_reset_presence_v2_learning)
         btn_apply = QPushButton("Použiť odporúčané tolerancie", model_group)
         btn_apply.clicked.connect(self._apply_presence_v2_recommended_thresholds)
         model_layout.addWidget(self._btn_recompute_model)
+        model_layout.addWidget(btn_reset_learning)
         model_layout.addWidget(btn_apply)
         model_layout.addStretch(1)
         layout.addWidget(model_group)
@@ -1521,6 +1525,8 @@ class ToolEditDialog(QDialog):
         if assets_dir is None:
             QMessageBox.warning(self, "Učenie", "Nie je dostupný recipe/view kontext pre uloženie datasetu.")
             return
+        if not self._confirm_capture_with_invalidated_samples(assets_dir):
+            return
         params = dict(self._tool.params.values or {})
         dialog = PresenceV2SampleCaptureDialog(
             title="Zber OK snímok" if mode == "ok" else "Zber NOK snímok",
@@ -1540,50 +1546,143 @@ class ToolEditDialog(QDialog):
             QMessageBox.information(self, "Učenie", f"Uložené vzorky: {saved}")
         self._refresh_presence_v2_learning_state()
 
+    def _presence_v2_expected_shape(self) -> tuple[int, int] | None:
+        roi = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
+        if roi is None:
+            return None
+        _, _, w, h = roi
+        if int(w) <= 0 or int(h) <= 0:
+            return None
+        return int(h), int(w)
+
+    def _confirm_capture_with_invalidated_samples(self, assets_dir: Path) -> bool:
+        params = dict(self._tool.params.values or {})
+        invalidated = bool(params.get("reference_model_invalidated", False))
+        if not invalidated:
+            return True
+        dirs = ensure_assets_dirs(assets_dir)
+        stale_ok = len(load_samples(dirs["ok"]))
+        stale_nok = len(load_samples(dirs["nok"]))
+        if stale_ok <= 0 and stale_nok <= 0:
+            return True
+
+        reply = QMessageBox.question(
+            self,
+            "Staré vzorky už nesedia",
+            "ROI sa zmenilo. Staré OK/NOK snímky patria k predchádzajúcej oblasti. "
+            "Chcete ich vymazať a začať nové učenie?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.Yes,
+        )
+        if reply == QMessageBox.Yes:
+            return self._reset_presence_v2_learning(show_success=False)
+        return True
+
+    def _confirm_reset_presence_v2_learning(self) -> None:
+        reply = QMessageBox.question(
+            self,
+            "Resetovať učenie?",
+            "Vymažú sa všetky OK/NOK snímky a prepočítaný model pre tento nástroj. "
+            "ROI a ostatné nastavenia zostanú zachované.",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self._reset_presence_v2_learning(show_success=True)
+
+    def _reset_presence_v2_learning(self, *, show_success: bool) -> bool:
+        assets_dir = self._presence_v2_assets_dir()
+        if assets_dir is None:
+            QMessageBox.warning(self, "Učenie", "Nie je dostupný recipe/view kontext.")
+            return False
+        ok, err = reset_learning_assets(assets_dir)
+        if not ok:
+            QMessageBox.warning(self, "Učenie", f"Reset učenia zlyhal: {err or 'neznáma chyba'}")
+            return False
+
+        self._recommended_thresholds = {}
+        params = dict(self._tool.params.values or {})
+        params["reference_model_ready"] = False
+        params["reference_model_invalidated"] = False
+        params["sample_count_ok"] = 0
+        params["sample_count_nok"] = 0
+        params.pop("model_stats", None)
+        params.pop("model_warnings", None)
+        self._tool.params = ToolParams(params)
+
+        if self._learning_result_label is not None:
+            self._learning_result_label.setText("")
+        if self._learning_preview_label is not None:
+            self._learning_preview_label.setPixmap(QPixmap())
+            self._learning_preview_label.setText("Preview nie je dostupný")
+        self._refresh_presence_v2_learning_state()
+        if show_success:
+            QMessageBox.information(self, "Učenie", "Učenie nástroja bolo resetované.")
+        return True
+
     def _refresh_presence_v2_learning_state(self) -> None:
         if not self._is_presence_v2:
             return
         assets_dir = self._presence_v2_assets_dir()
-        ok_count = 0
+        ok_count_raw = 0
         nok_count = 0
+        compatible_ok_count = 0
+        ignored_ok_count = 0
         model_ready = False
         invalidated = bool((self._tool.params.values or {}).get("reference_model_invalidated", False))
         if assets_dir is not None:
             dirs = ensure_assets_dirs(assets_dir)
-            ok_count = len(load_samples(dirs["ok"]))
+            ok_samples = load_samples(dirs["ok"])
+            ok_count_raw = len(ok_samples)
             nok_count = len(load_samples(dirs["nok"]))
+            expected_shape = self._presence_v2_expected_shape()
+            if expected_shape is None and ok_samples:
+                expected_shape = tuple(int(x) for x in np.asarray(ok_samples[0]).shape[:2])
+            for sample in ok_samples:
+                shape = tuple(int(x) for x in np.asarray(sample).shape[:2])
+                if expected_shape is not None and shape == expected_shape:
+                    compatible_ok_count += 1
+                else:
+                    ignored_ok_count += 1
             model_ready = bool(load_model(dirs["model"])) and not invalidated
+        ok_count_valid = 0 if invalidated else compatible_ok_count
+        nok_count_valid = 0 if invalidated else nok_count
         params = dict(self._tool.params.values or {})
-        params["sample_count_ok"] = int(ok_count)
-        params["sample_count_nok"] = int(nok_count)
+        params["sample_count_ok"] = int(ok_count_valid)
+        params["sample_count_nok"] = int(nok_count_valid)
         params.setdefault("reference_assets_dir", str(assets_dir) if assets_dir else "")
         params["reference_model_ready"] = bool(model_ready)
         self._tool.params = ToolParams(params)
 
         min_ok = int(params.get("min_ok_samples", 15) or 15)
         if self._learning_counts_label is not None:
-            self._learning_counts_label.setText(f"OK snímky: {ok_count} | NOK snímky: {nok_count}")
+            self._learning_counts_label.setText(f"OK snímky: {ok_count_valid} | NOK snímky: {nok_count_valid}")
         if self._learning_model_label is not None:
             self._learning_model_label.setText("Model: pripravený" if model_ready else "Model: nepripravený")
         if self._learning_status_label is not None:
             if invalidated:
                 status = "Neplatné po zmene ROI"
-            elif model_ready and ok_count >= min_ok:
+            elif model_ready and compatible_ok_count >= min_ok:
                 status = "Pripravené"
-            elif ok_count > 0:
+            elif compatible_ok_count > 0:
                 status = "Málo dát"
             else:
                 status = "Nenaučené"
             self._learning_status_label.setText(f"Stav: {status}")
         if self._learning_warning_label is not None:
-            self._learning_warning_label.setText(
-                "ROI sa zmenilo – je potrebné nové učenie modelu."
-                if invalidated
-                else ""
-            )
+            warnings: list[str] = []
+            if invalidated:
+                warnings.append("Model je neplatný po zmene ROI.")
+                stale_count = ok_count_raw + nok_count
+                if stale_count > 0:
+                    warnings.append(f"Na disku ostalo {stale_count} starých vzoriek z inej ROI.")
+            elif ignored_ok_count > 0:
+                warnings.append(f"{ignored_ok_count} OK vzoriek má nekompatibilný rozmer a nebudú použité.")
+            self._learning_warning_label.setText("\n".join(warnings))
         if hasattr(self, "_btn_recompute_model") and self._btn_recompute_model is not None:
             has_roi = (self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()) is not None
-            self._btn_recompute_model.setEnabled(has_roi and ok_count >= min_ok)
+            self._btn_recompute_model.setEnabled(has_roi and compatible_ok_count >= min_ok)
 
     def _recompute_presence_v2_model(self) -> None:
         assets_dir = self._presence_v2_assets_dir()
@@ -1596,17 +1695,30 @@ class ToolEditDialog(QDialog):
             return
         params = dict(self._tool.params.values or {})
         polarity = str(params.get("polarity", "any") or "any")
-        median, mad, recommended, warnings = build_model(ok_samples, polarity=polarity)
+        min_ok = int(params.get("min_ok_samples", 15) or 15)
+        try:
+            median, mad, recommended, warnings, build_info = build_model(
+                ok_samples,
+                polarity=polarity,
+                min_ok_samples=min_ok,
+                expected_shape=self._presence_v2_expected_shape(),
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "Učenie", str(exc))
+            if self._learning_result_label is not None:
+                self._learning_result_label.setText(str(exc))
+            return
         stats = {
             "model_method": "median_mad",
             "polarity": polarity,
             "created_at": int(time.time()),
-            "sample_count_ok": len(ok_samples),
+            "sample_count_ok": int(build_info.used_ok_samples),
             "sample_count_nok": len(load_samples(dirs["nok"])),
             "recommended_thresholds": recommended,
             "warnings": warnings,
             "roi_hash": params.get("roi_hash", ""),
             "image_shape": list(median.shape),
+            "ignored_ok_samples": int(build_info.ignored_ok_samples),
             "tool_type": self._tool.type,
             "tool_name": self._tool.name,
             "view_id": self._active_view_id,
@@ -1618,7 +1730,8 @@ class ToolEditDialog(QDialog):
         self._tool.params = ToolParams(params)
         if self._learning_result_label is not None:
             self._learning_result_label.setText(
-                f"Model prepočítaný z {len(ok_samples)} OK vzoriek. Odporúčané prahy: {recommended}.\n"
+                f"Model prepočítaný z {build_info.used_ok_samples} OK vzoriek "
+                f"(ignorovaných: {build_info.ignored_ok_samples}). Odporúčané prahy: {recommended}.\n"
                 + ("\n".join(warnings) if warnings else "")
             )
         if self._learning_preview_label is not None:
