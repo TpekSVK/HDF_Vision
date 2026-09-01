@@ -27,6 +27,7 @@ from app.services.storage_service import save_production_result, load_recipe_con
 from app.ui.golden_wizard import GoldenWizard
 from app.ui.gpio_wizard import GPIOWizard
 from app.ui.modbus_wizard import ModbusWizard
+from app.ui.pico_wizard import PicoWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
@@ -36,6 +37,7 @@ from app.services.tool_registry import ToolRegistry
 from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
 from app.services.pico_service import PicoService
+from app.services.pico_config_service import PicoConfigService
 from app.services.jetson_stats_service import JetsonStatsService
 from app.services import settings_service
 from app.models.schema import RecipeV2
@@ -85,6 +87,7 @@ class MainWindow(QMainWindow):
         self.gpio.register_trigger_callback(self._handle_gpio_trigger)
         self.modbus = ModbusService()
         self.pico = PicoService()
+        self.pico_config = PicoConfigService()
         self.pico.connect()
         self.pico.register_trigger_callback(self._handle_pico_trigger)
         self.modbus.register_trigger_callback(self._handle_modbus_trigger)
@@ -405,6 +408,10 @@ class MainWindow(QMainWindow):
         self.btn_modbus_wizard = QPushButton("Sprievodca Modbus", self)
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
         row1.addWidget(self.btn_modbus_wizard)
+
+        self.btn_pico_wizard = QPushButton("Sprievodca Raspberry Pi Pico", self)
+        self.btn_pico_wizard.clicked.connect(self.open_pico_wizard)
+        row1.addWidget(self.btn_pico_wizard)
 
         self.chk_debug_overlay = QCheckBox("Zobraziť debug overlay výkonu", self)
         self.chk_debug_overlay.setToolTip("Show performance debug overlay")
@@ -1491,6 +1498,14 @@ class MainWindow(QMainWindow):
         self._exit_run_trigger_session(restore_master=False)
         dlg = ModbusWizard(self.modbus, self)
         dlg.resize(760, 640)
+        dlg.exec()
+        if self.mode == "RUN":
+            self._apply_capture_mode(ensure_runtime_ready=True)
+
+    def open_pico_wizard(self):
+        self._exit_run_trigger_session(restore_master=False)
+        dlg = PicoWizard(self.pico, self.pico_config, self)
+        dlg.resize(680, 700)
         dlg.exec()
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)

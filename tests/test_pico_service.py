@@ -141,6 +141,13 @@ def test_multiline_response(connected_service, command, lines):
     assert response == "\n".join(lines)
 
 
+def test_inputs_public_api(connected_service):
+    service, device = connected_service
+    device.emit("INPUTS IN1=ACTIVE IN2=OFF", "END")
+
+    assert service.inputs() == "INPUTS IN1=ACTIVE IN2=OFF\nEND"
+
+
 def test_capture_is_separated_from_status_response(connected_service):
     service, device = connected_service
     received = []

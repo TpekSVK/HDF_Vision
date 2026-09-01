@@ -159,6 +159,11 @@ class PicoService:
             "device_status": response if ok else "",
         }
 
+    def inputs(self) -> str:
+        """Return the firmware's multiline INPUTS response, or an empty string."""
+        ok, response = self._send_command("INPUTS")
+        return response if ok else ""
+
     def close(self) -> None:
         with self._state_lock:
             dev = self._serial
