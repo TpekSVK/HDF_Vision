@@ -7,6 +7,13 @@ import time
 
 import pytest
 
+from app.utils.external_source import (
+    EXTERNAL_SOURCE_MODBUS,
+    EXTERNAL_SOURCE_PICO,
+    normalize_external_input,
+    normalize_external_source,
+)
+
 
 def _load_trigger_harness():
     source = Path("app/ui/main_window.py").read_text(encoding="utf-8")
@@ -33,7 +40,13 @@ def _load_trigger_harness():
         decorator_list=[],
     )
     module = ast.fix_missing_locations(ast.Module(body=[harness], type_ignores=[]))
-    namespace = {"Integral": Integral, "time": time, "Any": object}
+    namespace = {
+        "Integral": Integral, "time": time, "Any": object,
+        "EXTERNAL_SOURCE_MODBUS": EXTERNAL_SOURCE_MODBUS,
+        "EXTERNAL_SOURCE_PICO": EXTERNAL_SOURCE_PICO,
+        "normalize_external_input": normalize_external_input,
+        "normalize_external_source": normalize_external_source,
+    }
     exec(compile(module, "app/ui/main_window.py", "exec"), namespace)
     return namespace["TriggerHarness"]
 
@@ -142,7 +155,7 @@ def test_manual_run_trigger_remains_independent_of_external_sources() -> None:
     source = Path("app/ui/main_window.py").read_text(encoding="utf-8")
 
     assert "self.btn_trigger.clicked.connect(self.manual_trigger)" in source
-    assert 'self._pending_trigger_source or "manual"' in source
+    assert "normalize_external_source(raw_source) or \"manual\"" in source
 
 
 def test_pico_callback_is_registered_and_service_is_closed() -> None:

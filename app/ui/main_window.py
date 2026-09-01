@@ -48,6 +48,13 @@ from app.ui.camera_profile_utils import (
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
+from app.utils.external_source import (
+    EXTERNAL_SOURCE_MODBUS,
+    EXTERNAL_SOURCE_PICO,
+    format_external_input,
+    normalize_external_input,
+    normalize_external_source,
+)
 from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
 from app.ui.debug_overlay_widget import DebugOverlayWidget
 
@@ -697,15 +704,13 @@ class MainWindow(QMainWindow):
         ).strip().lower()
         if external_trigger_mode not in {"sequential", "explicit"}:
             external_trigger_mode = "sequential"
-        external_request_input_raw = getattr(view, "external_request_input", None)
-        external_source = str(getattr(view, "external_source", "modbus") or "modbus").lower()
-        external_request_input = (
-            int(external_request_input_raw)
-            if isinstance(external_request_input_raw, Integral)
-            else None
+        external_source = normalize_external_source(getattr(view, "external_source", None))
+        if external_source is None and getattr(view, "external_source", None) is None:
+            external_source = EXTERNAL_SOURCE_MODBUS
+        external_request_input = normalize_external_input(
+            external_source,
+            getattr(view, "external_input", getattr(view, "external_request_input", None)),
         )
-        if external_request_input is not None and not (1 <= external_request_input <= 8):
-            external_request_input = None
         return {
             "index": index,
             "view": view,
@@ -716,7 +721,8 @@ class MainWindow(QMainWindow):
             "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": frame_source_view_id,
             "external_trigger_mode": external_trigger_mode,
-            "external_source": external_source if external_source in {"pico", "modbus"} else "modbus",
+            "external_source": external_source,
+            "external_input": external_request_input,
             "external_request_input": external_request_input,
             "branch_enabled": bool(getattr(view, "branch_enabled", False)),
             "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
@@ -731,7 +737,7 @@ class MainWindow(QMainWindow):
         input_index: int,
     ) -> dict[str, Any] | None:
         """Resolve an external event without falling back to unrelated views."""
-        source = str(source or "").strip().lower()
+        source = normalize_external_source(source)
         if self.mode != "RUN" or source not in self._external_sequence_index:
             return None
         if isinstance(input_index, bool) or not isinstance(input_index, Integral):
@@ -767,9 +773,8 @@ class MainWindow(QMainWindow):
         if explicit:
             view = explicit[0]["view"]
             self._logger.info(
-                "[RUN] resolved external trigger mode=explicit source=%s input=%s view=%s",
-                source,
-                input_index,
+                '[RUN] resolved %s -> View "%s"',
+                format_external_input(source, input_index),
                 getattr(view, "name", None) or getattr(view, "id", None),
             )
             return explicit[0]
@@ -1038,7 +1043,8 @@ class MainWindow(QMainWindow):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
-        resolved_source = str(trigger_source or self._pending_trigger_source or "manual").strip().lower()
+        raw_source = trigger_source or self._pending_trigger_source
+        resolved_source = normalize_external_source(raw_source) or "manual"
         trigger_input_index = self._pending_trigger_input_index
         self._pending_trigger_source = None
         self._pending_trigger_input_index = None
@@ -1148,7 +1154,8 @@ class MainWindow(QMainWindow):
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
         external_spec = None
-        is_routed_external = trigger_source in {"pico", "modbus"}
+        trigger_source = normalize_external_source(trigger_source) or trigger_source
+        is_routed_external = trigger_source in {EXTERNAL_SOURCE_PICO, EXTERNAL_SOURCE_MODBUS}
         if is_routed_external and isinstance(trigger_input_index, Integral):
             external_spec = self._resolve_external_trigger_view(
                 view_specs=view_specs,
@@ -1631,7 +1638,7 @@ class MainWindow(QMainWindow):
         self._handle_external_trigger("GPIO")
 
     def _handle_modbus_trigger(self, input_index: int | None = None):
-        self._handle_external_trigger("Modbus", input_index=input_index)
+        self._handle_external_trigger(EXTERNAL_SOURCE_MODBUS, input_index=input_index)
 
     def _handle_pico_trigger(self, input_index: int) -> None:
         if not isinstance(input_index, Integral) or isinstance(input_index, bool):
@@ -1642,19 +1649,34 @@ class MainWindow(QMainWindow):
             self._logger.warning("[PICO] ignored invalid capture event input=%r", input_index)
             return
         self._logger.info("[PICO] capture event input=%s", parsed_input)
-        self._handle_external_trigger("Pico", input_index=parsed_input)
+        self._handle_external_trigger(EXTERNAL_SOURCE_PICO, input_index=parsed_input)
 
     def _handle_external_trigger(self, source: str, *, input_index: int | None = None) -> None:
-        self._logger.info("[RUN] %s trigger received input=%s mode=%s", source, input_index, self.mode)
+        resolved_source = normalize_external_source(source)
+        self._logger.info(
+            "[RUN] external trigger source=%s input=%s mode=%s",
+            resolved_source or str(source or "unknown"), input_index, self.mode,
+        )
         if self.mode != "RUN":
             return
-        resolved_source = str(source or "external").strip().lower()
-        self._pending_trigger_source = resolved_source
-        if resolved_source in {"modbus", "pico"} and isinstance(input_index, Integral):
-            parsed_input = int(input_index)
-            self._pending_trigger_input_index = parsed_input if 1 <= parsed_input <= 8 else None
-        else:
+        if resolved_source is None and str(source or "").strip().lower() == "gpio":
+            # GPIO remains a legacy/manual trigger path, not a recipe source.
+            self._pending_trigger_source = "gpio"
             self._pending_trigger_input_index = None
+            self.external_triggered.emit()
+            return
+        if resolved_source is None:
+            self._logger.warning("[RUN] ignored unknown external trigger source=%r", source)
+            return
+        self._pending_trigger_source = resolved_source
+        self._pending_trigger_input_index = normalize_external_input(resolved_source, input_index)
+        if self._pending_trigger_input_index is None:
+            self._logger.warning(
+                "[RUN] ignored invalid external trigger source=%s input=%r",
+                resolved_source, input_index,
+            )
+            self._pending_trigger_source = None
+            return
         self.external_triggered.emit()
 
     def _update_live_view(self):

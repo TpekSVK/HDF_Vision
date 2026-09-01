@@ -66,6 +66,7 @@ class ToolDefinition:
 import numpy as np
 
 from app.utils import imaging
+from app.utils.external_source import normalize_external_input, normalize_external_source
 
 
 @dataclass(slots=True)
@@ -667,6 +668,8 @@ class RecipeView:
     trigger_mode: Literal["timed", "external"] = "timed"
     external_trigger_mode: Optional[str] = None
     external_source: Optional[str] = None
+    external_input: Optional[int] = None
+    # Pre-canonical compatibility alias. New recipe JSON uses ``external_input``.
     external_request_input: Optional[int] = None
     trigger_interval_ms: Optional[int] = None
     trigger_gap_ms: Optional[float] = None
@@ -731,6 +734,7 @@ class RecipeView:
         if self.trigger_mode != "external":
             self.external_trigger_mode = None
             self.external_source = None
+            self.external_input = None
             self.external_request_input = None
         else:
             if not raw_external_mode:
@@ -738,20 +742,23 @@ class RecipeView:
             if raw_external_mode not in {"sequential", "explicit"}:
                 raw_external_mode = "sequential"
             self.external_trigger_mode = raw_external_mode
-            source = str(self.external_source or "modbus").strip().lower()
-            self.external_source = source if source in {"pico", "modbus"} else "modbus"
+            # Missing source is a legacy Modbus recipe. Unknown/corrupt sources
+            # remain invalid instead of being silently routed to another device.
+            self.external_source = (
+                "modbus" if self.external_source is None
+                else normalize_external_source(self.external_source)
+            )
 
             if self.external_trigger_mode != "explicit":
+                self.external_input = None
                 self.external_request_input = None
             else:
-                try:
+                raw_input = self.external_input
+                if raw_input is None:
                     raw_input = self.external_request_input
-                    if isinstance(raw_input, str):
-                        raw_input = raw_input.strip().upper().removeprefix("DI").removeprefix("IN")
-                    input_value = int(raw_input) if raw_input is not None else None
-                except Exception:
-                    input_value = None
-                self.external_request_input = input_value if input_value in {1, 2, 3, 4, 5, 6, 7, 8} else None
+                input_value = normalize_external_input(self.external_source, raw_input)
+                self.external_input = input_value
+                self.external_request_input = input_value
 
         if self.trigger_interval_ms is not None:
             try:
@@ -820,6 +827,8 @@ class RecipeView:
             "trigger_mode": self.trigger_mode,
             "external_trigger_mode": self.external_trigger_mode,
             "external_source": self.external_source,
+            "external_input": self.external_input,
+            # Keep the old key during the compatibility window for older builds.
             "external_request_input": self.external_request_input,
             "trigger_interval_ms": self.trigger_interval_ms,
             "trigger_gap_ms": self.trigger_gap_ms,
@@ -848,7 +857,13 @@ class RecipeView:
             trigger_mode=data.get("trigger_mode", "timed"),
             external_trigger_mode=data.get("external_trigger_mode"),
             external_source=data.get("external_source"),
-            external_request_input=data.get("external_request_input", data.get("modbus_input")),
+            external_input=data.get(
+                "external_input",
+                data.get(
+                    "external_input_index",
+                    data.get("external_request_input", data.get("modbus_input_index", data.get("modbus_input"))),
+                ),
+            ),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             trigger_gap_ms=data.get("trigger_gap_ms"),
             image_rotation=data.get("image_rotation", 0),
@@ -874,6 +889,7 @@ class RecipeView:
             trigger_mode=self.trigger_mode,
             external_trigger_mode=self.external_trigger_mode,
             external_source=self.external_source,
+            external_input=self.external_input,
             external_request_input=self.external_request_input,
             trigger_interval_ms=self.trigger_interval_ms,
             trigger_gap_ms=self.trigger_gap_ms,

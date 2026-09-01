@@ -149,6 +149,25 @@ def test_legacy_modbus_recipe_and_external_source_roundtrip():
     assert RecipeView.from_dict(pico.to_dict()).external_request_input == 5
 
 
+def test_canonical_external_input_and_old_modbus_index_roundtrip():
+    legacy = RecipeView.from_dict({
+        "id": "old", "name": "Old", "trigger_mode": "external",
+        "external_trigger_mode": "explicit", "modbus_input_index": "DI4",
+    })
+    assert (legacy.external_source, legacy.external_input) == ("modbus", 4)
+    saved = legacy.to_dict()
+    assert saved["external_input"] == 4
+    reloaded = RecipeView.from_dict(saved)
+    assert (reloaded.external_source, reloaded.external_input) == ("modbus", 4)
+
+    corrupt = RecipeView.from_dict({
+        "id": "bad", "trigger_mode": "external", "external_trigger_mode": "explicit",
+        "external_source": "abc", "external_input": 3,
+    })
+    assert corrupt.external_source is None
+    assert corrupt.external_input is None
+
+
 def test_external_source_namespaces_and_conflicts():
     pico = RecipeView(
         id="p", name="Pico", trigger_mode="external",

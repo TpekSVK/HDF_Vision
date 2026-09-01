@@ -441,17 +441,19 @@ class RecipeService:
     # ``RecipeService.list`` shadows the builtin ``list`` inside the class body
     # on Python 3.10, so use the imported typing alias in this annotation.
     def _validate_explicit_external_mappings(views: List[RecipeView]) -> None:
+        from app.utils.external_source import format_external_input
+
         used: dict[tuple[str, int], str] = {}
         for view in views:
             if view.trigger_mode != "external" or view.external_trigger_mode != "explicit":
                 continue
-            if view.external_source is None or view.external_request_input is None:
+            external_input = getattr(view, "external_input", view.external_request_input)
+            if view.external_source is None or external_input is None:
                 raise ValueError("Explicitný externý režim vyžaduje zdroj aj vstup")
-            key = (view.external_source, view.external_request_input)
+            key = (view.external_source, external_input)
             if key in used:
-                prefix = "IN" if key[0] == "pico" else "DI"
                 raise ValueError(
-                    f"Externý vstup {key[0]} {prefix}{key[1]} je už priradený"
+                    f"Externý vstup {format_external_input(*key)} je už priradený"
                     f" view {used[key]}"
                 )
             used[key] = view.name or view.id

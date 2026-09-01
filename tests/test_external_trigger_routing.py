@@ -4,6 +4,8 @@ from numbers import Integral
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.utils.external_source import format_external_input, normalize_external_source
+
 
 def _load_harness():
     tree = ast.parse(Path("app/ui/main_window.py").read_text(encoding="utf-8"))
@@ -17,7 +19,12 @@ def _load_harness():
     ]
     harness = ast.ClassDef("RoutingHarness", [], [], methods, [])
     module = ast.fix_missing_locations(ast.Module(body=[harness], type_ignores=[]))
-    namespace = {"Any": object, "Integral": Integral}
+    namespace = {
+        "Any": object,
+        "Integral": Integral,
+        "format_external_input": format_external_input,
+        "normalize_external_source": normalize_external_source,
+    }
     exec(compile(module, "app/ui/main_window.py", "exec"), namespace)
     return namespace["RoutingHarness"]
 

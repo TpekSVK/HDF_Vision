@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from app.models.schema import ViewCameraProfile
 from app.services.pico_config_service import PicoConfigService
 from app.utils.trigger_timing import get_default_trigger_gap_ms, get_trigger_min_period_ms
+from app.utils.external_source import normalize_external_source
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
     (
@@ -67,6 +68,7 @@ class ViewConfigDialog(QDialog):
         external_trigger_mode: Optional[str] = None,
         external_source: Optional[str] = None,
         external_request_input: Optional[int] = None,
+        available_modbus_inputs: Sequence[int] | None = None,
         trigger_interval_ms: Optional[int] = None,
         trigger_gap_ms: Optional[int | float] = None,
         available_frame_sources: Sequence[tuple[str, str]] | None = None,
@@ -83,6 +85,9 @@ class ViewConfigDialog(QDialog):
         self._available_resolutions = list(available_resolutions)
         self._available_frame_sources = list(available_frame_sources or [])
         self._available_branch_targets = list(available_branch_targets or [])
+        self._available_modbus_inputs = sorted(
+            {int(value) for value in (available_modbus_inputs or []) if 1 <= int(value) <= 8}
+        )
         self._result: Optional[dict[str, Any]] = None
         self._camera_model = str(camera_model or "").strip()
         controls = {str(c).strip() for c in (supported_v4l2_controls or set()) if str(c).strip()}
@@ -270,7 +275,8 @@ class ViewConfigDialog(QDialog):
         self._external_source_combo = QComboBox(timing_group)
         self._external_source_combo.addItem("Pico USB", "pico")
         self._external_source_combo.addItem("Modbus", "modbus")
-        self._external_source_combo.currentIndexChanged.connect(self._populate_external_inputs)
+        self._last_external_source = self._external_source_combo.currentData()
+        self._external_source_combo.currentIndexChanged.connect(self._on_external_source_changed)
         timing_form.addRow(self._external_source_label, self._external_source_combo)
 
         self._external_input_label = QLabel("Externý vstup:")
@@ -688,14 +694,27 @@ class ViewConfigDialog(QDialog):
         if external_mode_idx >= 0:
             self._external_mode_combo.setCurrentIndex(external_mode_idx)
 
-        normalized_source = str(external_source or ("modbus" if normalized_mode == "external" else "pico")).lower()
+        normalized_source = normalize_external_source(external_source)
+        if normalized_source is None:
+            normalized_source = "modbus" if normalized_mode == "external" else "pico"
         source_idx = self._external_source_combo.findData(normalized_source)
         if source_idx >= 0:
+            self._external_source_combo.blockSignals(True)
             self._external_source_combo.setCurrentIndex(source_idx)
-        self._populate_external_inputs()
+            self._external_source_combo.blockSignals(False)
+        self._last_external_source = normalized_source
+        self._populate_external_inputs(preserve_selection=False)
 
         if external_request_input in {1, 2, 3, 4, 5, 6, 7, 8}:
             external_input_idx = self._external_input_combo.findData(int(external_request_input))
+            if external_input_idx < 0 and normalized_source == "modbus":
+                # Preserve an offline/disabled legacy mapping without claiming it
+                # is currently active in the Modbus configuration.
+                self._external_input_combo.addItem(
+                    f"DI{int(external_request_input)} (nakonfigurovaný, neaktívny)",
+                    int(external_request_input),
+                )
+                external_input_idx = self._external_input_combo.count() - 1
             if external_input_idx >= 0:
                 self._external_input_combo.setCurrentIndex(external_input_idx)
 
@@ -796,11 +815,23 @@ class ViewConfigDialog(QDialog):
         if not explicit_active:
             self._external_input_combo.setCurrentIndex(-1)
 
-    def _populate_external_inputs(self) -> None:
-        previous = self._external_input_combo.currentData()
+    def _on_external_source_changed(self) -> None:
+        source = self._external_source_combo.currentData()
+        changed = source != self._last_external_source
+        self._last_external_source = source
+        self._populate_external_inputs(preserve_selection=not changed)
+        if changed:
+            # IN5 and DI5 are different identities; require an explicit choice.
+            self._external_input_combo.setCurrentIndex(-1)
+
+    def _populate_external_inputs(self, *, preserve_selection: bool = True) -> None:
+        previous = self._external_input_combo.currentData() if preserve_selection else None
         self._external_input_combo.clear()
         source = self._external_source_combo.currentData()
-        inputs = sorted(PicoConfigService().get_enabled_inputs()) if source == "pico" else list(range(1, 9))
+        inputs = (
+            sorted(PicoConfigService().get_enabled_inputs())
+            if source == "pico" else self._available_modbus_inputs
+        )
         prefix = "IN" if source == "pico" else "DI"
         for input_idx in inputs:
             self._external_input_combo.addItem(f"{prefix}{input_idx}", input_idx)
@@ -808,9 +839,13 @@ class ViewConfigDialog(QDialog):
         if index >= 0:
             self._external_input_combo.setCurrentIndex(index)
         no_pico = source == "pico" and not inputs
-        self._external_input_hint.setText("Nie sú povolené žiadne Pico vstupy." if no_pico else "")
+        no_modbus = source == "modbus" and not inputs
+        hint = "Nie sú povolené žiadne Pico vstupy." if no_pico else (
+            "Nie sú nakonfigurované žiadne aktívne Modbus DI vstupy." if no_modbus else ""
+        )
+        self._external_input_hint.setText(hint)
         self._external_input_hint.setVisible(
-            no_pico and self._trigger_mode_combo.currentData() == "external"
+            (no_pico or no_modbus) and self._trigger_mode_combo.currentData() == "external"
         )
         self._on_external_mode_changed()
 

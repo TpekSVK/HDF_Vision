@@ -2402,6 +2402,16 @@ class GoldenWizard(QDialog):
         self._sync_logging_ui(recipe)
         self._refresh_publish_state()
 
+    def _configured_modbus_inputs(self) -> list[int]:
+        """Return configured DI slots independently of device online state."""
+        if self.modbus is None:
+            return []
+        try:
+            addresses = list(self.modbus.get_config().request_di_addresses or [])
+        except Exception:
+            return []
+        return [index for index, address in enumerate(addresses[:8], 1) if int(address) >= 0]
+
     def _on_add_view(self) -> None:
         recipe = self._current_recipe_name()
         try:
@@ -2439,6 +2449,7 @@ class GoldenWizard(QDialog):
             external_request_input=getattr(source_view, "external_request_input", None)
             if source_view
             else None,
+            available_modbus_inputs=self._configured_modbus_inputs(),
             trigger_interval_ms=getattr(source_view, "trigger_interval_ms", None)
             if source_view
             else None,
@@ -2530,6 +2541,7 @@ class GoldenWizard(QDialog):
             external_trigger_mode=getattr(view, "external_trigger_mode", None),
             external_source=getattr(view, "external_source", None),
             external_request_input=getattr(view, "external_request_input", None),
+            available_modbus_inputs=self._configured_modbus_inputs(),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
             trigger_gap_ms=getattr(view, "trigger_gap_ms", None),
             available_frame_sources=[
