@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.schema import ViewCameraProfile
+from app.services.pico_config_service import PicoConfigService
 from app.utils.trigger_timing import get_default_trigger_gap_ms, get_trigger_min_period_ms
 
 _DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
@@ -64,6 +65,7 @@ class ViewConfigDialog(QDialog):
         flash_pulse_ms: int = 200,
         trigger_mode: str = "timed",
         external_trigger_mode: Optional[str] = None,
+        external_source: Optional[str] = None,
         external_request_input: Optional[int] = None,
         trigger_interval_ms: Optional[int] = None,
         trigger_gap_ms: Optional[int | float] = None,
@@ -243,39 +245,45 @@ class ViewConfigDialog(QDialog):
         self._add_form_row(timing_form, "Flash pulse [ms]:", self._flash_pulse_edit)
 
         self._trigger_mode_combo = QComboBox(timing_group)
-        self._trigger_mode_combo.addItem("Timed", "timed")
-        self._trigger_mode_combo.addItem("External Trigger", "external")
-        self._trigger_mode_combo.addItem("Manual Trigger (GPIO)", "manual")
+        self._trigger_mode_combo.addItem("Časovač", "timed")
+        self._trigger_mode_combo.addItem("Externý signál", "external")
         self._trigger_mode_combo.currentIndexChanged.connect(
             self._on_trigger_mode_changed
         )
         trigger_hint = (
-            "Určuje, ako sa spúšťa snímanie: Timed používa interný časovač"
-            " (v multi-view beží v cykle), External čaká na hardvérový impulz"
-            " a Manual reaguje na TRIGGER tlačidlo alebo GPIO vstup v RUN režime."
+            "Určuje, ako sa spúšťa snímanie: Časovač používa interný interval,"
+            " Externý signál čaká na vstup zo zvoleného zdroja. RUN tlačidlo"
+            " TRIGGER zostáva samostatnou manuálnou akciou používateľa."
         )
-        self._add_form_row(timing_form, "Trigger Mode:", self._trigger_mode_combo, tooltip=trigger_hint)
+        self._add_form_row(timing_form, "Spôsob snímania:", self._trigger_mode_combo, tooltip=trigger_hint)
 
         self._external_mode_label = QLabel("Externý režim:")
         self._external_mode_combo = QComboBox(timing_group)
-        self._external_mode_combo.addItem("Sekvenčné", "sequential")
-        self._external_mode_combo.addItem("Explicitné", "explicit")
+        self._external_mode_combo.addItem("Sekvenčný", "sequential")
+        self._external_mode_combo.addItem("Explicitný", "explicit")
         self._external_mode_combo.currentIndexChanged.connect(
             self._on_external_mode_changed
         )
         timing_form.addRow(self._external_mode_label, self._external_mode_combo)
 
+        self._external_source_label = QLabel("Externý zdroj:")
+        self._external_source_combo = QComboBox(timing_group)
+        self._external_source_combo.addItem("Pico USB", "pico")
+        self._external_source_combo.addItem("Modbus", "modbus")
+        self._external_source_combo.currentIndexChanged.connect(self._populate_external_inputs)
+        timing_form.addRow(self._external_source_label, self._external_source_combo)
+
         self._external_input_label = QLabel("Externý vstup:")
         self._external_input_combo = QComboBox(timing_group)
-        self._external_input_combo.addItem("Nepoužité", None)
-        for input_idx in range(1, 9):
-            self._external_input_combo.addItem(f"Vstup {input_idx}", input_idx)
         timing_form.addRow(self._external_input_label, self._external_input_combo)
+        self._external_input_hint = QLabel("", timing_group)
+        self._external_input_hint.setStyleSheet("color: #a05a00; font-size: 11px;")
+        timing_form.addRow(self._external_input_hint)
 
         self._interval_edit = QLineEdit(timing_group)
-        self._interval_edit.setPlaceholderText("Required for Timed mode")
+        self._interval_edit.setPlaceholderText("Povinné pre režim Časovač")
         interval_hint = (
-            "Interval po dokončení snímky v režime Timed. V multi-view určuje, ako"
+            "Interval po dokončení snímky v režime Časovač. V multi-view určuje, ako"
             " o koľko neskôr sa spustí ďalší view; ostatné view pokračujú podľa svojich"
             " nastavení."
         )
@@ -345,6 +353,7 @@ class ViewConfigDialog(QDialog):
             flash_pulse_ms,
             trigger_mode,
             external_trigger_mode,
+            external_source,
             external_request_input,
             trigger_interval_ms,
             trigger_gap_ms,
@@ -453,9 +462,7 @@ class ViewConfigDialog(QDialog):
             return
 
         trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
-        trigger_mode = (
-            trigger_mode if trigger_mode in {"timed", "external", "manual"} else "timed"
-        )
+        trigger_mode = trigger_mode if trigger_mode in {"timed", "external"} else "timed"
 
         try:
             interval_ms = self._parse_optional_int(self._interval_edit.text())
@@ -471,21 +478,29 @@ class ViewConfigDialog(QDialog):
             QMessageBox.critical(
                 self,
                 "Invalid input",
-                "Interval is required in Timed trigger mode.",
+                "V režime Časovač je interval povinný.",
             )
             return
         if trigger_mode != "timed":
             interval_ms = None
 
         external_mode: Optional[str] = None
+        external_source: Optional[str] = None
         external_input: Optional[int] = None
         if trigger_mode == "external":
             external_mode = str(self._external_mode_combo.currentData() or "sequential")
             if external_mode not in {"sequential", "explicit"}:
                 external_mode = "sequential"
+            external_source = str(self._external_source_combo.currentData() or "") or None
+            if external_source not in {"pico", "modbus"}:
+                QMessageBox.critical(self, "Neplatné nastavenie", "Vyberte externý zdroj.")
+                return
             if external_mode == "explicit":
                 selected_input = self._external_input_combo.currentData()
                 external_input = int(selected_input) if selected_input is not None else None
+                if external_input is None:
+                    QMessageBox.critical(self, "Neplatné nastavenie", "Pre explicitný režim vyberte externý vstup.")
+                    return
 
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
         if trigger_gap_ms is None:
@@ -504,6 +519,7 @@ class ViewConfigDialog(QDialog):
             "flash_pulse_ms": flash_pulse_ms,
             "trigger_mode": trigger_mode,
             "external_trigger_mode": external_mode,
+            "external_source": external_source,
             "external_request_input": external_input,
             "trigger_interval_ms": interval_ms,
             "trigger_gap_ms": trigger_gap_ms,
@@ -644,6 +660,7 @@ class ViewConfigDialog(QDialog):
         flash_pulse_ms: int,
         trigger_mode: str,
         external_trigger_mode: Optional[str],
+        external_source: Optional[str],
         external_request_input: Optional[int],
         trigger_interval_ms: Optional[int],
         trigger_gap_ms: Optional[float],
@@ -654,7 +671,9 @@ class ViewConfigDialog(QDialog):
         self._flash_pulse_edit.setText(str(max(1, int(flash_pulse_ms or 200))))
 
         normalized_mode = str(trigger_mode or "timed").strip().lower()
-        if normalized_mode not in {"timed", "external", "manual"}:
+        if normalized_mode in {"manual", "manual trigger", "external trigger"}:
+            normalized_mode = "external"
+        if normalized_mode not in {"timed", "external"}:
             normalized_mode = "timed"
         index = self._trigger_mode_combo.findData(normalized_mode)
         if index >= 0:
@@ -668,6 +687,12 @@ class ViewConfigDialog(QDialog):
         external_mode_idx = self._external_mode_combo.findData(normalized_external_mode)
         if external_mode_idx >= 0:
             self._external_mode_combo.setCurrentIndex(external_mode_idx)
+
+        normalized_source = str(external_source or ("modbus" if normalized_mode == "external" else "pico")).lower()
+        source_idx = self._external_source_combo.findData(normalized_source)
+        if source_idx >= 0:
+            self._external_source_combo.setCurrentIndex(source_idx)
+        self._populate_external_inputs()
 
         if external_request_input in {1, 2, 3, 4, 5, 6, 7, 8}:
             external_input_idx = self._external_input_combo.findData(int(external_request_input))
@@ -756,8 +781,7 @@ class ViewConfigDialog(QDialog):
         self._interval_edit.setEnabled(mode == "timed")
         external_active = mode == "external"
         self._external_mode_combo.setEnabled(external_active)
-        self._external_mode_label.setVisible(external_active)
-        self._external_mode_combo.setVisible(external_active)
+        self._external_source_combo.setEnabled(external_active)
         if not external_active:
             ext_mode_idx = self._external_mode_combo.findData("sequential")
             if ext_mode_idx >= 0:
@@ -768,13 +792,27 @@ class ViewConfigDialog(QDialog):
         trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
         external_mode = str(self._external_mode_combo.currentData() or "sequential")
         explicit_active = trigger_mode == "external" and external_mode == "explicit"
-        self._external_input_combo.setEnabled(explicit_active)
-        self._external_input_label.setVisible(trigger_mode == "external")
-        self._external_input_combo.setVisible(trigger_mode == "external")
+        self._external_input_combo.setEnabled(explicit_active and self._external_input_combo.count() > 0)
         if not explicit_active:
-            unused_idx = self._external_input_combo.findData(None)
-            if unused_idx >= 0:
-                self._external_input_combo.setCurrentIndex(unused_idx)
+            self._external_input_combo.setCurrentIndex(-1)
+
+    def _populate_external_inputs(self) -> None:
+        previous = self._external_input_combo.currentData()
+        self._external_input_combo.clear()
+        source = self._external_source_combo.currentData()
+        inputs = sorted(PicoConfigService().get_enabled_inputs()) if source == "pico" else list(range(1, 9))
+        prefix = "IN" if source == "pico" else "DI"
+        for input_idx in inputs:
+            self._external_input_combo.addItem(f"{prefix}{input_idx}", input_idx)
+        index = self._external_input_combo.findData(previous)
+        if index >= 0:
+            self._external_input_combo.setCurrentIndex(index)
+        no_pico = source == "pico" and not inputs
+        self._external_input_hint.setText("Nie sú povolené žiadne Pico vstupy." if no_pico else "")
+        self._external_input_hint.setVisible(
+            no_pico and self._trigger_mode_combo.currentData() == "external"
+        )
+        self._on_external_mode_changed()
 
     def _selected_resolution_data(self) -> dict[str, Any]:
         resolution_data = self._resolution_combo.currentData()
