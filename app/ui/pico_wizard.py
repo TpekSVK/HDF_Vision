@@ -7,6 +7,7 @@ import re
 from PySide6.QtCore import Signal, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QGridLayout,
@@ -69,6 +70,32 @@ class PicoWizard(QDialog):
             device_grid.addWidget(value, row, 1)
         layout.addWidget(device)
 
+        modes = QGroupBox("Režim Pico", self)
+        modes_grid = QGridLayout(modes)
+        self.cmb_v1_mode = QComboBox(modes)
+        self.cmb_v2_mode = QComboBox(modes)
+        mode_tooltip = (
+            "MASTER (odporúčané pre HDF_Vision): kamera streamuje kontinuálne a Pico pri externom "
+            "vstupe odošle CAPTURE INx.\nTRIGGER: legacy/test režim; Pico generuje hardvérové "
+            "trigger pulzy pre kameru."
+        )
+        for combo in (self.cmb_v1_mode, self.cmb_v2_mode):
+            combo.addItems(["MASTER", "TRIGGER"])
+            combo.setToolTip(mode_tooltip)
+            combo.setEnabled(False)
+        modes_grid.addWidget(QLabel("V1 režim:", modes), 0, 0)
+        modes_grid.addWidget(self.cmb_v1_mode, 0, 1)
+        modes_grid.addWidget(QLabel("V2 režim:", modes), 1, 0)
+        modes_grid.addWidget(self.cmb_v2_mode, 1, 1)
+        explanation = QLabel(
+            "MASTER je odporúčaný produkčný režim. TRIGGER je legacy/test režim pre hardvérové pulzy.",
+            modes,
+        )
+        explanation.setWordWrap(True)
+        explanation.setToolTip(mode_tooltip)
+        modes_grid.addWidget(explanation, 2, 0, 1, 2)
+        layout.addWidget(modes)
+
         inputs = QGroupBox("Stav vstupov / Povolené externé vstupy", self)
         grid = QGridLayout(inputs)
         grid.addWidget(QLabel("Vstup", inputs), 0, 0)
@@ -121,6 +148,18 @@ class PicoWizard(QDialog):
             states[int(index)] = state.upper()
         return states
 
+    @staticmethod
+    def parse_view_modes(response: str) -> dict[str, str]:
+        modes: dict[str, str] = {}
+        for line in str(response or "").splitlines():
+            match = re.match(r"^\s*(V[12])_MODE\s+([^\s]+)\s*$", line, re.IGNORECASE)
+            if not match:
+                continue
+            mode = match.group(2).upper()
+            if mode in {"MASTER", "TRIGGER"}:
+                modes[match.group(1).upper()] = mode
+        return modes
+
     def _load_config(self) -> None:
         enabled = self._pico_config.get_enabled_inputs()
         for index, checkbox in self._enabled_checks.items():
@@ -138,6 +177,12 @@ class PicoWizard(QDialog):
         self.lbl_port.setText(str(status.get("port") or "—") if connected else "—")
         self.lbl_firmware.setText(self.parse_firmware(response) or "—")
         self.txt_status.setPlainText(response)
+        view_modes = self.parse_view_modes(response) if connected else {}
+        for view, combo in (("V1", self.cmb_v1_mode), ("V2", self.cmb_v2_mode)):
+            mode = view_modes.get(view)
+            if mode is not None:
+                combo.setCurrentText(mode)
+            combo.setEnabled(mode is not None)
         self.refresh_inputs()
 
     def refresh_inputs(self) -> None:
@@ -158,9 +203,35 @@ class PicoWizard(QDialog):
 
     def _save(self) -> None:
         enabled = {index for index, checkbox in self._enabled_checks.items() if checkbox.isChecked()}
+        if not self.cmb_v1_mode.isEnabled() or not self.cmb_v2_mode.isEnabled():
+            QMessageBox.critical(
+                self,
+                "Pico konfigurácia",
+                "Režimy V1/V2 nie sú dostupné zo STATUS. Obnovte pripojenie a skúste znova.",
+            )
+            return
         try:
+            commands = (
+                ("V1", self.cmb_v1_mode.currentText()),
+                ("V2", self.cmb_v2_mode.currentText()),
+            )
+            for view, mode in commands:
+                if not self._pico.set_view_mode(view, mode):
+                    detail = str(getattr(self._pico, "last_error", "") or "Neznáma chyba")
+                    QMessageBox.critical(
+                        self, "Pico konfigurácia", f"Nepodarilo sa nastaviť {view} režim {mode}:\n{detail}"
+                    )
+                    return
+            if not self._pico.save_config():
+                detail = str(getattr(self._pico, "last_error", "") or "Neznáma chyba")
+                QMessageBox.critical(
+                    self,
+                    "Pico konfigurácia",
+                    f"Konfiguráciu sa nepodarilo uložiť do Pico:\n{detail}",
+                )
+                return
             self._pico_config.set_enabled_inputs(enabled)
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError, AttributeError) as exc:
             QMessageBox.critical(self, "Pico konfigurácia", f"Konfiguráciu sa nepodarilo uložiť:\n{exc}")
             return
         self.accept()

@@ -148,6 +148,43 @@ def test_inputs_public_api(connected_service):
     assert service.inputs() == "INPUTS IN1=ACTIVE IN2=OFF\nEND"
 
 
+@pytest.mark.parametrize(
+    ("view", "mode", "command"),
+    [("V1", "MASTER", "SET V1 MODE MASTER"), ("V2", "trigger", "SET V2 MODE TRIGGER")],
+)
+def test_set_view_mode_sends_normalized_command(monkeypatch, view, mode, command):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK SET"))
+
+    assert service.set_view_mode(view, mode)
+    assert sent == [command]
+
+
+@pytest.mark.parametrize(
+    ("view", "mode"),
+    [("V3", "MASTER"), ("V1", "AUTO"), ("", "MASTER"), (None, "MASTER"), ("V1", None)],
+)
+def test_set_view_mode_rejects_invalid_values_without_sending(monkeypatch, view, mode):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK SET"))
+
+    assert not service.set_view_mode(view, mode)
+    assert sent == []
+    assert service.last_error
+
+
+def test_save_and_save_config_remain_compatible(monkeypatch):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK SAVED"))
+
+    assert service.save()
+    assert service.save_config()
+    assert sent == ["SAVE", "SAVE"]
+
+
 def test_capture_is_separated_from_status_response(connected_service):
     service, device = connected_service
     received = []

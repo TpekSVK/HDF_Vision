@@ -146,9 +146,29 @@ class PicoService:
         ok, _ = self._send_command(f"FIRE {target}")
         return ok
 
-    def save(self) -> bool:
+    def set_view_mode(self, view_id_or_channel: str | int, mode: str) -> bool:
+        """Set a supported view to the firmware's MASTER or TRIGGER mode."""
+        target = self._normalize_target(view_id_or_channel)
+        if target not in {"V1", "V2"}:
+            self.last_error = f"Invalid Pico view: {view_id_or_channel!r}"
+            return False
+
+        normalized_mode = str(mode or "").strip().upper()
+        if normalized_mode not in {"MASTER", "TRIGGER"}:
+            self.last_error = f"Invalid Pico mode: {mode!r}"
+            return False
+
+        ok, _ = self._send_command(f"SET {target} MODE {normalized_mode}")
+        return ok
+
+    def save_config(self) -> bool:
+        """Persist the current Pico firmware configuration."""
         ok, _ = self._send_command("SAVE")
         return ok
+
+    def save(self) -> bool:
+        """Backward-compatible alias for :meth:`save_config`."""
+        return self.save_config()
 
     def status(self) -> dict[str, object]:
         ok, response = self._send_command("STATUS")
