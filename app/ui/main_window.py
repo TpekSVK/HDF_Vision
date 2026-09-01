@@ -86,6 +86,7 @@ class MainWindow(QMainWindow):
         self.modbus = ModbusService()
         self.pico = PicoService()
         self.pico.connect()
+        self.pico.register_trigger_callback(self._handle_pico_trigger)
         self.modbus.register_trigger_callback(self._handle_modbus_trigger)
         self.external_triggered.connect(self.manual_trigger)
 
@@ -101,7 +102,7 @@ class MainWindow(QMainWindow):
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._pending_trigger_source: str | None = None
-        self._pending_modbus_input_index: int | None = None
+        self._pending_trigger_input_index: int | None = None
         self._run_trigger_session_active = False
         # Tool/Recipe
         try:
@@ -551,7 +552,9 @@ class MainWindow(QMainWindow):
         flash_delay_ms = max(0, int(getattr(view, "flash_delay_ms", 0) or 0))
         settle_ms = max(0, int(getattr(view, "settle_ms", 0) or 0))
         source = str(capture_request_source or "manual").strip().lower()
-        is_external_request = source in {"modbus", "modbus_input", "external", "gpio_external"}
+        is_external_request = source in {
+            "gpio", "gpio_external", "modbus", "modbus_input", "pico", "external"
+        }
         view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
         if not is_external_request:
             fired = self.pico.fire(str(view_id))
@@ -970,15 +973,20 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
         resolved_source = str(trigger_source or self._pending_trigger_source or "manual").strip().lower()
-        modbus_input_index = self._pending_modbus_input_index
+        trigger_input_index = self._pending_trigger_input_index
         self._pending_trigger_source = None
-        self._pending_modbus_input_index = None
-        self._logger.info("[CAPTURE_REQUEST] source=%s capture_mode=%s", resolved_source, self.get_capture_mode())
+        self._pending_trigger_input_index = None
+        self._logger.info(
+            "[CAPTURE_REQUEST] trigger_source=%s trigger_input_index=%s capture_mode=%s",
+            resolved_source,
+            trigger_input_index,
+            self.get_capture_mode(),
+        )
         self._log_run_trigger_context("RUN trigger start")
         try:
             trigger_state = self._prepare_run_trigger(
                 trigger_source=resolved_source,
-                modbus_input_index=modbus_input_index,
+                trigger_input_index=trigger_input_index,
             )
         except Exception as exc:
             self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
@@ -1031,7 +1039,7 @@ class MainWindow(QMainWindow):
         self,
         *,
         trigger_source: str,
-        modbus_input_index: int | None = None,
+        trigger_input_index: int | None = None,
     ) -> dict[str, Any] | None:
         was_live_enabled = self._pause_live_preview_for_trigger()
         gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
@@ -1058,6 +1066,7 @@ class MainWindow(QMainWindow):
                 ),
                 "base_camera_state": base_camera_state,
                 "trigger_source": trigger_source,
+                "trigger_input_index": trigger_input_index,
             }
 
         if not getattr(recipe_cfg, "regions", None):
@@ -1072,8 +1081,8 @@ class MainWindow(QMainWindow):
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
         explicit_modbus_spec = None
-        if trigger_source == "modbus" and isinstance(modbus_input_index, Integral):
-            input_index = int(modbus_input_index)
+        if trigger_source == "modbus" and isinstance(trigger_input_index, Integral):
+            input_index = int(trigger_input_index)
             if 1 <= input_index <= 8:
                 explicit_modbus_spec = self._resolve_explicit_modbus_view(
                     view_specs=view_specs,
@@ -1126,7 +1135,9 @@ class MainWindow(QMainWindow):
             },
             "base_camera_state": base_camera_state,
             "trigger_source": trigger_source,
-            "modbus_input_index": int(modbus_input_index) if modbus_input_index is not None else None,
+            "trigger_input_index": (
+                int(trigger_input_index) if trigger_input_index is not None else None
+            ),
             "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
         }
 
@@ -1542,19 +1553,30 @@ class MainWindow(QMainWindow):
         self._handle_external_trigger("GPIO")
 
     def _handle_modbus_trigger(self, input_index: int | None = None):
-        self._handle_external_trigger("Modbus", modbus_input_index=input_index)
+        self._handle_external_trigger("Modbus", input_index=input_index)
 
-    def _handle_external_trigger(self, source: str, *, modbus_input_index: int | None = None) -> None:
-        print(f"[RUN] {source} trigger received, mode={self.mode}")
+    def _handle_pico_trigger(self, input_index: int) -> None:
+        if not isinstance(input_index, Integral) or isinstance(input_index, bool):
+            self._logger.warning("[PICO] ignored invalid capture event input=%r", input_index)
+            return
+        parsed_input = int(input_index)
+        if not 1 <= parsed_input <= 8:
+            self._logger.warning("[PICO] ignored invalid capture event input=%r", input_index)
+            return
+        self._logger.info("[PICO] capture event input=%s", parsed_input)
+        self._handle_external_trigger("Pico", input_index=parsed_input)
+
+    def _handle_external_trigger(self, source: str, *, input_index: int | None = None) -> None:
+        self._logger.info("[RUN] %s trigger received input=%s mode=%s", source, input_index, self.mode)
         if self.mode != "RUN":
             return
         resolved_source = str(source or "external").strip().lower()
         self._pending_trigger_source = resolved_source
-        if resolved_source == "modbus" and isinstance(modbus_input_index, Integral):
-            parsed_input = int(modbus_input_index)
-            self._pending_modbus_input_index = parsed_input if 1 <= parsed_input <= 8 else None
+        if resolved_source in {"modbus", "pico"} and isinstance(input_index, Integral):
+            parsed_input = int(input_index)
+            self._pending_trigger_input_index = parsed_input if 1 <= parsed_input <= 8 else None
         else:
-            self._pending_modbus_input_index = None
+            self._pending_trigger_input_index = None
         self.external_triggered.emit()
 
     def _update_live_view(self):
@@ -2514,6 +2536,7 @@ class MainWindow(QMainWindow):
             self.cam.stop(caller="main_window_close")
             self.gpio.close()
             self.modbus.close()
+            self.pico.close()
         finally:
             e.accept()
 
