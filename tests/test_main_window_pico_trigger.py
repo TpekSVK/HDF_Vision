@@ -109,6 +109,25 @@ def test_pico_master_capture_does_not_fire_light_again() -> None:
     assert fired == []
 
 
+def test_modbus_master_capture_still_fires_pico_light() -> None:
+    window = MainWindow.__new__(MainWindow)
+    window._active_view_id = "view_2"
+    window._logger = logging.getLogger("test.main_window.modbus")
+    fired: list[str] = []
+    window.pico = SimpleNamespace(
+        fire=lambda view_id: fired.append(view_id) or True,
+        last_error="",
+    )
+    view = SimpleNamespace(id="view_2", flash_delay_ms=0, settle_ms=0)
+
+    window._handle_master_flash_capture_flow(
+        view=view,
+        capture_request_source="modbus",
+    )
+
+    assert fired == ["view_2"]
+
+
 def test_modbus_trigger_still_preserves_its_input_index() -> None:
     window = _handler_window()
 

@@ -106,6 +106,7 @@ class MainWindow(QMainWindow):
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._pending_trigger_source: str | None = None
         self._pending_trigger_input_index: int | None = None
+        self._external_sequence_index: dict[str, int] = {"pico": 0, "modbus": 0}
         self._run_trigger_session_active = False
         # Tool/Recipe
         try:
@@ -460,6 +461,7 @@ class MainWindow(QMainWindow):
             self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
+            self._reset_external_sequence_state()
             self.mode_btn.setText("⚙ SETUP")
             if self.capture_mode == "trigger":
                 self._enter_run_trigger_session()
@@ -520,6 +522,10 @@ class MainWindow(QMainWindow):
         self._manual_trigger_positions.pop(recipe_name, None)
         self._manual_trigger_statuses.pop(recipe_name, None)
 
+    def _reset_external_sequence_state(self) -> None:
+        """Start every source-specific external sequence at its first view."""
+        self._external_sequence_index = {"pico": 0, "modbus": 0}
+
     def _reset_view_sequence_state(self) -> None:
         for vid in self.view_strip.view_ids():
             self.view_strip.set_status(vid, None)
@@ -559,11 +565,11 @@ class MainWindow(QMainWindow):
         flash_delay_ms = max(0, int(getattr(view, "flash_delay_ms", 0) or 0))
         settle_ms = max(0, int(getattr(view, "settle_ms", 0) or 0))
         source = str(capture_request_source or "manual").strip().lower()
-        is_external_request = source in {
-            "gpio", "gpio_external", "modbus", "modbus_input", "pico", "external"
-        }
+        # A Pico CAPTURE event is emitted after Pico has already driven the light.
+        # Other request sources (including Modbus) still need the normal FIRE path.
+        is_pico_request = source == "pico"
         view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
-        if not is_external_request:
+        if not is_pico_request:
             fired = self.pico.fire(str(view_id))
             if not fired:
                 self._logger.warning("[PICO] fire failed view=%s error=%s", view_id, self.pico.last_error)
@@ -717,31 +723,80 @@ class MainWindow(QMainWindow):
             "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
         }
 
-    def _resolve_explicit_modbus_view(
+    def _resolve_external_trigger_view(
         self,
         *,
         view_specs: list[dict[str, Any]],
+        source: str,
         input_index: int,
     ) -> dict[str, Any] | None:
-        matching_specs: list[dict[str, Any]] = []
-        for spec in view_specs:
-            if spec.get("trigger_mode") != "external":
-                continue
-            if spec.get("external_trigger_mode") != "explicit":
-                continue
-            if spec.get("external_source") != "modbus":
-                continue
-            if spec.get("external_request_input") != input_index:
-                continue
-            matching_specs.append(spec)
-        if not matching_specs:
+        """Resolve an external event without falling back to unrelated views."""
+        source = str(source or "").strip().lower()
+        if self.mode != "RUN" or source not in self._external_sequence_index:
             return None
-        if len(matching_specs) > 1:
-            self._logger.warning(
-                "Multiple explicit Modbus views mapped to input=%s; using first in recipe order.",
+        if isinstance(input_index, bool) or not isinstance(input_index, Integral):
+            return None
+        input_index = int(input_index)
+        if not 1 <= input_index <= 8:
+            return None
+
+        if source == "pico" and not self.pico_config.is_input_enabled(input_index):
+            self._logger.info(
+                "[RUN] external trigger ignored source=pico input=%s reason=disabled",
                 input_index,
             )
-        return matching_specs[0]
+            return None
+
+        external_specs = [
+            spec for spec in view_specs
+            if spec.get("trigger_mode") == "external"
+            and spec.get("external_source") == source
+        ]
+        explicit = [
+            spec for spec in external_specs
+            if spec.get("external_trigger_mode") == "explicit"
+            and spec.get("external_request_input") == input_index
+        ]
+        if len(explicit) > 1:
+            self._logger.error(
+                "[RUN] external trigger ignored source=%s input=%s reason=duplicate_explicit_match",
+                source,
+                input_index,
+            )
+            return None
+        if explicit:
+            view = explicit[0]["view"]
+            self._logger.info(
+                "[RUN] resolved external trigger mode=explicit source=%s input=%s view=%s",
+                source,
+                input_index,
+                getattr(view, "name", None) or getattr(view, "id", None),
+            )
+            return explicit[0]
+
+        sequential = [
+            spec for spec in external_specs
+            if spec.get("external_trigger_mode") == "sequential"
+        ]
+        if sequential:
+            position = self._external_sequence_index[source] % len(sequential)
+            selected = sequential[position]
+            self._external_sequence_index[source] = (position + 1) % len(sequential)
+            view = selected["view"]
+            self._logger.info(
+                "[RUN] resolved external trigger mode=sequential source=%s index=%s view=%s",
+                source,
+                position,
+                getattr(view, "name", None) or getattr(view, "id", None),
+            )
+            return selected
+
+        self._logger.info(
+            "[RUN] external trigger ignored source=%s input=%s reason=no_matching_view",
+            source,
+            input_index,
+        )
+        return None
 
     def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
         view_id = requested_view_id or self._active_view_id
@@ -1004,6 +1059,7 @@ class MainWindow(QMainWindow):
             self._resume_live_preview_after_trigger(False)
             return
         if trigger_state is None:
+            self._resume_live_preview_after_trigger(False)
             return
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
@@ -1091,19 +1147,21 @@ class MainWindow(QMainWindow):
 
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
-        explicit_modbus_spec = None
-        if trigger_source == "modbus" and isinstance(trigger_input_index, Integral):
-            input_index = int(trigger_input_index)
-            if 1 <= input_index <= 8:
-                explicit_modbus_spec = self._resolve_explicit_modbus_view(
-                    view_specs=view_specs,
-                    input_index=input_index,
-                )
+        external_spec = None
+        is_routed_external = trigger_source in {"pico", "modbus"}
+        if is_routed_external and isinstance(trigger_input_index, Integral):
+            external_spec = self._resolve_external_trigger_view(
+                view_specs=view_specs,
+                source=trigger_source,
+                input_index=int(trigger_input_index),
+            )
 
-        if explicit_modbus_spec is not None:
+        if is_routed_external and external_spec is None:
+            return None
+        if external_spec is not None:
             self._reset_view_sequence_state()
             per_view_statuses = {}
-            views_to_process = [explicit_modbus_spec]
+            views_to_process = [external_spec]
             self._reset_manual_trigger_progress(recipe_name)
         elif all_manual:
             cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
@@ -1484,6 +1542,7 @@ class MainWindow(QMainWindow):
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)
         self._reset_manual_trigger_progress(self.current_recipe_name())
+        self._reset_external_sequence_state()
         self._refresh_views()
         self._reload_results_strip()
         self._refresh_tool_selector()
@@ -2613,6 +2672,7 @@ class MainWindow(QMainWindow):
 
     def on_recipe_changed(self, name: str):
         try:
+            self._reset_external_sequence_state()
             self.recipes.load(name)
             self.tool = self.recipes.tool
             self._persist_last_recipe(name)
@@ -2635,6 +2695,7 @@ class MainWindow(QMainWindow):
         if not ok or not name.strip():
             return
         name = name.strip()
+        self._reset_external_sequence_state()
         self.recipes.create(name)
         self._refresh_recipe_list()
         self.recipes.load(name)
@@ -2654,6 +2715,7 @@ class MainWindow(QMainWindow):
         if not ok or not new.strip():
             return
         new = new.strip()
+        self._reset_external_sequence_state()
         self.recipes.rename(old, new)
         self.gpio.rename_profile(old, new)
         self._reset_manual_trigger_progress(old)
@@ -2677,6 +2739,7 @@ class MainWindow(QMainWindow):
         r = QMessageBox.question(self, "Zmazať recept", f"Naozaj zmazať '{name}'?")
         if r != QMessageBox.Yes:
             return
+        self._reset_external_sequence_state()
         self.recipes.delete(name)
         self.gpio.delete_profile(name)
         self._reset_manual_trigger_progress(name)
