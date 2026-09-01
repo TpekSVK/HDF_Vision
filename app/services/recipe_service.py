@@ -438,7 +438,9 @@ class RecipeService:
         return updated.copy()
 
     @staticmethod
-    def _validate_explicit_external_mappings(views: list[RecipeView]) -> None:
+    # ``RecipeService.list`` shadows the builtin ``list`` inside the class body
+    # on Python 3.10, so use the imported typing alias in this annotation.
+    def _validate_explicit_external_mappings(views: List[RecipeView]) -> None:
         used: dict[tuple[str, int], str] = {}
         for view in views:
             if view.trigger_mode != "external" or view.external_trigger_mode != "explicit":
