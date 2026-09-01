@@ -122,7 +122,9 @@ class RecipeService:
     @staticmethod
     def _normalize_trigger_mode(trigger_mode: str | None) -> str:
         mode = str(trigger_mode or "timed").strip().lower()
-        if mode not in {"timed", "external", "manual"}:
+        if mode in {"manual", "manual trigger", "external trigger"}:
+            mode = "external"
+        if mode not in {"timed", "external"}:
             mode = "timed"
         return mode
 
@@ -157,6 +159,7 @@ class RecipeService:
         flash_pulse_ms: int | None = None,
         trigger_mode: str | None = None,
         external_trigger_mode: str | None | object = _UNSET,
+        external_source: str | None | object = _UNSET,
         external_request_input: int | None | object = _UNSET,
         trigger_interval_ms: int | None = None,
         trigger_gap_ms: float | int | None = None,
@@ -203,6 +206,7 @@ class RecipeService:
         source_flash_pulse_ms: int = 200
         source_trigger_mode: str | None = None
         source_external_trigger_mode: str | None = None
+        source_external_source: str | None = None
         source_external_request_input: int | None = None
         source_trigger_interval: Optional[int] = None
         source_trigger_gap: float | None = None
@@ -229,6 +233,7 @@ class RecipeService:
                 source_external_trigger_mode = getattr(
                     source_view, "external_trigger_mode", None
                 )
+                source_external_source = getattr(source_view, "external_source", None)
                 source_external_request_input = getattr(
                     source_view, "external_request_input", None
                 )
@@ -274,6 +279,9 @@ class RecipeService:
             if external_request_input is not _UNSET
             else source_external_request_input
         )
+        target_external_source = (
+            external_source if external_source is not _UNSET else source_external_source
+        )
         target_trigger_interval = self._normalize_trigger_interval(
             target_trigger_mode,
             trigger_interval_ms if trigger_interval_ms is not None else source_trigger_interval,
@@ -315,6 +323,7 @@ class RecipeService:
             flash_pulse_ms=max(1, int(target_flash_pulse)),
             trigger_mode=target_trigger_mode,
             external_trigger_mode=target_external_trigger_mode,
+            external_source=target_external_source,
             external_request_input=target_external_request_input,
             trigger_interval_ms=target_trigger_interval,
             trigger_gap_ms=target_trigger_gap,
@@ -328,6 +337,7 @@ class RecipeService:
             new_view.set_tools(source_tools)
 
         recipe.views.append(new_view)
+        self._validate_explicit_external_mappings(recipe.views)
         normalized = self._save_recipe_config(name, recipe)
         normalized_view = normalized.get_view(new_id)
 
@@ -360,6 +370,7 @@ class RecipeService:
         flash_pulse_ms: int | None = None,
         trigger_mode: str,
         external_trigger_mode: str | None = None,
+        external_source: str | None = None,
         external_request_input: int | None = None,
         trigger_interval_ms: int | None,
         trigger_gap_ms: float | int | None = None,
@@ -400,6 +411,7 @@ class RecipeService:
             flash_pulse_ms=max(1, int(flash_pulse_ms if flash_pulse_ms is not None else getattr(view, "flash_pulse_ms", 200))),
             trigger_mode=normalized_mode,
             external_trigger_mode=external_trigger_mode,
+            external_source=external_source,
             external_request_input=external_request_input,
             trigger_interval_ms=normalized_interval,
             trigger_gap_ms=normalized_trigger_gap,
@@ -417,12 +429,30 @@ class RecipeService:
             else:
                 replaced.append(existing.copy())
         recipe.views = replaced
+        self._validate_explicit_external_mappings(recipe.views)
         normalized = self._save_recipe_config(name, recipe)
         updated = normalized.get_view(view.id)
         drafts = self._draft_tools.setdefault(name, {})
         drafts.setdefault(view.id, [tool.copy() for tool in updated.tools])
         self.db.mark_recipe_draft_updated(name)
         return updated.copy()
+
+    @staticmethod
+    def _validate_explicit_external_mappings(views: list[RecipeView]) -> None:
+        used: dict[tuple[str, int], str] = {}
+        for view in views:
+            if view.trigger_mode != "external" or view.external_trigger_mode != "explicit":
+                continue
+            if view.external_source is None or view.external_request_input is None:
+                raise ValueError("Explicitný externý režim vyžaduje zdroj aj vstup")
+            key = (view.external_source, view.external_request_input)
+            if key in used:
+                prefix = "IN" if key[0] == "pico" else "DI"
+                raise ValueError(
+                    f"Externý vstup {key[0]} {prefix}{key[1]} je už priradený"
+                    f" view {used[key]}"
+                )
+            used[key] = view.name or view.id
 
     def remove_view(self, name: str, view_id: str) -> List[RecipeView]:
         recipe = self._load_recipe_config(name)

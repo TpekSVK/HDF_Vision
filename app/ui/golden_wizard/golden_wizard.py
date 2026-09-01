@@ -2435,6 +2435,7 @@ class GoldenWizard(QDialog):
             external_trigger_mode=getattr(source_view, "external_trigger_mode", None)
             if source_view
             else None,
+            external_source=getattr(source_view, "external_source", None) if source_view else None,
             external_request_input=getattr(source_view, "external_request_input", None)
             if source_view
             else None,
@@ -2487,6 +2488,7 @@ class GoldenWizard(QDialog):
                 flash_pulse_ms=data.get("flash_pulse_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
+                external_source=data.get("external_source"),
                 external_request_input=data.get("external_request_input"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),
@@ -2526,6 +2528,7 @@ class GoldenWizard(QDialog):
             flash_pulse_ms=int(getattr(view, "flash_pulse_ms", 200) or 200),
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             external_trigger_mode=getattr(view, "external_trigger_mode", None),
+            external_source=getattr(view, "external_source", None),
             external_request_input=getattr(view, "external_request_input", None),
             trigger_interval_ms=getattr(view, "trigger_interval_ms", None),
             trigger_gap_ms=getattr(view, "trigger_gap_ms", None),
@@ -2561,6 +2564,7 @@ class GoldenWizard(QDialog):
                 flash_pulse_ms=data.get("flash_pulse_ms"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
+                external_source=data.get("external_source"),
                 external_request_input=data.get("external_request_input"),
                 trigger_interval_ms=data.get("trigger_interval_ms"),
                 trigger_gap_ms=data.get("trigger_gap_ms"),

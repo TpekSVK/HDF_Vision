@@ -692,6 +692,7 @@ class MainWindow(QMainWindow):
         if external_trigger_mode not in {"sequential", "explicit"}:
             external_trigger_mode = "sequential"
         external_request_input_raw = getattr(view, "external_request_input", None)
+        external_source = str(getattr(view, "external_source", "modbus") or "modbus").lower()
         external_request_input = (
             int(external_request_input_raw)
             if isinstance(external_request_input_raw, Integral)
@@ -709,6 +710,7 @@ class MainWindow(QMainWindow):
             "trigger_gap_ms": trigger_gap_ms,
             "frame_source_view_id": frame_source_view_id,
             "external_trigger_mode": external_trigger_mode,
+            "external_source": external_source if external_source in {"pico", "modbus"} else "modbus",
             "external_request_input": external_request_input,
             "branch_enabled": bool(getattr(view, "branch_enabled", False)),
             "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
@@ -726,6 +728,8 @@ class MainWindow(QMainWindow):
             if spec.get("trigger_mode") != "external":
                 continue
             if spec.get("external_trigger_mode") != "explicit":
+                continue
+            if spec.get("external_source") != "modbus":
                 continue
             if spec.get("external_request_input") != input_index:
                 continue
