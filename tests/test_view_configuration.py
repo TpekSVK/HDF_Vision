@@ -130,6 +130,51 @@ def test_recipe_view_external_trigger_submode_normalization():
     assert serialized["external_request_input"] == 3
 
 
+def test_legacy_modbus_recipe_and_external_source_roundtrip():
+    legacy = RecipeView.from_dict({
+        "id": "legacy", "name": "Legacy", "trigger_mode": "External Trigger",
+        "external_trigger_mode": "Explicit", "external_request_input": "DI3",
+    })
+    assert legacy.trigger_mode == "external"
+    assert legacy.external_trigger_mode == "explicit"
+    assert legacy.external_source == "modbus"
+    assert legacy.external_request_input == 3
+
+    pico = RecipeView.from_dict({
+        "id": "pico", "name": "Pico", "trigger_mode": "external",
+        "external_trigger_mode": "explicit", "external_source": "pico",
+        "external_request_input": 5,
+    })
+    assert RecipeView.from_dict(pico.to_dict()).external_source == "pico"
+    assert RecipeView.from_dict(pico.to_dict()).external_request_input == 5
+
+
+def test_external_source_namespaces_and_conflicts():
+    pico = RecipeView(
+        id="p", name="Pico", trigger_mode="external",
+        external_trigger_mode="explicit", external_source="pico",
+        external_request_input=3,
+    )
+    modbus = RecipeView(
+        id="m", name="Modbus", trigger_mode="external",
+        external_trigger_mode="explicit", external_source="modbus",
+        external_request_input=3,
+    )
+    RecipeService._validate_explicit_external_mappings([pico, modbus])
+    with pytest.raises(ValueError, match="už priradený"):
+        RecipeService._validate_explicit_external_mappings([pico, pico.copy()])
+
+
+def test_sequential_pico_has_no_view_specific_input():
+    view = RecipeView(
+        id="p", name="Pico", trigger_mode="external",
+        external_trigger_mode="sequential", external_source="pico",
+        external_request_input=7,
+    )
+    assert view.external_source == "pico"
+    assert view.external_request_input is None
+
+
 def test_recipe_service_add_and_update_view(tmp_path: Path):
     base_dir = tmp_path / "data"
     base_dir.mkdir(parents=True, exist_ok=True)

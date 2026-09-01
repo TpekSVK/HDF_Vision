@@ -664,8 +664,9 @@ class RecipeView:
     settle_ms: Optional[int] = None
     flash_delay_ms: int = 0
     flash_pulse_ms: int = 200
-    trigger_mode: Literal["timed", "external", "manual"] = "timed"
+    trigger_mode: Literal["timed", "external"] = "timed"
     external_trigger_mode: Optional[str] = None
+    external_source: Optional[str] = None
     external_request_input: Optional[int] = None
     trigger_interval_ms: Optional[int] = None
     trigger_gap_ms: Optional[float] = None
@@ -713,9 +714,14 @@ class RecipeView:
             self.flash_pulse_ms = 200
 
         mode = str(self.trigger_mode or "timed").strip().lower()
-        if mode not in {"timed", "external", "manual"}:
+        mode = {
+            "timer": "timed", "časovač": "timed", "manual": "external",
+            "manual trigger": "external", "external trigger": "external",
+            "externý signál": "external",
+        }.get(mode, mode)
+        if mode not in {"timed", "external"}:
             mode = "timed"
-        self.trigger_mode = cast(Literal["timed", "external", "manual"], mode)
+        self.trigger_mode = cast(Literal["timed", "external"], mode)
 
         raw_external_mode = (
             str(self.external_trigger_mode).strip().lower()
@@ -724,6 +730,7 @@ class RecipeView:
         )
         if self.trigger_mode != "external":
             self.external_trigger_mode = None
+            self.external_source = None
             self.external_request_input = None
         else:
             if not raw_external_mode:
@@ -731,12 +738,17 @@ class RecipeView:
             if raw_external_mode not in {"sequential", "explicit"}:
                 raw_external_mode = "sequential"
             self.external_trigger_mode = raw_external_mode
+            source = str(self.external_source or "modbus").strip().lower()
+            self.external_source = source if source in {"pico", "modbus"} else "modbus"
 
             if self.external_trigger_mode != "explicit":
                 self.external_request_input = None
             else:
                 try:
-                    input_value = int(self.external_request_input) if self.external_request_input is not None else None
+                    raw_input = self.external_request_input
+                    if isinstance(raw_input, str):
+                        raw_input = raw_input.strip().upper().removeprefix("DI").removeprefix("IN")
+                    input_value = int(raw_input) if raw_input is not None else None
                 except Exception:
                     input_value = None
                 self.external_request_input = input_value if input_value in {1, 2, 3, 4, 5, 6, 7, 8} else None
@@ -807,6 +819,7 @@ class RecipeView:
             "flash_pulse_ms": int(self.flash_pulse_ms),
             "trigger_mode": self.trigger_mode,
             "external_trigger_mode": self.external_trigger_mode,
+            "external_source": self.external_source,
             "external_request_input": self.external_request_input,
             "trigger_interval_ms": self.trigger_interval_ms,
             "trigger_gap_ms": self.trigger_gap_ms,
@@ -834,7 +847,8 @@ class RecipeView:
             flash_pulse_ms=data.get("flash_pulse_ms", 200),
             trigger_mode=data.get("trigger_mode", "timed"),
             external_trigger_mode=data.get("external_trigger_mode"),
-            external_request_input=data.get("external_request_input"),
+            external_source=data.get("external_source"),
+            external_request_input=data.get("external_request_input", data.get("modbus_input")),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             trigger_gap_ms=data.get("trigger_gap_ms"),
             image_rotation=data.get("image_rotation", 0),
@@ -859,6 +873,7 @@ class RecipeView:
             flash_pulse_ms=self.flash_pulse_ms,
             trigger_mode=self.trigger_mode,
             external_trigger_mode=self.external_trigger_mode,
+            external_source=self.external_source,
             external_request_input=self.external_request_input,
             trigger_interval_ms=self.trigger_interval_ms,
             trigger_gap_ms=self.trigger_gap_ms,
