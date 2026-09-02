@@ -148,6 +148,31 @@ def test_inputs_public_api(connected_service):
     assert service.inputs() == "INPUTS IN1=ACTIVE IN2=OFF\nEND"
 
 
+@pytest.mark.parametrize(("enabled", "command"), [(True, "LIGHT ON"), (False, "LIGHT OFF")])
+def test_set_manual_light_sends_command(monkeypatch, enabled, command):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK"))
+
+    assert service.set_manual_light(enabled)
+    assert sent == [command]
+
+
+def test_set_manual_light_failure_is_reported(monkeypatch):
+    service = pico_service.PicoService()
+    monkeypatch.setattr(service, "_send_command", lambda _value: (False, "ERR LIGHT"))
+
+    assert not service.set_manual_light(True)
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [("MANUAL_LIGHT ON", True), ("manual_light off", False), ("", None)],
+)
+def test_parse_manual_light_status(line, expected):
+    assert pico_service.PicoService.parse_status_config(line)["manual_light"] is expected
+
+
 @pytest.mark.parametrize(
     ("view", "mode", "command"),
     [("V1", "MASTER", "SET V1 MODE MASTER"), ("V2", "trigger", "SET V2 MODE TRIGGER")],
@@ -230,10 +255,13 @@ END"""
         "V1": {"mode": "MASTER", "delay_ms": 0, "pulse_ms": 100, "capture_ms": 20},
         "V2": {"mode": "MASTER", "delay_ms": 50, "pulse_ms": 300, "capture_ms": 80},
         "input_map": {1: "V1", 7: "V2", 8: "OFF"},
+        "manual_light": None,
     }
-    assert pico_service.PicoService.parse_status_config("") == {"V1": {}, "V2": {}, "input_map": {}}
+    assert pico_service.PicoService.parse_status_config("") == {
+        "V1": {}, "V2": {}, "input_map": {}, "manual_light": None
+    }
     assert pico_service.PicoService.parse_status_config("V1_DELAY nope\nV2_MODE AUTO") == {
-        "V1": {}, "V2": {}, "input_map": {}
+        "V1": {}, "V2": {}, "input_map": {}, "manual_light": None
     }
 
 

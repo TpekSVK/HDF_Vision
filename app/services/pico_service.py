@@ -55,6 +55,7 @@ class PicoService:
         self._pending_response: queue.Queue[object] | None = None
         self._pending_command: str | None = None
         self._trigger_callbacks: list[Callable[[int], None]] = []
+        self._manual_light: bool | None = None
         self.last_error: str = ""
 
     def connect(self) -> bool:
@@ -146,6 +147,23 @@ class PicoService:
         ok, _ = self._send_command(f"FIRE {target}")
         return ok
 
+    def set_manual_light(self, enabled: bool) -> bool:
+        """Enable or release the firmware's persistent manual light override."""
+        requested = bool(enabled)
+        ok, _ = self._send_command(f"LIGHT {'ON' if requested else 'OFF'}")
+        if ok:
+            self._manual_light = requested
+        return ok
+
+    def manual_light_status(self) -> bool | None:
+        """Return the actual manual-light state reported by STATUS, if known."""
+        ok, response = self._send_command("STATUS")
+        if not ok:
+            return None
+        value = self.parse_status_config(response).get("manual_light")
+        self._manual_light = value if isinstance(value, bool) else None
+        return self._manual_light
+
     def set_view_mode(self, view_id_or_channel: str | int, mode: str) -> bool:
         """Set a supported view to the firmware's MASTER or TRIGGER mode."""
         target = self._normalize_target(view_id_or_channel)
@@ -198,11 +216,17 @@ class PicoService:
     @staticmethod
     def parse_status_config(response: str) -> dict[str, object]:
         """Parse only valid values actually present in a firmware STATUS response."""
-        config: dict[str, object] = {"V1": {}, "V2": {}, "input_map": {}}
+        config: dict[str, object] = {
+            "V1": {}, "V2": {}, "input_map": {}, "manual_light": None
+        }
         field_names = {
             "MODE": "mode", "DELAY": "delay_ms", "PULSE": "pulse_ms", "CAPTURE": "capture_ms"
         }
         for line in str(response or "").splitlines():
+            light_match = re.match(r"^\s*MANUAL_LIGHT\s+(ON|OFF)\s*$", line, re.I)
+            if light_match:
+                config["manual_light"] = light_match.group(1).upper() == "ON"
+                continue
             match = re.match(r"^\s*(V[12])_(MODE|DELAY|PULSE|CAPTURE)\s+(\S+)\s*$", line, re.I)
             if match:
                 profile, field, raw = match.group(1).upper(), match.group(2).upper(), match.group(3)
@@ -368,6 +392,7 @@ class PicoService:
             "SET": ("OK SET",),
             "MAP": ("OK MAP",),
             "FIRE": ("OK FIRED", "BUSY "),
+            "LIGHT": ("OK",),
         }
         return upper.startswith(prefixes.get(verb, ("OK",)))
 
