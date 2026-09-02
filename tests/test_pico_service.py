@@ -185,6 +185,58 @@ def test_save_and_save_config_remain_compatible(monkeypatch):
     assert sent == ["SAVE", "SAVE"]
 
 
+@pytest.mark.parametrize("method,args,command", [
+    ("set_profile_delay", ("V1", 10), "SET V1 DELAY 10"),
+    ("set_profile_pulse", ("V1", 200), "SET V1 PULSE 200"),
+    ("set_profile_capture", ("V1", 30), "SET V1 CAPTURE 30"),
+    ("map_input", (1, "V1"), "MAP IN1 V1"),
+    ("map_input", (7, "v2"), "MAP IN7 V2"),
+    ("map_input", (8, "OFF"), "MAP IN8 OFF"),
+])
+def test_configuration_commands(monkeypatch, method, args, command):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK"))
+    assert getattr(service, method)(*args)
+    assert sent == [command]
+
+
+@pytest.mark.parametrize("method,args", [
+    ("set_profile_delay", ("V1", -1)), ("set_profile_delay", ("V3", 0)),
+    ("set_profile_pulse", ("V1", 0)), ("set_profile_capture", ("V2", -1)),
+    ("map_input", (0, "V1")), ("map_input", (9, "V2")), ("map_input", (1, "AUTO")),
+])
+def test_configuration_validation_does_not_send(monkeypatch, method, args):
+    service = pico_service.PicoService()
+    sent = []
+    monkeypatch.setattr(service, "_send_command", lambda value: (sent.append(value) or True, "OK"))
+    assert not getattr(service, method)(*args)
+    assert sent == []
+    assert service.last_error
+
+
+def test_parse_status_config_is_tolerant_and_does_not_invent_values():
+    response = """v1_mode master
+V1_DELAY 0
+V1_PULSE 100
+V1_CAPTURE 20
+V2_MODE MASTER
+V2_DELAY 50
+V2_PULSE 300
+V2_CAPTURE 80
+input_map in1=v1 IN5=bad in7=V2 IN8=off
+END"""
+    assert pico_service.PicoService.parse_status_config(response) == {
+        "V1": {"mode": "MASTER", "delay_ms": 0, "pulse_ms": 100, "capture_ms": 20},
+        "V2": {"mode": "MASTER", "delay_ms": 50, "pulse_ms": 300, "capture_ms": 80},
+        "input_map": {1: "V1", 7: "V2", 8: "OFF"},
+    }
+    assert pico_service.PicoService.parse_status_config("") == {"V1": {}, "V2": {}, "input_map": {}}
+    assert pico_service.PicoService.parse_status_config("V1_DELAY nope\nV2_MODE AUTO") == {
+        "V1": {}, "V2": {}, "input_map": {}
+    }
+
+
 def test_capture_is_separated_from_status_response(connected_service):
     service, device = connected_service
     received = []

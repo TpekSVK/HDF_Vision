@@ -1536,7 +1536,6 @@ class MainWindow(QMainWindow):
             trigger_fn=self._send_run_trigger_gpio_pulse,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
-            publish_flash_to_pico=self._publish_recipe_flash_to_pico,
         )
         dlg.exec()
         if self.mode == "RUN":
