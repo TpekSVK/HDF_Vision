@@ -161,6 +161,75 @@ class PicoService:
         ok, _ = self._send_command(f"SET {target} MODE {normalized_mode}")
         return ok
 
+    def _set_profile_timing(self, profile: str | int, field: str, value: int, minimum: int) -> bool:
+        target = self._normalize_target(profile)
+        if target not in {"V1", "V2"}:
+            self.last_error = f"Invalid Pico profile: {profile!r}"
+            return False
+        if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+            self.last_error = f"Invalid Pico {field.lower()}: {value!r} (minimum {minimum})"
+            return False
+        ok, _ = self._send_command(f"SET {target} {field} {value}")
+        return ok
+
+    def set_profile_delay(self, profile: str | int, delay_ms: int) -> bool:
+        return self._set_profile_timing(profile, "DELAY", delay_ms, 0)
+
+    def set_profile_pulse(self, profile: str | int, pulse_ms: int) -> bool:
+        return self._set_profile_timing(profile, "PULSE", pulse_ms, 1)
+
+    def set_profile_capture(self, profile: str | int, capture_ms: int) -> bool:
+        return self._set_profile_timing(profile, "CAPTURE", capture_ms, 0)
+
+    def map_input(self, input_index: int, profile: str) -> bool:
+        if isinstance(input_index, bool) or not isinstance(input_index, int) or not 1 <= input_index <= 8:
+            self.last_error = f"Invalid Pico input: {input_index!r} (expected 1..8)"
+            return False
+        target = str(profile or "").strip().upper()
+        if target not in {"OFF", "V1", "V2"}:
+            self.last_error = f"Invalid Pico mapping target: {profile!r}"
+            return False
+        ok, _ = self._send_command(f"MAP IN{input_index} {target}")
+        return ok
+
+    def clear_input_mapping(self, input_index: int) -> bool:
+        return self.map_input(input_index, "OFF")
+
+    @staticmethod
+    def parse_status_config(response: str) -> dict[str, object]:
+        """Parse only valid values actually present in a firmware STATUS response."""
+        config: dict[str, object] = {"V1": {}, "V2": {}, "input_map": {}}
+        field_names = {
+            "MODE": "mode", "DELAY": "delay_ms", "PULSE": "pulse_ms", "CAPTURE": "capture_ms"
+        }
+        for line in str(response or "").splitlines():
+            match = re.match(r"^\s*(V[12])_(MODE|DELAY|PULSE|CAPTURE)\s+(\S+)\s*$", line, re.I)
+            if match:
+                profile, field, raw = match.group(1).upper(), match.group(2).upper(), match.group(3)
+                values = config[profile]
+                assert isinstance(values, dict)
+                if field == "MODE":
+                    mode = raw.upper()
+                    if mode in {"MASTER", "TRIGGER"}:
+                        values[field_names[field]] = mode
+                else:
+                    try:
+                        number = int(raw)
+                    except ValueError:
+                        continue
+                    minimum = 1 if field == "PULSE" else 0
+                    if number >= minimum:
+                        values[field_names[field]] = number
+                continue
+            if re.match(r"^\s*INPUT_MAP\b", line, re.I):
+                mappings = config["input_map"]
+                assert isinstance(mappings, dict)
+                for index, target in re.findall(r"\bIN([1-8])\s*=\s*(\S+)", line, re.I):
+                    normalized = target.upper()
+                    if normalized in {"OFF", "V1", "V2"}:
+                        mappings[int(index)] = normalized
+        return config
+
     def save_config(self) -> bool:
         """Persist the current Pico firmware configuration."""
         ok, _ = self._send_command("SAVE")

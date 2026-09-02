@@ -29,7 +29,10 @@ class FakePico:
         return {
             "connected": True,
             "port": "/dev/ttyACM0",
-            "device_status": "FIRMWARE pico_hdf_controller 3.2.0-master-capture\nV1_MODE MASTER\nV2_MODE TRIGGER\nEND",
+            "device_status": "FIRMWARE pico_hdf_controller 3.2.0-master-capture\n"
+            "V1_MODE MASTER\nV1_DELAY 0\nV1_PULSE 100\nV1_CAPTURE 20\n"
+            "V2_MODE TRIGGER\nV2_DELAY 50\nV2_PULSE 300\nV2_CAPTURE 80\n"
+            "INPUT_MAP IN1=V1 IN2=OFF IN3=OFF IN4=OFF IN5=OFF IN6=OFF IN7=V2 IN8=OFF\nEND",
         }
 
     def inputs(self):
@@ -47,6 +50,18 @@ class FakePico:
         if view in self.failures:
             self.last_error = f"failed {view}"
             return False
+        return True
+
+    def _timing(self, view, field, value):
+        self.commands.append((view, field, value))
+        return True
+
+    def set_profile_delay(self, view, value): return self._timing(view, "DELAY", value)
+    def set_profile_pulse(self, view, value): return self._timing(view, "PULSE", value)
+    def set_profile_capture(self, view, value): return self._timing(view, "CAPTURE", value)
+
+    def map_input(self, index, target):
+        self.commands.append((f"IN{index}", target))
         return True
 
     def save_config(self):
@@ -114,7 +129,10 @@ def test_wizard_saves_enabled_inputs_locally(tmp_path):
     wizard._save()
 
     assert PicoConfigService(path).get_enabled_inputs() == {1, 3}
-    assert pico.commands == [("V1", "MASTER"), ("V2", "TRIGGER"), ("SAVE",)]
+    assert pico.commands[0] == ("V1", "MASTER")
+    assert pico.commands[4] == ("V2", "TRIGGER")
+    assert pico.commands[8:16] == [("IN1", "V1"), ("IN2", "OFF"), ("IN3", "OFF"), ("IN4", "OFF"), ("IN5", "OFF"), ("IN6", "OFF"), ("IN7", "V2"), ("IN8", "OFF")]
+    assert pico.commands[-1] == ("SAVE",)
     assert wizard.result() == QDialog.Accepted
 
 
@@ -122,8 +140,7 @@ def test_wizard_saves_enabled_inputs_locally(tmp_path):
     ("failures", "expected_commands"),
     [
         ({"V1"}, [("V1", "MASTER")]),
-        ({"V2"}, [("V1", "MASTER"), ("V2", "TRIGGER")]),
-        ({"SAVE"}, [("V1", "MASTER"), ("V2", "TRIGGER"), ("SAVE",)]),
+        ({"V2"}, [("V1", "MASTER"), ("V1", "DELAY", 0), ("V1", "PULSE", 100), ("V1", "CAPTURE", 20), ("V2", "TRIGGER")]),
     ],
 )
 def test_wizard_does_not_save_local_config_when_pico_command_fails(
@@ -143,4 +160,19 @@ def test_wizard_does_not_save_local_config_when_pico_command_fails(
     assert not path.exists()
     assert wizard.result() != QDialog.Accepted
     assert errors and pico.last_error in errors[0]
+    wizard.reject()
+
+
+def test_save_failure_does_not_accept_or_write_whitelist(tmp_path, monkeypatch):
+    _app()
+    path = tmp_path / "pico.json"
+    pico = FakePico({"SAVE"})
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *args: errors.append(args[2]))
+    wizard = PicoWizard(pico, PicoConfigService(path))
+    wizard._save()
+    assert pico.commands[-1] == ("SAVE",)
+    assert wizard.result() != QDialog.Accepted
+    assert not path.exists()
+    assert errors and "failed SAVE" in errors[0]
     wizard.reject()

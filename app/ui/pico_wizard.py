@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -43,6 +44,7 @@ class PicoWizard(QDialog):
         self._callback_registered = False
         self._input_states: dict[int, QLabel] = {}
         self._enabled_checks: dict[int, QCheckBox] = {}
+        self._mapping_combos: dict[int, QComboBox] = {}
         self._build_ui()
         self._load_config()
         self.capture_received.connect(self._show_capture)
@@ -70,7 +72,7 @@ class PicoWizard(QDialog):
             device_grid.addWidget(value, row, 1)
         layout.addWidget(device)
 
-        modes = QGroupBox("Režim Pico", self)
+        modes = QGroupBox("Timing profily", self)
         modes_grid = QGridLayout(modes)
         self.cmb_v1_mode = QComboBox(modes)
         self.cmb_v2_mode = QComboBox(modes)
@@ -79,21 +81,34 @@ class PicoWizard(QDialog):
             "vstupe odošle CAPTURE INx.\nTRIGGER: legacy/test režim; Pico generuje hardvérové "
             "trigger pulzy pre kameru."
         )
-        for combo in (self.cmb_v1_mode, self.cmb_v2_mode):
+        self._profile_widgets: dict[str, dict[str, object]] = {}
+        for profile, combo in (("V1", self.cmb_v1_mode), ("V2", self.cmb_v2_mode)):
             combo.addItems(["MASTER", "TRIGGER"])
             combo.setToolTip(mode_tooltip)
             combo.setEnabled(False)
-        modes_grid.addWidget(QLabel("V1 režim:", modes), 0, 0)
-        modes_grid.addWidget(self.cmb_v1_mode, 0, 1)
-        modes_grid.addWidget(QLabel("V2 režim:", modes), 1, 0)
-        modes_grid.addWidget(self.cmb_v2_mode, 1, 1)
+            widgets: dict[str, object] = {"mode": combo}
+            column = 0 if profile == "V1" else 2
+            modes_grid.addWidget(QLabel(f"Profil {profile}", modes), 0, column, 1, 2)
+            modes_grid.addWidget(QLabel("Režim:", modes), 1, column)
+            modes_grid.addWidget(combo, 1, column + 1)
+            for row, (key, label, minimum) in enumerate((
+                ("delay_ms", "Delay [ms]:", 0), ("pulse_ms", "Pulse [ms]:", 1),
+                ("capture_ms", "Capture [ms]:", 0),
+            ), start=2):
+                spin = QSpinBox(modes)
+                spin.setRange(minimum, 60000)
+                spin.setEnabled(False)
+                modes_grid.addWidget(QLabel(label, modes), row, column)
+                modes_grid.addWidget(spin, row, column + 1)
+                widgets[key] = spin
+            self._profile_widgets[profile] = widgets
         explanation = QLabel(
             "MASTER je odporúčaný produkčný režim. TRIGGER je legacy/test režim pre hardvérové pulzy.",
             modes,
         )
         explanation.setWordWrap(True)
         explanation.setToolTip(mode_tooltip)
-        modes_grid.addWidget(explanation, 2, 0, 1, 2)
+        modes_grid.addWidget(explanation, 5, 0, 1, 4)
         layout.addWidget(modes)
 
         inputs = QGroupBox("Stav vstupov / Povolené externé vstupy", self)
@@ -101,14 +116,22 @@ class PicoWizard(QDialog):
         grid.addWidget(QLabel("Vstup", inputs), 0, 0)
         grid.addWidget(QLabel("Stav", inputs), 0, 1)
         grid.addWidget(QLabel("Povolený", inputs), 0, 2)
+        grid.addWidget(QLabel("Timing profil", inputs), 0, 3)
         for index in range(1, 9):
             state = QLabel("—", inputs)
             enabled = QCheckBox(inputs)
+            enabled.setToolTip("Aplikačný RUN whitelist: HDF_Vision smie spracovať CAPTURE z tohto vstupu.")
+            mapping = QComboBox(inputs)
+            mapping.addItems(["OFF", "V1", "V2"])
+            mapping.setEnabled(False)
+            mapping.setToolTip("Hardvérové mapovanie vo firmware Pico; je nezávislé od RUN whitelistu.")
             self._input_states[index] = state
             self._enabled_checks[index] = enabled
+            self._mapping_combos[index] = mapping
             grid.addWidget(QLabel(f"IN{index}", inputs), index, 0)
             grid.addWidget(state, index, 1)
             grid.addWidget(enabled, index, 2)
+            grid.addWidget(mapping, index, 3)
         layout.addWidget(inputs)
 
         self.lbl_last_event = QLabel("Posledný event: —", self)
@@ -177,12 +200,21 @@ class PicoWizard(QDialog):
         self.lbl_port.setText(str(status.get("port") or "—") if connected else "—")
         self.lbl_firmware.setText(self.parse_firmware(response) or "—")
         self.txt_status.setPlainText(response)
-        view_modes = self.parse_view_modes(response) if connected else {}
-        for view, combo in (("V1", self.cmb_v1_mode), ("V2", self.cmb_v2_mode)):
-            mode = view_modes.get(view)
-            if mode is not None:
-                combo.setCurrentText(mode)
-            combo.setEnabled(mode is not None)
+        config = PicoService.parse_status_config(response) if connected else {"V1": {}, "V2": {}, "input_map": {}}
+        for profile, widgets in self._profile_widgets.items():
+            values = config.get(profile, {})
+            complete = isinstance(values, dict) and all(k in values for k in ("mode", "delay_ms", "pulse_ms", "capture_ms"))
+            if isinstance(values, dict):
+                for key, widget in widgets.items():
+                    if key in values:
+                        widget.setCurrentText(values[key]) if key == "mode" else widget.setValue(values[key])
+                    widget.setEnabled(complete)
+        mappings = config.get("input_map", {})
+        for index, combo in self._mapping_combos.items():
+            target = mappings.get(index) if isinstance(mappings, dict) else None
+            if target is not None:
+                combo.setCurrentText(target)
+            combo.setEnabled(target is not None)
         self.refresh_inputs()
 
     def refresh_inputs(self) -> None:
@@ -203,7 +235,7 @@ class PicoWizard(QDialog):
 
     def _save(self) -> None:
         enabled = {index for index, checkbox in self._enabled_checks.items() if checkbox.isChecked()}
-        if not self.cmb_v1_mode.isEnabled() or not self.cmb_v2_mode.isEnabled():
+        if not all(widget.isEnabled() for widgets in self._profile_widgets.values() for widget in widgets.values()) or not all(combo.isEnabled() for combo in self._mapping_combos.values()):
             QMessageBox.critical(
                 self,
                 "Pico konfigurácia",
@@ -211,16 +243,25 @@ class PicoWizard(QDialog):
             )
             return
         try:
-            commands = (
-                ("V1", self.cmb_v1_mode.currentText()),
-                ("V2", self.cmb_v2_mode.currentText()),
-            )
-            for view, mode in commands:
-                if not self._pico.set_view_mode(view, mode):
+            for view, widgets in self._profile_widgets.items():
+                commands = (
+                    (self._pico.set_view_mode, widgets["mode"].currentText(), "MODE"),
+                    (self._pico.set_profile_delay, widgets["delay_ms"].value(), "DELAY"),
+                    (self._pico.set_profile_pulse, widgets["pulse_ms"].value(), "PULSE"),
+                    (self._pico.set_profile_capture, widgets["capture_ms"].value(), "CAPTURE"),
+                )
+                for method, value, field in commands:
+                    if method(view, value):
+                        continue
                     detail = str(getattr(self._pico, "last_error", "") or "Neznáma chyba")
                     QMessageBox.critical(
-                        self, "Pico konfigurácia", f"Nepodarilo sa nastaviť {view} režim {mode}:\n{detail}"
+                        self, "Pico konfigurácia", f"Nepodarilo sa nastaviť {view} {field}:\n{detail}"
                     )
+                    return
+            for index, combo in self._mapping_combos.items():
+                if not self._pico.map_input(index, combo.currentText()):
+                    detail = str(getattr(self._pico, "last_error", "") or "Neznáma chyba")
+                    QMessageBox.critical(self, "Pico konfigurácia", f"Nepodarilo sa namapovať IN{index}:\n{detail}")
                     return
             if not self._pico.save_config():
                 detail = str(getattr(self._pico, "last_error", "") or "Neznáma chyba")

@@ -2083,13 +2083,6 @@ class GoldenWizard(QDialog):
         except Exception as exc:
             self._err(f"Publikovanie receptu zlyhalo: {exc}")
             return
-        pico_note = ""
-        if callable(self._publish_flash_to_pico):
-            ok_pico, msg_pico = self._publish_flash_to_pico(recipe)
-            if ok_pico:
-                pico_note = f"\nPico sync: {msg_pico}"
-            else:
-                pico_note = f"\nPico warning: {msg_pico}"
         self._record_saved_snapshot(recipe, self._active_view_id)
         self._refresh_tools_table()
         message = "Recept publikovaný."
@@ -2097,8 +2090,6 @@ class GoldenWizard(QDialog):
             message += "\nPoradie nástrojov bolo automaticky upravené: Locator nástroje boli presunuté na začiatok."
         if assets_message:
             message += f"\n{assets_message}"
-        if pico_note:
-            message += pico_note
         self._info(message)
         try:
             self.recipes.load(recipe)
@@ -2402,6 +2393,19 @@ class GoldenWizard(QDialog):
         self._sync_logging_ui(recipe)
         self._refresh_publish_state()
 
+    def _read_pico_config_snapshot(self) -> dict[str, object] | None:
+        """Read STATUS through the already-owned PicoService connection."""
+        if self.pico is None:
+            return None
+        try:
+            status = self.pico.status()
+            if not status.get("connected"):
+                return None
+            return self.pico.parse_status_config(str(status.get("device_status", "") or ""))
+        except Exception:
+            self._logger.exception("Unable to read Pico configuration snapshot")
+            return None
+
     def _on_add_view(self) -> None:
         recipe = self._current_recipe_name()
         try:
@@ -2431,6 +2435,7 @@ class GoldenWizard(QDialog):
             flash_pulse_ms=int(getattr(source_view, "flash_pulse_ms", 200) or 200)
             if source_view
             else 200,
+            pico_config_snapshot=self._read_pico_config_snapshot(),
             trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
             external_trigger_mode=getattr(source_view, "external_trigger_mode", None)
             if source_view
@@ -2526,6 +2531,7 @@ class GoldenWizard(QDialog):
             settle_ms=view.settle_ms,
             flash_delay_ms=int(getattr(view, "flash_delay_ms", 0) or 0),
             flash_pulse_ms=int(getattr(view, "flash_pulse_ms", 200) or 200),
+            pico_config_snapshot=self._read_pico_config_snapshot(),
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             external_trigger_mode=getattr(view, "external_trigger_mode", None),
             external_source=getattr(view, "external_source", None),

@@ -63,6 +63,7 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int] = None,
         flash_delay_ms: int = 0,
         flash_pulse_ms: int = 200,
+        pico_config_snapshot: Optional[dict[str, object]] = None,
         trigger_mode: str = "timed",
         external_trigger_mode: Optional[str] = None,
         external_source: Optional[str] = None,
@@ -97,6 +98,7 @@ class ViewConfigDialog(QDialog):
         self._supports_sharpness = "sharpness" in controls
         self._trigger_pulse_ms = 10.0
         self._image_rotation = 0
+        self._pico_config_snapshot = pico_config_snapshot
 
         title = "Pridať pohľad" if mode == "add" else "Upraviť pohľad"
         self.setWindowTitle(title)
@@ -236,14 +238,6 @@ class ViewConfigDialog(QDialog):
         )
         self._add_form_row(timing_form, "Settle Time:", self._settle_edit, tooltip=settle_hint)
 
-        self._flash_delay_edit = QLineEdit(timing_group)
-        self._flash_delay_edit.setPlaceholderText("0")
-        self._add_form_row(timing_form, "Flash delay [ms]:", self._flash_delay_edit)
-
-        self._flash_pulse_edit = QLineEdit(timing_group)
-        self._flash_pulse_edit.setPlaceholderText("200")
-        self._add_form_row(timing_form, "Flash pulse [ms]:", self._flash_pulse_edit)
-
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Časovač", "timed")
         self._trigger_mode_combo.addItem("Externý signál", "external")
@@ -275,10 +269,15 @@ class ViewConfigDialog(QDialog):
 
         self._external_input_label = QLabel("Externý vstup:")
         self._external_input_combo = QComboBox(timing_group)
+        self._external_input_combo.currentIndexChanged.connect(self._update_pico_timing_info)
         timing_form.addRow(self._external_input_label, self._external_input_combo)
         self._external_input_hint = QLabel("", timing_group)
         self._external_input_hint.setStyleSheet("color: #a05a00; font-size: 11px;")
         timing_form.addRow(self._external_input_hint)
+        self._pico_timing_info = QLabel("", timing_group)
+        self._pico_timing_info.setWordWrap(True)
+        self._pico_timing_info.setStyleSheet("color: #555; font-size: 11px;")
+        timing_form.addRow(self._pico_timing_info)
 
         self._interval_edit = QLineEdit(timing_group)
         self._interval_edit.setPlaceholderText("Povinné pre režim Časovač")
@@ -405,23 +404,6 @@ class ViewConfigDialog(QDialog):
             )
             return
         try:
-            flash_delay_ms = int(self._flash_delay_edit.text().strip() or "0")
-            flash_pulse_ms = int(self._flash_pulse_edit.text().strip() or "200")
-        except ValueError:
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "Flash delay/pulse musia byť celé čísla.",
-            )
-            return
-        if flash_delay_ms < 0:
-            QMessageBox.critical(self, "Invalid input", "Flash delay musí byť >= 0 ms.")
-            return
-        if flash_pulse_ms <= 0:
-            QMessageBox.critical(self, "Invalid input", "Flash pulse musí byť > 0 ms.")
-            return
-
-        try:
             exposure_us = self._parse_optional_int(self._exposure_edit.text())
         except ValueError:
             QMessageBox.critical(
@@ -515,8 +497,6 @@ class ViewConfigDialog(QDialog):
             "name": name,
             "camera_profile": profile,
             "settle_ms": settle_ms,
-            "flash_delay_ms": flash_delay_ms,
-            "flash_pulse_ms": flash_pulse_ms,
             "trigger_mode": trigger_mode,
             "external_trigger_mode": external_mode,
             "external_source": external_source,
@@ -667,9 +647,6 @@ class ViewConfigDialog(QDialog):
     ) -> None:
         if settle_ms is not None:
             self._settle_edit.setText(str(int(settle_ms)))
-        self._flash_delay_edit.setText(str(max(0, int(flash_delay_ms or 0))))
-        self._flash_pulse_edit.setText(str(max(1, int(flash_pulse_ms or 200))))
-
         normalized_mode = str(trigger_mode or "timed").strip().lower()
         if normalized_mode in {"manual", "manual trigger", "external trigger"}:
             normalized_mode = "external"
@@ -705,6 +682,7 @@ class ViewConfigDialog(QDialog):
             self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
         self._on_external_mode_changed()
+        self._update_pico_timing_info()
         self._update_trigger_gap_warning()
 
     def _apply_initial_rotation(self, image_rotation: int) -> None:
@@ -813,6 +791,36 @@ class ViewConfigDialog(QDialog):
             no_pico and self._trigger_mode_combo.currentData() == "external"
         )
         self._on_external_mode_changed()
+        self._update_pico_timing_info()
+
+    def _update_pico_timing_info(self) -> None:
+        is_pico = self._external_source_combo.currentData() == "pico"
+        self._pico_timing_info.setVisible(is_pico)
+        if not is_pico:
+            return
+        snapshot = self._pico_config_snapshot
+        input_index = self._external_input_combo.currentData()
+        if not isinstance(snapshot, dict) or input_index is None:
+            self._pico_timing_info.setText("Pico konfigurácia nie je dostupná.")
+            return
+        mappings = snapshot.get("input_map", {})
+        target = mappings.get(int(input_index)) if isinstance(mappings, dict) else None
+        if target == "OFF":
+            self._pico_timing_info.setText(
+                f"Pico IN{input_index} → OFF\nVstup nie je namapovaný na timing profil."
+            )
+            return
+        profile = snapshot.get(str(target), {})
+        if target not in {"V1", "V2"} or not isinstance(profile, dict) or not all(
+            key in profile for key in ("delay_ms", "pulse_ms", "capture_ms")
+        ):
+            self._pico_timing_info.setText("Pico konfigurácia nie je dostupná.")
+            return
+        self._pico_timing_info.setText(
+            f"Pico IN{input_index} → {target}\n"
+            f"Delay: {profile['delay_ms']} ms | Pulse: {profile['pulse_ms']} ms | "
+            f"Capture: {profile['capture_ms']} ms"
+        )
 
     def _selected_resolution_data(self) -> dict[str, Any]:
         resolution_data = self._resolution_combo.currentData()
