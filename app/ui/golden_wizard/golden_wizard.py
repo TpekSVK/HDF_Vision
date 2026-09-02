@@ -1362,6 +1362,10 @@ class GoldenWizard(QDialog):
         self.btn_live.setCheckable(True)
         self.btn_live.clicked.connect(self._toggle_live)
 
+        self.btn_manual_light = QPushButton("Svetlo: neznámy stav")
+        self.btn_manual_light.setCheckable(True)
+        self.btn_manual_light.clicked.connect(self._toggle_manual_light)
+
         self._session_settings_button = QToolButton(self)
         self._session_settings_button.setText("⚙")
         self._session_settings_button.setToolTip("Nastavenia relácie")
@@ -1381,6 +1385,7 @@ class GoldenWizard(QDialog):
         top_primary.addStretch(1)
         top_primary.addWidget(self.btn_add_tool)
         top_primary.addWidget(self.btn_live)
+        top_primary.addWidget(self.btn_manual_light)
 
         top_secondary = QHBoxLayout()
         top_secondary.setContentsMargins(0, 0, 0, 0)
@@ -1567,6 +1572,7 @@ class GoldenWizard(QDialog):
         self._sync_locator_policy_ui(self._last_recipe)
         self._sync_logging_ui(self._last_recipe)
         self._sync_live_policy_ui()
+        self._refresh_manual_light()
         self._refresh_publish_state()
 
         self.setSizeGripEnabled(True)
@@ -1574,6 +1580,29 @@ class GoldenWizard(QDialog):
         self.setWindowState(self.windowState() | Qt.WindowFullScreen)
 
     # ---------- Live ----------
+    def _set_manual_light_ui(self, enabled: bool | None) -> None:
+        self.btn_manual_light.blockSignals(True)
+        if enabled is None:
+            self.btn_manual_light.setText("Svetlo: neznámy stav")
+        else:
+            self.btn_manual_light.setChecked(enabled)
+            self.btn_manual_light.setText("Svetlo zapnuté" if enabled else "Svetlo vypnuté")
+        self.btn_manual_light.blockSignals(False)
+
+    def _refresh_manual_light(self) -> None:
+        state = self.pico.manual_light_status() if self.pico is not None else None
+        self._set_manual_light_ui(state)
+
+    def _toggle_manual_light(self, checked: bool) -> None:
+        previous = not checked
+        if self.pico is not None and self.pico.set_manual_light(checked):
+            self._set_manual_light_ui(checked)
+            return
+        self._set_manual_light_ui(previous)
+        self._err(
+            getattr(self.pico, "last_error", "") or "Pico nie je dostupné"
+        )
+
     def _pause_runtime_camera_for_wizard(self) -> None:
         if self._runtime_camera_paused_by_wizard:
             self._logger.debug("wizard_camera_pause skipped: already paused")

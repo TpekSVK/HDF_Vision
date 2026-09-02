@@ -219,6 +219,12 @@ class MainWindow(QMainWindow):
         self.btn_live.clicked.connect(self._toggle_live)
         actions.addWidget(self.btn_live)
 
+        self.btn_manual_light = QPushButton("Svetlo: neznámy stav")
+        self.btn_manual_light.setCheckable(True)
+        self.btn_manual_light.clicked.connect(self._toggle_manual_light)
+        actions.addWidget(self.btn_manual_light)
+        QTimer.singleShot(0, self._refresh_manual_light)
+
         # Heatmap toggle
         self.chk_heatmap = QCheckBox("Heatmap")
         self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
@@ -463,6 +469,7 @@ class MainWindow(QMainWindow):
             self.mode = "RUN"
             self._reset_external_sequence_state()
             self.mode_btn.setText("⚙ SETUP")
+            self._refresh_manual_light()
             if self.capture_mode == "trigger":
                 self._enter_run_trigger_session()
                 self.live_enabled = False
@@ -1538,6 +1545,7 @@ class MainWindow(QMainWindow):
             capture_frame_for_golden=self.capture_frame_for_golden,
         )
         dlg.exec()
+        self._refresh_manual_light()
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)
         self._reset_manual_trigger_progress(self.current_recipe_name())
@@ -1625,6 +1633,28 @@ class MainWindow(QMainWindow):
             self._run_timer.stop()
             self._apply_run_camera_profile()
             self._update_live_view()
+
+    def _set_manual_light_ui(self, enabled: bool | None) -> None:
+        self.btn_manual_light.blockSignals(True)
+        if enabled is None:
+            self.btn_manual_light.setText("Svetlo: neznámy stav")
+        else:
+            self.btn_manual_light.setChecked(enabled)
+            self.btn_manual_light.setText("Svetlo zapnuté" if enabled else "Svetlo vypnuté")
+        self.btn_manual_light.blockSignals(False)
+
+    def _refresh_manual_light(self) -> None:
+        self._set_manual_light_ui(self.pico.manual_light_status())
+
+    def _toggle_manual_light(self, checked: bool) -> None:
+        previous = not checked
+        if self.pico.set_manual_light(checked):
+            self._set_manual_light_ui(checked)
+            return
+        self._set_manual_light_ui(previous)
+        QMessageBox.critical(
+            self, "Chyba", self.pico.last_error or "Pico nie je dostupné"
+        )
 
     def _handle_gpio_trigger(self):
         self._handle_external_trigger("GPIO")
