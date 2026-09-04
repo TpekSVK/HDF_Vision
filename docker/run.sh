@@ -1,6 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+ADMIN_MODE=0
+if [[ "${1:-}" == "--admin" ]]; then
+  if [[ "$(id -u)" -ne 0 ]]; then
+    echo "ERROR: --admin requires root privileges." >&2
+    echo "Run: sudo bash docker/run.sh --admin" >&2
+    exit 1
+  fi
+  ADMIN_MODE=1
+  shift
+fi
+if [[ $# -gt 0 && "${1:-}" != "configure-gpio" ]]; then
+  echo "ERROR: Unknown argument: $1" >&2
+  exit 2
+fi
+
 # --- GPIO mapa podľa požiadavky ---
 # gpio = {
 #   "output": (7, 11, 12, 13, 15, 16, 18, 22),
@@ -104,6 +119,7 @@ docker run --rm -it \
   --env QT_QPA_PLATFORM=xcb \
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
+  --env HDF_ADMIN_MODE="${ADMIN_MODE}" \
   --ulimit core=-1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   --group-add video \
