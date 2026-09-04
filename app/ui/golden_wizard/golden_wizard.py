@@ -1278,6 +1278,7 @@ class GoldenWizard(QDialog):
         get_capture_mode: Optional[Callable[[], str]] = None,
         capture_frame_for_golden: Optional[Callable[..., Any]] = None,
         publish_flash_to_pico: Optional[Callable[[str], tuple[bool, str]]] = None,
+        authorize_write: Optional[Callable[[], bool]] = None,
     ):
         super().__init__(parent)
         self._logger = logging.getLogger(__name__)
@@ -1293,6 +1294,7 @@ class GoldenWizard(QDialog):
         self._get_capture_mode = get_capture_mode
         self._capture_frame_for_golden = capture_frame_for_golden
         self._publish_flash_to_pico = publish_flash_to_pico
+        self._authorize_write = authorize_write or (lambda: True)
         self.current_img = None
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
@@ -2086,6 +2088,8 @@ class GoldenWizard(QDialog):
         dialog.exec()
 
     def _save_tool_draft(self):
+        if not self._authorize_write():
+            return
         assets_ok, assets_message = self._persist_recipe_assets()
         if not assets_ok:
             return
@@ -2104,6 +2108,8 @@ class GoldenWizard(QDialog):
         self._refresh_publish_state()
 
     def _publish_recipe(self):
+        if not self._authorize_write():
+            return
         assets_ok, assets_message = self._persist_recipe_assets()
         if not assets_ok:
             return
@@ -2284,6 +2290,10 @@ class GoldenWizard(QDialog):
         if getattr(self, "_updating_policy_combo", False):
             return
 
+        if not self._authorize_write():
+            self._sync_locator_policy_ui()
+            return
+
         policy = self.failure_policy_combo.currentData() or "continue_without_alignment"
         recipe = self._current_recipe_name()
         try:
@@ -2311,6 +2321,10 @@ class GoldenWizard(QDialog):
 
     def _on_logging_changed(self, checked: bool) -> None:
         if getattr(self, "_updating_logging_checkbox", False):
+            return
+
+        if not self._authorize_write():
+            self._sync_logging_ui()
             return
 
         recipe = self._current_recipe_name()
@@ -2515,6 +2529,9 @@ class GoldenWizard(QDialog):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        if not self._authorize_write():
+            return
+
         data = dialog.values()
         try:
             new_view = self.recipes.add_view(
@@ -2593,6 +2610,9 @@ class GoldenWizard(QDialog):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        if not self._authorize_write():
+            return
+
         data = dialog.values()
         try:
             updated_view = self.recipes.update_view(
@@ -2628,6 +2648,8 @@ class GoldenWizard(QDialog):
         recipe = self._current_recipe_name()
         view_id = self._active_view_id
         if not view_id:
+            return
+        if not self._authorize_write():
             return
         try:
             remaining = self.recipes.remove_view(recipe, view_id)

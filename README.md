@@ -294,6 +294,33 @@ sudo cp docker/99-hdf-uvc.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules && sudo udevadm trigger
 ```
 
+## Recipe security
+
+Ochrana zápisu receptov sa spravuje výhradne z terminálu v jednorazovom Docker
+kontajneri (aplikácia pritom nemusí bežať):
+
+```bash
+bash docker/security.sh status
+bash docker/security.sh set-password
+bash docker/security.sh change-password
+bash docker/security.sh verify
+bash docker/security.sh remove-password
+sudo bash docker/security.sh reset-password
+```
+
+Normálny režim spustíte cez `bash docker/run.sh`. Ak je ochrana zapnutá, zápisy
+receptu vyžiadajú heslo. Servisný runtime režim sa spúšťa výhradne ako root:
+
+```bash
+sudo bash docker/run.sh --admin
+```
+
+ADMIN iba obíde password prompt; nemení ani neodstraňuje heslo a audit zmien
+receptu zostáva aktívny. Po ukončení procesu ADMIN režim zanikne. Heslo sa nikdy
+neukladá ako plaintext: persistentný `/data/security.json` obsahuje náhodný salt
+a PBKDF2-HMAC-SHA256 hash a má oprávnenia `0600`. Pico Wizard a runtime akcie
+(RUN, Live, trigger, manual light) nie sú recipe-password ochranou ovplyvnené.
+
 ## Raspberry Pi Pico firmware update
 
 Repozitárový firmware je v `firmware/pico/main.py`. Nahrajte požadovanú verziu na Pico pod presným názvom `main.py`, Pico reštartujte a cez serial odošlite:

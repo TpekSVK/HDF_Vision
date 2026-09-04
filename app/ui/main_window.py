@@ -51,6 +51,8 @@ from app.utils.trigger_timing import get_default_trigger_gap_ms
 from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
 from app.ui.debug_overlay_widget import DebugOverlayWidget
 from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
+from app.services.security_service import SecurityService
+from app.ui.password_dialog import authorize_recipe_write
 
 
 class MainWindow(QMainWindow):
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow):
         # DB + služby
         self.db = DbService()
         self.recipes = RecipeService(db=self.db)
+        self.security = SecurityService()
         self.stats = StatsService(db=self.db)
 
         self.gpio = GPIOService()
@@ -139,6 +142,15 @@ class MainWindow(QMainWindow):
         title.setFont(tf)
         top.addWidget(title)
         top.addStretch(1)
+
+        self.security_status = QLabel(
+            "ADMIN MODE" if self.security.is_admin_mode()
+            else ("Ochrana receptov: ZAPNUTÁ" if self.security.has_password()
+                  else "Ochrana receptov: VYPNUTÁ")
+        )
+        if self.security.is_admin_mode():
+            self.security_status.setStyleSheet("color: #e6a23c; font-weight: bold;")
+        top.addWidget(self.security_status)
 
         # prepínač režimu (ikonový text)
         self.mode_btn = QPushButton("⚙ SETUP")
@@ -1548,6 +1560,7 @@ class MainWindow(QMainWindow):
             trigger_fn=self._send_run_trigger_gpio_pulse,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
+            authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
         self._refresh_manual_light()
@@ -2732,6 +2745,8 @@ class MainWindow(QMainWindow):
         name, ok = QInputDialog.getText(self, "Nový recept", "Názov receptu:")
         if not ok or not name.strip():
             return
+        if not authorize_recipe_write(self, self.security):
+            return
         name = name.strip()
         self._reset_external_sequence_state()
         self.recipes.create(name)
@@ -2751,6 +2766,8 @@ class MainWindow(QMainWindow):
         old = self.current_recipe_name()
         new, ok = QInputDialog.getText(self, "Premenovať recept", f"Nový názov pre '{old}':")
         if not ok or not new.strip():
+            return
+        if not authorize_recipe_write(self, self.security):
             return
         new = new.strip()
         self._reset_external_sequence_state()
@@ -2776,6 +2793,8 @@ class MainWindow(QMainWindow):
             return
         r = QMessageBox.question(self, "Zmazať recept", f"Naozaj zmazať '{name}'?")
         if r != QMessageBox.Yes:
+            return
+        if not authorize_recipe_write(self, self.security):
             return
         self._reset_external_sequence_state()
         self.recipes.delete(name)

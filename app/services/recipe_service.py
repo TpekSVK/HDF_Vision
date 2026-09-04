@@ -14,6 +14,7 @@ from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
 from app.services.recipe_audit_service import RecipeAuditService, audit_recipe_diff
+from app.services.security_service import SecurityService
 
 _UNSET = object()
 
@@ -23,8 +24,12 @@ class RecipeService:
         self.db = db or DbService(self.base / "HDF_Vision.db")
         self.tool = ToolService(base_dir=base_dir)
         self.audit = RecipeAuditService(self.db)
+        self.security = SecurityService(self.base / "security.json")
         self._draft_tools: dict[str, dict[str, List[Tool]]] = {}
         self._locator_autosort: dict[tuple[str, str], bool] = {}
+
+    def _audit_source(self, source: str) -> str:
+        return f"{source}; authorization={self.security.authorization_source()}"
 
     def list(self) -> list[str]:
         # DB je master
@@ -56,7 +61,7 @@ class RecipeService:
         self._save_recipe_config(name, recipe)
         if not existed:
             self.audit.log_change(name, recipe_id=rid, action="CREATE", entity_type="RECIPE",
-                                  old_value=None, new_value=name, source="RecipeService", force=True)
+                                  old_value=None, new_value=name, source=self._audit_source("RecipeService"), force=True)
         # nechaj usera cez Wizard uložiť golden/regions
         return name
 
@@ -71,7 +76,7 @@ class RecipeService:
             oldp.rename(newp)
         self.audit.log_change(new, recipe_id=rid, action="RENAME", entity_type="RECIPE",
                               field_name="name", old_value=old, new_value=new,
-                              source="RecipeService", force=True)
+                              source=self._audit_source("RecipeService"), force=True)
 
     def delete(self, name: str):
         rid = self.db.recipe_id(name)
@@ -83,7 +88,7 @@ class RecipeService:
             import shutil
             shutil.rmtree(p, ignore_errors=True)
         self.audit.log_change(name, recipe_id=rid, action="DELETE", entity_type="RECIPE",
-                              old_value=name, new_value=None, source="RecipeService", force=True)
+                              old_value=name, new_value=None, source=self._audit_source("RecipeService"), force=True)
 
     def save_regions(self, name: str, recipe: RecipeData):
         recipe_dir = self.base / "recipes" / name
@@ -546,7 +551,7 @@ class RecipeService:
         self.db.mark_recipe_published(name)
         self.audit.log_change(name, action="PUBLISH", entity_type="RECIPE",
                               field_name="state", old_value="Draft", new_value="Published",
-                              source="Publish", details=self.db.recipe_publish_state(name), force=True)
+                              source=self._audit_source("Publish"), details=self.db.recipe_publish_state(name), force=True)
         self._draft_tools[name] = {
             view.id: [tool.copy() for tool in view.tools]
             for view in publish_copy.views
@@ -597,7 +602,7 @@ class RecipeService:
             name, action="REPLACE", entity_type="GOLDEN", view_id=view.id,
             view_name=view.name, entity_id=golden_path, entity_name=view.name,
             field_name="golden", old_value=old_sha256, new_value=new_sha256,
-            source="GoldenWizard", details={"message": "golden replaced",
+            source=self._audit_source("GoldenWizard"), details={"message": "golden replaced",
                                              "old_sha256": old_sha256,
                                              "new_sha256": new_sha256}, force=True,
         )
@@ -738,7 +743,7 @@ class RecipeService:
         recipe_copy._sync_tools_from_views()
         save_recipe_config(name, recipe_copy, base_dir=self.base)
         if old_data:
-            audit_recipe_diff(self.audit, name, old_data, recipe_copy.to_dict(), source="RecipeService")
+            audit_recipe_diff(self.audit, name, old_data, recipe_copy.to_dict(), source=self._audit_source("RecipeService"))
         return recipe_copy
 
     def _ensure_recipe_file(self, name: str, recipe: RecipeV2) -> None:
