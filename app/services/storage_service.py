@@ -190,8 +190,9 @@ def save_golden(frame_u8, recipe_name: str, *, golden_path: str | None = None):
         "recipe": recipe,
         "golden_path": target_name,
     }
-    _SAVEQ.put(("golden", payload))
-    # vrátime očakávanú cestu (asynchrónne sa zapíše)
+    # Golden is a SETUP transaction: finish the file write before callers
+    # persist dependent recipe data or append its audit event.
+    _do_save_golden(**payload)
     path = Path("/data") / "recipes" / recipe / target_name
     return str(path)
 

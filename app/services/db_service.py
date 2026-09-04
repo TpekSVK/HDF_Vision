@@ -41,6 +41,27 @@ CREATE TABLE IF NOT EXISTS results (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS recipe_change_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts_ms INTEGER NOT NULL,
+  recipe_id INTEGER,
+  recipe_name TEXT NOT NULL,
+  view_id TEXT,
+  view_name TEXT,
+  action TEXT NOT NULL,
+  entity_type TEXT NOT NULL,
+  entity_id TEXT,
+  entity_name TEXT,
+  field_name TEXT,
+  old_value_json TEXT,
+  new_value_json TEXT,
+  source TEXT,
+  details_json TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_recipe_change_log_ts ON recipe_change_log(ts_ms);
+CREATE INDEX IF NOT EXISTS idx_recipe_change_log_recipe ON recipe_change_log(recipe_name);
+CREATE INDEX IF NOT EXISTS idx_recipe_change_log_view ON recipe_change_log(view_id);
+CREATE INDEX IF NOT EXISTS idx_recipe_change_log_type ON recipe_change_log(entity_type);
 """
 
 class DbService:

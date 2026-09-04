@@ -2057,10 +2057,17 @@ class GoldenWizard(QDialog):
         name = self.recipe_name.text().strip() or "default"
         view = self._view_by_id(self._active_view_id)
         golden_filename = view.golden_path if view else "golden.png"
+        import hashlib
+        existing_golden = Path("/data") / "recipes" / name / golden_filename
+        old_sha256 = hashlib.sha256(existing_golden.read_bytes()).hexdigest() if existing_golden.exists() else None
         golden_path = save_golden(
             self.current_img,
             name,
             golden_path=golden_filename,
+        )
+        new_sha256 = hashlib.sha256(Path(golden_path).read_bytes()).hexdigest()
+        self.recipes.record_golden_replaced(
+            name, self._active_view_id, golden_filename, old_sha256, new_sha256
         )
         if self._active_view_id:
             self._view_states.setdefault(self._active_view_id, {})["golden_image"] = (

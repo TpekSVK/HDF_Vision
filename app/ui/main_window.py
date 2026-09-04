@@ -50,6 +50,7 @@ from app.ui.camera_profile_utils import (
 from app.utils.trigger_timing import get_default_trigger_gap_ms
 from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
 from app.ui.debug_overlay_widget import DebugOverlayWidget
+from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
 
 
 class MainWindow(QMainWindow):
@@ -419,6 +420,10 @@ class MainWindow(QMainWindow):
         self.btn_pico_wizard = QPushButton("Sprievodca Raspberry Pi Pico", self)
         self.btn_pico_wizard.clicked.connect(self.open_pico_wizard)
         row1.addWidget(self.btn_pico_wizard)
+
+        self.btn_change_log = QPushButton("Záznam zmien", self)
+        self.btn_change_log.clicked.connect(self.open_change_log)
+        row1.addWidget(self.btn_change_log)
 
         self.chk_debug_overlay = QCheckBox("Zobraziť debug overlay výkonu", self)
         self.chk_debug_overlay.setToolTip("Show performance debug overlay")
@@ -1579,6 +1584,10 @@ class MainWindow(QMainWindow):
         dlg.exec()
         if self.mode == "RUN":
             self._apply_capture_mode(ensure_runtime_ready=True)
+
+    def open_change_log(self):
+        dialog = RecipeChangeLogDialog(self.recipes.audit, self)
+        dialog.exec()
 
     def _reload_results_strip(self) -> None:
         strip = getattr(self, "strip", None)

@@ -13,6 +13,7 @@ from app.models.schema import (
 from app.services.db_service import DbService
 from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
 from app.services.storage_service import load_recipe_config, save_recipe_config
+from app.services.recipe_audit_service import RecipeAuditService, audit_recipe_diff
 
 _UNSET = object()
 
@@ -21,6 +22,7 @@ class RecipeService:
         self.base = Path(base_dir)
         self.db = db or DbService(self.base / "HDF_Vision.db")
         self.tool = ToolService(base_dir=base_dir)
+        self.audit = RecipeAuditService(self.db)
         self._draft_tools: dict[str, dict[str, List[Tool]]] = {}
         self._locator_autosort: dict[tuple[str, str], bool] = {}
 
@@ -42,6 +44,7 @@ class RecipeService:
             self.tool.save_thresholds()
 
     def create(self, name: str):
+        existed = name in self.list()
         rid = self.db.ensure_recipe(name)
         # inicializuj thresholds default
         self.db.set_thresholds(rid, DEFAULT_THRESHOLDS)
@@ -51,10 +54,14 @@ class RecipeService:
         # create empty recipe.json with empty tools
         recipe = RecipeV2(pose_enabled=True, regions=[], tools=[])
         self._save_recipe_config(name, recipe)
+        if not existed:
+            self.audit.log_change(name, recipe_id=rid, action="CREATE", entity_type="RECIPE",
+                                  old_value=None, new_value=name, source="RecipeService", force=True)
         # nechaj usera cez Wizard uložiť golden/regions
         return name
 
     def rename(self, old: str, new: str):
+        rid = self.db.recipe_id(old)
         # premenuj v DB
         self.db.rename_recipe(old, new)
         # premenuj priečinok na FS (golden/regions)
@@ -62,8 +69,12 @@ class RecipeService:
         newp = self.base / "recipes" / new
         if oldp.exists():
             oldp.rename(newp)
+        self.audit.log_change(new, recipe_id=rid, action="RENAME", entity_type="RECIPE",
+                              field_name="name", old_value=old, new_value=new,
+                              source="RecipeService", force=True)
 
     def delete(self, name: str):
+        rid = self.db.recipe_id(name)
         # zmaž v DB (cascade thresholds, results)
         self.db.delete_recipe(name)
         # zmaž FS priečinok
@@ -71,6 +82,8 @@ class RecipeService:
         if p.exists():
             import shutil
             shutil.rmtree(p, ignore_errors=True)
+        self.audit.log_change(name, recipe_id=rid, action="DELETE", entity_type="RECIPE",
+                              old_value=name, new_value=None, source="RecipeService", force=True)
 
     def save_regions(self, name: str, recipe: RecipeData):
         recipe_dir = self.base / "recipes" / name
@@ -531,6 +544,9 @@ class RecipeService:
         publish_copy._sync_tools_from_views()
         self._save_published_recipe_config(name, publish_copy)
         self.db.mark_recipe_published(name)
+        self.audit.log_change(name, action="PUBLISH", entity_type="RECIPE",
+                              field_name="state", old_value="Draft", new_value="Published",
+                              source="Publish", details=self.db.recipe_publish_state(name), force=True)
         self._draft_tools[name] = {
             view.id: [tool.copy() for tool in view.tools]
             for view in publish_copy.views
@@ -573,6 +589,18 @@ class RecipeService:
 
     def mark_draft_updated(self, name: str) -> None:
         self.db.mark_recipe_draft_updated(name)
+
+    def record_golden_replaced(self, name: str, view_id: str | None, golden_path: str,
+                               old_sha256: str | None, new_sha256: str) -> None:
+        view = self.get_view(name, view_id)
+        self.audit.log_change(
+            name, action="REPLACE", entity_type="GOLDEN", view_id=view.id,
+            view_name=view.name, entity_id=golden_path, entity_name=view.name,
+            field_name="golden", old_value=old_sha256, new_value=new_sha256,
+            source="GoldenWizard", details={"message": "golden replaced",
+                                             "old_sha256": old_sha256,
+                                             "new_sha256": new_sha256}, force=True,
+        )
 
     # --- draft tool management ---
     def get_draft_tools(self, name: str, view_id: str | None = None) -> List[Tool]:
@@ -700,6 +728,8 @@ class RecipeService:
         return recipe
 
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
+        path = self.base / "recipes" / name / "recipe.json"
+        old_data = load_recipe_config(name, base_dir=self.base).to_dict() if path.exists() else {}
         recipe_copy = recipe.copy()
         for view in recipe_copy.views:
             normalized_tools, autosorted = self._normalize_tools(view.tools)
@@ -707,6 +737,8 @@ class RecipeService:
             self._locator_autosort[(name, view.id)] = autosorted
         recipe_copy._sync_tools_from_views()
         save_recipe_config(name, recipe_copy, base_dir=self.base)
+        if old_data:
+            audit_recipe_diff(self.audit, name, old_data, recipe_copy.to_dict(), source="RecipeService")
         return recipe_copy
 
     def _ensure_recipe_file(self, name: str, recipe: RecipeV2) -> None:
