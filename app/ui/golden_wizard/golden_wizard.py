@@ -51,7 +51,7 @@ from app.ui.roi_mask_editor import (
     MAX_ROI_PIXELS,
     ROI_WARN_PIXELS,
     MaskEditor,
-    ROIEditor,
+    LocatorROIEditor,
 )
 from app.services.storage_service import save_golden
 from app.models.regions import Region, validate_cardinality
@@ -213,6 +213,9 @@ class CollapsibleSection(QWidget):
         self._header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._content.setVisible(expanded)
 
+    def set_title(self, title: str) -> None:
+        self._header.setText(title)
+
 
 class ToolConfigPanel(QWidget):
     """Side panel for editing tool parameters and thresholds."""
@@ -222,6 +225,8 @@ class ToolConfigPanel(QWidget):
     testRequested = Signal(dict, dict)
     locatorPolicyWarningChanged = Signal(str)
     testButtonEnabledChanged = Signal(bool)
+    locatorAreaRequested = Signal(str)
+    locatorFitSearchRequested = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -277,22 +282,46 @@ class ToolConfigPanel(QWidget):
         self._threshold_layout.setContentsMargins(0, 0, 0, 0)
         self._threshold_layout.setSpacing(6)
         self._threshold_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        geometry_content = QWidget(self)
+        geometry_layout = QVBoxLayout(geometry_content)
+        geometry_layout.setContentsMargins(0, 0, 0, 0)
+        geometry_layout.setSpacing(6)
         self._geometry_summary = QLabel(
             "Nie je vybraný nástroj\nPridajte nástroj alebo ho vyberte zo zoznamu.", self
         )
         self._geometry_summary.setWordWrap(True)
         self._geometry_summary.setStyleSheet("color: #aab2bc; padding: 8px;")
-        layout.addWidget(CollapsibleSection("Geometria", self._geometry_summary, parent=self))
-        layout.addWidget(CollapsibleSection("Detekcia", self._form_container, parent=self))
-        layout.addWidget(CollapsibleSection("Prahy", self._threshold_container, parent=self))
-
-        advanced_hint = QLabel(
-            "Špecializované nastavenia locatora, šablóny a ignorovacej masky sú dostupné cez Rozšírené nastavenie.",
-            self,
+        geometry_layout.addWidget(self._geometry_summary)
+        self._locator_geometry_actions = QWidget(self)
+        locator_actions = QVBoxLayout(self._locator_geometry_actions)
+        locator_actions.setContentsMargins(0, 0, 0, 0)
+        for text, target in (("Vybrať oblasť hľadania", "search"),
+                             ("Vybrať oblasť šablóny", "template"),
+                             ("Vybrať oblasť uhla", "angle")):
+            button = QPushButton(text, self._locator_geometry_actions)
+            button.clicked.connect(lambda _checked=False, value=target: self.locatorAreaRequested.emit(value))
+            locator_actions.addWidget(button)
+            setattr(self, f"_locator_{target}_button", button)
+        fit_search = QPushButton("Prispôsobiť hľadanie šablóne", self._locator_geometry_actions)
+        fit_search.clicked.connect(self.locatorFitSearchRequested.emit)
+        locator_actions.addWidget(fit_search)
+        self._locator_fit_button = fit_search
+        geometry_layout.addWidget(self._locator_geometry_actions)
+        self._locator_geometry_actions.hide()
+        self._geometry_section = CollapsibleSection("Geometria", geometry_content, parent=self)
+        self._detection_section = CollapsibleSection("Detekcia", self._form_container, parent=self)
+        self._threshold_section = CollapsibleSection("Prahy", self._threshold_container, parent=self)
+        layout.addWidget(self._geometry_section)
+        layout.addWidget(self._detection_section)
+        layout.addWidget(self._threshold_section)
+        self._advanced_container = QWidget(self)
+        self._advanced_layout = QFormLayout(self._advanced_container)
+        self._advanced_layout.setContentsMargins(0, 0, 0, 0)
+        self._advanced_layout.setSpacing(6)
+        self._advanced_section = CollapsibleSection(
+            "Pokročilé", self._advanced_container, expanded=False, parent=self
         )
-        advanced_hint.setWordWrap(True)
-        advanced_hint.setStyleSheet("color: #89919b; padding: 8px;")
-        layout.addWidget(CollapsibleSection("Pokročilé", advanced_hint, expanded=False, parent=self))
+        layout.addWidget(self._advanced_section)
 
         self._form_error_label = QLabel("", self)
         self._form_error_label.setStyleSheet("color: #b03030; padding-top: 4px;")
@@ -465,6 +494,10 @@ class ToolConfigPanel(QWidget):
         self._geometry_summary.setText(
             "Nie je vybraný nástroj\nPridajte nástroj alebo ho vyberte zo zoznamu."
         )
+        self._locator_geometry_actions.hide()
+        self._geometry_section.set_title("Geometria")
+        self._detection_section.set_title("Detekcia")
+        self._threshold_section.set_title("Prahy")
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
@@ -488,6 +521,22 @@ class ToolConfigPanel(QWidget):
         self._description_label.setText(description)
         self._description_label.setVisible(bool(description))
         self.refresh_geometry(tool)
+        is_locator = tool.type == "locator.template_match"
+        self._geometry_section.set_title("Oblasť hľadania" if is_locator else "Geometria")
+        self._detection_section.set_title(
+            "Šablóna · Rotácia · Meranie uhla" if is_locator else "Detekcia"
+        )
+        self._threshold_section.set_title("Prah" if is_locator else "Prahy")
+        self._locator_geometry_actions.setVisible(is_locator)
+        if is_locator:
+            params = dict(getattr(tool.params, "values", {}) or {})
+            use_crop = bool(params.get("use_golden_crop", False))
+            angle_enabled = bool(params.get("angle_enabled", False))
+            self._locator_template_button.setEnabled(not use_crop)
+            self._locator_angle_button.setEnabled(angle_enabled)
+            has_template = (ToolRoi.from_obj(params.get("template_roi")).rect() is not None
+                            or tool.template_roi.rect() is not None)
+            self._locator_fit_button.setEnabled(has_template and not use_crop)
 
         self._rebuild_form()
         self._clear_test_result()
@@ -505,6 +554,13 @@ class ToolConfigPanel(QWidget):
             )
             geometry_text = f"Shape: {shape}\nX: {x}   Y: {y}\nW: {width}   H: {height}"
         self._geometry_summary.setText(geometry_text)
+        if tool.type == "locator.template_match":
+            params = dict(getattr(tool.params, "values", {}) or {})
+            has_template = (ToolRoi.from_obj(params.get("template_roi")).rect() is not None
+                            or tool.template_roi.rect() is not None)
+            self._locator_fit_button.setEnabled(
+                has_template and not bool(params.get("use_golden_crop", False))
+            )
 
     def set_locator_failure_policy(self, policy: str) -> None:
         normalized = "fail" if str(policy or "").strip().lower() == "fail" else "continue_without_alignment"
@@ -570,7 +626,11 @@ class ToolConfigPanel(QWidget):
                 self._param_error_labels[name] = error_label
                 if tooltip:
                     container.setToolTip(tooltip)
-                self._form_layout.addRow(label, container)
+                target_layout = self._advanced_layout if (
+                    self._current_tool.type == "locator.template_match"
+                    and name in {"coarse_to_fine", "coarse_cap", "angle_smooth", "apply_alignment"}
+                ) else self._form_layout
+                target_layout.addRow(label, container)
                 added_fields = True
 
         if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
@@ -617,6 +677,8 @@ class ToolConfigPanel(QWidget):
             self._form_layout.removeRow(0)
         while self._threshold_layout.rowCount():
             self._threshold_layout.removeRow(0)
+        while self._advanced_layout.rowCount():
+            self._advanced_layout.removeRow(0)
         self._param_widgets.clear()
         self._threshold_widgets.clear()
         self._param_wrappers.clear()
@@ -1465,7 +1527,7 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live vypnuté
         self.view = DrawView(self)
-        self.roi_editor = ROIEditor(self)
+        self.roi_editor = LocatorROIEditor(self)
         self._syncing_workspace_roi = False
         self.live_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -1657,6 +1719,7 @@ class GoldenWizard(QDialog):
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
         self.tools_table.rowsReordered.connect(self._on_tools_reordered)
         self.roi_editor.roiChanged.connect(self._on_workspace_roi_changed)
+        self.roi_editor.locatorRoiChanged.connect(self._on_locator_roi_changed)
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
         self._tool_panel.testRequested.connect(self._on_tool_test_requested)
@@ -1664,6 +1727,8 @@ class GoldenWizard(QDialog):
         self._tool_panel.locatorPolicyWarningChanged.connect(
             self._update_locator_policy_banner
         )
+        self._tool_panel.locatorAreaRequested.connect(self.roi_editor.select_locator_roi)
+        self._tool_panel.locatorFitSearchRequested.connect(self.roi_editor.fit_search_to_template)
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
@@ -2074,13 +2139,14 @@ class GoldenWizard(QDialog):
             self.view.set_tool_overlay(tools[row])
             self._syncing_workspace_roi = True
             try:
-                self.roi_editor.set_roi_data(tools[row].roi.to_dict())
+                self._configure_workspace_editor(tools[row])
             finally:
                 self._syncing_workspace_roi = False
         else:
             self.view.set_tool_overlay(None)
             self._syncing_workspace_roi = True
             try:
+                self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
             finally:
                 self._syncing_workspace_roi = False
@@ -2103,6 +2169,26 @@ class GoldenWizard(QDialog):
                 return np.asarray(golden).copy()
 
         return self._load_saved_golden_image(view_id=view_id)
+
+    def _configure_workspace_editor(self, tool: Tool) -> None:
+        is_locator = tool.type == "locator.template_match"
+        params = dict(getattr(tool.params, "values", {}) or {})
+        if is_locator:
+            template = ToolRoi.from_obj(params.get("template_roi")).rect()
+            if template is None:
+                template = tool.template_roi.rect()
+            angle = ToolRoi.from_obj(params.get("angle_roi")).rect()
+            self.roi_editor.set_locator_mode(
+                True,
+                search=tool.roi.rect(),
+                template=template,
+                angle=angle,
+                use_golden_crop=bool(params.get("use_golden_crop", False)),
+                angle_enabled=bool(params.get("angle_enabled", False)),
+            )
+        else:
+            self.roi_editor.set_locator_mode(False)
+            self.roi_editor.set_roi_data(tool.roi.to_dict())
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -3054,7 +3140,7 @@ class GoldenWizard(QDialog):
             self.view.set_tool_overlay(tool)
             self._syncing_workspace_roi = True
             try:
-                self.roi_editor.set_roi_data(tool.roi.to_dict())
+                self._configure_workspace_editor(tool)
             finally:
                 self._syncing_workspace_roi = False
             shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
@@ -3073,6 +3159,7 @@ class GoldenWizard(QDialog):
             self.view.set_tool_overlay(None)
             self._syncing_workspace_roi = True
             try:
+                self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
             finally:
                 self._syncing_workspace_roi = False
@@ -3092,6 +3179,8 @@ class GoldenWizard(QDialog):
         if not (0 <= row < len(tools)):
             return
         tool = tools[row]
+        if tool.type == "locator.template_match":
+            return
         roi_data = self.roi_editor.roi_data()
         tool.roi = ToolRoi.from_obj(roi_data)
         params = dict(getattr(tool.params, "values", {}) or {})
@@ -3114,6 +3203,46 @@ class GoldenWizard(QDialog):
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  ROI: {shape}  |  Koncept aktualizovaný"
         )
+
+    def _on_locator_roi_changed(self, target: str, rect: object) -> None:
+        if self._syncing_workspace_roi:
+            return
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)) or tools[row].type != "locator.template_match":
+            return
+        tool = tools[row]
+        roi = ToolRoi()
+        roi.set_rect(tuple(int(v) for v in rect) if rect is not None else None)
+        params = dict(getattr(tool.params, "values", {}) or {})
+        if target == "search":
+            tool.roi = roi
+            if roi.rect() is None:
+                params.pop("roi", None)
+            else:
+                params["roi"] = roi.to_dict()
+        elif target == "template":
+            tool.template_roi = roi
+            params["template_roi"] = roi.to_dict() or None
+        elif target == "angle":
+            params["angle_roi"] = roi.to_dict() or None
+        else:
+            return
+        tool.params = ToolParams(params)
+        try:
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        except Exception as exc:
+            self._err(f"Uloženie Locator ROI zlyhalo: {exc}")
+            return
+        self.view.set_tool_overlay(tool)
+        self._tool_panel.refresh_geometry(tool)
+        self._update_dirty_state(recipe, view_id)
+        label = {"search": "Hľadanie", "template": "Šablóna", "angle": "Uhol"}[target]
+        self._status_bar.setText(f"Locator | {label}: aktualizované | Koncept uložený")
 
     def _refresh_view_metadata(self) -> None:
         self._updating_view_selector = True
@@ -3150,6 +3279,12 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+        if tool.type == "locator.template_match" and name in ("use_golden_crop", "angle_enabled"):
+            self._syncing_workspace_roi = True
+            try:
+                self._configure_workspace_editor(tool)
+            finally:
+                self._syncing_workspace_roi = False
         self._update_dirty_state(recipe, view_id)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:

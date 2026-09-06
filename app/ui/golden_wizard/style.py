@@ -76,6 +76,11 @@ FIELD_LABELS_SK = {
     "angle_range_deg": "Rozsah hľadania uhla",
     "angle_step_deg": "Krok uhla",
     "apply_alignment": "Použiť zarovnanie",
+    "rotation_enabled": "Hľadať rotáciu",
+    "angle_enabled": "Určiť výsledný uhol",
+    "template_roi": "Oblasť šablóny",
+    "angle_roi": "Oblasť uhla",
+    "threshold_corr": "Minimálna zhoda",
 }
 
 

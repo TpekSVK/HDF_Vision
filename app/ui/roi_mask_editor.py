@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QImage,
@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
+    QGraphicsSimpleTextItem,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -1913,6 +1914,196 @@ class ROIEditor(QWidget):
                 self._hint_label.setVisible(False)
 
 
+class LocatorROIEditor(ROIEditor):
+    """One-scene editor for Locator search, template and angle rectangles."""
+
+    locatorRoiChanged = Signal(str, object)
+    COLORS = {
+        "search": QColor("#2F80ED"), "template": QColor("#22C55E"),
+        "angle": QColor("#D946EF"),
+    }
+    LABELS = {"search": "HĽADANIE", "template": "ŠABLÓNA", "angle": "UHOL"}
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._locator_mode = False
+        self._active_area = "search"
+        self._areas = {"search": None, "template": None, "angle": None}
+        self._locator_syncing = False
+        self._use_golden_crop = False
+        self._angle_enabled = False
+        self._area_items: List[QGraphicsItem] = []
+        self._locator_buttons = self._navigation.set_draw_tools([
+            ("Hľadanie", lambda: self._start_area_draw("search"), "Nakresliť oblasť hľadania"),
+            ("Šablóna", lambda: self._start_area_draw("template"), "Nakresliť oblasť šablóny"),
+            ("Uhol", lambda: self._start_area_draw("angle"), "Nakresliť oblasť merania uhla"),
+        ])
+        for button in self._locator_buttons:
+            button.hide()
+        self.roiChanged.connect(self._active_area_changed)
+        self._view.viewport().installEventFilter(self)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (self._locator_mode and watched is self._view.viewport()
+                and event.type() == QEvent.MouseButtonPress
+                and event.button() == Qt.LeftButton
+                and self._view.interaction_mode() == InteractionMode.SELECT):
+            point = self._view.mapToScene(event.position().toPoint())
+            candidates = []
+            for target in ("angle", "template", "search"):
+                rect = self._areas.get(target)
+                if rect is None or not QRectF(*rect).contains(point):
+                    continue
+                if target == "template" and self._use_golden_crop:
+                    continue
+                if target == "angle" and not self._angle_enabled:
+                    continue
+                candidates.append((rect[2] * rect[3], target))
+            if candidates:
+                target = min(candidates)[1]
+                if target != self._active_area:
+                    self._activate_area(target)
+        return super().eventFilter(watched, event)
+
+    def set_background(self, pixmap: Optional[QPixmap]) -> None:
+        self._area_items.clear()  # scene.clear() owns/deletes these items
+        super().set_background(pixmap)
+        self._render_areas()
+
+    def set_locator_mode(self, enabled: bool, *, search=None, template=None, angle=None,
+                         use_golden_crop: bool = False, angle_enabled: bool = False) -> None:
+        self._locator_mode = bool(enabled)
+        for button in self._shape_buttons:
+            button.setVisible(not enabled)
+        for index, button in enumerate(self._locator_buttons):
+            button.setVisible(enabled)
+            button.setEnabled(enabled and (index != 1 or not use_golden_crop)
+                              and (index != 2 or angle_enabled))
+        if not enabled:
+            self._clear_area_items()
+            return
+        self._use_golden_crop = bool(use_golden_crop)
+        self._angle_enabled = bool(angle_enabled)
+        self._areas = {"search": search, "template": template, "angle": angle}
+        self._activate_area("search")
+
+    def select_locator_roi(self, target: str) -> None:
+        if self._locator_mode and target in self._areas:
+            self._activate_area(target)
+
+    def fit_search_to_template(self) -> None:
+        template = self._areas.get("template")
+        if template is None:
+            return
+        x, y, width, height = template
+        mx, my = max(1, round(width * 0.2)), max(1, round(height * 0.2))
+        proposed = self._clamp_scene((x - mx, y - my, width + 2 * mx, height + 2 * my))
+        current = self._areas.get("search")
+        self._areas["search"] = self._clamp_scene(self._union(current, proposed)) if current else proposed
+        self._activate_area("search")
+        self.locatorRoiChanged.emit("search", self._areas["search"])
+
+    def _start_area_draw(self, target: str) -> None:
+        if target == "template" and self._areas.get("search") is None:
+            self._hint_label.setText("Najprv nastav oblasť hľadania.")
+            self._hint_label.setVisible(True)
+            return
+        if (target == "template" and self._use_golden_crop) or (
+                target == "angle" and not self._angle_enabled):
+            return
+        self._activate_area(target)
+        self._view.set_draw_shape("rect")
+
+    def _activate_area(self, target: str) -> None:
+        self._active_area = target
+        self._locator_syncing = True
+        try:
+            self.set_roi(self._areas.get(target))
+            self._view._shape_history.clear()
+            self._view._shape_redo.clear()
+            self._view.historyChanged.emit()
+            self._view.set_interaction_mode(InteractionMode.SELECT)
+        finally:
+            self._locator_syncing = False
+        self._style_active_area()
+        self._render_areas()
+
+    def _active_area_changed(self, rect: object) -> None:
+        if not self._locator_mode or self._locator_syncing:
+            return
+        value = tuple(int(v) for v in rect) if rect is not None else None
+        if value is not None and self._active_area == "template":
+            search = self._areas.get("search")
+            value = self._inside(value, search) if search else None
+        elif value is not None and self._active_area == "search" and self._areas.get("template"):
+            value = self._clamp_scene(self._union(value, self._areas["template"]))
+        self._areas[self._active_area] = value
+        if value != rect:
+            self._locator_syncing = True
+            try:
+                self.set_roi(value)
+            finally:
+                self._locator_syncing = False
+        self._style_active_area()
+        self._render_areas()
+        self.locatorRoiChanged.emit(self._active_area, value)
+
+    def _style_active_area(self) -> None:
+        if self._view._roi_item is not None:
+            pen = QPen(self.COLORS[self._active_area]); pen.setWidthF(2.5)
+            self._view._roi_item.setPen(pen)
+
+    def _render_areas(self) -> None:
+        self._clear_area_items()
+        if not self._locator_mode:
+            return
+        for target in ("search", "template", "angle"):
+            rect = self._areas.get(target)
+            if rect is None:
+                continue
+            if target == "template" and self._use_golden_crop:
+                continue
+            if target == "angle" and not self._angle_enabled:
+                continue
+            color = self.COLORS[target]
+            if target != self._active_area:
+                item = QGraphicsRectItem(QRectF(*rect))
+                pen = QPen(color); pen.setWidthF(1.5)
+                item.setPen(pen); item.setBrush(Qt.transparent); item.setZValue(20)
+                item.setAcceptedMouseButtons(Qt.NoButton)
+                self._view.scene().addItem(item)
+                self._area_items.append(item)
+            label = QGraphicsSimpleTextItem(self.LABELS[target])
+            label.setBrush(color); label.setZValue(130)
+            label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            label.setPos(float(rect[0]), max(0.0, float(rect[1]) - 16.0))
+            self._view.scene().addItem(label)
+            self._area_items.append(label)
+
+    def _clear_area_items(self) -> None:
+        for item in self._area_items:
+            if item.scene() is self._view.scene():
+                self._view.scene().removeItem(item)
+        self._area_items.clear()
+
+    def _clamp_scene(self, rect):
+        return self._view._clamp_integer_rect(rect)
+
+    @staticmethod
+    def _inside(rect, bounds):
+        x, y, width, height = rect; bx, by, bw, bh = bounds
+        width, height = min(width, bw), min(height, bh)
+        return (min(max(x, bx), bx + bw - width), min(max(y, by), by + bh - height),
+                width, height)
+
+    @staticmethod
+    def _union(first, second):
+        ax, ay, aw, ah = first; bx, by, bw, bh = second
+        left, top = min(ax, bx), min(ay, by)
+        right, bottom = max(ax + aw, bx + bw), max(ay + ah, by + bh)
+        return left, top, right - left, bottom - top
+
+
 @dataclass
 class MaskEditorState:
     mode: str
@@ -2234,6 +2425,7 @@ class MaskEditor(QWidget):
 
 __all__ = [
     "ROIEditor",
+    "LocatorROIEditor",
     "MaskEditor",
     "MaskEditorState",
     "ROI_WARN_PIXELS",
