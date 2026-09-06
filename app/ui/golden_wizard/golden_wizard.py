@@ -82,6 +82,19 @@ from app.services.golden_wizard_logic import (
     _SUPPORTED_FORM_FIELD_TYPES,
     _validate_params_and_thresholds,
 )
+from app.services.presence_absence_v2_service import (
+    build_model,
+    compute_roi_hash,
+    ensure_assets_dirs,
+    evaluate_sample,
+    load_model,
+    load_samples,
+    reset_learning_assets,
+    resolve_assets_dir,
+    save_model,
+    save_sample,
+)
+from app.utils.tool_identity import compute_tool_identity
 from app.ui.view_utils import (
     apply_view_image_transform,
     view_image_rotation,
@@ -102,6 +115,7 @@ from app.ui.golden_wizard.session_settings_dialog import SessionSettingsDialog
 from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label, metric_label
 from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog
 from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
+from app.ui.golden_wizard.presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
 from app.ui.golden_wizard.view_config_dialog import (
     ViewConfigDialog,
     _DEFAULT_CAMERA_RESOLUTIONS,
@@ -233,6 +247,7 @@ class ToolConfigPanel(QWidget):
     maskVisibilityChanged = Signal(bool)
     maskOpacityChanged = Signal(int)
     maskClearRequested = Signal()
+    presenceLearningRequested = Signal(str)
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -318,8 +333,66 @@ class ToolConfigPanel(QWidget):
         self._detection_section = CollapsibleSection("Detekcia", self._form_container, parent=self)
         self._threshold_section = CollapsibleSection("Prahy", self._threshold_container, parent=self)
         layout.addWidget(self._geometry_section)
+
+        learning_content = QWidget(self)
+        learning_layout = QVBoxLayout(learning_content)
+        learning_layout.setContentsMargins(0, 0, 0, 0)
+        learning_layout.setSpacing(6)
+        self._presence_model_state = QLabel("● Nenaučený", learning_content)
+        self._presence_counts = QLabel("OK vzorky: 0 / 30\nNOK vzorky: 0", learning_content)
+        self._presence_warning = QLabel("", learning_content)
+        self._presence_warning.setWordWrap(True)
+        self._presence_warning.setStyleSheet("color: #d29922;")
+        learning_layout.addWidget(self._presence_model_state)
+        learning_layout.addWidget(self._presence_counts)
+        learning_layout.addWidget(self._presence_warning)
+        capture_row = QHBoxLayout()
+        for label, action in (("Zbierať OK", "capture_ok"), ("Zbierať NOK", "capture_nok")):
+            button = QPushButton(label, learning_content)
+            button.clicked.connect(
+                lambda _checked=False, value=action: self.presenceLearningRequested.emit(value)
+            )
+            capture_row.addWidget(button)
+        learning_layout.addLayout(capture_row)
+        self._presence_rebuild = QPushButton("Prepočítať model", learning_content)
+        self._presence_rebuild.clicked.connect(
+            lambda: self.presenceLearningRequested.emit("rebuild")
+        )
+        learning_layout.addWidget(self._presence_rebuild)
+        self._presence_recommended = QLabel("Odporúčané nastavenia nie sú dostupné.", learning_content)
+        self._presence_recommended.setWordWrap(True)
+        learning_layout.addWidget(self._presence_recommended)
+        self._presence_apply = QPushButton("Použiť odporúčané nastavenia", learning_content)
+        self._presence_apply.clicked.connect(
+            lambda: self.presenceLearningRequested.emit("apply_recommended")
+        )
+        learning_layout.addWidget(self._presence_apply)
+        reset_learning = QPushButton("Resetovať učenie", learning_content)
+        reset_learning.setProperty("role", "destructive")
+        reset_learning.clicked.connect(lambda: self.presenceLearningRequested.emit("reset"))
+        learning_layout.addWidget(reset_learning)
+        self._presence_learning_section = CollapsibleSection("Učenie", learning_content, parent=self)
+        self._presence_learning_section.hide()
+        layout.addWidget(self._presence_learning_section)
+
         layout.addWidget(self._detection_section)
         layout.addWidget(self._threshold_section)
+
+        validation_content = QWidget(self)
+        validation_layout = QVBoxLayout(validation_content)
+        validation_layout.setContentsMargins(0, 0, 0, 0)
+        validation_layout.setSpacing(6)
+        validate_samples = QPushButton("Otestovať vzorky", validation_content)
+        validate_samples.clicked.connect(lambda: self.presenceLearningRequested.emit("validate"))
+        self._presence_validation_result = QLabel("Zatiaľ bez výsledku", validation_content)
+        self._presence_validation_result.setWordWrap(True)
+        validation_layout.addWidget(validate_samples)
+        validation_layout.addWidget(self._presence_validation_result)
+        self._presence_validation_section = CollapsibleSection(
+            "Validácia", validation_content, parent=self
+        )
+        self._presence_validation_section.hide()
+        layout.addWidget(self._presence_validation_section)
         self._advanced_container = QWidget(self)
         self._advanced_layout = QFormLayout(self._advanced_container)
         self._advanced_layout.setContentsMargins(0, 0, 0, 0)
@@ -534,6 +607,8 @@ class ToolConfigPanel(QWidget):
         )
         self._locator_geometry_actions.hide()
         self._mask_section.hide()
+        self._presence_learning_section.hide()
+        self._presence_validation_section.hide()
         self._geometry_section.set_title("Geometria")
         self._detection_section.set_title("Detekcia")
         self._threshold_section.set_title("Prahy")
@@ -561,14 +636,22 @@ class ToolConfigPanel(QWidget):
         self._description_label.setVisible(bool(description))
         self.refresh_geometry(tool)
         is_locator = tool.type == "locator.template_match"
-        self._geometry_section.set_title("Oblasť hľadania" if is_locator else "Geometria")
+        is_presence_v2 = tool.type == "presence.absence_v2"
+        self._geometry_section.set_title(
+            "Oblasť hľadania" if is_locator else
+            "Oblasť kontroly" if is_presence_v2 else "Geometria"
+        )
         self._detection_section.set_title(
             "Šablóna · Rotácia · Meranie uhla" if is_locator else "Detekcia"
         )
-        self._threshold_section.set_title("Prah" if is_locator else "Prahy")
+        self._threshold_section.set_title(
+            "Prah" if is_locator else "Citlivosť" if is_presence_v2 else "Prahy"
+        )
         self._locator_geometry_actions.setVisible(is_locator)
         capabilities = getattr(meta, "meta", meta)
         self._mask_section.setVisible(bool(getattr(capabilities, "supports_ignore_mask", False)))
+        self._presence_learning_section.setVisible(is_presence_v2)
+        self._presence_validation_section.setVisible(is_presence_v2)
         if is_locator:
             params = dict(getattr(tool.params, "values", {}) or {})
             use_crop = bool(params.get("use_golden_crop", False))
@@ -583,12 +666,57 @@ class ToolConfigPanel(QWidget):
         self._geometry_section.setVisible(
             bool(getattr(capabilities, "supports_roi", False)) or is_locator
         )
-        self._detection_section.setVisible(self._form_layout.rowCount() > 1)
+        self._detection_section.setVisible(not is_presence_v2 and self._form_layout.rowCount() > 1)
         self._threshold_section.setVisible(self._threshold_layout.rowCount() > 0)
         self._advanced_section.setVisible(self._advanced_layout.rowCount() > 0)
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
+
+    def refresh_presence_learning(
+        self,
+        tool: Tool,
+        *,
+        compatible_ok: Optional[int] = None,
+        nok_count: Optional[int] = None,
+        recommended: Optional[dict[str, float]] = None,
+        validation_text: Optional[str] = None,
+    ) -> None:
+        if tool.type != "presence.absence_v2":
+            return
+        params = dict(tool.params.values or {})
+        ok_count = int(params.get("sample_count_ok", 0) if compatible_ok is None else compatible_ok)
+        nok_value = int(params.get("sample_count_nok", 0) if nok_count is None else nok_count)
+        target = int(params.get("recommended_ok_samples", 30) or 30)
+        minimum = int(params.get("min_ok_samples", 15) or 15)
+        invalid = bool(params.get("reference_model_invalidated", False))
+        ready = bool(params.get("reference_model_ready", False)) and not invalid
+        if invalid:
+            state, color = "● Neplatný", "#d29922"
+            warning = "⚠ Model je neplatný\nROI alebo Ignore Mask boli zmenené."
+        elif ready:
+            state, color, warning = "● Pripravený", "#22c55e", ""
+        else:
+            state, color = "● Nenaučený", "#8d96a0"
+            warning = f"⚠ Minimum pre model: {minimum}" if ok_count < minimum else ""
+        self._presence_model_state.setText(state)
+        self._presence_model_state.setStyleSheet(f"color: {color}; font-weight: 600;")
+        self._presence_counts.setText(f"OK vzorky: {ok_count} / {target}\nNOK vzorky: {nok_value}")
+        self._presence_warning.setText(warning)
+        self._presence_rebuild.setEnabled(tool.roi.rect() is not None and ok_count >= minimum)
+        values = dict(recommended or {})
+        if values:
+            self._presence_recommended.setText(
+                "Odporúčané:\n"
+                f"Prah odchýlky: {float(values.get('score_threshold', 0)):.2f}\n"
+                f"Max. anomálna plocha: {float(values.get('total_area_threshold', 0)):.0f} px\n"
+                f"Min. veľkosť objektu: {float(values.get('min_blob_area', 0)):.0f} px"
+            )
+        else:
+            self._presence_recommended.setText("Odporúčané nastavenia nie sú dostupné.")
+        self._presence_apply.setEnabled(bool(values))
+        if validation_text is not None:
+            self._presence_validation_result.setText(validation_text)
 
     def _on_mask_opacity_changed(self, value: int) -> None:
         self._mask_opacity.setToolTip(f"Priehľadnosť masky: {value} %")
@@ -659,6 +787,10 @@ class ToolConfigPanel(QWidget):
             for name, spec in self._param_specs.items():
                 if not self._is_supported_spec(spec):
                     continue
+                if (self._current_tool.type == "presence.absence_v2" and name in {
+                        "reference_model_ready", "reference_model_invalidated",
+                        "sample_count_ok", "sample_count_nok"}):
+                    continue
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
@@ -678,8 +810,9 @@ class ToolConfigPanel(QWidget):
                 if tooltip:
                     container.setToolTip(tooltip)
                 target_layout = self._advanced_layout if (
-                    self._current_tool.type == "locator.template_match"
-                    and name in {"coarse_to_fine", "coarse_cap", "angle_smooth", "apply_alignment"}
+                    (self._current_tool.type == "locator.template_match"
+                     and name in {"coarse_to_fine", "coarse_cap", "angle_smooth", "apply_alignment"})
+                    or self._current_tool.type == "presence.absence_v2"
                 ) else self._form_layout
                 target_layout.addRow(label, container)
                 added_fields = True
@@ -1766,6 +1899,7 @@ class GoldenWizard(QDialog):
         self._tool_panel.maskVisibilityChanged.connect(self.roi_editor.set_mask_visible)
         self._tool_panel.maskOpacityChanged.connect(self.roi_editor.set_mask_opacity)
         self._tool_panel.maskClearRequested.connect(self.roi_editor.clear_ignore_mask)
+        self._tool_panel.presenceLearningRequested.connect(self._on_presence_v2_learning)
         self.roi_editor.ignoreMaskChanged.connect(self._on_workspace_mask_changed)
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
@@ -3195,6 +3329,8 @@ class GoldenWizard(QDialog):
             finally:
                 self._syncing_workspace_roi = False
             self._restore_tool_result(tool)
+            if tool.type == "presence.absence_v2":
+                self._refresh_presence_v2_learning(tool, row)
             shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
                 tool.roi.shape(), "ROI"
             ) if tool.roi.rect() is not None else "Bez ROI"
@@ -3243,6 +3379,7 @@ class GoldenWizard(QDialog):
         else:
             params.pop("roi", None)
         tool.params = ToolParams(params)
+        self._invalidate_presence_v2_model(tool)
         try:
             self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         except Exception as exc:
@@ -3251,6 +3388,8 @@ class GoldenWizard(QDialog):
         self.view.set_tool_overlay(tool)
         self._tool_panel.refresh_geometry(tool)
         self._update_dirty_state(recipe, view_id)
+        if tool.type == "presence.absence_v2":
+            self._refresh_presence_v2_learning(tool, row)
         shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
             tool.roi.shape(), "ROI"
         ) if tool.roi.rect() is not None else "Bez ROI"
@@ -3278,6 +3417,7 @@ class GoldenWizard(QDialog):
             return
         value = None if mask is None else np.asarray(mask, dtype=np.uint8).copy()
         tool.ignore_mask = ToolMask(value)
+        self._invalidate_presence_v2_model(tool)
         try:
             self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         except Exception as exc:
@@ -3285,9 +3425,217 @@ class GoldenWizard(QDialog):
             return
         self.view.set_tool_overlay(tool)
         self._update_dirty_state(recipe, view_id)
+        if tool.type == "presence.absence_v2":
+            self._refresh_presence_v2_learning(tool, row)
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  Ignore mask aktualizovaná  |  Koncept aktualizovaný"
         )
+
+    def _invalidate_presence_v2_model(self, tool: Tool) -> None:
+        if tool.type != "presence.absence_v2":
+            return
+        params = dict(tool.params.values or {})
+        current_hash = compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value)
+        previous_hash = str(params.get("roi_hash", "") or "")
+        params["roi_hash"] = current_hash
+        if previous_hash and previous_hash != current_hash:
+            params["reference_model_ready"] = False
+            params["reference_model_invalidated"] = True
+        tool.params = ToolParams(params)
+
+    def _presence_v2_context(self):
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return None
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)) or tools[row].type != "presence.absence_v2":
+            return None
+        tool = tools[row]
+        identity, _, _ = compute_tool_identity(tool)
+        assets = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+        return recipe, view_id, row, tool, assets
+
+    def _presence_v2_expected_shape(self, tool: Tool) -> Optional[tuple[int, int]]:
+        rect = tool.roi.rect()
+        if rect is None:
+            return None
+        return int(rect[3]), int(rect[2])
+
+    def _refresh_presence_v2_learning(self, tool: Tool, row: int) -> None:
+        context = self._presence_v2_context()
+        if context is None:
+            return
+        recipe, view_id, _, current, assets = context
+        dirs = ensure_assets_dirs(assets)
+        ok_samples = load_samples(dirs["ok"])
+        nok_samples = load_samples(dirs["nok"])
+        expected = self._presence_v2_expected_shape(current)
+        compatible = sum(
+            1 for sample in ok_samples
+            if expected is None or tuple(np.asarray(sample).shape[:2]) == expected
+        )
+        params = dict(current.params.values or {})
+        invalid = bool(params.get("reference_model_invalidated", False))
+        model = load_model(dirs["model"])
+        params["sample_count_ok"] = 0 if invalid else compatible
+        params["sample_count_nok"] = 0 if invalid else len(nok_samples)
+        params["reference_model_ready"] = bool(model) and not invalid
+        params["reference_assets_dir"] = str(assets)
+        current.params = ToolParams(params)
+        self.recipes.update_tool(recipe, row, current, view_id=view_id)
+        recommended = dict(model.stats.get("recommended_thresholds", {}) or {}) if model else {}
+        self._tool_panel.refresh_presence_learning(
+            current,
+            compatible_ok=compatible if not invalid else 0,
+            nok_count=len(nok_samples) if not invalid else 0,
+            recommended=recommended,
+        )
+
+    def _on_presence_v2_learning(self, action: str) -> None:
+        context = self._presence_v2_context()
+        if context is None:
+            return
+        if action != "validate" and not self._authorize_write():
+            return
+        recipe, view_id, row, tool, assets = context
+        dirs = ensure_assets_dirs(assets)
+        if action in {"capture_ok", "capture_nok"}:
+            mode = "ok" if action == "capture_ok" else "nok"
+            params = dict(tool.params.values or {})
+            if bool(params.get("reference_model_invalidated", False)) and (
+                    load_samples(dirs["ok"]) or load_samples(dirs["nok"])):
+                reply = QMessageBox.question(
+                    self, "Staré vzorky už nesedia",
+                    "ROI alebo Ignore Mask boli zmenené. Vymazať staré vzorky a začať nové učenie?",
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
+                )
+                if reply != QMessageBox.Yes:
+                    return
+                ok, error = reset_learning_assets(assets)
+                if not ok:
+                    self._warn(f"Reset učenia zlyhal: {error or 'neznáma chyba'}")
+                    return
+                params.update(reference_model_ready=False, reference_model_invalidated=False,
+                              sample_count_ok=0, sample_count_nok=0)
+                tool.params = ToolParams(params)
+                self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+            dialog = PresenceV2SampleCaptureDialog(
+                title="Zber OK snímok" if mode == "ok" else "Zber NOK snímok",
+                capture_fn=lambda: self._capture_frame_for_golden(
+                    view_id=view_id,
+                    trigger_mode_label="presence_v2_learning",
+                    image_rotation_override=0,
+                    capture_request_source="presence_v2_learning",
+                ) if callable(self._capture_frame_for_golden) else None,
+                crop_fn=lambda frame: self._presence_v2_crop(frame, tool.roi.rect()),
+                default_mode=str((tool.params.values or {}).get("capture_mode_default", "manual")),
+                parent=self,
+            )
+            if dialog.exec() == QDialog.Accepted:
+                for sample in dialog.samples():
+                    save_sample(sample, dirs[mode])
+        elif action == "reset":
+            reply = QMessageBox.question(
+                self, "Resetovať učenie?",
+                "Vymažú sa všetky OK/NOK vzorky a prepočítaný model.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+            ok, error = reset_learning_assets(assets)
+            if not ok:
+                self._warn(f"Reset učenia zlyhal: {error or 'neznáma chyba'}")
+                return
+            params = dict(tool.params.values or {})
+            params.update(reference_model_ready=False, reference_model_invalidated=False,
+                          sample_count_ok=0, sample_count_nok=0)
+            params.pop("model_stats", None)
+            params.pop("model_warnings", None)
+            tool.params = ToolParams(params)
+        elif action == "rebuild":
+            params = dict(tool.params.values or {})
+            try:
+                median, mad, recommended, warnings, info = build_model(
+                    load_samples(dirs["ok"]),
+                    polarity=str(params.get("polarity", "any")),
+                    min_ok_samples=int(params.get("min_ok_samples", 15) or 15),
+                    expected_shape=self._presence_v2_expected_shape(tool),
+                )
+            except ValueError as exc:
+                self._warn(str(exc))
+                return
+            stats = {
+                "model_method": "median_mad", "polarity": params.get("polarity", "any"),
+                "created_at": int(time.time()), "sample_count_ok": info.used_ok_samples,
+                "sample_count_nok": len(load_samples(dirs["nok"])),
+                "recommended_thresholds": recommended, "warnings": warnings,
+                "roi_hash": compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value),
+                "image_shape": list(median.shape), "ignored_ok_samples": info.ignored_ok_samples,
+                "tool_type": tool.type, "tool_name": tool.name, "view_id": view_id,
+            }
+            save_model(dirs["model"], median, mad, stats)
+            params.update(reference_model_ready=True, reference_model_invalidated=False,
+                          roi_hash=stats["roi_hash"])
+            tool.params = ToolParams(params)
+        elif action == "apply_recommended":
+            model = load_model(dirs["model"])
+            recommended = dict(model.stats.get("recommended_thresholds", {}) or {}) if model else {}
+            if not recommended:
+                self._warn("Odporúčané nastavenia nie sú dostupné.")
+                return
+            thresholds = dict(tool.thresholds.values or {})
+            for key in ("score_threshold", "total_area_threshold", "min_blob_area"):
+                if key in recommended:
+                    thresholds[key] = float(recommended[key])
+            tool.thresholds = ToolThresholds(thresholds)
+        elif action == "validate":
+            self._validate_presence_v2_samples(tool, dirs)
+            return
+        self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        self._tool_panel.refresh_values(tool)
+        self._refresh_presence_v2_learning(tool, row)
+        self._update_dirty_state(recipe, view_id)
+
+    @staticmethod
+    def _presence_v2_crop(frame: np.ndarray, rect) -> Optional[np.ndarray]:
+        if rect is None:
+            return None
+        x, y, width, height = rect
+        image = np.asarray(frame)
+        if image.ndim == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        return image[max(0, y):max(0, y + height), max(0, x):max(0, x + width)].copy()
+
+    def _validate_presence_v2_samples(self, tool: Tool, dirs: dict[str, Path]) -> None:
+        model = load_model(dirs["model"])
+        if model is None:
+            self._warn("Model nie je pripravený.")
+            return
+        thresholds, params = dict(tool.thresholds.values or {}), dict(tool.params.values or {})
+        correct_ok = correct_nok = 0
+        ok_samples, nok_samples = load_samples(dirs["ok"]), load_samples(dirs["nok"])
+        for sample in ok_samples:
+            result = evaluate_sample(sample, model.median, model.mad,
+                polarity=str(params.get("polarity", "any")),
+                score_threshold=float(thresholds.get("score_threshold", 4.0)),
+                total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
+                min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            correct_ok += result["status"] == "ok"
+        for sample in nok_samples:
+            result = evaluate_sample(sample, model.median, model.mad,
+                polarity=str(params.get("polarity", "any")),
+                score_threshold=float(thresholds.get("score_threshold", 4.0)),
+                total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
+                min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            correct_nok += result["status"] == "nok"
+        total = len(ok_samples) + len(nok_samples)
+        accuracy = 100.0 * (correct_ok + correct_nok) / total if total else 0.0
+        text = (f"OK: {correct_ok} / {len(ok_samples)} správne\n"
+                f"NOK: {correct_nok} / {len(nok_samples)} správne\n\n"
+                f"Úspešnosť: {accuracy:.1f} %")
+        self._tool_panel.refresh_presence_learning(tool, validation_text=text)
 
     def _on_locator_roi_changed(self, target: str, rect: object) -> None:
         if self._syncing_workspace_roi:
