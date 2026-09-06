@@ -227,6 +227,13 @@ class ToolConfigPanel(QWidget):
     testButtonEnabledChanged = Signal(bool)
     locatorAreaRequested = Signal(str)
     locatorFitSearchRequested = Signal()
+    maskToolChanged = Signal(str)
+    maskBrushSizeChanged = Signal(int)
+    maskVisibilityChanged = Signal(bool)
+    maskOpacityChanged = Signal(int)
+    maskClearRequested = Signal()
+    maskUndoRequested = Signal()
+    maskRedoRequested = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -322,6 +329,51 @@ class ToolConfigPanel(QWidget):
             "Pokročilé", self._advanced_container, expanded=False, parent=self
         )
         layout.addWidget(self._advanced_section)
+
+        mask_content = QWidget(self)
+        mask_layout = QFormLayout(mask_content)
+        mask_layout.setContentsMargins(0, 0, 0, 0)
+        mask_layout.setSpacing(6)
+        self._mask_show = QCheckBox("Zobraziť masku", mask_content)
+        self._mask_show.setChecked(True)
+        self._mask_show.setToolTip(
+            "Ignorovaná oblasť – táto časť obrazu sa pri kontrole vynechá."
+        )
+        self._mask_show.toggled.connect(self.maskVisibilityChanged)
+        mask_layout.addRow(self._mask_show)
+        self._mask_tool = QComboBox(mask_content)
+        for label, value in (("Štetec", "brush"), ("Guma", "eraser"),
+                             ("Obdĺžnik", "rectangle"), ("Kruh", "circle"),
+                             ("Polygón", "polygon")):
+            self._mask_tool.addItem(label, value)
+        self._mask_tool.currentIndexChanged.connect(
+            lambda: self.maskToolChanged.emit(str(self._mask_tool.currentData()))
+        )
+        mask_layout.addRow("Nástroj:", self._mask_tool)
+        self._mask_brush_size = QSpinBox(mask_content)
+        self._mask_brush_size.setRange(1, 200)
+        self._mask_brush_size.setValue(25)
+        self._mask_brush_size.setSuffix(" px")
+        self._mask_brush_size.valueChanged.connect(self.maskBrushSizeChanged)
+        mask_layout.addRow("Veľkosť štetca:", self._mask_brush_size)
+        self._mask_opacity = QSlider(Qt.Horizontal, mask_content)
+        self._mask_opacity.setRange(10, 90)
+        self._mask_opacity.setValue(40)
+        self._mask_opacity.setToolTip("Priehľadnosť masky: 40 %")
+        self._mask_opacity.valueChanged.connect(self._on_mask_opacity_changed)
+        mask_layout.addRow("Priehľadnosť:", self._mask_opacity)
+        mask_actions = QWidget(mask_content)
+        actions_layout = QHBoxLayout(mask_actions)
+        actions_layout.setContentsMargins(0, 0, 0, 0)
+        for label, signal in (("Späť", self.maskUndoRequested),
+                              ("Znova", self.maskRedoRequested),
+                              ("Vymazať masku", self.maskClearRequested)):
+            button = QPushButton(label, mask_actions)
+            button.clicked.connect(signal.emit)
+            actions_layout.addWidget(button)
+        self._mask_section = CollapsibleSection("Ignore mask", mask_content, parent=self)
+        self._mask_section.hide()
+        layout.addWidget(self._mask_section)
 
         self._form_error_label = QLabel("", self)
         self._form_error_label.setStyleSheet("color: #b03030; padding-top: 4px;")
@@ -495,6 +547,7 @@ class ToolConfigPanel(QWidget):
             "Nie je vybraný nástroj\nPridajte nástroj alebo ho vyberte zo zoznamu."
         )
         self._locator_geometry_actions.hide()
+        self._mask_section.hide()
         self._geometry_section.set_title("Geometria")
         self._detection_section.set_title("Detekcia")
         self._threshold_section.set_title("Prahy")
@@ -528,6 +581,8 @@ class ToolConfigPanel(QWidget):
         )
         self._threshold_section.set_title("Prah" if is_locator else "Prahy")
         self._locator_geometry_actions.setVisible(is_locator)
+        capabilities = getattr(meta, "meta", meta)
+        self._mask_section.setVisible(bool(getattr(capabilities, "supports_ignore_mask", False)))
         if is_locator:
             params = dict(getattr(tool.params, "values", {}) or {})
             use_crop = bool(params.get("use_golden_crop", False))
@@ -542,6 +597,10 @@ class ToolConfigPanel(QWidget):
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
+
+    def _on_mask_opacity_changed(self, value: int) -> None:
+        self._mask_opacity.setToolTip(f"Priehľadnosť masky: {value} %")
+        self.maskOpacityChanged.emit(value)
 
     def refresh_geometry(self, tool: Tool) -> None:
         rect = tool.roi.rect()
@@ -1729,6 +1788,14 @@ class GoldenWizard(QDialog):
         )
         self._tool_panel.locatorAreaRequested.connect(self.roi_editor.select_locator_roi)
         self._tool_panel.locatorFitSearchRequested.connect(self.roi_editor.fit_search_to_template)
+        self._tool_panel.maskToolChanged.connect(self.roi_editor.set_mask_tool)
+        self._tool_panel.maskBrushSizeChanged.connect(self.roi_editor.set_mask_brush_size)
+        self._tool_panel.maskVisibilityChanged.connect(self.roi_editor.set_mask_visible)
+        self._tool_panel.maskOpacityChanged.connect(self.roi_editor.set_mask_opacity)
+        self._tool_panel.maskClearRequested.connect(self.roi_editor.clear_ignore_mask)
+        self._tool_panel.maskUndoRequested.connect(self.roi_editor.undo_ignore_mask)
+        self._tool_panel.maskRedoRequested.connect(self.roi_editor.redo_ignore_mask)
+        self.roi_editor.ignoreMaskChanged.connect(self._on_workspace_mask_changed)
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
@@ -2148,6 +2215,7 @@ class GoldenWizard(QDialog):
             try:
                 self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
+                self.roi_editor.configure_ignore_mask(False)
             finally:
                 self._syncing_workspace_roi = False
 
@@ -2189,6 +2257,13 @@ class GoldenWizard(QDialog):
         else:
             self.roi_editor.set_locator_mode(False)
             self.roi_editor.set_roi_data(tool.roi.to_dict())
+        try:
+            definition = self.recipes.tool.get_tool_meta(tool.type)
+            supports_mask = bool(definition.meta.supports_ignore_mask)
+        except KeyError:
+            supports_mask = False
+        mask_value = getattr(getattr(tool, "ignore_mask", None), "value", None)
+        self.roi_editor.configure_ignore_mask(supports_mask, mask_value)
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -3132,7 +3207,10 @@ class GoldenWizard(QDialog):
                 return
             self._tool_panel.set_tool(tool, meta, schema)
             supports_roi = bool(getattr(getattr(meta, "meta", meta), "supports_roi", False))
-            self.roi_editor.setEnabled(supports_roi)
+            supports_mask = bool(
+                getattr(getattr(meta, "meta", meta), "supports_ignore_mask", False)
+            )
+            self.roi_editor.setEnabled(supports_roi or supports_mask)
             self._tool_panel.set_locator_failure_policy(
                 self._current_locator_failure_policy
             )
@@ -3161,6 +3239,7 @@ class GoldenWizard(QDialog):
             try:
                 self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
+                self.roi_editor.configure_ignore_mask(False)
             finally:
                 self._syncing_workspace_roi = False
             self._status_bar.setText(
@@ -3202,6 +3281,37 @@ class GoldenWizard(QDialog):
         ) if tool.roi.rect() is not None else "Bez ROI"
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  ROI: {shape}  |  Koncept aktualizovaný"
+        )
+
+    def _on_workspace_mask_changed(self, mask: object) -> None:
+        if self._syncing_workspace_roi:
+            return
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        try:
+            definition = self.recipes.tool.get_tool_meta(tool.type)
+        except KeyError:
+            return
+        if not bool(definition.meta.supports_ignore_mask):
+            return
+        value = None if mask is None else np.asarray(mask, dtype=np.uint8).copy()
+        tool.ignore_mask = ToolMask(value)
+        try:
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        except Exception as exc:
+            self._err(f"Uloženie Ignore Mask zlyhalo: {exc}")
+            return
+        self.view.set_tool_overlay(tool)
+        self._update_dirty_state(recipe, view_id)
+        self._status_bar.setText(
+            f"Nástroj: {tool.name}  |  Ignore mask aktualizovaná  |  Koncept aktualizovaný"
         )
 
     def _on_locator_roi_changed(self, target: str, rect: object) -> None:

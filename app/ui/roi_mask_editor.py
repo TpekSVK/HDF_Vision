@@ -42,7 +42,7 @@ from app.ui.image_canvas import ImageView as _ImageView, ImageNavigationToolbar,
 
 
 _ROI_COLOR = QColor(0, 200, 0, 200)
-_MASK_COLOR = QColor(255, 0, 200, 160)
+_MASK_COLOR = QColor(217, 70, 239, 102)
 _OVERLAY_COLOR = QColor(0, 0, 0, 120)
 
 
@@ -1713,6 +1713,325 @@ class _MaskView(_ImageView):
             self._mask_item.setPixmap(pixmap)
 
 
+class _SharedCanvasView(_ShapeROIView):
+    """ROI view with an optional raster ignore-mask layer in the same scene."""
+
+    maskChanged = Signal(object)
+    maskHistoryChanged = Signal()
+    MASK_BRUSH = "brush"
+    MASK_ERASER = "eraser"
+    MASK_RECTANGLE = "rectangle"
+    MASK_CIRCLE = "circle"
+    MASK_POLYGON = "polygon"
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._mask_enabled = False
+        self._mask_editing = False
+        self._mask_mode = self.MASK_BRUSH
+        self._mask: Optional[np.ndarray] = None
+        self._mask_item: Optional[QGraphicsPixmapItem] = None
+        self._mask_rgba: Optional[np.ndarray] = None
+        self._mask_visible = True
+        self._mask_opacity = 40
+        self._mask_brush_size = 25
+        self._mask_before: Optional[np.ndarray] = None
+        self._mask_last: Optional[QPointF] = None
+        self._mask_start: Optional[QPointF] = None
+        self._mask_polygon: List[QPointF] = []
+        self._mask_preview: Optional[QGraphicsPathItem] = None
+        self._mask_undo: List[np.ndarray] = []
+        self._mask_redo: List[np.ndarray] = []
+
+    def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
+        self.cancel_drawing()
+        # The base view clears the scene; discard its scene-owned wrappers first.
+        self._mask_item = None
+        self._mask_preview = None
+        super().set_pixmap(pixmap)
+        if pixmap is None or pixmap.isNull():
+            self._mask = None
+        else:
+            self._mask = np.zeros((pixmap.height(), pixmap.width()), dtype=np.uint8)
+        self._mask_undo.clear()
+        self._mask_redo.clear()
+        self._update_mask_overlay()
+        self.maskHistoryChanged.emit()
+
+    def configure_mask(self, enabled: bool, mask: Optional[np.ndarray] = None) -> None:
+        self.cancel_drawing()
+        self._mask_enabled = bool(enabled)
+        self._mask_editing = False
+        self.set_interaction_mode(InteractionMode.SELECT)
+        if enabled:
+            self.set_mask(mask)
+        else:
+            self._mask_undo.clear()
+            self._mask_redo.clear()
+            self._update_mask_overlay()
+        self._update_cursor()
+
+    def set_mask_editing(self, editing: bool) -> None:
+        self.cancel_drawing()
+        self._mask_editing = bool(editing) and self._mask_enabled
+        self.set_interaction_mode(InteractionMode.SELECT)
+        self._update_cursor()
+
+    def set_mask_mode(self, mode: str) -> None:
+        if mode not in {self.MASK_BRUSH, self.MASK_ERASER, self.MASK_RECTANGLE,
+                        self.MASK_CIRCLE, self.MASK_POLYGON}:
+            return
+        self.cancel_drawing()
+        self._mask_mode = mode
+        if self._mask_editing:
+            self.set_interaction_mode(InteractionMode.DRAW)
+
+    def set_mask_brush_size(self, size: int) -> None:
+        self._mask_brush_size = max(1, min(200, int(size)))
+
+    def set_mask_visible(self, visible: bool) -> None:
+        self._mask_visible = bool(visible)
+        if self._mask_item is not None:
+            self._mask_item.setVisible(self._mask_visible and self._mask_enabled)
+
+    def set_mask_opacity(self, opacity: int) -> None:
+        self._mask_opacity = max(10, min(90, int(opacity)))
+        self._update_mask_overlay()
+
+    def mask(self) -> Optional[np.ndarray]:
+        return None if self._mask is None else self._mask.copy()
+
+    def set_mask(self, mask: Optional[np.ndarray]) -> None:
+        bounds = self.scene_rect()
+        if bounds.isEmpty():
+            self._mask = None if mask is None else np.asarray(mask, dtype=np.uint8).copy()
+        else:
+            width, height = int(bounds.width()), int(bounds.height())
+            if mask is None:
+                self._mask = np.zeros((height, width), dtype=np.uint8)
+            else:
+                value = np.asarray(mask, dtype=np.uint8)
+                if value.ndim == 3:
+                    value = value[:, :, 0]
+                if value.shape != (height, width):
+                    value = cv2.resize(value, (width, height), interpolation=cv2.INTER_NEAREST)
+                self._mask = value.copy()
+        self._mask_undo.clear()
+        self._mask_redo.clear()
+        self._update_mask_overlay()
+        self.maskHistoryChanged.emit()
+
+    def clear_mask(self) -> None:
+        if self._mask is None or not np.any(self._mask):
+            return
+        self._push_mask_undo()
+        self._mask.fill(0)
+        self._mask_redo.clear()
+        self._finish_mask_change()
+
+    def mask_undo(self) -> None:
+        if not self._mask_undo or self._mask is None:
+            return
+        self._mask_redo.append(self._mask.copy())
+        self._mask = self._mask_undo.pop()
+        self._finish_mask_change()
+
+    def mask_redo(self) -> None:
+        if not self._mask_redo or self._mask is None:
+            return
+        self._mask_undo.append(self._mask.copy())
+        self._mask = self._mask_redo.pop()
+        self._finish_mask_change()
+
+    def cancel_drawing(self) -> None:
+        if self._mask_before is not None:
+            self._mask = self._mask_before
+            self._update_mask_overlay()
+        self._mask_before = None
+        self._mask_last = None
+        self._mask_start = None
+        self._mask_polygon.clear()
+        self._remove_mask_preview()
+        super().cancel_drawing()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if (not self._mask_editing or self.is_pan_gesture(event)
+                or not self.can_draw() or self._mask is None):
+            super().mousePressEvent(event)
+            return
+        self.setFocus(Qt.MouseFocusReason)
+        if event.button() != Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        point = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
+        if self._mask_mode == self.MASK_POLYGON:
+            self._mask_polygon.append(point)
+            self._update_mask_preview(point)
+        elif self._mask_mode in (self.MASK_RECTANGLE, self.MASK_CIRCLE):
+            self._mask_start = point
+            self._update_mask_preview(point)
+        else:
+            self._mask_before = self._mask.copy()
+            self._mask_last = point
+            self._paint_mask(point)
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._panning or self._space_pressed or not self._mask_editing:
+            super().mouseMoveEvent(event)
+            return
+        point = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
+        if self._mask_before is not None:
+            self._paint_mask_line(point)
+        elif self._mask_start is not None or self._mask_polygon:
+            self._update_mask_preview(point)
+        else:
+            super().mouseMoveEvent(event)
+            return
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if not self._mask_editing or event.button() != Qt.LeftButton:
+            super().mouseReleaseEvent(event)
+            return
+        if self._mask_before is not None:
+            self._mask_undo.append(self._mask_before)
+            self._mask_undo = self._mask_undo[-100:]
+            self._mask_redo.clear()
+            self._mask_before = None
+            self._mask_last = None
+            self._finish_mask_change()
+            event.accept()
+            return
+        if self._mask_start is not None:
+            point = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
+            start, self._mask_start = self._mask_start, None
+            self._remove_mask_preview()
+            self._apply_mask_shape(start, point)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if (self._mask_editing and self._mask_mode == self.MASK_POLYGON
+                and event.button() == Qt.LeftButton):
+            self._commit_mask_polygon()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if (self._mask_editing and self._mask_mode == self.MASK_POLYGON
+                and event.key() in (Qt.Key_Return, Qt.Key_Enter)):
+            self._commit_mask_polygon()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def _paint_mask(self, point: QPointF) -> None:
+        if self._mask is None:
+            return
+        value = 0 if self._mask_mode == self.MASK_ERASER else 255
+        cv2.circle(self._mask, (round(point.x()), round(point.y())),
+                   max(1, self._mask_brush_size // 2), value, -1)
+        self._update_mask_overlay()
+
+    def _paint_mask_line(self, point: QPointF) -> None:
+        if self._mask is None or self._mask_last is None:
+            return
+        value = 0 if self._mask_mode == self.MASK_ERASER else 255
+        radius = max(1, self._mask_brush_size // 2)
+        cv2.line(self._mask, (round(self._mask_last.x()), round(self._mask_last.y())),
+                 (round(point.x()), round(point.y())), value, radius * 2, cv2.LINE_8)
+        self._mask_last = point
+        self._update_mask_overlay()
+
+    def _apply_mask_shape(self, start: QPointF, end: QPointF) -> None:
+        if self._mask is None:
+            return
+        rect = QRectF(start, end).normalized()
+        if rect.width() < 1 or rect.height() < 1:
+            return
+        self._push_mask_undo()
+        p1 = (round(rect.left()), round(rect.top()))
+        p2 = (round(rect.right()), round(rect.bottom()))
+        if self._mask_mode == self.MASK_CIRCLE:
+            center = (round(rect.center().x()), round(rect.center().y()))
+            axes = (max(1, round(rect.width() / 2)), max(1, round(rect.height() / 2)))
+            cv2.ellipse(self._mask, center, axes, 0, 0, 360, 255, -1)
+        else:
+            cv2.rectangle(self._mask, p1, p2, 255, -1)
+        self._mask_redo.clear()
+        self._finish_mask_change()
+
+    def _commit_mask_polygon(self) -> None:
+        if self._mask is not None and len(self._mask_polygon) >= 3:
+            self._push_mask_undo()
+            points = np.array([(round(p.x()), round(p.y())) for p in self._mask_polygon])
+            cv2.fillPoly(self._mask, [points.astype(np.int32)], 255)
+            self._mask_redo.clear()
+            self._finish_mask_change()
+        self._mask_polygon.clear()
+        self._remove_mask_preview()
+
+    def _push_mask_undo(self) -> None:
+        if self._mask is not None:
+            self._mask_undo.append(self._mask.copy())
+            self._mask_undo = self._mask_undo[-100:]
+
+    def _finish_mask_change(self) -> None:
+        self._update_mask_overlay()
+        self.maskChanged.emit(self.mask())
+        self.maskHistoryChanged.emit()
+
+    def _update_mask_preview(self, point: QPointF) -> None:
+        path = QPainterPath()
+        if self._mask_polygon:
+            path.moveTo(self._mask_polygon[0])
+            for vertex in self._mask_polygon[1:]:
+                path.lineTo(vertex)
+            path.lineTo(point)
+        elif self._mask_start is not None:
+            rect = QRectF(self._mask_start, point).normalized()
+            path.addEllipse(rect) if self._mask_mode == self.MASK_CIRCLE else path.addRect(rect)
+        if self._mask_preview is None:
+            self._mask_preview = QGraphicsPathItem()
+            self._mask_preview.setPen(QPen(QColor("#D946EF"), 1.5))
+            self._mask_preview.setBrush(QColor(217, 70, 239, 60))
+            self._mask_preview.setZValue(60)
+            self._mask_preview.setAcceptedMouseButtons(Qt.NoButton)
+            self.scene().addItem(self._mask_preview)
+        self._mask_preview.setPath(path)
+
+    def _remove_mask_preview(self) -> None:
+        if self._mask_preview is not None:
+            self.scene().removeItem(self._mask_preview)
+            self._mask_preview = None
+
+    def _update_mask_overlay(self) -> None:
+        if not self._mask_enabled or self._mask is None or not np.any(self._mask):
+            if self._mask_item is not None:
+                self.scene().removeItem(self._mask_item)
+                self._mask_item = None
+            self._mask_rgba = None
+            return
+        pixels = (self._mask > 0).astype(np.uint8)
+        rgba = np.zeros((*pixels.shape, 4), dtype=np.uint8)
+        rgba[..., :3] = (217, 70, 239)
+        rgba[..., 3] = pixels * round(255 * self._mask_opacity / 100)
+        self._mask_rgba = rgba
+        image = QImage(rgba.data, rgba.shape[1], rgba.shape[0], rgba.strides[0],
+                       QImage.Format_RGBA8888)
+        pixmap = QPixmap.fromImage(image.copy())
+        if self._mask_item is None:
+            self._mask_item = self.scene().addPixmap(pixmap)
+            self._mask_item.setZValue(5)
+            self._mask_item.setAcceptedMouseButtons(Qt.NoButton)
+        else:
+            self._mask_item.setPixmap(pixmap)
+        self._mask_item.setVisible(self._mask_visible)
+
+
 class ROIEditor(QWidget):
     """Composite widget exposing ROI editing controls."""
 
@@ -1720,7 +2039,7 @@ class ROIEditor(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None, show_toolbar: bool = True) -> None:
         super().__init__(parent)
-        self._view = _ShapeROIView(self)
+        self._view = _SharedCanvasView(self)
         self._view.historyChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
@@ -1918,6 +2237,7 @@ class LocatorROIEditor(ROIEditor):
     """One-scene editor for Locator search, template and angle rectangles."""
 
     locatorRoiChanged = Signal(str, object)
+    ignoreMaskChanged = Signal(object)
     COLORS = {
         "search": QColor("#2F80ED"), "template": QColor("#22C55E"),
         "angle": QColor("#D946EF"),
@@ -1940,6 +2260,53 @@ class LocatorROIEditor(ROIEditor):
         ])
         for button in self._locator_buttons:
             button.hide()
+        self._mask_controls = QWidget(self)
+        mask_row = QHBoxLayout(self._mask_controls)
+        mask_row.setContentsMargins(0, 0, 0, 0)
+        mask_row.setSpacing(4)
+        mask_row.addWidget(QLabel("Režim:", self._mask_controls))
+        self._btn_roi_mode = QToolButton(self._mask_controls)
+        self._btn_roi_mode.setText("ROI")
+        self._btn_roi_mode.setCheckable(True)
+        self._btn_roi_mode.setChecked(True)
+        self._btn_mask_mode = QToolButton(self._mask_controls)
+        self._btn_mask_mode.setText("Ignore mask")
+        self._btn_mask_mode.setCheckable(True)
+        self._btn_mask_mode.setToolTip(
+            "Ignorovaná oblasť – táto časť obrazu sa pri kontrole vynechá."
+        )
+        edit_group = QButtonGroup(self)
+        edit_group.setExclusive(True)
+        edit_group.addButton(self._btn_roi_mode)
+        edit_group.addButton(self._btn_mask_mode)
+        self._btn_roi_mode.clicked.connect(lambda: self.set_mask_editing(False))
+        self._btn_mask_mode.clicked.connect(lambda: self.set_mask_editing(True))
+        mask_row.addWidget(self._btn_roi_mode)
+        mask_row.addWidget(self._btn_mask_mode)
+        mask_row.addSpacing(8)
+        self._mask_tool_buttons: List[QToolButton] = []
+        mask_tools = (
+            ("Štetec", _SharedCanvasView.MASK_BRUSH),
+            ("Guma", _SharedCanvasView.MASK_ERASER),
+            ("Obdĺžnik", _SharedCanvasView.MASK_RECTANGLE),
+            ("Kruh", _SharedCanvasView.MASK_CIRCLE),
+            ("Polygón", _SharedCanvasView.MASK_POLYGON),
+        )
+        tool_group = QButtonGroup(self)
+        tool_group.setExclusive(True)
+        for index, (text, mode) in enumerate(mask_tools):
+            button = QToolButton(self._mask_controls)
+            button.setText(text)
+            button.setCheckable(True)
+            button.setChecked(index == 0)
+            button.clicked.connect(lambda _checked=False, value=mode: self._start_mask_tool(value))
+            tool_group.addButton(button)
+            mask_row.addWidget(button)
+            self._mask_tool_buttons.append(button)
+        mask_row.addStretch(1)
+        self.layout().insertWidget(1, self._mask_controls)
+        self._mask_controls.hide()
+        self._view.maskChanged.connect(self.ignoreMaskChanged)
         self.roiChanged.connect(self._active_area_changed)
         self._view.viewport().installEventFilter(self)
 
@@ -1969,6 +2336,54 @@ class LocatorROIEditor(ROIEditor):
         self._area_items.clear()  # scene.clear() owns/deletes these items
         super().set_background(pixmap)
         self._render_areas()
+
+    def configure_ignore_mask(self, enabled: bool, mask: Optional[np.ndarray] = None) -> None:
+        self._mask_controls.setVisible(bool(enabled))
+        self._btn_roi_mode.setChecked(True)
+        self._view.configure_mask(enabled, mask)
+
+    def set_mask_editing(self, editing: bool) -> None:
+        editing = bool(editing) and self._mask_controls.isVisible()
+        self._btn_mask_mode.setChecked(editing)
+        self._btn_roi_mode.setChecked(not editing)
+        for button in self._shape_buttons + self._locator_buttons:
+            button.setEnabled(not editing)
+        self._view.set_mask_editing(editing)
+        if editing:
+            self.set_mask_tool(self._view._mask_mode)
+
+    def set_mask_tool(self, mode: str) -> None:
+        self._view.set_mask_mode(mode)
+        for button, value in zip(self._mask_tool_buttons, (
+                _SharedCanvasView.MASK_BRUSH, _SharedCanvasView.MASK_ERASER,
+                _SharedCanvasView.MASK_RECTANGLE, _SharedCanvasView.MASK_CIRCLE,
+                _SharedCanvasView.MASK_POLYGON)):
+            button.setChecked(value == mode)
+
+    def _start_mask_tool(self, mode: str) -> None:
+        self.set_mask_editing(True)
+        self.set_mask_tool(mode)
+
+    def set_mask_brush_size(self, size: int) -> None:
+        self._view.set_mask_brush_size(size)
+
+    def set_mask_visible(self, visible: bool) -> None:
+        self._view.set_mask_visible(visible)
+
+    def set_mask_opacity(self, opacity: int) -> None:
+        self._view.set_mask_opacity(opacity)
+
+    def clear_ignore_mask(self) -> None:
+        self._view.clear_mask()
+
+    def undo_ignore_mask(self) -> None:
+        self._view.mask_undo()
+
+    def redo_ignore_mask(self) -> None:
+        self._view.mask_redo()
+
+    def ignore_mask(self) -> Optional[np.ndarray]:
+        return self._view.mask()
 
     def set_locator_mode(self, enabled: bool, *, search=None, template=None, angle=None,
                          use_golden_crop: bool = False, angle_enabled: bool = False) -> None:
