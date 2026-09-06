@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
+    QSpinBox,
     QSizePolicy,
     QToolButton,
     QVBoxLayout,
@@ -80,6 +81,7 @@ class _ROIView(_ImageView):
 
     roiChanged = Signal(object)
     historyChanged = Signal()
+    lockChanged = Signal(bool)
     MIN_ROI_SIZE = 4.0
     HANDLE_SIZE = 9.0
     HANDLE_HIT_RADIUS = 9.0
@@ -97,6 +99,7 @@ class _ROIView(_ImageView):
         self._edit_origin: Optional[Tuple[int, int, int, int]] = None
         self._preview_rect: Optional[QRectF] = None
         self._roi_rect: Optional[Tuple[int, int, int, int]] = None
+        self._roi_locked = False
         self._undo_stack: List[Optional[Tuple[int, int, int, int]]] = []
         self._redo_stack: List[Optional[Tuple[int, int, int, int]]] = []
         self.setMouseTracking(True)
@@ -110,6 +113,7 @@ class _ROIView(_ImageView):
         self._handle_items = {}
         self._roi_rect = None
         self._clear_edit_state()
+        self.set_roi_locked(False)
         self._undo_stack.clear()
         self._redo_stack.clear()
         self.historyChanged.emit()
@@ -117,9 +121,46 @@ class _ROIView(_ImageView):
 
     # ------------------------------------------------------------------
     def set_roi(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        self.cancel_drawing()
         self._apply_roi(rect, push_history=False)
 
+    def is_roi_locked(self) -> bool:
+        return self._roi_locked
+
+    def set_roi_locked(self, locked: bool) -> None:
+        locked = bool(locked) and self._roi_rect is not None
+        if locked == self._roi_locked:
+            return
+        self.cancel_drawing()
+        self._roi_locked = locked
+        if locked and self.interaction_mode() == InteractionMode.DRAW:
+            self.set_interaction_mode(InteractionMode.SELECT)
+        for item in self._handle_items.values():
+            item.setVisible(not locked)
+        self._update_cursor()
+        self.lockChanged.emit(locked)
+
+    def edit_roi(self, rect: Tuple[int, int, int, int]) -> None:
+        """Commit one numeric or keyboard edit through the shared history path."""
+        if self._roi_locked or self._roi_rect is None or self.scene_rect().isEmpty():
+            return
+        self.cancel_drawing()
+        self._commit_roi(rect)
+
+    def _commit_roi(self, rect: Tuple[int, int, int, int]) -> None:
+        rect = self._clamp_integer_rect(rect)
+        if rect == self.roi():
+            self._restore_roi_preview()
+            return
+        self._push_undo()
+        self._redo_stack.clear()
+        self._apply_roi(rect, push_history=False)
+        self.historyChanged.emit()
+
     def reset_roi(self) -> None:
+        if self._roi_locked:
+            return
+        self.cancel_drawing()
         self._push_undo()
         self._apply_roi(None, push_history=False)
         self._redo_stack.clear()
@@ -129,6 +170,7 @@ class _ROIView(_ImageView):
         return tuple(self._roi_rect) if self._roi_rect is not None else None
 
     def undo(self) -> None:
+        self.cancel_drawing()
         if not self._undo_stack:
             return
         previous = self._undo_stack.pop()
@@ -138,6 +180,7 @@ class _ROIView(_ImageView):
         self.historyChanged.emit()
 
     def redo(self) -> None:
+        self.cancel_drawing()
         if not self._redo_stack:
             return
         next_rect = self._redo_stack.pop()
@@ -153,9 +196,35 @@ class _ROIView(_ImageView):
         return bool(self._redo_stack)
 
     # ------------------------------------------------------------------
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        directions = {
+            Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0),
+            Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1),
+        }
+        if event.key() in directions and self.hasFocus():
+            if (
+                self.isEnabled()
+                and self.interaction_mode() == InteractionMode.SELECT
+                and self._roi_rect is not None and not self._roi_locked
+                and not self._space_pressed and not self._panning
+                and self._edit_origin is None and not self._drawing
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)
+            ):
+                dx, dy = directions[event.key()]
+                step = 10 if event.modifiers() & Qt.ShiftModifier else 1
+                x, y, width, height = self._roi_rect
+                self.edit_roi((x + dx * step, y + dy * step, width, height))
+            # Do not let inactive nudges fall through to QGraphicsView scrolling.
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self.is_pan_gesture(event):
             super().mousePressEvent(event)
+            return
+        if self._roi_locked:
+            event.accept()
             return
         if (
             event.button() == Qt.LeftButton
@@ -209,18 +278,14 @@ class _ROIView(_ImageView):
             scene_pos = _clamp_point_to_rect(scene_pos, self.scene_rect())
             rect = QRectF(self._start_pos, scene_pos).normalized()
             if rect.width() >= 1 and rect.height() >= 1:
-                self._push_undo()
-                self._apply_roi(
+                self._commit_roi(
                     (
                         int(round(rect.left())),
                         int(round(rect.top())),
                         int(round(rect.width())),
                         int(round(rect.height())),
                     ),
-                    push_history=False,
                 )
-                self._redo_stack.clear()
-                self.historyChanged.emit()
                 self.set_interaction_mode(InteractionMode.SELECT)
             else:
                 self._restore_roi_preview()
@@ -269,25 +334,22 @@ class _ROIView(_ImageView):
         self._update_roi_item(preview)
 
     def _move_rect(self, rect: QRectF, delta: QPointF) -> QRectF:
-        bounds = self.scene_rect()
-        left = min(max(rect.left() + delta.x(), bounds.left()), bounds.right() - rect.width())
-        top = min(max(rect.top() + delta.y(), bounds.top()), bounds.bottom() - rect.height())
-        return QRectF(left, top, rect.width(), rect.height())
+        return QRectF(*self._clamp_integer_rect((
+            rect.left() + delta.x(), rect.top() + delta.y(), rect.width(), rect.height()
+        )))
 
     def _resize_rect(self, rect: QRectF, point: QPointF, handle: RoiHandle) -> QRectF:
-        bounds = self.scene_rect()
-        point = _clamp_point_to_rect(point, bounds)
         left, top, right, bottom = rect.left(), rect.top(), rect.right(), rect.bottom()
 
         if handle in (RoiHandle.TOP_LEFT, RoiHandle.LEFT, RoiHandle.BOTTOM_LEFT):
-            left = min(max(point.x(), bounds.left()), right - self.MIN_ROI_SIZE)
+            left = point.x()
         if handle in (RoiHandle.TOP_RIGHT, RoiHandle.RIGHT, RoiHandle.BOTTOM_RIGHT):
-            right = max(min(point.x(), bounds.right()), left + self.MIN_ROI_SIZE)
+            right = point.x()
         if handle in (RoiHandle.TOP_LEFT, RoiHandle.TOP, RoiHandle.TOP_RIGHT):
-            top = min(max(point.y(), bounds.top()), bottom - self.MIN_ROI_SIZE)
+            top = point.y()
         if handle in (RoiHandle.BOTTOM_LEFT, RoiHandle.BOTTOM, RoiHandle.BOTTOM_RIGHT):
-            bottom = max(min(point.y(), bounds.bottom()), top + self.MIN_ROI_SIZE)
-        return QRectF(QPointF(left, top), QPointF(right, bottom))
+            bottom = point.y()
+        return QRectF(*self._clamp_integer_rect((left, top, right - left, bottom - top), handle=handle))
 
     def _finish_roi_edit(self) -> None:
         origin = self._edit_origin
@@ -295,31 +357,36 @@ class _ROIView(_ImageView):
         self._clear_edit_state()
         if origin is None or preview is None:
             return
-        rect = (
-            int(round(preview.left())),
-            int(round(preview.top())),
-            max(int(self.MIN_ROI_SIZE), int(round(preview.width()))),
-            max(int(self.MIN_ROI_SIZE), int(round(preview.height()))),
-        )
-        rect = self._clamp_integer_rect(rect)
-        if rect == origin:
-            self._restore_roi_preview()
-            return
-        self._undo_stack.append(origin)
-        if len(self._undo_stack) > 100:
-            self._undo_stack.pop(0)
-        self._redo_stack.clear()
-        self._apply_roi(rect, push_history=False)
-        self.historyChanged.emit()
+        self._commit_roi((preview.left(), preview.top(), preview.width(), preview.height()))
 
     def _clamp_integer_rect(
-        self, rect: Tuple[int, int, int, int]
+        self, rect: Tuple[float, float, float, float], *, handle: Optional[RoiHandle] = None
     ) -> Tuple[int, int, int, int]:
+        """Shared image bounds for drawing, move, resize, numeric edits and nudges.
+
+        Resize keeps the opposite edge fixed and clamps at the UI-02 minimum.
+        Other edits preserve valid small legacy ROI sizes (down to one pixel).
+        """
         bounds = self.scene_rect()
         x, y, width, height = rect
-        min_size = int(self.MIN_ROI_SIZE)
-        width = min(max(min_size, width), int(round(bounds.width())))
-        height = min(max(min_size, height), int(round(bounds.height())))
+        if handle is not None:
+            right, bottom = x + width, y + height
+            if handle in (RoiHandle.TOP_LEFT, RoiHandle.LEFT, RoiHandle.BOTTOM_LEFT):
+                minimum = min(self.MIN_ROI_SIZE, right - bounds.left())
+                x = min(max(x, bounds.left()), right - minimum)
+            if handle in (RoiHandle.TOP_RIGHT, RoiHandle.RIGHT, RoiHandle.BOTTOM_RIGHT):
+                minimum = min(self.MIN_ROI_SIZE, bounds.right() - x)
+                right = max(min(right, bounds.right()), x + minimum)
+            if handle in (RoiHandle.TOP_LEFT, RoiHandle.TOP, RoiHandle.TOP_RIGHT):
+                minimum = min(self.MIN_ROI_SIZE, bottom - bounds.top())
+                y = min(max(y, bounds.top()), bottom - minimum)
+            if handle in (RoiHandle.BOTTOM_LEFT, RoiHandle.BOTTOM, RoiHandle.BOTTOM_RIGHT):
+                minimum = min(self.MIN_ROI_SIZE, bounds.bottom() - y)
+                bottom = max(min(bottom, bounds.bottom()), y + minimum)
+            width, height = right - x, bottom - y
+        x, y, width, height = (int(round(value)) for value in (x, y, width, height))
+        width = min(max(1, width), int(round(bounds.width())))
+        height = min(max(1, height), int(round(bounds.height())))
         x = min(max(int(round(bounds.left())), x), int(round(bounds.right())) - width)
         y = min(max(int(round(bounds.top())), y), int(round(bounds.bottom())) - height)
         return x, y, width, height
@@ -378,6 +445,7 @@ class _ROIView(_ImageView):
             or self.interaction_mode() != InteractionMode.SELECT
             or self._roi_rect is None
             or self._space_pressed
+            or self._roi_locked
         ):
             self._update_cursor()
             return
@@ -394,6 +462,7 @@ class _ROIView(_ImageView):
         elif self._roi_item is not None:
             self.scene().removeItem(self._roi_item)
             self._roi_item = None
+            self._remove_handles()
         self._update_overlay()
 
     def _push_undo(self) -> None:
@@ -410,6 +479,7 @@ class _ROIView(_ImageView):
                 self.scene().removeItem(self._roi_item)
                 self._roi_item = None
             self._remove_handles()
+            self.set_roi_locked(False)
         else:
             left, top, width, height = rect
             roi_rectf = QRectF(float(left), float(top), float(width), float(height))
@@ -459,7 +529,7 @@ class _ROIView(_ImageView):
                 self.scene().addItem(item)
                 self._handle_items[handle] = item
             item.setPos(center)
-            item.setVisible(True)
+            item.setVisible(not self._roi_locked)
 
     def _remove_handles(self) -> None:
         for item in self._handle_items.values():
@@ -1237,6 +1307,7 @@ class ROIEditor(QWidget):
         layout.setSpacing(6)
         self._navigation = ImageNavigationToolbar(self._view, self)
         layout.addWidget(self._navigation)
+        layout.addLayout(self._build_geometry_controls())
         layout.addWidget(self._view, 1)
 
         toolbar = QHBoxLayout()
@@ -1261,12 +1332,74 @@ class ROIEditor(QWidget):
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._update_history_buttons()
+        self._view.lockChanged.connect(self._on_lock_changed)
+        self._sync_geometry_controls()
 
     # ------------------------------------------------------------------
+    def _build_geometry_controls(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self._geometry_fields: List[QSpinBox] = []
+        for label, tooltip in (("X", "X position"), ("Y", "Y position"),
+                               ("W", "Width"), ("H", "Height")):
+            field = QSpinBox(self)
+            field.setToolTip(tooltip)
+            field.setAccessibleName(tooltip)
+            field.setMinimumWidth(60)
+            field.setMaximumWidth(100)
+            # Typed values commit on Enter/focus loss; arrows commit each step.
+            field.setKeyboardTracking(False)
+            field.valueChanged.connect(self._apply_geometry_controls)
+            row.addWidget(QLabel(label, self))
+            row.addWidget(field)
+            self._geometry_fields.append(field)
+        self._btn_lock = QToolButton(self)
+        self._btn_lock.setCheckable(True)
+        self._btn_lock.toggled.connect(self._view.set_roi_locked)
+        row.addWidget(self._btn_lock)
+        row.addStretch(1)
+        return row
+
+    def _apply_geometry_controls(self, _value: int) -> None:
+        self._view.edit_roi(tuple(field.value() for field in self._geometry_fields))
+        # A clamped/no-op edit may not emit roiChanged; always reflect its result.
+        self._sync_geometry_controls()
+
+    def _sync_geometry_controls(self) -> None:
+        bounds = self._view.scene_rect()
+        width, height = int(bounds.width()), int(bounds.height())
+        rect = self._view.roi()
+        locked = self._view.is_roi_locked()
+        available = rect is not None and width > 0 and height > 0
+        ranges = ((0, max(0, width - 1)), (0, max(0, height - 1)),
+                  (1, max(1, width)), (1, max(1, height)))
+        values = rect if rect is not None else (0, 0, 1, 1)
+        for field, (minimum, maximum), value in zip(self._geometry_fields, ranges, values):
+            blocked = field.blockSignals(True)
+            try:
+                field.setRange(minimum, maximum)
+                field.setValue(value)
+                field.setEnabled(available and not locked)
+            finally:
+                field.blockSignals(blocked)
+        blocked = self._btn_lock.blockSignals(True)
+        self._btn_lock.setChecked(locked)
+        self._btn_lock.blockSignals(blocked)
+        self._btn_lock.setText("Locked" if locked else "Lock ROI")
+        self._btn_lock.setToolTip("Unlock ROI editing" if locked else "Lock ROI editing (this editor only)")
+        self._btn_lock.setEnabled(available)
+        self._btn_reset.setEnabled(not locked)
+        self._navigation.mode_buttons[InteractionMode.DRAW].setEnabled(not locked)
+
+    def _on_lock_changed(self, _locked: bool) -> None:
+        self._sync_geometry_controls()
+
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._view.set_pixmap(pixmap)
         self._update_history_buttons()
         self._update_info_label()
+        self._sync_geometry_controls()
 
     def set_roi(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
         self._view.set_roi(rect)
@@ -1296,6 +1429,7 @@ class ROIEditor(QWidget):
     def _on_roi_changed(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
         self._update_history_buttons()
         self._update_info_label()
+        self._sync_geometry_controls()
         self.roiChanged.emit(rect)
 
     def _update_info_label(self) -> None:
