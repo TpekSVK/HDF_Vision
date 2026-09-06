@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QFormLayout,
     QSpinBox,
+    QSlider,
     QDoubleSpinBox,
     QGroupBox,
     QSizePolicy,
