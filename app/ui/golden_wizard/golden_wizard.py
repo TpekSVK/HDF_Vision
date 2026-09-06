@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QFormLayout,
     QSpinBox,
+    QSlider,
     QDoubleSpinBox,
     QGroupBox,
     QSizePolicy,
@@ -98,7 +99,7 @@ from app.ui.golden_wizard.form_widgets import (
     _set_form_widget_value,
 )
 from app.ui.golden_wizard.session_settings_dialog import SessionSettingsDialog
-from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label
+from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label, metric_label
 from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog
 from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
 from app.ui.golden_wizard.view_config_dialog import (
@@ -507,14 +508,6 @@ class ToolConfigPanel(QWidget):
 
         layout.addWidget(CollapsibleSection("Výsledok", self._diagnostics_group, parent=self))
 
-        self._test_result_label = QLabel("", self)
-        self._test_result_label.setStyleSheet(
-            "color: #444; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px;"
-        )
-        self._test_result_label.setWordWrap(True)
-        self._test_result_label.setVisible(False)
-        layout.addWidget(self._test_result_label)
-
         self._update_visibility()
         self._reset_diagnostics()
         self.testButtonEnabledChanged.emit(self._btn_test.isEnabled())
@@ -587,6 +580,12 @@ class ToolConfigPanel(QWidget):
             self._locator_fit_button.setEnabled(has_template and not use_crop)
 
         self._rebuild_form()
+        self._geometry_section.setVisible(
+            bool(getattr(capabilities, "supports_roi", False)) or is_locator
+        )
+        self._detection_section.setVisible(self._form_layout.rowCount() > 1)
+        self._threshold_section.setVisible(self._threshold_layout.rowCount() > 0)
+        self._advanced_section.setVisible(self._advanced_layout.rowCount() > 0)
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
@@ -744,15 +743,13 @@ class ToolConfigPanel(QWidget):
         field_type = (spec or {}).get("type")
         return field_type in _SUPPORTED_FORM_FIELD_TYPES
     def _clear_test_result(self) -> None:
-        self._test_result_label.clear()
-        self._test_result_label.setVisible(False)
         self._reset_diagnostics()
         self.locatorPolicyWarningChanged.emit("")
 
     def set_test_running(self, running: bool) -> None:
         if running:
             self._set_test_button_enabled(False)
-            self._set_test_message("Test prebieha…", "#666")
+            self._status_value_label.setText("Test prebieha…")
         else:
             self._set_test_button_enabled(bool(self._current_tool) and not self._updating)
 
@@ -772,11 +769,6 @@ class ToolConfigPanel(QWidget):
         )
         diagnostics_payload = (
             diagnostics_payload_raw if isinstance(diagnostics_payload_raw, dict) else {}
-        )
-        status_key = (result.status or "").lower()
-        latency_value = metrics.get(
-            "latency_ms",
-            elapsed_ms if elapsed_ms is not None else getattr(result, "latency_ms", None),
         )
         diagnostics_breakdown = perf_breakdown
         tool_identifier = debug_artifacts.get("tool_id") if debug_artifacts else None
@@ -804,26 +796,10 @@ class ToolConfigPanel(QWidget):
         self._set_perf_overlay(diagnostics_breakdown)
         self._maybe_emit_locator_warning(metrics, diagnostics_payload)
 
-        status_text = result.status.upper() if result.status else "—"
-        latency_text = self._format_latency_text(latency_value)
-        message = f"Test: {status_text} · {latency_text}"
-        color = self._STATUS_COLORS.get(status_key, "#444")
-        self._set_test_message(message, color)
-
     def show_test_error(self, message: str) -> None:
-        self._update_diagnostics("nok", {}, None)
-        self._set_test_message(message, "#b03030")
+        self._update_diagnostics("nok", {}, None, message=message)
         self._set_perf_overlay(None)
         self.locatorPolicyWarningChanged.emit("")
-
-    def _set_test_message(self, message: str, color: str) -> None:
-        self._test_result_label.setText(message)
-        self._test_result_label.setStyleSheet(
-            "color: {color}; font-family: 'JetBrains Mono', 'Courier New', monospace; font-size: 12px;".format(
-                color=color
-            )
-        )
-        self._test_result_label.setVisible(True)
 
     def _set_perf_overlay(self, breakdown: Optional[list[dict[str, Any]]]) -> None:
         if not breakdown:
@@ -874,7 +850,7 @@ class ToolConfigPanel(QWidget):
 
     def _reset_diagnostics(self) -> None:
         self._set_status_indicator_color("#555")
-        self._status_value_label.setText("—")
+        self._status_value_label.setText("Zatiaľ bez výsledku")
         self._status_message_label.clear()
         self._status_message_label.setVisible(False)
         self._latency_label.setText("Čas: —")
@@ -961,17 +937,20 @@ class ToolConfigPanel(QWidget):
             )
             for spec in spec_entries:
                 key = getattr(spec, "key", "")
-                label = (getattr(spec, "description", "") or key or "Metric").strip()
+                if key not in remaining:
+                    continue
+                description = getattr(spec, "description", "")
+                label = metric_label(key, description)
                 unit = getattr(spec, "unit", None)
                 if unit:
                     label = f"{label} [{unit}]"
-                raw_value = remaining.pop(key, None)
+                raw_value = remaining.pop(key)
                 value_text = self._format_metric_value(raw_value)
-                rows.append((label, value_text, getattr(spec, "description", "")))
+                rows.append((label, value_text, description))
 
         if not self._current_metrics_spec:
             for key in sorted(remaining.keys()):
-                rows.append((str(key), self._format_metric_value(remaining[key]), ""))
+                rows.append((metric_label(str(key)), self._format_metric_value(remaining[key]), ""))
 
         if not rows:
             self._metrics_table.setRowCount(0)
@@ -1472,6 +1451,7 @@ class GoldenWizard(QDialog):
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._dirty_views: dict[str, dict[str, bool]] = {}
         self._view_states: dict[str, dict[str, Any]] = {}
+        self._last_tool_results: dict[tuple[str, int, str], tuple[Any, ...]] = {}
         self._views: list[RecipeView] = []
         self._active_view_id: Optional[str] = None
         self._updating_view_selector = False
@@ -2202,6 +2182,7 @@ class GoldenWizard(QDialog):
                 self._syncing_workspace_roi = False
         else:
             self.view.set_tool_overlay(None)
+            self.roi_editor.set_result_overlay(None)
             self._syncing_workspace_roi = True
             try:
                 self.roi_editor.set_locator_mode(False)
@@ -2230,6 +2211,7 @@ class GoldenWizard(QDialog):
         return self._load_saved_golden_image(view_id=view_id)
 
     def _configure_workspace_editor(self, tool: Tool) -> None:
+        self.roi_editor.set_result_overlay(None)
         is_locator = tool.type == "locator.template_match"
         params = dict(getattr(tool.params, "values", {}) or {})
         if is_locator:
@@ -3212,6 +3194,7 @@ class GoldenWizard(QDialog):
                 self._configure_workspace_editor(tool)
             finally:
                 self._syncing_workspace_roi = False
+            self._restore_tool_result(tool)
             shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
                 tool.roi.shape(), "ROI"
             ) if tool.roi.rect() is not None else "Bez ROI"
@@ -3226,6 +3209,7 @@ class GoldenWizard(QDialog):
             self.roi_editor.setEnabled(False)
             self._selected_tool_row = -1
             self.view.set_tool_overlay(None)
+            self.roi_editor.set_result_overlay(None)
             self._syncing_workspace_roi = True
             try:
                 self.roi_editor.set_locator_mode(False)
@@ -3413,6 +3397,7 @@ class GoldenWizard(QDialog):
         self._update_dirty_state(recipe, view_id)
 
     def _on_tool_test_requested(self, params: dict[str, Any], thresholds: dict[str, Any]) -> None:
+        self.roi_editor.set_result_overlay(None)
         try:
             row = getattr(self, "_selected_tool_row", -1)
             if row < 0:
@@ -3593,10 +3578,49 @@ class GoldenWizard(QDialog):
                 perf_breakdown=perf_breakdown,
                 status_message=status_message,
             )
+            result_rect = target_tool.roi.rect()
+            is_locator = target_tool.type == "locator.template_match"
+            if is_locator:
+                template_rect = ToolRoi.from_obj(params_payload.get("template_roi")).rect()
+                if template_rect is None:
+                    template_rect = target_tool.template_roi.rect()
+                if template_rect is not None:
+                    dx = int(round(float((result.metrics or {}).get("dx", 0.0))))
+                    dy = int(round(float((result.metrics or {}).get("dy", 0.0))))
+                    x, y, width, height = template_rect
+                    result_rect = (x + dx, y + dy, width, height)
+            self.roi_editor.set_result_overlay(
+                result.status,
+                dict(result.metrics or {}),
+                result_rect,
+                locator=is_locator,
+            )
+            cache_key = (view_id, int(target_tool.order), target_tool.type)
+            self._last_tool_results[cache_key] = (
+                result, test_run.elapsed_ms, perf_breakdown, status_message, result_rect
+            )
         except Exception as exc:
             self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
         finally:
             self._tool_panel.set_test_running(False)
+
+    def _restore_tool_result(self, tool: Tool) -> None:
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        cached = self._last_tool_results.get((view_id, int(tool.order), tool.type))
+        if cached is None:
+            return
+        result, elapsed_ms, breakdown, message, rect = cached
+        self._tool_panel.show_test_result(
+            result, elapsed_ms, perf_breakdown=breakdown, status_message=message
+        )
+        self.roi_editor.set_result_overlay(
+            result.status,
+            dict(result.metrics or {}),
+            rect,
+            locator=tool.type == "locator.template_match",
+        )
 
     def _edit_tool(self, index: int):
         recipe = self._current_recipe_name()

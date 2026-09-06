@@ -2277,6 +2277,7 @@ class LocatorROIEditor(ROIEditor):
         self._use_golden_crop = False
         self._angle_enabled = False
         self._area_items: List[QGraphicsItem] = []
+        self._result_items: List[QGraphicsItem] = []
         self._locator_buttons = self._navigation.set_draw_tools([
             ("Hľadanie", lambda: self._start_area_draw("search"), "Nakresliť oblasť hľadania"),
             ("Šablóna", lambda: self._start_area_draw("template"), "Nakresliť oblasť šablóny"),
@@ -2358,8 +2359,55 @@ class LocatorROIEditor(ROIEditor):
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._area_items.clear()  # scene.clear() owns/deletes these items
+        self._result_items.clear()
         super().set_background(pixmap)
         self._render_areas()
+
+    def set_result_overlay(
+        self,
+        status: Optional[str],
+        metrics: Optional[dict] = None,
+        rect: Optional[Tuple[int, int, int, int]] = None,
+        *,
+        locator: bool = False,
+    ) -> None:
+        self._clear_result_overlay()
+        if not status or rect is None:
+            return
+        color = QColor("#22C55E" if str(status).lower() == "ok" else "#EF4444")
+        box = QGraphicsRectItem(QRectF(*rect))
+        pen = QPen(color)
+        pen.setWidthF(2.0)
+        pen.setCosmetic(True)
+        box.setPen(pen)
+        box.setBrush(Qt.transparent)
+        box.setZValue(15)
+        box.setAcceptedMouseButtons(Qt.NoButton)
+        self._view.scene().addItem(box)
+        self._result_items.append(box)
+
+        values = dict(metrics or {})
+        score = next((values[key] for key in ("corr", "score", "ssim", "similarity")
+                      if key in values), None)
+        prefix = "MATCH" if locator else str(status).upper()
+        try:
+            text = f"{prefix}  {float(score):.3f}" if score is not None else prefix
+        except (TypeError, ValueError):
+            text = prefix
+        badge = QGraphicsSimpleTextItem(text)
+        badge.setBrush(color)
+        badge.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+        badge.setAcceptedMouseButtons(Qt.NoButton)
+        badge.setZValue(16)
+        badge.setPos(float(rect[0]), float(rect[1]))
+        self._view.scene().addItem(badge)
+        self._result_items.append(badge)
+
+    def _clear_result_overlay(self) -> None:
+        for item in self._result_items:
+            if item.scene() is self._view.scene():
+                self._view.scene().removeItem(item)
+        self._result_items.clear()
 
     def configure_ignore_mask(self, enabled: bool, mask: Optional[np.ndarray] = None) -> None:
         self._mask_controls.setVisible(bool(enabled))
