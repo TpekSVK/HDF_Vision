@@ -342,14 +342,15 @@ class ImageNavigationToolbar(QWidget):
         generic = self.mode_buttons[InteractionMode.DRAW]
         generic.hide()
         insert_at = self._mode_layout.indexOf(generic)
-        self.draw_buttons = []
+        new_buttons: list[QToolButton] = []
         for offset, (label, action, tooltip) in enumerate(tools):
             button = self._button(label, action, tooltip)
             button.setCheckable(True)
             self._modes.addButton(button)
             self._mode_layout.insertWidget(insert_at + offset, button)
             self.draw_buttons.append(button)
-        return self.draw_buttons
+            new_buttons.append(button)
+        return new_buttons
 
     def _button(self, text: str, action: Callable, tooltip: str = "") -> QToolButton:
         button = QToolButton(self)
