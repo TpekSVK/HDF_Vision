@@ -1,85 +1,305 @@
-"""Tool catalog dialog for the Golden Wizard."""
+"""Metadata-driven Tool Catalog for the Golden Wizard."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
-    QDialog,
-    QDialogButtonBox,
-    QListWidget,
-    QListWidgetItem,
-    QLineEdit,
-    QWidget,
-    QVBoxLayout,
+    QAbstractItemView, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QListWidget, QListWidgetItem, QPushButton, QSplitter, QVBoxLayout, QWidget,
 )
+
+from app.ui.golden_wizard.style import TOOL_CATALOG_STYLE
+
+_ALL = "__all__"
+_RECOMMENDED = "__recommended__"
+_RECOMMENDED_TYPES = {
+    "locator.template_match", "presence_absence", "presence.absence_v2", "ssim", "edge_change",
+}
+_NAME_SK = {
+    "locator.template_match": "Locator – Template Match",
+    "presence_absence": "Kontrola prítomnosti",
+    "presence.absence_v2": "Kontrola prítomnosti V2",
+    "ssim": "SSIM porovnanie",
+    "edge_change": "Detekcia zmien hrán",
+    "edge_profile_deviation": "Odchýlka profilu hrany",
+    "light_presence": "Kontrola prítomnosti svetlom",
+    "light_transmission": "Kontrola priepustnosti svetla",
+    "absdiff": "Porovnanie absolútnym rozdielom",
+}
+_CATEGORY_SK = {
+    "locator": "Locator", "presence": "Prítomnosť", "presence / backlight": "Prítomnosť",
+    "similarity": "Porovnanie", "change detection": "Porovnanie",
+    "edge": "Hrany a tvary", "measurement": "Meranie", "inspection": "Meranie",
+    "light": "Svetlo a farba", "color": "Svetlo a farba",
+    "ocr": "OCR a kódy", "code": "OCR a kódy",
+    "ai": "AI / Detekcia", "detection": "AI / Detekcia", "general": "Ostatné",
+}
+_CATEGORY_ORDER = [
+    "Locator", "Prítomnosť", "Porovnanie", "Hrany a tvary", "Meranie",
+    "Svetlo a farba", "OCR a kódy", "AI / Detekcia", "Ostatné",
+]
+
+
+@dataclass(frozen=True)
+class _CatalogEntry:
+    type_id: str
+    name: str
+    description: str
+    category_label: str
+    supports_roi: bool
+    supports_mask: bool
+    deprecated: bool
+    metrics: tuple[str, ...]
+
+
+class ToolCard(QFrame):
+    clicked = Signal(str)
+    doubleClicked = Signal(str)
+
+    def __init__(self, entry: _CatalogEntry, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.entry = entry
+        self.setObjectName("toolCard")
+        self.setProperty("selected", False)
+        self.setProperty("deprecated", entry.deprecated)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(entry.type_id)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(5)
+        title_row = QHBoxLayout()
+        title = QLabel(entry.name, self)
+        title.setProperty("role", "cardTitle")
+        title_row.addWidget(title, 1)
+        if entry.deprecated:
+            badge = QLabel("Zastaraný", self)
+            badge.setProperty("role", "warningBadge")
+            title_row.addWidget(badge)
+        layout.addLayout(title_row)
+        description = QLabel(entry.description or "Popis nástroja nie je dostupný.", self)
+        description.setWordWrap(True)
+        description.setMaximumHeight(48)
+        description.setProperty("role", "secondary")
+        layout.addWidget(description)
+        capabilities = QLabel(
+            f"ROI: {'áno' if entry.supports_roi else 'nie'}    "
+            f"Ignorovacia maska: {'áno' if entry.supports_mask else 'nie'}", self,
+        )
+        capabilities.setProperty("role", "capabilities")
+        layout.addWidget(capabilities)
+        if entry.metrics:
+            output = QLabel(f"Výstup: {', '.join(entry.metrics)}", self)
+            output.setProperty("role", "secondary")
+            output.setWordWrap(True)
+            layout.addWidget(output)
+        technical = QLabel(entry.type_id, self)
+        technical.setProperty("role", "technical")
+        layout.addWidget(technical)
+        for label in self.findChildren(QLabel):
+            label.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    def set_selected(self, selected: bool) -> None:
+        self.setProperty("selected", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit(self.entry.type_id)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.doubleClicked.emit(self.entry.type_id)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
 
 class ToolCatalogDialog(QDialog):
-    """Dialog allowing users to pick a tool from the registry."""
+    """Two-panel catalog preserving the existing selected_type contract."""
 
     def __init__(self, tool_service, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Tool catalog")
+        self.setObjectName("toolCatalog")
+        self.setStyleSheet(TOOL_CATALOG_STYLE)
+        self.setWindowTitle("Pridať nástroj")
+        self.setModal(True)
+        self.resize(1100, 700)
         self._tool_service = tool_service
         self._selected_type: str | None = None
+        self._cards: dict[str, ToolCard] = {}
+        self._entries = self._load_entries()
 
-        self._filter = QLineEdit(self)
-        self._filter.setPlaceholderText("Filter tools…")
-        self._filter.textChanged.connect(self._apply_filter)
+        title = QLabel("Pridať nástroj", self)
+        title.setProperty("role", "dialogTitle")
+        self._search = QLineEdit(self)
+        self._search.setPlaceholderText("Hľadať nástroj...")
+        self._search.setClearButtonEnabled(True)
+        self._search.textChanged.connect(self._apply_filter)
+        header = QHBoxLayout()
+        header.addWidget(title)
+        header.addStretch(1)
+        header.addWidget(self._search)
 
-        self._list = QListWidget(self)
-        self._list.itemDoubleClicked.connect(self._on_double_clicked)
+        self._categories = QListWidget(self)
+        self._categories.setObjectName("categoryList")
+        self._categories.setMinimumWidth(190)
+        self._categories.setMaximumWidth(260)
+        self._categories.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._populate_categories()
+        category_panel = QFrame(self)
+        category_panel.setObjectName("catalogPanel")
+        category_layout = QVBoxLayout(category_panel)
+        category_heading = QLabel("KATEGÓRIE", category_panel)
+        category_heading.setProperty("role", "panelHeader")
+        category_layout.addWidget(category_heading)
+        category_layout.addWidget(self._categories, 1)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel, parent=self)
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
+        self._tools = QListWidget(self)
+        self._tools.setObjectName("toolCards")
+        self._tools.setSelectionMode(QAbstractItemView.NoSelection)
+        self._tools.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self._empty = QLabel(
+            "Nenašli sa žiadne nástroje.\nSkúste inú kategóriu alebo vyhľadávanie.", self
+        )
+        self._empty.setAlignment(Qt.AlignCenter)
+        self._empty.setProperty("role", "emptyState")
+        tools_panel = QFrame(self)
+        tools_panel.setObjectName("catalogPanel")
+        tools_layout = QVBoxLayout(tools_panel)
+        tools_heading = QLabel("NÁSTROJE", tools_panel)
+        tools_heading.setProperty("role", "panelHeader")
+        tools_layout.addWidget(tools_heading)
+        tools_layout.addWidget(self._tools, 1)
+        tools_layout.addWidget(self._empty, 1)
+
+        splitter = QSplitter(Qt.Horizontal, self)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(category_panel)
+        splitter.addWidget(tools_panel)
+        splitter.setSizes([220, 820])
+        splitter.setStretchFactor(1, 1)
+
+        cancel = QPushButton("Zrušiť", self)
+        cancel.clicked.connect(self.reject)
+        self._add_button = QPushButton("Pridať nástroj", self)
+        self._add_button.setProperty("role", "primary")
+        self._add_button.setEnabled(False)
+        self._add_button.clicked.connect(self.accept)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        actions.addWidget(cancel)
+        actions.addWidget(self._add_button)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self._filter)
-        layout.addWidget(self._list)
-        layout.addWidget(buttons)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+        layout.addLayout(header)
+        layout.addWidget(splitter, 1)
+        layout.addLayout(actions)
+        self._categories.currentItemChanged.connect(lambda *_: self._apply_filter())
+        self._apply_filter()
 
-        self._entries: list[tuple[str, str, str]] = []
-        self._populate_entries()
-        self._apply_filter("")
-
-    def _populate_entries(self) -> None:
-        self._entries.clear()
-        for tool_type in self._tool_service.list_tool_types():
+    def _load_entries(self) -> list[_CatalogEntry]:
+        entries: list[_CatalogEntry] = []
+        for type_id in self._tool_service.list_tool_types():
             try:
-                meta = self._tool_service.get_tool_meta(tool_type)
-                display = f"{getattr(meta, 'name', tool_type)} ({tool_type})"
-                tooltip = getattr(meta, "description", tool_type)
+                definition = self._tool_service.get_tool_meta(type_id)
             except KeyError:
-                display = tool_type
-                tooltip = tool_type
-            self._entries.append((tool_type, display, tooltip))
-
-    def _apply_filter(self, text: str) -> None:
-        pattern = (text or "").strip().lower()
-        self._list.clear()
-        for tool_type, display, tooltip in self._entries:
-            if pattern and pattern not in display.lower() and pattern not in tool_type.lower():
                 continue
-            item = QListWidgetItem(display)
-            item.setData(Qt.UserRole, tool_type)
-            item.setToolTip(tooltip)
-            self._list.addItem(item)
-        if self._list.count():
-            self._list.setCurrentRow(0)
+            raw_category = str(getattr(definition, "category", "General") or "General")
+            capabilities = getattr(definition, "meta", None)
+            metrics = tuple(
+                str(metric.description or metric.key)
+                for metric in getattr(definition, "metrics_spec", ()) if metric.key
+            )
+            entries.append(_CatalogEntry(
+                type_id=type_id,
+                name=_NAME_SK.get(type_id, str(getattr(definition, "name", type_id))),
+                description=str(getattr(definition, "description", "") or ""),
+                category_label=self._category_label(raw_category),
+                supports_roi=bool(getattr(capabilities, "supports_roi", False)),
+                supports_mask=bool(getattr(capabilities, "supports_ignore_mask", False)),
+                deprecated=bool(getattr(definition, "deprecated", False)),
+                metrics=metrics[:5],
+            ))
+        return sorted(entries, key=lambda entry: (entry.category_label, entry.name.lower()))
 
-    def _on_double_clicked(self, item: QListWidgetItem) -> None:
-        if item is None:
-            return
-        self._selected_type = item.data(Qt.UserRole)
+    @staticmethod
+    def _category_label(raw_category: str) -> str:
+        normalized = raw_category.strip().lower()
+        if normalized in _CATEGORY_SK:
+            return _CATEGORY_SK[normalized]
+        for key, label in _CATEGORY_SK.items():
+            if key in normalized:
+                return label
+        return raw_category
+
+    def _populate_categories(self) -> None:
+        recommended = QListWidgetItem("Odporúčané")
+        recommended.setData(Qt.UserRole, _RECOMMENDED)
+        self._categories.addItem(recommended)
+        labels = {entry.category_label for entry in self._entries}
+        ordered = [label for label in _CATEGORY_ORDER if label in labels]
+        ordered.extend(sorted(labels.difference(ordered)))
+        for label in ordered:
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, label)
+            self._categories.addItem(item)
+        all_tools = QListWidgetItem("Všetky nástroje")
+        all_tools.setData(Qt.UserRole, _ALL)
+        self._categories.addItem(all_tools)
+        self._categories.setCurrentRow(0)
+
+    def _apply_filter(self, _text: str = "") -> None:
+        pattern = self._search.text().strip().lower()
+        category_item = self._categories.currentItem()
+        category = category_item.data(Qt.UserRole) if category_item is not None else _ALL
+        previous = self._selected_type
+        self._tools.clear()
+        self._cards.clear()
+        for entry in self._entries:
+            if category == _RECOMMENDED and (
+                entry.type_id not in _RECOMMENDED_TYPES or entry.deprecated
+            ):
+                continue
+            if category not in (_ALL, _RECOMMENDED) and entry.category_label != category:
+                continue
+            searchable = " ".join(
+                (entry.name, entry.description, entry.category_label, entry.type_id)
+            ).lower()
+            if pattern and pattern not in searchable:
+                continue
+            item = QListWidgetItem()
+            item.setSizeHint(QSize(100, 168 if entry.metrics else 138))
+            card = ToolCard(entry, self._tools)
+            card.clicked.connect(self._select_type)
+            card.doubleClicked.connect(self._accept_type)
+            self._tools.addItem(item)
+            self._tools.setItemWidget(item, card)
+            self._cards[entry.type_id] = card
+        self._empty.setVisible(self._tools.count() == 0)
+        self._tools.setVisible(self._tools.count() > 0)
+        self._select_type(previous if previous in self._cards else None)
+
+    def _select_type(self, type_id: Optional[str]) -> None:
+        self._selected_type = type_id
+        for card_type, card in self._cards.items():
+            card.set_selected(card_type == type_id)
+        self._add_button.setEnabled(type_id is not None)
+
+    def _accept_type(self, type_id: str) -> None:
+        self._select_type(type_id)
         super().accept()
 
-    def accept(self) -> None:  # noqa: N802 - Qt API
-        current = self._list.currentItem()
-        if current is None:
+    def accept(self) -> None:  # noqa: N802
+        if self._selected_type is None:
             return
-        self._selected_type = current.data(Qt.UserRole)
         super().accept()
 
     def selected_type(self) -> str | None:

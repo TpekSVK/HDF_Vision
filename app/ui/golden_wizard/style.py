@@ -81,3 +81,58 @@ FIELD_LABELS_SK = {
 
 def field_label(name: str, configured_label: object = None) -> str:
     return FIELD_LABELS_SK.get(name, str(configured_label or name).replace("_", " ").capitalize())
+
+
+TOOL_CATALOG_STYLE = """
+QDialog#toolCatalog { background: #14181d; color: #e6e8eb; }
+QDialog#toolCatalog QWidget { color: #e6e8eb; background: transparent; }
+QDialog#toolCatalog QFrame#catalogPanel {
+    background: #181d23; border: 1px solid #2a313a; border-radius: 4px;
+}
+QDialog#toolCatalog QLabel[role="dialogTitle"] { font-size: 18px; font-weight: 700; }
+QDialog#toolCatalog QLabel[role="panelHeader"] {
+    color: #9aa4af; font-size: 11px; font-weight: 700;
+    border-bottom: 1px solid #2a313a; padding-bottom: 7px;
+}
+QDialog#toolCatalog QLineEdit {
+    min-width: 300px; background: #11161b; border: 1px solid #303842;
+    border-radius: 4px; padding: 7px 9px;
+}
+QDialog#toolCatalog QLineEdit:focus { border-color: #2f80c9; }
+QDialog#toolCatalog QListWidget { background: transparent; border: none; outline: none; }
+QDialog#toolCatalog QListWidget#categoryList::item {
+    border-radius: 4px; padding: 9px 10px; margin: 1px 0;
+}
+QDialog#toolCatalog QListWidget#categoryList::item:hover { background: #202731; }
+QDialog#toolCatalog QListWidget#categoryList::item:selected {
+    background: #173f61; color: white; border-left: 3px solid #2f80c9;
+}
+QDialog#toolCatalog QListWidget#toolCards::item { background: transparent; border: none; }
+QDialog#toolCatalog QFrame#toolCard {
+    background: #181d23; border: 1px solid #2a313a;
+    border-radius: 6px; margin: 3px 5px;
+}
+QDialog#toolCatalog QFrame#toolCard:hover { background: #202731; border-color: #3a4653; }
+QDialog#toolCatalog QFrame#toolCard[selected="true"] {
+    background: #173f61; border-color: #2f80c9;
+}
+QDialog#toolCatalog QFrame#toolCard[deprecated="true"] { color: #6f7882; }
+QDialog#toolCatalog QLabel[role="cardTitle"] { font-size: 14px; font-weight: 700; }
+QDialog#toolCatalog QLabel[role="secondary"] { color: #9aa4af; }
+QDialog#toolCatalog QLabel[role="technical"] { color: #6f7882; font-size: 10px; }
+QDialog#toolCatalog QLabel[role="capabilities"] { color: #b8c2cc; font-size: 11px; }
+QDialog#toolCatalog QLabel[role="warningBadge"] {
+    color: #d29922; background: #2b2518; border: 1px solid #6f581d;
+    border-radius: 3px; padding: 2px 5px;
+}
+QDialog#toolCatalog QLabel[role="emptyState"] { color: #6f7882; font-size: 13px; }
+QDialog#toolCatalog QPushButton {
+    background: #20262d; border: 1px solid #343c46; border-radius: 4px; padding: 7px 12px;
+}
+QDialog#toolCatalog QPushButton:hover { background: #29313a; border-color: #46515e; }
+QDialog#toolCatalog QPushButton:disabled { color: #6f7882; background: #1a1f25; }
+QDialog#toolCatalog QPushButton[role="primary"] {
+    background: #2f80c9; border-color: #3b91dc; color: white; font-weight: 600;
+}
+QDialog#toolCatalog QSplitter::handle { background: #2a313a; }
+"""
