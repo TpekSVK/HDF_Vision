@@ -9,7 +9,12 @@ from typing import Any, Dict
 import numpy as np
 
 from app.models.schema import ToolParams, ToolThresholds
-from app.services.presence_absence_v2_service import compute_roi_hash, evaluate_sample, load_model
+from app.services.presence_absence_v2_service import (
+    compute_roi_hash,
+    evaluate_sample,
+    load_model,
+    sensitivity_to_score_threshold,
+)
 from app.services.tool_service import ToolRunResult
 from app.services.tools.common import PairTool
 
@@ -69,6 +74,11 @@ class PresenceAbsenceV2Tool(PairTool):
                 "largest_blob_area": 0,
                 "valid_pixel_count": valid_pixels,
                 "ignored_pixel_count": max(0, total_pixels - valid_pixels),
+                "fail_area_px": False,
+                "fail_area_percent": False,
+                "fail_largest_blob": False,
+                "fail_blob_count": False,
+                "decision_reason": "",
                 "max_deviation": 0.0,
                 "mean_deviation": 0.0,
                 "latency_ms": float(latency_ms),
@@ -87,17 +97,29 @@ class PresenceAbsenceV2Tool(PairTool):
                 },
             )
 
+        score_threshold = (
+            sensitivity_to_score_threshold(thresholds_dict["sensitivity"])
+            if "sensitivity" in thresholds_dict
+            else float(thresholds_dict.get("score_threshold", 4.0) or 4.0)
+        )
         result = evaluate_sample(
             prepared.frame_roi,
             model.median,
             model.mad,
             polarity=str(params_dict.get("polarity", "any") or "any"),
-            score_threshold=float(thresholds_dict.get("score_threshold", 4.0) or 4.0),
+            score_threshold=score_threshold,
             total_area_threshold=float(thresholds_dict.get("total_area_threshold", 50.0) or 50.0),
             min_blob_area=float(thresholds_dict.get("min_blob_area", 10.0) or 10.0),
             ignore_mask=(
                 np.logical_not(prepared.valid_mask)
                 if prepared.valid_mask is not None else None
+            ),
+            max_blob_count=int(thresholds_dict.get("max_blob_count", 0) or 0),
+            max_largest_blob_area=float(
+                thresholds_dict.get("max_largest_blob_area", 0.0) or 0.0
+            ),
+            max_anomaly_area_percent=float(
+                thresholds_dict.get("max_anomaly_area_percent", 0.0) or 0.0
             ),
         )
 
@@ -110,6 +132,11 @@ class PresenceAbsenceV2Tool(PairTool):
             "largest_blob_area": int(result["largest_blob_area"]),
             "valid_pixel_count": int(result["valid_pixel_count"]),
             "ignored_pixel_count": int(result["ignored_pixel_count"]),
+            "fail_area_px": bool(result["fail_area_px"]),
+            "fail_area_percent": bool(result["fail_area_percent"]),
+            "fail_largest_blob": bool(result["fail_largest_blob"]),
+            "fail_blob_count": bool(result["fail_blob_count"]),
+            "decision_reason": str(result["decision_reason"]),
             "max_deviation": float(result["max_deviation"]),
             "mean_deviation": float(result["mean_deviation"]),
             "model_ready": True,
