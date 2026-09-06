@@ -2041,14 +2041,15 @@ class ROIEditor(QWidget):
         super().__init__(parent)
         self._view = _SharedCanvasView(self)
         self._view.historyChanged.connect(self._update_history_buttons)
+        self._view.maskHistoryChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
         self._btn_undo = QPushButton("Späť", self)
         self._btn_redo = QPushButton("Znova", self)
         self._btn_reset = QPushButton("Obnoviť", self)
-        self._btn_undo.clicked.connect(self._view.undo)
-        self._btn_redo.clicked.connect(self._view.redo)
-        self._btn_reset.clicked.connect(self._view.reset_roi)
+        self._btn_undo.clicked.connect(self._undo_active_editor)
+        self._btn_redo.clicked.connect(self._redo_active_editor)
+        self._btn_reset.clicked.connect(self._reset_active_editor)
 
         self._info_label = QLabel("ROI: —", self)
         self._info_label.setStyleSheet("color: #bbb;")
@@ -2196,8 +2197,31 @@ class ROIEditor(QWidget):
 
     # ------------------------------------------------------------------
     def _update_history_buttons(self) -> None:
-        self._btn_undo.setEnabled(self._view.can_undo())
-        self._btn_redo.setEnabled(self._view.can_redo())
+        if self._active_edit_context() == "mask":
+            self._btn_undo.setEnabled(bool(self._view._mask_undo))
+            self._btn_redo.setEnabled(bool(self._view._mask_redo))
+            self._btn_reset.setEnabled(
+                self._view._mask is not None and bool(np.any(self._view._mask))
+            )
+        else:
+            self._btn_undo.setEnabled(self._view.can_undo())
+            self._btn_redo.setEnabled(self._view.can_redo())
+            self._btn_reset.setEnabled(not self._view.is_roi_locked())
+
+    def _active_edit_context(self) -> str:
+        return "mask" if self._view._mask_editing else "roi"
+
+    def _undo_active_editor(self) -> None:
+        self._view.mask_undo() if self._active_edit_context() == "mask" else self._view.undo()
+
+    def _redo_active_editor(self) -> None:
+        self._view.mask_redo() if self._active_edit_context() == "mask" else self._view.redo()
+
+    def _reset_active_editor(self) -> None:
+        if self._active_edit_context() == "mask":
+            self._view.clear_mask()
+        else:
+            self._view.reset_roi()
 
     def _on_roi_changed(self, rect: Optional[Tuple[int, int, int, int]]) -> None:
         self._update_history_buttons()
@@ -2341,6 +2365,7 @@ class LocatorROIEditor(ROIEditor):
         self._mask_controls.setVisible(bool(enabled))
         self._btn_roi_mode.setChecked(True)
         self._view.configure_mask(enabled, mask)
+        self._update_history_buttons()
 
     def set_mask_editing(self, editing: bool) -> None:
         editing = bool(editing) and self._mask_controls.isVisible()
@@ -2351,6 +2376,7 @@ class LocatorROIEditor(ROIEditor):
         self._view.set_mask_editing(editing)
         if editing:
             self.set_mask_tool(self._view._mask_mode)
+        self._update_history_buttons()
 
     def set_mask_tool(self, mode: str) -> None:
         self._view.set_mask_mode(mode)

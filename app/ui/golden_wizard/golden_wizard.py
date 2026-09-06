@@ -232,8 +232,6 @@ class ToolConfigPanel(QWidget):
     maskVisibilityChanged = Signal(bool)
     maskOpacityChanged = Signal(int)
     maskClearRequested = Signal()
-    maskUndoRequested = Signal()
-    maskRedoRequested = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -333,7 +331,8 @@ class ToolConfigPanel(QWidget):
         mask_content = QWidget(self)
         mask_layout = QFormLayout(mask_content)
         mask_layout.setContentsMargins(0, 0, 0, 0)
-        mask_layout.setSpacing(6)
+        mask_layout.setHorizontalSpacing(12)
+        mask_layout.setVerticalSpacing(10)
         self._mask_show = QCheckBox("Zobraziť masku", mask_content)
         self._mask_show.setChecked(True)
         self._mask_show.setToolTip(
@@ -362,15 +361,9 @@ class ToolConfigPanel(QWidget):
         self._mask_opacity.setToolTip("Priehľadnosť masky: 40 %")
         self._mask_opacity.valueChanged.connect(self._on_mask_opacity_changed)
         mask_layout.addRow("Priehľadnosť:", self._mask_opacity)
-        mask_actions = QWidget(mask_content)
-        actions_layout = QHBoxLayout(mask_actions)
-        actions_layout.setContentsMargins(0, 0, 0, 0)
-        for label, signal in (("Späť", self.maskUndoRequested),
-                              ("Znova", self.maskRedoRequested),
-                              ("Vymazať masku", self.maskClearRequested)):
-            button = QPushButton(label, mask_actions)
-            button.clicked.connect(signal.emit)
-            actions_layout.addWidget(button)
+        clear_mask = QPushButton("Vymazať masku", mask_content)
+        clear_mask.clicked.connect(self.maskClearRequested.emit)
+        mask_layout.addRow(clear_mask)
         self._mask_section = CollapsibleSection("Ignore mask", mask_content, parent=self)
         self._mask_section.hide()
         layout.addWidget(self._mask_section)
@@ -1793,8 +1786,6 @@ class GoldenWizard(QDialog):
         self._tool_panel.maskVisibilityChanged.connect(self.roi_editor.set_mask_visible)
         self._tool_panel.maskOpacityChanged.connect(self.roi_editor.set_mask_opacity)
         self._tool_panel.maskClearRequested.connect(self.roi_editor.clear_ignore_mask)
-        self._tool_panel.maskUndoRequested.connect(self.roi_editor.undo_ignore_mask)
-        self._tool_panel.maskRedoRequested.connect(self.roi_editor.redo_ignore_mask)
         self.roi_editor.ignoreMaskChanged.connect(self._on_workspace_mask_changed)
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
