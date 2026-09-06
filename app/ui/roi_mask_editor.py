@@ -1741,9 +1741,9 @@ class ROIEditor(QWidget):
         layout.setSpacing(6)
         self._navigation = ImageNavigationToolbar(self._view, self)
         self._shape_buttons = self._navigation.set_draw_tools([
-            ("Rectangle", lambda: self._view.set_draw_shape("rect"), "Drag to draw a rectangle ROI"),
-            ("Circle", lambda: self._view.set_draw_shape("ellipse"), "Drag to draw a circle or ellipse ROI"),
-            ("Polygon", lambda: self._view.set_draw_shape("polygon"), "Click vertices; double-click or Enter to finish"),
+            ("Obdĺžnik", lambda: self._view.set_draw_shape("rect"), "Ťahaním nakresliť obdĺžnikové ROI"),
+            ("Kruh", lambda: self._view.set_draw_shape("ellipse"), "Ťahaním nakresliť kruh alebo elipsu"),
+            ("Polygón", lambda: self._view.set_draw_shape("polygon"), "Klikajte vrcholy; dvojklik alebo Enter dokončí polygón"),
         ])
         layout.addWidget(self._navigation)
         layout.addLayout(self._build_geometry_controls())
@@ -1780,8 +1780,8 @@ class ROIEditor(QWidget):
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
         self._geometry_fields: List[QSpinBox] = []
-        for label, tooltip in (("X", "X position"), ("Y", "Y position"),
-                               ("W", "Width"), ("H", "Height")):
+        for label, tooltip in (("X", "Pozícia X"), ("Y", "Pozícia Y"),
+                               ("W", "Šírka"), ("H", "Výška")):
             field = QSpinBox(self)
             field.setToolTip(tooltip)
             field.setAccessibleName(tooltip)
@@ -1821,15 +1821,15 @@ class ROIEditor(QWidget):
                 field.setRange(minimum, maximum)
                 field.setValue(value)
                 field.setEnabled(numeric_editable and not locked)
-                field.setToolTip("Numeric geometry editing is not available for Polygon."
+                field.setToolTip("Číselná úprava geometrie nie je pre polygón dostupná."
                                  if available and not numeric_editable else field.accessibleName())
             finally:
                 field.blockSignals(blocked)
         blocked = self._btn_lock.blockSignals(True)
         self._btn_lock.setChecked(locked)
         self._btn_lock.blockSignals(blocked)
-        self._btn_lock.setText("Locked" if locked else "Lock ROI")
-        self._btn_lock.setToolTip("Unlock ROI editing" if locked else "Lock ROI editing (this editor only)")
+        self._btn_lock.setText("ROI zamknuté" if locked else "Zamknúť ROI")
+        self._btn_lock.setToolTip("Odomknúť úpravu ROI" if locked else "Zamknúť úpravu ROI v tomto editore")
         self._btn_lock.setEnabled(available)
         self._btn_reset.setEnabled(not locked)
         self._navigation.mode_buttons[InteractionMode.DRAW].setEnabled(not locked)
@@ -1893,7 +1893,7 @@ class ROIEditor(QWidget):
         else:
             x, y, w, h = rect
             area = max(0, int(w) * int(h))
-            shape = {"rect": "Rectangle", "ellipse": "Circle", "polygon": "Polygon"}.get(
+            shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
                 self._view._shape, "ROI")
             self._info_label.setText(
                 f"{shape}: {w}×{h} px · {_format_pixels(area)} px @ ({x}, {y})"
@@ -1947,19 +1947,19 @@ class MaskEditor(QWidget):
         self._mode_group.addButton(self._btn_brush_erase)
 
         self._btn_polygon = QToolButton(self)
-        self._btn_polygon.setText("Polygon")
+        self._btn_polygon.setText("Polygón")
         self._btn_polygon.setCheckable(True)
         self._btn_polygon.setToolTip("Double click to finish polygon fill")
         self._mode_group.addButton(self._btn_polygon)
 
         self._btn_circle = QToolButton(self)
-        self._btn_circle.setText("Circle")
+        self._btn_circle.setText("Kruh")
         self._btn_circle.setCheckable(True)
         self._btn_circle.setToolTip("Click three points to define a circle")
         self._mode_group.addButton(self._btn_circle)
 
         self._btn_rectangle = QToolButton(self)
-        self._btn_rectangle.setText("Rectangle")
+        self._btn_rectangle.setText("Obdĺžnik")
         self._btn_rectangle.setCheckable(True)
         self._btn_rectangle.setToolTip("Click and drag to draw a rectangle")
         self._mode_group.addButton(self._btn_rectangle)
