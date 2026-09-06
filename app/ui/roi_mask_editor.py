@@ -107,13 +107,19 @@ class _ROIView(_ImageView):
 
     # ------------------------------------------------------------------
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
-        super().set_pixmap(pixmap)
+        self.cancel_drawing()
+        was_locked = self._roi_locked
+        # ImageView.set_pixmap() clears the scene and destroys every scene-owned
+        # C++ item. Drop Python wrappers before that happens.
         self._roi_item = None
         self._overlay_item = None
-        self._handle_items = {}
+        self._handle_items.clear()
         self._roi_rect = None
         self._clear_edit_state()
-        self.set_roi_locked(False)
+        super().set_pixmap(pixmap)
+        self._roi_locked = False
+        if was_locked:
+            self.lockChanged.emit(False)
         self._undo_stack.clear()
         self._redo_stack.clear()
         self.historyChanged.emit()
@@ -605,6 +611,15 @@ class _ShapeROIView(_ROIView):
             self._render_shape()
 
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        self.cancel_drawing()
+        # Polygon handles are also owned by the scene cleared in the base view.
+        self._vertex_items.clear()
+        self._points = []
+        self._draft_points = []
+        self._draft_cursor = None
+        self._selected_vertex = None
+        self._polygon_origin = None
+        self._polygon_edit_vertex = None
         super().set_pixmap(pixmap)
         self._shape, self._points = "rect", []
         self._draft_points, self._vertex_items = [], []
