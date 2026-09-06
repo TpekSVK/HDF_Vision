@@ -61,6 +61,7 @@ from app.services.presence_absence_v2_service import (
     resolve_assets_dir,
     save_model,
     save_sample,
+    sensitivity_to_score_threshold,
 )
 from app.utils.tool_identity import compute_tool_identity
 from .presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
@@ -1792,18 +1793,28 @@ class ToolEditDialog(QDialog):
         thresholds = dict(self._tool.thresholds.values or {})
         params = dict(self._tool.params.values or {})
         pol = str(params.get("polarity", "any") or "any")
+        score_threshold = (
+            sensitivity_to_score_threshold(thresholds["sensitivity"])
+            if "sensitivity" in thresholds
+            else float(thresholds.get("score_threshold", 4.0))
+        )
+        limits = {
+            "max_blob_count": int(thresholds.get("max_blob_count", 0) or 0),
+            "max_largest_blob_area": float(thresholds.get("max_largest_blob_area", 0) or 0),
+            "max_anomaly_area_percent": float(thresholds.get("max_anomaly_area_percent", 0) or 0),
+        }
 
         ok_samples = load_samples(dirs["ok"])
         nok_samples = load_samples(dirs["nok"])
         ok_true = ok_false = nok_true = nok_false = 0
         for sample in ok_samples:
-            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask())
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=score_threshold, total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask(), **limits)
             if res["status"] == "ok":
                 ok_true += 1
             else:
                 ok_false += 1
         for sample in nok_samples:
-            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask())
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=score_threshold, total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask(), **limits)
             if res["status"] == "nok":
                 nok_true += 1
             else:

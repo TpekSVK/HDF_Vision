@@ -28,6 +28,17 @@ class PresenceV2BuildInfo:
     target_shape: tuple[int, int] | None
 
 
+def sensitivity_to_score_threshold(sensitivity: float) -> float:
+    """Map user-facing 0–100 sensitivity to the robust deviation threshold."""
+    value = max(0.0, min(100.0, float(sensitivity)))
+    return 8.0 - (value * 7.0 / 100.0)
+
+
+def score_threshold_to_sensitivity(score_threshold: float) -> float:
+    value = max(1.0, min(8.0, float(score_threshold)))
+    return (8.0 - value) * 100.0 / 7.0
+
+
 def _as_gray_u8(image: np.ndarray) -> np.ndarray:
     arr = np.asarray(image)
     if arr.ndim == 3:
@@ -218,6 +229,9 @@ def evaluate_sample(
     total_area_threshold: float,
     min_blob_area: float,
     ignore_mask: np.ndarray | None = None,
+    max_blob_count: int = 0,
+    max_largest_blob_area: float = 0.0,
+    max_anomaly_area_percent: float = 0.0,
 ) -> dict[str, Any]:
     image = _as_gray_u8(sample).astype(np.float32)
     ignored = _ignore_mask_bool(ignore_mask, tuple(image.shape[:2]))
@@ -261,10 +275,26 @@ def evaluate_sample(
         anomaly_area / valid_pixel_count * 100.0 if valid_pixel_count else 0.0
     )
 
-    status = (
-        "warn" if valid_pixel_count == 0
-        else "ok" if anomaly_area <= float(total_area_threshold) else "nok"
+    fail_area_px = anomaly_area > float(total_area_threshold)
+    fail_area_percent = (
+        float(max_anomaly_area_percent) > 0
+        and anomaly_area_percent > float(max_anomaly_area_percent)
     )
+    fail_largest_blob = (
+        float(max_largest_blob_area) > 0
+        and largest_blob_area > float(max_largest_blob_area)
+    )
+    fail_blob_count = int(max_blob_count) > 0 and blob_count > int(max_blob_count)
+    reasons = []
+    if fail_area_px:
+        reasons.append("area_px")
+    if fail_area_percent:
+        reasons.append("area_percent")
+    if fail_largest_blob:
+        reasons.append("largest_blob")
+    if fail_blob_count:
+        reasons.append("blob_count")
+    status = "warn" if valid_pixel_count == 0 else "nok" if reasons else "ok"
     overlay = cv2.cvtColor(_as_gray_u8(sample), cv2.COLOR_GRAY2BGR)
     overlay[filtered > 0] = (0, 0, 255)
 
@@ -277,6 +307,11 @@ def evaluate_sample(
         "largest_blob_area": int(largest_blob_area),
         "valid_pixel_count": valid_pixel_count,
         "ignored_pixel_count": ignored_pixel_count,
+        "fail_area_px": bool(fail_area_px),
+        "fail_area_percent": bool(fail_area_percent),
+        "fail_largest_blob": bool(fail_largest_blob),
+        "fail_blob_count": bool(fail_blob_count),
+        "decision_reason": ",".join(reasons),
         "max_deviation": max_dev,
         "mean_deviation": mean_dev,
         "binary_mask": filtered,

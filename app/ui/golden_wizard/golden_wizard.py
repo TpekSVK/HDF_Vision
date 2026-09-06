@@ -93,6 +93,8 @@ from app.services.presence_absence_v2_service import (
     resolve_assets_dir,
     save_model,
     save_sample,
+    score_threshold_to_sensitivity,
+    sensitivity_to_score_threshold,
 )
 from app.utils.tool_identity import compute_tool_identity
 from app.ui.view_utils import (
@@ -303,6 +305,7 @@ class ToolConfigPanel(QWidget):
         self._threshold_layout.setContentsMargins(0, 0, 0, 0)
         self._threshold_layout.setSpacing(6)
         self._threshold_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._presence_live_values: Optional[QLabel] = None
         geometry_content = QWidget(self)
         geometry_layout = QVBoxLayout(geometry_content)
         geometry_layout.setContentsMargins(0, 0, 0, 0)
@@ -794,6 +797,11 @@ class ToolConfigPanel(QWidget):
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
+                if self._current_tool.type == "presence.absence_v2" and isinstance(
+                        widget, (QSpinBox, QDoubleSpinBox)):
+                    unit = str(spec.get("unit", "") or "")
+                    if unit:
+                        widget.setSuffix(f" {unit}")
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
@@ -824,6 +832,11 @@ class ToolConfigPanel(QWidget):
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
+                if self._current_tool.type == "presence.absence_v2" and isinstance(
+                        widget, (QSpinBox, QDoubleSpinBox)):
+                    unit = str(spec.get("unit", "") or "")
+                    if unit:
+                        widget.setSuffix(f" {unit}")
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
@@ -839,8 +852,18 @@ class ToolConfigPanel(QWidget):
                 self._threshold_error_labels[name] = error_label
                 if tooltip:
                     container.setToolTip(tooltip)
-                self._threshold_layout.addRow(label, container)
+                target_layout = self._advanced_layout if (
+                    self._current_tool.type == "presence.absence_v2"
+                    and name in {"score_threshold", "total_area_threshold", "min_blob_area"}
+                ) else self._threshold_layout
+                target_layout.addRow(label, container)
                 added_fields = True
+
+        if self._current_tool.type == "presence.absence_v2":
+            self._presence_live_values = QLabel("Zatiaľ bez výsledku", self._threshold_container)
+            self._presence_live_values.setWordWrap(True)
+            self._presence_live_values.setStyleSheet("color: #9aa4af; padding-top: 4px;")
+            self._threshold_layout.addRow(self._presence_live_values)
 
         if not added_fields:
             placeholder = QLabel(
@@ -919,6 +942,19 @@ class ToolConfigPanel(QWidget):
                 }
             ]
 
+        if self._current_tool is not None and self._current_tool.type == "presence.absence_v2":
+            reason = self._presence_decision_reason(metrics.get("decision_reason"))
+            if reason and (result.status or "").lower() == "nok":
+                status_message = "\n".join(filter(None, (status_message, f"Dôvod: {reason}")))
+            if self._presence_live_values is not None:
+                self._presence_live_values.setText(
+                    "Aktuálna anomália: "
+                    f"{float(metrics.get('anomaly_area_percent', 0.0)):.1f} %\n"
+                    "Najväčší objekt: "
+                    f"{float(metrics.get('largest_blob_area', 0.0)):.0f} px\n"
+                    f"Počet objektov: {int(metrics.get('blob_count', 0) or 0)}"
+                )
+
         self._update_diagnostics(
             result.status,
             metrics,
@@ -928,6 +964,17 @@ class ToolConfigPanel(QWidget):
         )
         self._set_perf_overlay(diagnostics_breakdown)
         self._maybe_emit_locator_warning(metrics, diagnostics_payload)
+
+    @staticmethod
+    def _presence_decision_reason(value: object) -> str:
+        labels = {
+            "area_px": "prekročená chybná plocha",
+            "area_percent": "prekročená chybná plocha %",
+            "largest_blob": "príliš veľký objekt",
+            "blob_count": "príliš veľa objektov",
+        }
+        keys = [item.strip() for item in str(value or "").split(",") if item.strip()]
+        return ", ".join(labels.get(key, key) for key in keys)
 
     def show_test_error(self, message: str) -> None:
         self._update_diagnostics("nok", {}, None, message=message)
@@ -3606,6 +3653,10 @@ class GoldenWizard(QDialog):
             for key in ("score_threshold", "total_area_threshold", "min_blob_area"):
                 if key in recommended:
                     thresholds[key] = float(recommended[key])
+            if "sensitivity" in thresholds and "score_threshold" in recommended:
+                thresholds["sensitivity"] = int(round(score_threshold_to_sensitivity(
+                    recommended["score_threshold"]
+                )))
             tool.thresholds = ToolThresholds(thresholds)
         elif action == "validate":
             self._validate_presence_v2_samples(tool, dirs)
@@ -3631,23 +3682,37 @@ class GoldenWizard(QDialog):
             self._warn("Model nie je pripravený.")
             return
         thresholds, params = dict(tool.thresholds.values or {}), dict(tool.params.values or {})
+        score_threshold = (
+            sensitivity_to_score_threshold(thresholds["sensitivity"])
+            if "sensitivity" in thresholds
+            else float(thresholds.get("score_threshold", 4.0))
+        )
+        decision_limits = {
+            "max_blob_count": int(thresholds.get("max_blob_count", 0) or 0),
+            "max_largest_blob_area": float(
+                thresholds.get("max_largest_blob_area", 0.0) or 0.0
+            ),
+            "max_anomaly_area_percent": float(
+                thresholds.get("max_anomaly_area_percent", 0.0) or 0.0
+            ),
+        }
         correct_ok = correct_nok = 0
         ok_samples, nok_samples = load_samples(dirs["ok"]), load_samples(dirs["nok"])
         for sample in ok_samples:
             result = evaluate_sample(sample, model.median, model.mad,
                 polarity=str(params.get("polarity", "any")),
-                score_threshold=float(thresholds.get("score_threshold", 4.0)),
+                score_threshold=score_threshold,
                 total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
                 min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
-                ignore_mask=self._presence_v2_ignore_mask(tool))
+                ignore_mask=self._presence_v2_ignore_mask(tool), **decision_limits)
             correct_ok += result["status"] == "ok"
         for sample in nok_samples:
             result = evaluate_sample(sample, model.median, model.mad,
                 polarity=str(params.get("polarity", "any")),
-                score_threshold=float(thresholds.get("score_threshold", 4.0)),
+                score_threshold=score_threshold,
                 total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
                 min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
-                ignore_mask=self._presence_v2_ignore_mask(tool))
+                ignore_mask=self._presence_v2_ignore_mask(tool), **decision_limits)
             correct_nok += result["status"] == "nok"
         total = len(ok_samples) + len(nok_samples)
         accuracy = 100.0 * (correct_ok + correct_nok) / total if total else 0.0
