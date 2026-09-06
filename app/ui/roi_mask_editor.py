@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from enum import Enum
 from typing import List, Optional, Tuple
 
 import cv2
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QGraphicsPathItem,
+    QGraphicsItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QHBoxLayout,
@@ -62,28 +64,52 @@ def _clamp_point_to_rect(point: QPointF, rect: QRectF) -> QPointF:
     return QPointF(x, y)
 
 
+class RoiHandle(Enum):
+    TOP_LEFT = "top_left"
+    TOP = "top"
+    TOP_RIGHT = "top_right"
+    LEFT = "left"
+    RIGHT = "right"
+    BOTTOM_LEFT = "bottom_left"
+    BOTTOM = "bottom"
+    BOTTOM_RIGHT = "bottom_right"
+
+
 class _ROIView(_ImageView):
     """View handling rectangle ROI selection with history support."""
 
     roiChanged = Signal(object)
     historyChanged = Signal()
+    MIN_ROI_SIZE = 4.0
+    HANDLE_SIZE = 9.0
+    HANDLE_HIT_RADIUS = 9.0
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._roi_item: Optional[QGraphicsRectItem] = None
         self._overlay_item: Optional[QGraphicsPathItem] = None
+        self._handle_items: dict[RoiHandle, QGraphicsRectItem] = {}
         self._drawing = False
         self._start_pos = QPointF()
+        self._edit_handle: Optional[RoiHandle] = None
+        self._moving_roi = False
+        self._edit_start_pos = QPointF()
+        self._edit_origin: Optional[Tuple[int, int, int, int]] = None
+        self._preview_rect: Optional[QRectF] = None
         self._roi_rect: Optional[Tuple[int, int, int, int]] = None
         self._undo_stack: List[Optional[Tuple[int, int, int, int]]] = []
         self._redo_stack: List[Optional[Tuple[int, int, int, int]]] = []
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
 
     # ------------------------------------------------------------------
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
         super().set_pixmap(pixmap)
         self._roi_item = None
         self._overlay_item = None
+        self._handle_items = {}
         self._roi_rect = None
+        self._clear_edit_state()
         self._undo_stack.clear()
         self._redo_stack.clear()
         self.historyChanged.emit()
@@ -131,6 +157,18 @@ class _ROIView(_ImageView):
         if self.is_pan_gesture(event):
             super().mousePressEvent(event)
             return
+        if (
+            event.button() == Qt.LeftButton
+            and self.isEnabled()
+            and self.interaction_mode() == InteractionMode.SELECT
+            and self._roi_rect is not None
+        ):
+            scene_pos = self.mapToScene(event.position().toPoint())
+            handle = self._hit_test_handle(event.position().toPoint())
+            if handle is not None or self._roi_qrect().contains(scene_pos):
+                self._begin_roi_edit(scene_pos, handle)
+                event.accept()
+                return
         if event.button() == Qt.LeftButton and self.can_draw() and self.scene_rect():
             scene_pos = self.mapToScene(event.position().toPoint())
             if not self.scene_rect().contains(scene_pos):
@@ -143,6 +181,11 @@ class _ROIView(_ImageView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._edit_origin is not None:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self._update_roi_edit(scene_pos)
+            event.accept()
+            return
         if self._drawing:
             scene_pos = self.mapToScene(event.position().toPoint())
             scene_pos = _clamp_point_to_rect(scene_pos, self.scene_rect())
@@ -150,9 +193,16 @@ class _ROIView(_ImageView):
             self._update_roi_item(rect)
             event.accept()
             return
+        if event.buttons() == Qt.NoButton:
+            self._update_roi_cursor(event.position().toPoint())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._edit_origin is not None and event.button() == Qt.LeftButton:
+            self._finish_roi_edit()
+            self._update_roi_cursor(event.position().toPoint())
+            event.accept()
+            return
         if self._drawing and event.button() == Qt.LeftButton:
             self._drawing = False
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -180,9 +230,163 @@ class _ROIView(_ImageView):
 
     # ------------------------------------------------------------------
     def cancel_drawing(self) -> None:
+        if self._edit_origin is not None:
+            self._restore_roi_preview()
+            self._clear_edit_state()
         if self._drawing:
             self._drawing = False
             self._restore_roi_preview()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._edit_origin is None:
+            self._update_cursor()
+        super().leaveEvent(event)
+
+    def _roi_qrect(self) -> QRectF:
+        if self._roi_rect is None:
+            return QRectF()
+        return QRectF(*(float(value) for value in self._roi_rect))
+
+    def _begin_roi_edit(self, scene_pos: QPointF, handle: Optional[RoiHandle]) -> None:
+        self._edit_origin = self.roi()
+        self._edit_start_pos = scene_pos
+        self._edit_handle = handle
+        self._moving_roi = handle is None
+        self._preview_rect = self._roi_qrect()
+        self._set_edit_cursor()
+
+    def _update_roi_edit(self, scene_pos: QPointF) -> None:
+        if self._edit_origin is None:
+            return
+        original = QRectF(*(float(value) for value in self._edit_origin))
+        if self._moving_roi:
+            preview = self._move_rect(original, scene_pos - self._edit_start_pos)
+        elif self._edit_handle is not None:
+            preview = self._resize_rect(original, scene_pos, self._edit_handle)
+        else:
+            return
+        self._preview_rect = preview
+        self._update_roi_item(preview)
+
+    def _move_rect(self, rect: QRectF, delta: QPointF) -> QRectF:
+        bounds = self.scene_rect()
+        left = min(max(rect.left() + delta.x(), bounds.left()), bounds.right() - rect.width())
+        top = min(max(rect.top() + delta.y(), bounds.top()), bounds.bottom() - rect.height())
+        return QRectF(left, top, rect.width(), rect.height())
+
+    def _resize_rect(self, rect: QRectF, point: QPointF, handle: RoiHandle) -> QRectF:
+        bounds = self.scene_rect()
+        point = _clamp_point_to_rect(point, bounds)
+        left, top, right, bottom = rect.left(), rect.top(), rect.right(), rect.bottom()
+
+        if handle in (RoiHandle.TOP_LEFT, RoiHandle.LEFT, RoiHandle.BOTTOM_LEFT):
+            left = min(max(point.x(), bounds.left()), right - self.MIN_ROI_SIZE)
+        if handle in (RoiHandle.TOP_RIGHT, RoiHandle.RIGHT, RoiHandle.BOTTOM_RIGHT):
+            right = max(min(point.x(), bounds.right()), left + self.MIN_ROI_SIZE)
+        if handle in (RoiHandle.TOP_LEFT, RoiHandle.TOP, RoiHandle.TOP_RIGHT):
+            top = min(max(point.y(), bounds.top()), bottom - self.MIN_ROI_SIZE)
+        if handle in (RoiHandle.BOTTOM_LEFT, RoiHandle.BOTTOM, RoiHandle.BOTTOM_RIGHT):
+            bottom = max(min(point.y(), bounds.bottom()), top + self.MIN_ROI_SIZE)
+        return QRectF(QPointF(left, top), QPointF(right, bottom))
+
+    def _finish_roi_edit(self) -> None:
+        origin = self._edit_origin
+        preview = self._preview_rect
+        self._clear_edit_state()
+        if origin is None or preview is None:
+            return
+        rect = (
+            int(round(preview.left())),
+            int(round(preview.top())),
+            max(int(self.MIN_ROI_SIZE), int(round(preview.width()))),
+            max(int(self.MIN_ROI_SIZE), int(round(preview.height()))),
+        )
+        rect = self._clamp_integer_rect(rect)
+        if rect == origin:
+            self._restore_roi_preview()
+            return
+        self._undo_stack.append(origin)
+        if len(self._undo_stack) > 100:
+            self._undo_stack.pop(0)
+        self._redo_stack.clear()
+        self._apply_roi(rect, push_history=False)
+        self.historyChanged.emit()
+
+    def _clamp_integer_rect(
+        self, rect: Tuple[int, int, int, int]
+    ) -> Tuple[int, int, int, int]:
+        bounds = self.scene_rect()
+        x, y, width, height = rect
+        min_size = int(self.MIN_ROI_SIZE)
+        width = min(max(min_size, width), int(round(bounds.width())))
+        height = min(max(min_size, height), int(round(bounds.height())))
+        x = min(max(int(round(bounds.left())), x), int(round(bounds.right())) - width)
+        y = min(max(int(round(bounds.top())), y), int(round(bounds.bottom())) - height)
+        return x, y, width, height
+
+    def _clear_edit_state(self) -> None:
+        self._edit_handle = None
+        self._moving_roi = False
+        self._edit_origin = None
+        self._preview_rect = None
+        self._update_cursor()
+
+    def _handle_centers(self, rect: QRectF) -> dict[RoiHandle, QPointF]:
+        return {
+            RoiHandle.TOP_LEFT: rect.topLeft(),
+            RoiHandle.TOP: QPointF(rect.center().x(), rect.top()),
+            RoiHandle.TOP_RIGHT: rect.topRight(),
+            RoiHandle.LEFT: QPointF(rect.left(), rect.center().y()),
+            RoiHandle.RIGHT: QPointF(rect.right(), rect.center().y()),
+            RoiHandle.BOTTOM_LEFT: rect.bottomLeft(),
+            RoiHandle.BOTTOM: QPointF(rect.center().x(), rect.bottom()),
+            RoiHandle.BOTTOM_RIGHT: rect.bottomRight(),
+        }
+
+    def _hit_test_handle(self, view_pos) -> Optional[RoiHandle]:
+        rect = self._preview_rect or self._roi_qrect()
+        if rect.isNull():
+            return None
+        for handle, center in self._handle_centers(rect).items():
+            handle_pos = self.mapFromScene(center)
+            if (
+                abs(handle_pos.x() - view_pos.x()) <= self.HANDLE_HIT_RADIUS
+                and abs(handle_pos.y() - view_pos.y()) <= self.HANDLE_HIT_RADIUS
+            ):
+                return handle
+        return None
+
+    @staticmethod
+    def _handle_cursor(handle: RoiHandle):
+        if handle in (RoiHandle.LEFT, RoiHandle.RIGHT):
+            return Qt.SizeHorCursor
+        if handle in (RoiHandle.TOP, RoiHandle.BOTTOM):
+            return Qt.SizeVerCursor
+        if handle in (RoiHandle.TOP_LEFT, RoiHandle.BOTTOM_RIGHT):
+            return Qt.SizeFDiagCursor
+        return Qt.SizeBDiagCursor
+
+    def _set_edit_cursor(self) -> None:
+        if self._moving_roi:
+            self.setCursor(Qt.SizeAllCursor)
+        elif self._edit_handle is not None:
+            self.setCursor(self._handle_cursor(self._edit_handle))
+
+    def _update_roi_cursor(self, view_pos) -> None:
+        if (
+            not self.isEnabled()
+            or self.interaction_mode() != InteractionMode.SELECT
+            or self._roi_rect is None
+            or self._space_pressed
+        ):
+            self._update_cursor()
+            return
+        handle = self._hit_test_handle(view_pos)
+        if handle is not None:
+            self.setCursor(self._handle_cursor(handle))
+            return
+        scene_pos = self.mapToScene(view_pos)
+        self.setCursor(Qt.SizeAllCursor if self._roi_qrect().contains(scene_pos) else Qt.ArrowCursor)
 
     def _restore_roi_preview(self) -> None:
         if self._roi_rect is not None:
@@ -205,6 +409,7 @@ class _ROIView(_ImageView):
             if self._roi_item is not None:
                 self.scene().removeItem(self._roi_item)
                 self._roi_item = None
+            self._remove_handles()
         else:
             left, top, width, height = rect
             roi_rectf = QRectF(float(left), float(top), float(width), float(height))
@@ -218,6 +423,7 @@ class _ROIView(_ImageView):
                 self.scene().addItem(self._roi_item)
             else:
                 self._roi_item.setRect(roi_rectf)
+            self._update_handles(roi_rectf)
         self._update_overlay()
         self.roiChanged.emit(self.roi())
 
@@ -234,7 +440,31 @@ class _ROIView(_ImageView):
             self.scene().addItem(self._roi_item)
         else:
             self._roi_item.setRect(rect)
+        self._update_handles(rect)
         self._update_overlay(rect)
+
+    def _update_handles(self, rect: QRectF) -> None:
+        half = self.HANDLE_SIZE / 2.0
+        pen = QPen(QColor(225, 240, 255))
+        pen.setWidthF(1.0)
+        for handle, center in self._handle_centers(rect).items():
+            item = self._handle_items.get(handle)
+            if item is None:
+                item = QGraphicsRectItem(-half, -half, self.HANDLE_SIZE, self.HANDLE_SIZE)
+                item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+                item.setAcceptedMouseButtons(Qt.NoButton)
+                item.setPen(pen)
+                item.setBrush(QColor(75, 165, 235))
+                item.setZValue(110)
+                self.scene().addItem(item)
+                self._handle_items[handle] = item
+            item.setPos(center)
+            item.setVisible(True)
+
+    def _remove_handles(self) -> None:
+        for item in self._handle_items.values():
+            self.scene().removeItem(item)
+        self._handle_items.clear()
 
     def _update_overlay(self, preview_rect: Optional[QRectF] = None) -> None:
         scene_rect = self.scene_rect()
