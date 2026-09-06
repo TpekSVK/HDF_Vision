@@ -3463,6 +3463,22 @@ class GoldenWizard(QDialog):
             return None
         return int(rect[3]), int(rect[2])
 
+    @staticmethod
+    def _presence_v2_ignore_mask(tool: Tool) -> Optional[np.ndarray]:
+        mask = tool.ignore_mask.value
+        rect = tool.roi.rect()
+        if mask is None or rect is None:
+            return None
+        value = np.asarray(mask)
+        if value.ndim == 3:
+            value = value[:, :, 0]
+        x, y, width, height = rect
+        if value.shape[:2] == (height, width):
+            return value.copy()
+        if value.shape[0] >= y + height and value.shape[1] >= x + width:
+            return value[y:y + height, x:x + width].copy()
+        return None
+
     def _refresh_presence_v2_learning(self, tool: Tool, row: int) -> None:
         context = self._presence_v2_context()
         if context is None:
@@ -3562,6 +3578,7 @@ class GoldenWizard(QDialog):
                     polarity=str(params.get("polarity", "any")),
                     min_ok_samples=int(params.get("min_ok_samples", 15) or 15),
                     expected_shape=self._presence_v2_expected_shape(tool),
+                    ignore_mask=self._presence_v2_ignore_mask(tool),
                 )
             except ValueError as exc:
                 self._warn(str(exc))
@@ -3621,14 +3638,16 @@ class GoldenWizard(QDialog):
                 polarity=str(params.get("polarity", "any")),
                 score_threshold=float(thresholds.get("score_threshold", 4.0)),
                 total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
-                min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+                min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
+                ignore_mask=self._presence_v2_ignore_mask(tool))
             correct_ok += result["status"] == "ok"
         for sample in nok_samples:
             result = evaluate_sample(sample, model.median, model.mad,
                 polarity=str(params.get("polarity", "any")),
                 score_threshold=float(thresholds.get("score_threshold", 4.0)),
                 total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
-                min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+                min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
+                ignore_mask=self._presence_v2_ignore_mask(tool))
             correct_nok += result["status"] == "nok"
         total = len(ok_samples) + len(nok_samples)
         accuracy = 100.0 * (correct_ok + correct_nok) / total if total else 0.0

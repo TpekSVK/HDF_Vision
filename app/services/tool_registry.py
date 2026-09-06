@@ -722,7 +722,11 @@ def _register_default_tools() -> None:
             "metrics_spec": [
                 {"key": "anomaly_score", "priority": 10, "description": "Maximálne robustné skóre"},
                 {"key": "anomaly_area", "unit": "px", "priority": 9, "description": "Anomálna plocha"},
+                {"key": "anomaly_area_percent", "unit": "%", "priority": 9, "description": "Anomálna plocha"},
+                {"key": "largest_blob_area", "unit": "px", "priority": 8, "description": "Najväčší objekt"},
                 {"key": "blob_count", "priority": 8, "description": "Počet blobov"},
+                {"key": "ignored_pixel_count", "unit": "px", "priority": 7, "description": "Ignorované pixely"},
+                {"key": "valid_pixel_count", "unit": "px", "priority": 7, "description": "Platné pixely"},
                 {"key": "max_deviation", "priority": 7, "description": "Max odchýlka"},
                 {"key": "mean_deviation", "priority": 6, "description": "Priemerná odchýlka"},
                 {"key": "model_ready", "priority": 5, "description": "Pripravenosť modelu"},
