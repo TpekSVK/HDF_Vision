@@ -8,12 +8,10 @@ from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
-    QCursor,
     QImage,
-    QPainter,
     QPainterPath,
     QPen,
     QPixmap,
@@ -22,12 +20,9 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QFrame,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
-    QGraphicsScene,
-    QGraphicsView,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -37,6 +32,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+from app.ui.image_canvas import ImageView as _ImageView, ImageNavigationToolbar, InteractionMode
 
 
 _ROI_COLOR = QColor(0, 200, 0, 200)
@@ -62,169 +60,6 @@ def _clamp_point_to_rect(point: QPointF, rect: QRectF) -> QPointF:
     x = min(max(point.x(), rect.left()), rect.right())
     y = min(max(point.y(), rect.top()), rect.bottom())
     return QPointF(x, y)
-
-
-class _ImageView(QGraphicsView):
-    """Common graphics view with wheel zoom and panning."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setScene(QGraphicsScene(self))
-        self.setRenderHint(QPainter.Antialiasing, True)
-        self.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        self.setDragMode(QGraphicsView.NoDrag)
-        self.setFrameShape(QFrame.NoFrame)
-        self._pixmap_item: Optional[QGraphicsPixmapItem] = None
-        self._current_scale = 1.0
-        self._panning = False
-        self._pan_start = QPoint()
-        self._space_pressed = False
-        self._pending_fit_to_view = False
-        self._fit_schedule_queued = False
-        self._fit_retry_scheduled = False
-
-    # ------------------------------------------------------------------
-    # Scene helpers
-    # ------------------------------------------------------------------
-    def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
-        scene = self.scene()
-        if scene is None:
-            scene = QGraphicsScene(self)
-            self.setScene(scene)
-        scene.clear()
-        self._pixmap_item = None
-        if pixmap is not None and not pixmap.isNull():
-            self._pixmap_item = scene.addPixmap(pixmap)
-            self._pixmap_item.setZValue(-100)
-            scene.setSceneRect(QRectF(0, 0, pixmap.width(), pixmap.height()))
-        else:
-            scene.setSceneRect(QRectF())
-        self._current_scale = 1.0
-        self.resetTransform()
-        self.schedule_fit_to_view(source="set_pixmap")
-
-    def schedule_fit_to_view(self, *, source: str = "unknown") -> None:
-        self._pending_fit_to_view = self._pixmap_item is not None
-        if not self._pending_fit_to_view:
-            return
-        print(f"[FIT_TO_VIEW] schedule requested source={source}")
-        if self._fit_schedule_queued:
-            return
-        self._fit_schedule_queued = True
-        QTimer.singleShot(0, self._run_scheduled_fit)
-
-    def _run_scheduled_fit(self) -> None:
-        self._fit_schedule_queued = False
-        if not self._pending_fit_to_view:
-            return
-        if self.fit_image_to_view(force=False):
-            print("[FIT_TO_VIEW] applied successfully")
-            self._fit_retry_scheduled = False
-            return
-        if not self._fit_retry_scheduled:
-            self._fit_retry_scheduled = True
-            QTimer.singleShot(30, self._run_scheduled_fit)
-
-    def fit_image_to_view(self, *, force: bool = True) -> bool:
-        if self._pixmap_item is None:
-            self._pending_fit_to_view = False
-            return False
-        if not force:
-            viewport = self.viewport()
-            if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
-                width = 0 if viewport is None else viewport.width()
-                height = 0 if viewport is None else viewport.height()
-                print(
-                    f"[FIT_TO_VIEW] skipped viewport too small width={width} height={height}"
-                )
-                return False
-        self._current_scale = 1.0
-        self.resetTransform()
-        self.fitInView(self._pixmap_item, Qt.KeepAspectRatio)
-        self._pending_fit_to_view = False
-        return True
-
-    def scene_rect(self) -> QRectF:
-        scene = self.scene()
-        if scene is None:
-            return QRectF()
-        return scene.sceneRect()
-
-    # ------------------------------------------------------------------
-    # Interaction helpers
-    # ------------------------------------------------------------------
-    def wheelEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self._pixmap_item is None:
-            return
-        angle = event.angleDelta().y()
-        if angle == 0:
-            return
-        factor = 1.25 if angle > 0 else 0.8
-        new_scale = self._current_scale * factor
-        new_scale = max(0.1, min(48.0, new_scale))
-        factor = new_scale / self._current_scale
-        self._current_scale = new_scale
-        self.scale(factor, factor)
-        event.accept()
-
-    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.button() == Qt.MiddleButton or (event.button() == Qt.LeftButton and self._space_pressed):
-            self._panning = True
-            self._pan_start = event.pos()
-            self.setCursor(QCursor(Qt.ClosedHandCursor))
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if self._panning:
-            delta = event.pos() - self._pan_start
-            self._pan_start = event.pos()
-            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
-            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.button() == Qt.MiddleButton or event.button() == Qt.LeftButton:
-            if self._panning:
-                self._panning = False
-                if not self._space_pressed:
-                    self.setCursor(QCursor(Qt.ArrowCursor))
-                else:
-                    self.setCursor(QCursor(Qt.OpenHandCursor))
-                event.accept()
-                return
-        super().mouseReleaseEvent(event)
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.key() == Qt.Key_Space and not self._space_pressed:
-            self._space_pressed = True
-            if not self._panning:
-                self.setCursor(QCursor(Qt.OpenHandCursor))
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.key() == Qt.Key_Space and self._space_pressed:
-            self._space_pressed = False
-            if not self._panning:
-                self.setCursor(QCursor(Qt.ArrowCursor))
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
-    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().showEvent(event)
-        if self._pending_fit_to_view:
-            self.schedule_fit_to_view(source="showEvent")
-
-    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
-        super().resizeEvent(event)
-        if self._pending_fit_to_view:
-            self.schedule_fit_to_view(source="resizeEvent")
 
 
 class _ROIView(_ImageView):
@@ -293,9 +128,14 @@ class _ROIView(_ImageView):
 
     # ------------------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.button() == Qt.LeftButton and self.scene_rect():
-            scene_pos = self.mapToScene(event.pos())
-            scene_pos = _clamp_point_to_rect(scene_pos, self.scene_rect())
+        if self.is_pan_gesture(event):
+            super().mousePressEvent(event)
+            return
+        if event.button() == Qt.LeftButton and self.can_draw() and self.scene_rect():
+            scene_pos = self.mapToScene(event.position().toPoint())
+            if not self.scene_rect().contains(scene_pos):
+                event.accept()
+                return
             self._drawing = True
             self._start_pos = scene_pos
             event.accept()
@@ -304,7 +144,7 @@ class _ROIView(_ImageView):
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._drawing:
-            scene_pos = self.mapToScene(event.pos())
+            scene_pos = self.mapToScene(event.position().toPoint())
             scene_pos = _clamp_point_to_rect(scene_pos, self.scene_rect())
             rect = QRectF(self._start_pos, scene_pos).normalized()
             self._update_roi_item(rect)
@@ -315,7 +155,7 @@ class _ROIView(_ImageView):
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
         if self._drawing and event.button() == Qt.LeftButton:
             self._drawing = False
-            scene_pos = self.mapToScene(event.pos())
+            scene_pos = self.mapToScene(event.position().toPoint())
             scene_pos = _clamp_point_to_rect(scene_pos, self.scene_rect())
             rect = QRectF(self._start_pos, scene_pos).normalized()
             if rect.width() >= 1 and rect.height() >= 1:
@@ -331,13 +171,27 @@ class _ROIView(_ImageView):
                 )
                 self._redo_stack.clear()
                 self.historyChanged.emit()
+                self.set_interaction_mode(InteractionMode.SELECT)
             else:
-                self._update_overlay()
+                self._restore_roi_preview()
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     # ------------------------------------------------------------------
+    def cancel_drawing(self) -> None:
+        if self._drawing:
+            self._drawing = False
+            self._restore_roi_preview()
+
+    def _restore_roi_preview(self) -> None:
+        if self._roi_rect is not None:
+            self._update_roi_item(QRectF(*self._roi_rect))
+        elif self._roi_item is not None:
+            self.scene().removeItem(self._roi_item)
+            self._roi_item = None
+        self._update_overlay()
+
     def _push_undo(self) -> None:
         self._undo_stack.append(self.roi())
         if len(self._undo_stack) > 100:
@@ -442,6 +296,7 @@ class _MaskView(_ImageView):
         self._mode = self.MODE_BRUSH_ADD
         self._brush_radius = 24
         self._painting = False
+        self._stroke_before: Optional[np.ndarray] = None
         self._last_point: Optional[QPointF] = None
         self._polygon_points: List[QPointF] = []
         self._polygon_item: Optional[QGraphicsPathItem] = None
@@ -469,10 +324,10 @@ class _MaskView(_ImageView):
         self._undo_stack.clear()
         self._redo_stack.clear()
         self._polygon_points.clear()
-        self._remove_polygon_item()
+        self._polygon_item = None
         self._shape_start = None
         self._circle_points.clear()
-        self._remove_shape_preview()
+        self._shape_preview_item = None
         self._roi_overlay_item = None
         self._update_mask_item()
         self._update_roi_overlay()
@@ -490,6 +345,8 @@ class _MaskView(_ImageView):
             return
         if self._mode == mode:
             return
+
+        self.cancel_drawing()
 
         if self._mode == self.MODE_POLYGON:
             self._polygon_points.clear()
@@ -616,12 +473,15 @@ class _MaskView(_ImageView):
 
     # ------------------------------------------------------------------
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self.is_pan_gesture(event) or not self.can_draw():
+            super().mousePressEvent(event)
+            return
         if self._mask is None or self.scene_rect().isNull():
             super().mousePressEvent(event)
             return
 
         if event.button() == Qt.LeftButton:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             if self._mode == self.MODE_SHAPE_CIRCLE:
                 self._circle_points.append(scene_pos)
                 if len(self._circle_points) >= 3:
@@ -642,8 +502,7 @@ class _MaskView(_ImageView):
                 self._update_polygon_preview(scene_pos)
                 event.accept()
                 return
-            self._push_undo()
-            self._redo_stack.clear()
+            self._stroke_before = self._mask.copy()
             self._painting = True
             self._last_point = scene_pos
             self._apply_brush_point(scene_pos)
@@ -672,26 +531,29 @@ class _MaskView(_ImageView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if self._panning or self._space_pressed:
+            super().mouseMoveEvent(event)
+            return
         if self._painting and self._mask is not None:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             self._apply_brush_segment(scene_pos)
             event.accept()
             return
 
         if self._mode == self.MODE_SHAPE_CIRCLE and self._circle_points:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             self._update_shape_preview(scene_pos)
             event.accept()
             return
 
         if self._mode == self.MODE_SHAPE_RECTANGLE and self._shape_start is not None:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             self._update_shape_preview(scene_pos)
             event.accept()
             return
 
         if self._mode == self.MODE_POLYGON and self._polygon_points:
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             self._update_polygon_preview(scene_pos)
             event.accept()
             return
@@ -704,7 +566,7 @@ class _MaskView(_ImageView):
             and self._shape_start is not None
             and event.button() == Qt.LeftButton
         ):
-            scene_pos = _clamp_point_to_rect(self.mapToScene(event.pos()), self.scene_rect())
+            scene_pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
             start = self._shape_start
             self._shape_start = None
             self._remove_shape_preview()
@@ -715,6 +577,11 @@ class _MaskView(_ImageView):
         if self._painting and event.button() == Qt.LeftButton:
             self._painting = False
             self._last_point = None
+            if self._stroke_before is not None:
+                self._undo_stack.append(self._stroke_before)
+                self._undo_stack = self._undo_stack[-100:]
+                self._redo_stack.clear()
+                self._stroke_before = None
             self.maskChanged.emit(self.mask())
             self.historyChanged.emit()
             event.accept()
@@ -722,6 +589,9 @@ class _MaskView(_ImageView):
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self.can_draw():
+            super().mouseDoubleClickEvent(event)
+            return
         if self._mode == self.MODE_POLYGON and self._polygon_points and event.button() == Qt.LeftButton:
             if len(self._polygon_points) >= 3:
                 self._push_undo()
@@ -743,6 +613,19 @@ class _MaskView(_ImageView):
         super().mouseDoubleClickEvent(event)
 
     # ------------------------------------------------------------------
+    def cancel_drawing(self) -> None:
+        if self._painting and self._stroke_before is not None:
+            self._mask = self._stroke_before
+            self._update_mask_item()
+        self._stroke_before = None
+        self._painting = False
+        self._last_point = None
+        self._polygon_points.clear()
+        self._remove_polygon_item()
+        self._shape_start = None
+        self._circle_points.clear()
+        self._remove_shape_preview()
+
     def _push_undo(self) -> None:
         if self._mask is None:
             return
@@ -1122,6 +1005,8 @@ class ROIEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+        self._navigation = ImageNavigationToolbar(self._view, self)
+        layout.addWidget(self._navigation)
         layout.addWidget(self._view, 1)
 
         toolbar = QHBoxLayout()
@@ -1302,6 +1187,8 @@ class MaskEditor(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
+        self._navigation = ImageNavigationToolbar(self._view, self)
+        layout.addWidget(self._navigation)
         layout.addWidget(self._view, 1)
 
         toolbar_top = QHBoxLayout()

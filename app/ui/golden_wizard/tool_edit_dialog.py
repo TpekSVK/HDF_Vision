@@ -308,7 +308,7 @@ class EdgeAnchorEditor(_ImageView):
         return self._point_a, self._point_b
 
     def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
-        if event.button() == Qt.LeftButton and not self._space_pressed:
+        if event.button() == Qt.LeftButton and not self.is_pan_gesture(event):
             scene_rect = self.scene_rect()
             point = self.mapToScene(event.position().toPoint())
             if scene_rect.contains(point):
@@ -664,7 +664,8 @@ class ToolEditDialog(QDialog):
                     self._angle_roi_editor.set_roi(initial_angle_roi)
             self._schedule_active_tab_fit(source="initial_load")
             instructions = [
-                "Scroll to zoom, use the middle mouse button or space + drag to pan."
+                "Select preserves existing ROI. Choose Draw to edit; Esc cancels. "
+                "Zoom: +/− or wheel; F: Fit; 1: 100%. Pan: Space + drag or middle drag."
             ]
             if self._supports_roi and self._supports_mask:
                 instructions.append("Draw the ROI rectangle and paint the ignore mask directly on the golden image.")
@@ -700,15 +701,12 @@ class ToolEditDialog(QDialog):
     def _schedule_active_tab_fit(self, *, source: str) -> None:
         current = self._tabs.currentIndex()
         if self._roi_tab_index is not None and current == self._roi_tab_index and self._roi_editor is not None:
-            print("[FIT_TO_VIEW] tab activated roi")
             self._roi_editor.schedule_fit_to_view(source=f"tab_roi:{source}")
             return
         if self._edge_anchor_tab_index is not None and current == self._edge_anchor_tab_index and self._edge_anchor_editor is not None:
-            print("[FIT_TO_VIEW] tab activated edge_anchor")
             self._edge_anchor_editor.schedule_fit_to_view(source=f"tab_edge_anchor:{source}")
             return
         if self._mask_tab_index is not None and current == self._mask_tab_index and self._mask_editor is not None:
-            print("[FIT_TO_VIEW] tab activated ignore_mask")
             self._mask_editor.schedule_fit_to_view(source=f"tab_ignore_mask:{source}")
 
     def _on_tab_changed(self, _index: int) -> None:
