@@ -37,6 +37,19 @@ def _as_gray_u8(image: np.ndarray) -> np.ndarray:
     return arr
 
 
+def _ignore_mask_bool(ignore_mask: np.ndarray | None, shape: tuple[int, int]) -> np.ndarray:
+    if ignore_mask is None:
+        return np.zeros(shape, dtype=bool)
+    mask = np.asarray(ignore_mask)
+    if mask.ndim == 3:
+        mask = mask[:, :, 0]
+    if tuple(mask.shape[:2]) != tuple(shape):
+        raise ValueError(
+            f"Ignore Mask má rozmer {tuple(mask.shape[:2])}, očakáva sa {tuple(shape)}."
+        )
+    return mask > 0
+
+
 def compute_roi_hash(roi: tuple[int, int, int, int] | None, ignore_mask: np.ndarray | None) -> str:
     payload: dict[str, Any] = {"roi": tuple(roi) if roi is not None else None}
     if ignore_mask is not None:
@@ -134,6 +147,7 @@ def build_model(
     eps: float = 1.0,
     min_ok_samples: int = 1,
     expected_shape: tuple[int, int] | None = None,
+    ignore_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, float], list[str], PresenceV2BuildInfo]:
     if not ok_samples:
         raise ValueError("Nie sú dostupné OK vzorky pre výpočet modelu.")
@@ -146,13 +160,21 @@ def build_model(
         )
 
     stack = np.stack([sample.astype(np.float32) for sample in compatible], axis=0)
+    ignored = _ignore_mask_bool(ignore_mask, tuple(stack.shape[1:3]))
+    if np.all(ignored):
+        raise ValueError("Ignore Mask zakrýva celú oblasť kontroly.")
     median = np.median(stack, axis=0)
     mad = np.median(np.abs(stack - median[None, :, :]), axis=0) + float(eps)
+    median[ignored] = 0.0
+    mad[ignored] = 1.0
 
     scores: list[float] = []
     areas: list[float] = []
     for sample in stack:
-        metrics = evaluate_sample(sample, median, mad, polarity=polarity, score_threshold=3.0, total_area_threshold=0.0, min_blob_area=1.0)
+        metrics = evaluate_sample(
+            sample, median, mad, polarity=polarity, score_threshold=3.0,
+            total_area_threshold=0.0, min_blob_area=1.0, ignore_mask=ignored,
+        )
         scores.append(float(metrics["anomaly_score"]))
         areas.append(float(metrics["anomaly_area"]))
 
@@ -195,8 +217,13 @@ def evaluate_sample(
     score_threshold: float,
     total_area_threshold: float,
     min_blob_area: float,
+    ignore_mask: np.ndarray | None = None,
 ) -> dict[str, Any]:
     image = _as_gray_u8(sample).astype(np.float32)
+    ignored = _ignore_mask_bool(ignore_mask, tuple(image.shape[:2]))
+    valid = ~ignored
+    valid_pixel_count = int(np.count_nonzero(valid))
+    ignored_pixel_count = int(np.count_nonzero(ignored))
     diff_raw = image - median.astype(np.float32)
     mode = str(polarity or "any").strip().lower()
     if mode == "darker_only":
@@ -207,26 +234,37 @@ def evaluate_sample(
         diff = np.abs(diff_raw)
 
     robust = diff / np.maximum(mad.astype(np.float32), 1.0)
+    robust[ignored] = 0.0
     binary = (robust >= float(score_threshold)).astype(np.uint8) * 255
+    binary[ignored] = 0
     kernel = np.ones((3, 3), dtype=np.uint8)
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
+    binary[ignored] = 0
 
     n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
     filtered = np.zeros_like(binary)
     blob_count = 0
+    largest_blob_area = 0
     for idx in range(1, int(n_labels)):
         area = int(stats[idx, cv2.CC_STAT_AREA])
         if area >= float(min_blob_area):
             filtered[labels == idx] = 255
             blob_count += 1
+            largest_blob_area = max(largest_blob_area, area)
 
     anomaly_area = float(np.count_nonzero(filtered))
-    anomaly_score = float(np.max(robust)) if robust.size else 0.0
-    max_dev = float(np.max(diff)) if diff.size else 0.0
-    mean_dev = float(np.mean(diff)) if diff.size else 0.0
+    anomaly_score = float(np.max(robust[valid])) if valid_pixel_count else 0.0
+    max_dev = float(np.max(diff[valid])) if valid_pixel_count else 0.0
+    mean_dev = float(np.mean(diff[valid])) if valid_pixel_count else 0.0
+    anomaly_area_percent = (
+        anomaly_area / valid_pixel_count * 100.0 if valid_pixel_count else 0.0
+    )
 
-    status = "ok" if anomaly_area <= float(total_area_threshold) else "nok"
+    status = (
+        "warn" if valid_pixel_count == 0
+        else "ok" if anomaly_area <= float(total_area_threshold) else "nok"
+    )
     overlay = cv2.cvtColor(_as_gray_u8(sample), cv2.COLOR_GRAY2BGR)
     overlay[filtered > 0] = (0, 0, 255)
 
@@ -234,7 +272,11 @@ def evaluate_sample(
         "status": status,
         "anomaly_score": anomaly_score,
         "anomaly_area": anomaly_area,
+        "anomaly_area_percent": float(anomaly_area_percent),
         "blob_count": int(blob_count),
+        "largest_blob_area": int(largest_blob_area),
+        "valid_pixel_count": valid_pixel_count,
+        "ignored_pixel_count": ignored_pixel_count,
         "max_deviation": max_dev,
         "mean_deviation": mean_dev,
         "binary_mask": filtered,

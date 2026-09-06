@@ -1561,6 +1561,21 @@ class ToolEditDialog(QDialog):
             return None
         return int(h), int(w)
 
+    def _presence_v2_ignore_mask(self) -> np.ndarray | None:
+        mask = self._mask_editor.mask() if self._mask_editor is not None else self._tool.ignore_mask.value
+        roi = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
+        if mask is None or roi is None:
+            return None
+        value = np.asarray(mask)
+        if value.ndim == 3:
+            value = value[:, :, 0]
+        x, y, width, height = roi
+        if value.shape[:2] == (height, width):
+            return value.copy()
+        if value.shape[0] >= y + height and value.shape[1] >= x + width:
+            return value[y:y + height, x:x + width].copy()
+        return None
+
     def _confirm_capture_with_invalidated_samples(self, assets_dir: Path) -> bool:
         params = dict(self._tool.params.values or {})
         invalidated = bool(params.get("reference_model_invalidated", False))
@@ -1708,6 +1723,7 @@ class ToolEditDialog(QDialog):
                 polarity=polarity,
                 min_ok_samples=min_ok,
                 expected_shape=self._presence_v2_expected_shape(),
+                ignore_mask=self._presence_v2_ignore_mask(),
             )
         except ValueError as exc:
             QMessageBox.warning(self, "Učenie", str(exc))
@@ -1781,13 +1797,13 @@ class ToolEditDialog(QDialog):
         nok_samples = load_samples(dirs["nok"])
         ok_true = ok_false = nok_true = nok_false = 0
         for sample in ok_samples:
-            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask())
             if res["status"] == "ok":
                 ok_true += 1
             else:
                 ok_false += 1
         for sample in nok_samples:
-            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)))
+            res = evaluate_sample(sample, model.median, model.mad, polarity=pol, score_threshold=float(thresholds.get("score_threshold", 4.0)), total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)), min_blob_area=float(thresholds.get("min_blob_area", 10.0)), ignore_mask=self._presence_v2_ignore_mask())
             if res["status"] == "nok":
                 nok_true += 1
             else:
