@@ -14,6 +14,16 @@ from PySide6.QtWidgets import (
 )
 
 
+CANVAS_TOOLBAR_STYLE = """
+    QToolButton { background: #30343b; color: #eee; border: 1px solid #505661;
+                  border-radius: 3px; padding: 4px 7px; font-size: 12px; }
+    QToolButton:hover { background: #424b58; }
+    QToolButton:checked { background: #245e99; border-color: #6ba8e5; }
+    QToolButton:disabled { color: #777; }
+    QLabel { color: #ddd; font-size: 12px; }
+"""
+
+
 class InteractionMode(Enum):
     SELECT = "select"
     DRAW = "draw"
@@ -291,14 +301,7 @@ class ImageNavigationToolbar(QWidget):
     def __init__(self, view: ImageView, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._view = view
-        self.setStyleSheet("""
-            QToolButton { background: #30343b; color: #eee; border: 1px solid #505661;
-                          border-radius: 3px; padding: 4px 7px; font-size: 12px; }
-            QToolButton:hover { background: #424b58; }
-            QToolButton:checked { background: #245e99; border-color: #6ba8e5; }
-            QToolButton:disabled { color: #777; }
-            QLabel { color: #ddd; font-size: 12px; }
-        """)
+        self.setStyleSheet(CANVAS_TOOLBAR_STYLE)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
