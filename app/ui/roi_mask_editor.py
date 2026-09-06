@@ -573,6 +573,425 @@ class _ROIView(_ImageView):
             self._overlay_item.setPath(overlay_path)
 
 
+class _ShapeROIView(_ROIView):
+    """ROI view adding ellipse and vertex-editable polygon geometry."""
+
+    EDGE_HIT_RADIUS = 8.0
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._shape = "rect"
+        self._draw_shape = "rect"
+        self._points: List[Tuple[int, int]] = []
+        self._draft_points: List[QPointF] = []
+        self._draft_cursor: Optional[QPointF] = None
+        self._vertex_items: List[QGraphicsRectItem] = []
+        self._selected_vertex: Optional[int] = None
+        self._polygon_origin: Optional[List[Tuple[int, int]]] = None
+        self._polygon_edit_start = QPointF()
+        self._polygon_edit_vertex: Optional[int] = None
+        self._draw_before: Optional[dict] = None
+        self._shape_history: List[dict] = []
+        self._shape_redo: List[dict] = []
+
+    def set_draw_shape(self, shape: str) -> None:
+        self.cancel_drawing()
+        self._draw_shape = shape
+        self.set_interaction_mode(InteractionMode.DRAW)
+
+    def set_interaction_mode(self, mode: InteractionMode) -> None:
+        super().set_interaction_mode(mode)
+        if hasattr(self, "_shape"):
+            self._render_shape()
+
+    def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
+        super().set_pixmap(pixmap)
+        self._shape, self._points = "rect", []
+        self._draft_points, self._vertex_items = [], []
+        self._shape_history.clear(); self._shape_redo.clear()
+
+    def set_roi_locked(self, locked: bool) -> None:
+        super().set_roi_locked(locked)
+        for item in self._vertex_items:
+            item.setVisible(not self._roi_locked)
+
+    def _apply_roi(self, rect, push_history: bool) -> None:
+        if push_history:
+            self._shape_history.append(self._snapshot())
+        self._roi_rect = tuple(int(round(v)) for v in rect) if rect is not None else None
+        if rect is None:
+            self._points = []
+            self.set_roi_locked(False)
+        self._render_shape()
+        self.roiChanged.emit(self.roi())
+
+    def _update_roi_item(self, rect: QRectF) -> None:
+        self._preview_rect = rect
+        if self._roi_item is not None:
+            self.scene().removeItem(self._roi_item); self._roi_item = None
+        path = QPainterPath()
+        path.addEllipse(rect) if self._shape == "ellipse" else path.addRect(rect)
+        pen = QPen(QColor(_ROI_COLOR)); pen.setWidthF(2.0)
+        item = QGraphicsPathItem(path); item.setPen(pen); item.setBrush(Qt.transparent)
+        item.setZValue(100); self.scene().addItem(item); self._roi_item = item  # type: ignore[assignment]
+        self._update_handles(rect)
+
+    def _restore_roi_preview(self) -> None:
+        self._preview_rect = None
+        self._render_shape()
+
+    def roi_data(self) -> dict:
+        if self._shape == "polygon":
+            return {"shape": "polygon", "points": [list(point) for point in self._points]}
+        rect = self.roi()
+        if rect is None:
+            return {}
+        x, y, w, h = rect
+        result = {"x": x, "y": y, "w": w, "h": h}
+        if self._shape == "ellipse":
+            result["shape"] = "ellipse"
+        return result
+
+    def set_roi_data(self, value) -> None:
+        self.cancel_drawing()
+        data = dict(value or {}) if isinstance(value, dict) else {}
+        if data.get("shape") == "polygon":
+            points = [(int(p[0]), int(p[1])) for p in data.get("points", [])]
+            self._shape = "polygon"
+            self._points = points if len(points) >= 3 else []
+            self._roi_rect = self._polygon_bounds(self._points) if self._points else None
+            self._render_shape()
+            self.roiChanged.emit(self.roi())
+        else:
+            self._shape = "ellipse" if data.get("shape") == "ellipse" else "rect"
+            self._points = []
+            rect = None
+            if {"x", "y", "w", "h"}.issubset(data):
+                rect = tuple(int(data[key]) for key in ("x", "y", "w", "h"))
+            super().set_roi(rect)
+            self._render_shape()
+        self._shape_history.clear()
+        self._shape_redo.clear()
+        self.historyChanged.emit()
+
+    def set_roi(self, rect) -> None:
+        if isinstance(rect, dict):
+            self.set_roi_data(rect)
+            return
+        self._shape = "rect"
+        self._points = []
+        super().set_roi(rect)
+
+    def can_undo(self) -> bool:
+        return bool(self._shape_history)
+
+    def can_redo(self) -> bool:
+        return bool(self._shape_redo)
+
+    def _snapshot(self) -> dict:
+        return self.roi_data()
+
+    def _record(self, before: dict) -> None:
+        if before == self.roi_data():
+            return
+        self._shape_history.append(before)
+        self._shape_history = self._shape_history[-100:]
+        self._shape_redo.clear()
+        self.historyChanged.emit()
+
+    def undo(self) -> None:
+        self.cancel_drawing()
+        if not self._shape_history:
+            return
+        current = self._snapshot()
+        previous = self._shape_history.pop()
+        self._shape_redo.append(current)
+        self._restore_snapshot(previous)
+        self.historyChanged.emit()
+
+    def redo(self) -> None:
+        self.cancel_drawing()
+        if not self._shape_redo:
+            return
+        current = self._snapshot()
+        following = self._shape_redo.pop()
+        self._shape_history.append(current)
+        self._restore_snapshot(following)
+        self.historyChanged.emit()
+
+    def _restore_snapshot(self, data: dict) -> None:
+        history, redo = self._shape_history, self._shape_redo
+        self.set_roi_data(data)
+        self._shape_history, self._shape_redo = history, redo
+
+    def reset_roi(self) -> None:
+        if self._roi_locked:
+            return
+        before = self._snapshot()
+        self._shape, self._points, self._roi_rect = "rect", [], None
+        self._render_shape()
+        self._record(before)
+        self.roiChanged.emit(None)
+
+    def edit_roi(self, rect) -> None:
+        if self._shape == "polygon" or self._roi_locked:
+            return
+        before = self._snapshot()
+        self._roi_rect = self._clamp_integer_rect(rect)
+        self._render_shape()
+        self._record(before)
+        self.roiChanged.emit(self.roi())
+
+    def cancel_drawing(self) -> None:
+        if hasattr(self, "_draft_points"):
+            self._draft_points = []
+            self._draft_cursor = None
+            self._polygon_origin = None
+            self._polygon_edit_vertex = None
+        super().cancel_drawing()
+        if hasattr(self, "_shape"):
+            self._render_shape()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if self.is_pan_gesture(event):
+            super().mousePressEvent(event)
+            return
+        if self._roi_locked:
+            event.accept()
+            return
+        pos = self.mapToScene(event.position().toPoint())
+        if event.button() == Qt.LeftButton and self.interaction_mode() == InteractionMode.DRAW:
+            if not self.scene_rect().contains(pos):
+                event.accept(); return
+            if self._draw_shape == "polygon":
+                self._draft_points.append(_clamp_point_to_rect(pos, self.scene_rect()))
+                self._draft_cursor = pos
+                self._render_shape()
+                event.accept(); return
+            self._draw_before = self._snapshot()
+            self._shape = self._draw_shape
+        if (event.button() == Qt.LeftButton and self.interaction_mode() == InteractionMode.SELECT
+                and self._shape == "polygon" and self._points):
+            vertex = self._hit_vertex(event.position().toPoint())
+            if vertex is not None or self._polygon_path().contains(pos):
+                self._selected_vertex = vertex
+                self._polygon_edit_vertex = vertex
+                self._polygon_origin = list(self._points)
+                self._polygon_edit_start = pos
+                self._render_shape()
+                event.accept(); return
+            event.accept(); return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        pos = _clamp_point_to_rect(self.mapToScene(event.position().toPoint()), self.scene_rect())
+        if self._draft_points:
+            self._draft_cursor = pos
+            self._render_shape(); event.accept(); return
+        if self._polygon_origin is not None:
+            if self._polygon_edit_vertex is not None:
+                points = list(self._polygon_origin)
+                points[self._polygon_edit_vertex] = (int(round(pos.x())), int(round(pos.y())))
+                self._points = points
+            else:
+                delta = pos - self._polygon_edit_start
+                self._points = self._move_polygon(self._polygon_origin, delta)
+            self._roi_rect = self._polygon_bounds(self._points)
+            self._render_shape(); event.accept(); return
+        if event.buttons() == Qt.NoButton and self._shape == "polygon" and self._points:
+            vertex = self._hit_vertex(event.position().toPoint())
+            self.setCursor(Qt.PointingHandCursor if vertex is not None else
+                           (Qt.SizeAllCursor if self._polygon_path().contains(pos) else Qt.ArrowCursor))
+            event.accept(); return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if self._polygon_origin is not None and event.button() == Qt.LeftButton:
+            before = {"shape": "polygon", "points": [list(p) for p in self._polygon_origin]}
+            self._polygon_origin = None
+            self._polygon_edit_vertex = None
+            self._record(before)
+            self.roiChanged.emit(self.roi())
+            event.accept(); return
+        drawing_box = self._drawing
+        before = self._draw_before if drawing_box and self._draw_before is not None else self._snapshot()
+        super().mouseReleaseEvent(event)
+        if drawing_box and self._roi_rect is not None:
+            self._shape = self._draw_shape
+            self._points = []
+            self._render_shape()
+            self._record(before)
+        self._draw_before = None
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self._draft_points:
+            self._finish_polygon()
+            event.accept(); return
+        if (event.button() == Qt.LeftButton and self.interaction_mode() == InteractionMode.SELECT
+                and self._shape == "polygon" and not self._roi_locked):
+            pos = self.mapToScene(event.position().toPoint())
+            segment = self._nearest_segment(pos)
+            if segment is not None:
+                before = self._snapshot()
+                self._polygon_origin = None
+                self._polygon_edit_vertex = None
+                self._points.insert(segment + 1, (int(round(pos.x())), int(round(pos.y()))))
+                self._selected_vertex = segment + 1
+                self._roi_rect = self._polygon_bounds(self._points)
+                self._render_shape(); self._record(before); self.roiChanged.emit(self.roi())
+                event.accept(); return
+        super().mouseDoubleClickEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter) and self._draft_points:
+            self._finish_polygon(); event.accept(); return
+        if event.key() == Qt.Key_Escape and self._draft_points:
+            self._draft_points = []; self._draft_cursor = None; self._render_shape()
+            event.accept(); return
+        if (event.key() in (Qt.Key_Delete, Qt.Key_Backspace) and self._shape == "polygon"
+                and self._selected_vertex is not None and len(self._points) > 3 and not self._roi_locked):
+            before = self._snapshot(); self._points.pop(self._selected_vertex)
+            self._selected_vertex = None; self._roi_rect = self._polygon_bounds(self._points)
+            self._render_shape(); self._record(before); self.roiChanged.emit(self.roi())
+            event.accept(); return
+        directions = {Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0),
+                      Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1)}
+        if (event.key() in directions and self._shape == "polygon" and self._points
+                and self.interaction_mode() == InteractionMode.SELECT and not self._roi_locked
+                and not event.modifiers() & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)):
+            before = self._snapshot(); dx, dy = directions[event.key()]
+            step = 10 if event.modifiers() & Qt.ShiftModifier else 1
+            if self._selected_vertex is None:
+                self._points = self._move_polygon(self._points, QPointF(dx * step, dy * step))
+            else:
+                x, y = self._points[self._selected_vertex]
+                p = _clamp_point_to_rect(QPointF(x + dx * step, y + dy * step), self.scene_rect())
+                self._points[self._selected_vertex] = (int(round(p.x())), int(round(p.y())))
+            self._roi_rect = self._polygon_bounds(self._points)
+            self._render_shape(); self._record(before); self.roiChanged.emit(self.roi())
+            event.accept(); return
+        super().keyPressEvent(event)
+
+    def _finish_polygon(self) -> None:
+        if len(self._draft_points) < 3:
+            return
+        before = self._snapshot()
+        # A double click can deliver the same final point twice.
+        points = [(int(round(p.x())), int(round(p.y()))) for p in self._draft_points]
+        if len(points) > 1 and points[-1] == points[-2]:
+            points.pop()
+        if len(points) < 3:
+            return
+        self._shape, self._points = "polygon", points
+        self._roi_rect = self._polygon_bounds(points)
+        self._draft_points = []; self._draft_cursor = None; self._selected_vertex = None
+        self._render_shape(); self._record(before); self.roiChanged.emit(self.roi())
+        self.set_interaction_mode(InteractionMode.SELECT)
+
+    @staticmethod
+    def _polygon_bounds(points) -> Tuple[int, int, int, int]:
+        xs, ys = zip(*points)
+        return min(xs), min(ys), max(1, max(xs) - min(xs)), max(1, max(ys) - min(ys))
+
+    def _move_polygon(self, points, delta: QPointF):
+        bounds = self._polygon_bounds(points)
+        dx = min(max(int(round(delta.x())), -bounds[0]),
+                 int(round(self.scene_rect().right())) - (bounds[0] + bounds[2]))
+        dy = min(max(int(round(delta.y())), -bounds[1]),
+                 int(round(self.scene_rect().bottom())) - (bounds[1] + bounds[3]))
+        return [(x + dx, y + dy) for x, y in points]
+
+    def _polygon_path(self, points=None) -> QPainterPath:
+        points = self._points if points is None else points
+        path = QPainterPath()
+        if points:
+            first = points[0]; path.moveTo(float(first[0]), float(first[1]))
+            for point in points[1:]: path.lineTo(float(point[0]), float(point[1]))
+            if len(points) >= 3: path.closeSubpath()
+        return path
+
+    def _hit_vertex(self, view_pos) -> Optional[int]:
+        for index, (x, y) in enumerate(self._points):
+            mapped = self.mapFromScene(QPointF(x, y))
+            if abs(mapped.x() - view_pos.x()) <= self.HANDLE_HIT_RADIUS and abs(mapped.y() - view_pos.y()) <= self.HANDLE_HIT_RADIUS:
+                return index
+        return None
+
+    def _nearest_segment(self, point: QPointF) -> Optional[int]:
+        best = None; best_distance = self.EDGE_HIT_RADIUS / max(self.zoom(), 0.001)
+        for index, start in enumerate(self._points):
+            end = self._points[(index + 1) % len(self._points)]
+            ax, ay = start; bx, by = end; vx, vy = bx - ax, by - ay
+            length2 = vx * vx + vy * vy
+            t = 0.0 if not length2 else max(0.0, min(1.0, ((point.x()-ax)*vx + (point.y()-ay)*vy)/length2))
+            distance = math.hypot(point.x() - (ax + t*vx), point.y() - (ay + t*vy))
+            if distance <= best_distance: best, best_distance = index, distance
+        return best
+
+    def _render_shape(self) -> None:
+        if not hasattr(self, "_shape"):
+            return
+        for item in self._vertex_items:
+            self.scene().removeItem(item)
+        self._vertex_items = []
+        if self._roi_item is not None:
+            self.scene().removeItem(self._roi_item)
+            self._roi_item = None
+        self._remove_handles()
+        path = QPainterPath()
+        if self._draft_points:
+            path.moveTo(self._draft_points[0])
+            for point in self._draft_points[1:]:
+                path.lineTo(point)
+            if self._draft_cursor is not None: path.lineTo(self._draft_cursor)
+        elif self._shape == "polygon" and self._points:
+            path = self._polygon_path()
+        elif self._roi_rect is not None:
+            rect = QRectF(*self._roi_rect)
+            path.addEllipse(rect) if self._shape == "ellipse" else path.addRect(rect)
+        if not path.isEmpty():
+            pen = QPen(QColor(_ROI_COLOR)); pen.setWidthF(2.0)
+            item = QGraphicsPathItem(path); item.setPen(pen); item.setBrush(Qt.transparent)
+            item.setZValue(100); self.scene().addItem(item); self._roi_item = item  # type: ignore[assignment]
+        if self._shape == "polygon" and self._points and self.interaction_mode() == InteractionMode.SELECT:
+            half = self.HANDLE_SIZE / 2.0
+            for index, point in enumerate(self._points):
+                item = QGraphicsRectItem(-half, -half, self.HANDLE_SIZE, self.HANDLE_SIZE)
+                item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True); item.setAcceptedMouseButtons(Qt.NoButton)
+                item.setPen(QPen(QColor(225, 240, 255)))
+                item.setBrush(QColor(255, 190, 55) if index == self._selected_vertex else QColor(75, 165, 235))
+                item.setPos(QPointF(*point)); item.setZValue(110); item.setVisible(not self._roi_locked)
+                self.scene().addItem(item); self._vertex_items.append(item)
+        elif self._draft_points:
+            half = self.HANDLE_SIZE / 2.0
+            for point in self._draft_points:
+                item = QGraphicsRectItem(-half, -half, self.HANDLE_SIZE, self.HANDLE_SIZE)
+                item.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+                item.setAcceptedMouseButtons(Qt.NoButton)
+                item.setPen(QPen(QColor(225, 240, 255)))
+                item.setBrush(QColor(75, 165, 235)); item.setPos(point); item.setZValue(110)
+                self.scene().addItem(item); self._vertex_items.append(item)
+        elif self._roi_rect is not None:
+            self._update_handles(QRectF(*self._roi_rect))
+        self._update_shape_overlay()
+
+    def _update_shape_overlay(self) -> None:
+        if self.scene_rect().isNull(): return
+        inner = QPainterPath()
+        if self._shape == "polygon" and self._points: inner = self._polygon_path()
+        elif self._roi_rect is not None:
+            rect = QRectF(*self._roi_rect)
+            inner.addEllipse(rect) if self._shape == "ellipse" else inner.addRect(rect)
+        if inner.isEmpty():
+            if self._overlay_item is not None: self.scene().removeItem(self._overlay_item); self._overlay_item = None
+            return
+        outer = QPainterPath(); outer.addRect(self.scene_rect()); overlay = outer.subtracted(inner)
+        if self._overlay_item is None:
+            self._overlay_item = QGraphicsPathItem(); self._overlay_item.setBrush(_OVERLAY_COLOR)
+            self._overlay_item.setPen(Qt.NoPen); self._overlay_item.setZValue(10); self.scene().addItem(self._overlay_item)
+        self._overlay_item.setPath(overlay)
+
+
 class _MaskView(_ImageView):
     """View handling mask painting with brush or polygon tools."""
 
@@ -1285,7 +1704,7 @@ class ROIEditor(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None, show_toolbar: bool = True) -> None:
         super().__init__(parent)
-        self._view = _ROIView(self)
+        self._view = _ShapeROIView(self)
         self._view.historyChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
@@ -1306,6 +1725,11 @@ class ROIEditor(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
         self._navigation = ImageNavigationToolbar(self._view, self)
+        self._shape_buttons = self._navigation.set_draw_tools([
+            ("Rectangle", lambda: self._view.set_draw_shape("rect"), "Drag to draw a rectangle ROI"),
+            ("Circle", lambda: self._view.set_draw_shape("ellipse"), "Drag to draw a circle or ellipse ROI"),
+            ("Polygon", lambda: self._view.set_draw_shape("polygon"), "Click vertices; double-click or Enter to finish"),
+        ])
         layout.addWidget(self._navigation)
         layout.addLayout(self._build_geometry_controls())
         layout.addWidget(self._view, 1)
@@ -1372,6 +1796,7 @@ class ROIEditor(QWidget):
         rect = self._view.roi()
         locked = self._view.is_roi_locked()
         available = rect is not None and width > 0 and height > 0
+        numeric_editable = available and self._view._shape != "polygon"
         ranges = ((0, max(0, width - 1)), (0, max(0, height - 1)),
                   (1, max(1, width)), (1, max(1, height)))
         values = rect if rect is not None else (0, 0, 1, 1)
@@ -1380,7 +1805,9 @@ class ROIEditor(QWidget):
             try:
                 field.setRange(minimum, maximum)
                 field.setValue(value)
-                field.setEnabled(available and not locked)
+                field.setEnabled(numeric_editable and not locked)
+                field.setToolTip("Numeric geometry editing is not available for Polygon."
+                                 if available and not numeric_editable else field.accessibleName())
             finally:
                 field.blockSignals(blocked)
         blocked = self._btn_lock.blockSignals(True)
@@ -1391,6 +1818,8 @@ class ROIEditor(QWidget):
         self._btn_lock.setEnabled(available)
         self._btn_reset.setEnabled(not locked)
         self._navigation.mode_buttons[InteractionMode.DRAW].setEnabled(not locked)
+        for button in self._shape_buttons:
+            button.setEnabled(not locked)
 
     def _on_lock_changed(self, _locked: bool) -> None:
         self._sync_geometry_controls()
@@ -1408,6 +1837,15 @@ class ROIEditor(QWidget):
 
     def roi(self) -> Optional[Tuple[int, int, int, int]]:
         return self._view.roi()
+
+    def set_roi_data(self, data: object) -> None:
+        self._view.set_roi_data(data)
+        self._update_history_buttons()
+        self._update_info_label()
+        self._sync_geometry_controls()
+
+    def roi_data(self) -> dict:
+        return self._view.roi_data()
 
     def reset_roi(self) -> None:
         self._view.reset_roi()
@@ -1440,8 +1878,10 @@ class ROIEditor(QWidget):
         else:
             x, y, w, h = rect
             area = max(0, int(w) * int(h))
+            shape = {"rect": "Rectangle", "ellipse": "Circle", "polygon": "Polygon"}.get(
+                self._view._shape, "ROI")
             self._info_label.setText(
-                f"ROI: {w}×{h} px · {_format_pixels(area)} px @ ({x}, {y})"
+                f"{shape}: {w}×{h} px · {_format_pixels(area)} px @ ({x}, {y})"
             )
             if area > MAX_ROI_PIXELS:
                 limit = _format_pixels(MAX_ROI_PIXELS)
