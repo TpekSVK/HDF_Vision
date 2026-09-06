@@ -147,6 +147,19 @@ class ToolRoi:
         if not isinstance(self.data, dict):
             self.data = dict(self.data)
 
+        shape = str(self.data.get("shape", "rect")).lower()
+        if shape == "polygon":
+            try:
+                points = [[int(round(float(x))), int(round(float(y)))]
+                          for x, y in self.data.get("points", [])]
+            except Exception:
+                self.data = {}
+                return
+            self.data = {"shape": "polygon", "points": points} if len(points) >= 3 else {}
+            return
+        if shape not in ("rect", "ellipse"):
+            self.data = {}
+            return
         keys = {"x", "y", "w", "h"}
         if keys.issubset(self.data.keys()):
             try:
@@ -161,12 +174,20 @@ class ToolRoi:
                 self.data = {}
                 return
             self.data = {"x": x, "y": y, "w": w, "h": h}
+            if shape == "ellipse":
+                self.data["shape"] = "ellipse"
         else:
             self.data = {}
 
     def rect(self) -> Optional[Tuple[int, int, int, int]]:
         if not self.data:
             return None
+        if self.data.get("shape") == "polygon":
+            points = self.points()
+            if not points:
+                return None
+            xs, ys = zip(*points)
+            return min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys)
         try:
             x = int(self.data["x"])
             y = int(self.data["y"])
@@ -185,12 +206,34 @@ class ToolRoi:
         x, y, w, h = rect
         self.data = {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
 
+    def shape(self) -> str:
+        return str(self.data.get("shape", "rect")) if self.data else "rect"
+
+    def points(self) -> List[Tuple[int, int]]:
+        if self.data.get("shape") != "polygon":
+            return []
+        return [(int(x), int(y)) for x, y in self.data.get("points", [])]
+
+    def set_shape_rect(self, shape: str, rect: Optional[Tuple[int, int, int, int]]) -> None:
+        self.set_rect(rect)
+        if self.data and shape == "ellipse":
+            self.data["shape"] = "ellipse"
+
+    def set_polygon(self, points: Sequence[Sequence[int]]) -> None:
+        normalized = [[int(p[0]), int(p[1])] for p in points]
+        self.data = {"shape": "polygon", "points": normalized} if len(normalized) >= 3 else {}
+
     def to_dict(self) -> Dict[str, Any]:
+        if self.data.get("shape") == "polygon":
+            return {"shape": "polygon", "points": [list(point) for point in self.points()]}
         rect = self.rect()
         if rect is None:
             return {}
         x, y, w, h = rect
-        return {"x": x, "y": y, "w": w, "h": h}
+        result = {"x": x, "y": y, "w": w, "h": h}
+        if self.shape() == "ellipse":
+            result["shape"] = "ellipse"
+        return result
 
     @classmethod
     def from_obj(cls, obj: Any | None) -> "ToolRoi":

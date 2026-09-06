@@ -609,10 +609,15 @@ class ToolEditDialog(QDialog):
         initial_angle_roi = self._rect_from_any(params_values.get("angle_roi"))
 
         initial_roi: Optional[tuple[int, int, int, int]] = None
+        initial_roi_data: Optional[dict] = None
         roi_value = params_values.get("roi") if isinstance(params_values, dict) else None
         if isinstance(roi_value, ToolRoi):
             initial_roi = roi_value.rect()
+            initial_roi_data = roi_value.to_dict()
         elif isinstance(roi_value, dict):
+            parsed_roi = ToolRoi.from_obj(roi_value)
+            initial_roi_data = parsed_roi.to_dict() or None
+            initial_roi = parsed_roi.rect()
             try:
                 x = int(round(float(roi_value.get("x", 0))))
                 y = int(round(float(roi_value.get("y", 0))))
@@ -631,6 +636,7 @@ class ToolEditDialog(QDialog):
                 initial_roi = None
         if initial_roi is None:
             initial_roi = self._tool.roi.rect()
+            initial_roi_data = self._tool.roi.to_dict() or None
 
         initial_mask: Optional[np.ndarray] = None
         if self._tool.ignore_mask.value is not None:
@@ -652,7 +658,9 @@ class ToolEditDialog(QDialog):
         if self._golden_pixmap is not None:
             if self._roi_editor is not None:
                 self._roi_editor.set_background(self._golden_pixmap)
-                if initial_roi is not None:
+                if initial_roi_data is not None:
+                    self._roi_editor.set_roi_data(initial_roi_data)
+                elif initial_roi is not None:
                     self._roi_editor.set_roi(initial_roi)
             if self._mask_editor is not None:
                 self._mask_editor.set_background(self._golden_pixmap)
@@ -1811,11 +1819,10 @@ class ToolEditDialog(QDialog):
         params_values = dict(self._tool.params.values)
 
         if supports_roi:
-            roi_rect = self._roi_editor.roi() if self._roi_editor is not None else None
-            roi = ToolRoi()
-            roi.set_rect(roi_rect)
+            roi_data = self._roi_editor.roi_data() if self._roi_editor is not None else {}
+            roi = ToolRoi.from_obj(roi_data)
             self._tool.roi = roi
-            params_values["roi"] = roi.to_dict() if roi_rect is not None else None
+            params_values["roi"] = roi.to_dict() or None
         else:
             self._tool.roi = ToolRoi()
             params_values.pop("roi", None)

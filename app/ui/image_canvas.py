@@ -303,6 +303,8 @@ class ImageNavigationToolbar(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         self._modes = QButtonGroup(self)
+        self._mode_layout = layout
+        self.draw_buttons: list[QToolButton] = []
         self.mode_buttons: dict[InteractionMode, QToolButton] = {}
         for mode, label in ((InteractionMode.SELECT, "Select"),
                             (InteractionMode.DRAW, "Draw"), (InteractionMode.PAN, "Pan")):
@@ -335,6 +337,20 @@ class ImageNavigationToolbar(QWidget):
         self._update_zoom(view.zoom())
         self._update_mode(view.interaction_mode())
 
+    def set_draw_tools(self, tools: list[tuple[str, Callable, str]]) -> list[QToolButton]:
+        """Replace the generic Draw action with editor-specific draw tools."""
+        generic = self.mode_buttons[InteractionMode.DRAW]
+        generic.hide()
+        insert_at = self._mode_layout.indexOf(generic)
+        self.draw_buttons = []
+        for offset, (label, action, tooltip) in enumerate(tools):
+            button = self._button(label, action, tooltip)
+            button.setCheckable(True)
+            self._modes.addButton(button)
+            self._mode_layout.insertWidget(insert_at + offset, button)
+            self.draw_buttons.append(button)
+        return self.draw_buttons
+
     def _button(self, text: str, action: Callable, tooltip: str = "") -> QToolButton:
         button = QToolButton(self)
         button.setText(text)
@@ -350,4 +366,8 @@ class ImageNavigationToolbar(QWidget):
         self.zoom_label.setText(f"{scale * 100:.0f} %")
 
     def _update_mode(self, mode: InteractionMode) -> None:
-        self.mode_buttons[mode].setChecked(True)
+        if mode == InteractionMode.DRAW and self.draw_buttons:
+            if not any(button.isChecked() for button in self.draw_buttons):
+                self.draw_buttons[0].setChecked(True)
+        else:
+            self.mode_buttons[mode].setChecked(True)
