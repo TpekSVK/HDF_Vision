@@ -26,7 +26,9 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QFileDialog,
     QToolButton,
-    QScrollArea
+    QScrollArea,
+    QSplitter,
+    QFrame,
 )
 
 import os
@@ -184,6 +186,35 @@ class ToolsTableWidget(QTableWidget):
 
 
 
+class CollapsibleSection(QWidget):
+    """Compact reusable section for the properties inspector."""
+
+    def __init__(self, title: str, content: QWidget, *, expanded: bool = True, parent=None):
+        super().__init__(parent)
+        self._header = QToolButton(self)
+        self._header.setText(title)
+        self._header.setCheckable(True)
+        self._header.setChecked(expanded)
+        self._header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._header.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self._header.setStyleSheet(
+            "QToolButton { text-align: left; font-weight: 600; padding: 7px; "
+            "background: #292d33; border: 1px solid #40454d; }"
+        )
+        self._content = content
+        self._content.setVisible(expanded)
+        self._header.toggled.connect(self._toggle)
+        section_layout = QVBoxLayout(self)
+        section_layout.setContentsMargins(0, 0, 0, 0)
+        section_layout.setSpacing(3)
+        section_layout.addWidget(self._header)
+        section_layout.addWidget(self._content)
+
+    def _toggle(self, expanded: bool) -> None:
+        self._header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
+        self._content.setVisible(expanded)
+
+
 class ToolConfigPanel(QWidget):
     """Side panel for editing tool parameters and thresholds."""
 
@@ -224,8 +255,8 @@ class ToolConfigPanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        title = QLabel("Thresholds & Params", self)
-        title.setStyleSheet("font-weight: 600; font-size: 14px;")
+        title = QLabel("PROPERTIES", self)
+        title.setStyleSheet("font-weight: 700; font-size: 14px; color: #e8edf2;")
         layout.addWidget(title)
 
         self._tool_label = QLabel("", self)
@@ -242,7 +273,27 @@ class ToolConfigPanel(QWidget):
         self._form_layout.setContentsMargins(0, 0, 0, 0)
         self._form_layout.setSpacing(6)
         self._form_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
-        layout.addWidget(self._form_container, 1)
+        self._threshold_container = QWidget(self)
+        self._threshold_layout = QFormLayout(self._threshold_container)
+        self._threshold_layout.setContentsMargins(0, 0, 0, 0)
+        self._threshold_layout.setSpacing(6)
+        self._threshold_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+        self._geometry_summary = QLabel(
+            "No tool selected\nAdd a tool or select one from the list.", self
+        )
+        self._geometry_summary.setWordWrap(True)
+        self._geometry_summary.setStyleSheet("color: #aab2bc; padding: 8px;")
+        layout.addWidget(CollapsibleSection("Geometry", self._geometry_summary, parent=self))
+        layout.addWidget(CollapsibleSection("Detection", self._form_container, parent=self))
+        layout.addWidget(CollapsibleSection("Thresholds", self._threshold_container, parent=self))
+
+        advanced_hint = QLabel(
+            "Specialized locator, template and ignore-mask controls remain available through Legacy Edit.",
+            self,
+        )
+        advanced_hint.setWordWrap(True)
+        advanced_hint.setStyleSheet("color: #89919b; padding: 8px;")
+        layout.addWidget(CollapsibleSection("Advanced", advanced_hint, expanded=False, parent=self))
 
         self._form_error_label = QLabel("", self)
         self._form_error_label.setStyleSheet("color: #b03030; padding-top: 4px;")
@@ -381,7 +432,7 @@ class ToolConfigPanel(QWidget):
 
         diag_layout.addWidget(self._preview_widget)
 
-        layout.addWidget(self._diagnostics_group)
+        layout.addWidget(CollapsibleSection("Result", self._diagnostics_group, parent=self))
 
         self._test_result_label = QLabel("", self)
         self._test_result_label.setStyleSheet(
@@ -412,6 +463,7 @@ class ToolConfigPanel(QWidget):
         self._clear_form()
         self._tool_label.setText("No tool selected")
         self._description_label.clear()
+        self._geometry_summary.setText("No tool selected\nAdd a tool or select one from the list.")
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
@@ -433,11 +485,24 @@ class ToolConfigPanel(QWidget):
         description = getattr(meta, "description", "") or ""
         self._description_label.setText(description)
         self._description_label.setVisible(bool(description))
+        self.refresh_geometry(tool)
 
         self._rebuild_form()
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
+
+    def refresh_geometry(self, tool: Tool) -> None:
+        rect = tool.roi.rect()
+        if rect is None:
+            geometry_text = "No ROI\nSelect a drawing tool and create ROI."
+        else:
+            x, y, width, height = rect
+            shape = {"rect": "Rectangle", "ellipse": "Circle", "polygon": "Polygon"}.get(
+                tool.roi.shape(), "Rectangle"
+            )
+            geometry_text = f"Shape: {shape}\nX: {x}   Y: {y}\nW: {width}   H: {height}"
+        self._geometry_summary.setText(geometry_text)
 
     def set_locator_failure_policy(self, policy: str) -> None:
         normalized = "fail" if str(policy or "").strip().lower() == "fail" else "continue_without_alignment"
@@ -511,9 +576,6 @@ class ToolConfigPanel(QWidget):
                 added_fields = True
 
         if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
-            header = QLabel("Prahy", self)
-            header.setStyleSheet("font-weight: 600; padding-top: 6px;")
-            self._form_layout.addRow(header)
             for name, spec in self._threshold_specs.items():
                 if not self._is_supported_spec(spec):
                     continue
@@ -539,7 +601,7 @@ class ToolConfigPanel(QWidget):
                 self._threshold_error_labels[name] = error_label
                 if tooltip:
                     container.setToolTip(tooltip)
-                self._form_layout.addRow(label, container)
+                self._threshold_layout.addRow(label, container)
                 added_fields = True
 
         if not added_fields:
@@ -559,6 +621,8 @@ class ToolConfigPanel(QWidget):
     def _clear_form(self) -> None:
         while self._form_layout.rowCount():
             self._form_layout.removeRow(0)
+        while self._threshold_layout.rowCount():
+            self._threshold_layout.removeRow(0)
         self._param_widgets.clear()
         self._threshold_widgets.clear()
         self._param_wrappers.clear()
@@ -1385,7 +1449,6 @@ class GoldenWizard(QDialog):
         top_primary.addWidget(self.btn_edit_view)
         top_primary.addWidget(self.btn_remove_view)
         top_primary.addStretch(1)
-        top_primary.addWidget(self.btn_add_tool)
         top_primary.addWidget(self.btn_live)
         top_primary.addWidget(self.btn_manual_light)
 
@@ -1408,8 +1471,12 @@ class GoldenWizard(QDialog):
 
         # 2) DrawView (kreslenie) – používa sa pri Live vypnuté
         self.view = DrawView(self)
+        self.roi_editor = ROIEditor(self)
+        self._syncing_workspace_roi = False
         self.live_lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.roi_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.view.hide()
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
@@ -1467,6 +1534,8 @@ class GoldenWizard(QDialog):
         self.tools_table.setDragDropOverwriteMode(False)
         self.tools_table.setDefaultDropAction(Qt.MoveAction)
         self.tools_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.tools_table.setColumnHidden(0, True)
+        self.tools_table.setColumnHidden(4, True)
         tools_label = QLabel("Nástroje v recepte:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
@@ -1487,26 +1556,78 @@ class GoldenWizard(QDialog):
         )
         self.locator_policy_banner.setVisible(False)
 
-        content_layout = QHBoxLayout()
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(12)
-
-        left_layout = QVBoxLayout()
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_panel = QFrame(self)
+        left_panel.setObjectName("workspacePanel")
+        left_panel.setMinimumWidth(220)
+        left_panel.setMaximumWidth(420)
+        left_layout = QVBoxLayout(left_panel)
+        left_layout.setContentsMargins(10, 10, 10, 10)
         left_layout.setSpacing(8)
-        left_layout.addWidget(self.live_lbl, 1)
-        left_layout.addWidget(self.view, 1)
+        tools_label.setText("TOOLS")
+        tools_label.setStyleSheet("font-weight: 700; color: #e8edf2;")
+        self.btn_add_tool.setText("+ Add Tool")
         left_layout.addWidget(tools_label)
+        left_layout.addWidget(self.btn_add_tool)
         left_layout.addWidget(self.tools_table, 1)
+        selected_actions = QHBoxLayout()
+        self._btn_legacy_edit = QPushButton("Legacy Edit", left_panel)
+        self._btn_legacy_edit.setToolTip("Open specialized or legacy tool configuration")
+        self._btn_legacy_edit.clicked.connect(
+            lambda: self._edit_tool(self.tools_table.currentRow())
+        )
+        self._btn_delete_selected = QToolButton(left_panel)
+        self._btn_delete_selected.setText("×")
+        self._btn_delete_selected.setToolTip("Delete selected tool")
+        self._btn_delete_selected.clicked.connect(
+            lambda: self._delete_tool(self.tools_table.currentRow())
+        )
+        selected_actions.addWidget(self._btn_legacy_edit)
+        selected_actions.addStretch(1)
+        selected_actions.addWidget(self._btn_delete_selected)
+        left_layout.addLayout(selected_actions)
         left_layout.addWidget(self.locator_hint_label)
         left_layout.addWidget(self.locator_policy_banner)
-        left_layout.addLayout(buttons)
-        left_layout.setStretch(0, 5)
-        left_layout.setStretch(1, 5)
-        left_layout.setStretch(3, 2)
 
-        content_layout.addLayout(left_layout, 5)
-        content_layout.addWidget(self._tool_panel)
+        center_panel = QFrame(self)
+        center_panel.setObjectName("workspacePanel")
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setContentsMargins(10, 10, 10, 10)
+        center_layout.setSpacing(8)
+        self._canvas_title = QLabel("MAIN IMAGE CANVAS", center_panel)
+        self._canvas_title.setStyleSheet("font-weight: 700; color: #e8edf2;")
+        self._canvas_empty = QLabel(
+            "No Golden image\nCapture or load Golden first", center_panel
+        )
+        self._canvas_empty.setAlignment(Qt.AlignCenter)
+        self._canvas_empty.setStyleSheet(
+            "color: #8d96a0; background: #111417; border: 1px dashed #414851; padding: 20px;"
+        )
+        self._canvas_empty.setAttribute(Qt.WA_TransparentForMouseEvents)
+        center_layout.addWidget(self._canvas_title)
+        center_layout.addWidget(self._canvas_empty)
+        center_layout.addWidget(self.live_lbl, 1)
+        center_layout.addWidget(self.roi_editor, 1)
+        center_layout.addLayout(buttons)
+
+        properties_scroll = QScrollArea(self)
+        properties_scroll.setObjectName("propertiesScroll")
+        properties_scroll.setWidgetResizable(True)
+        properties_scroll.setFrameShape(QScrollArea.NoFrame)
+        properties_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        properties_scroll.setMinimumWidth(300)
+        properties_scroll.setMaximumWidth(480)
+        properties_scroll.setWidget(self._tool_panel)
+
+        self._workspace_splitter = QSplitter(Qt.Horizontal, self)
+        self._workspace_splitter.setChildrenCollapsible(False)
+        self._workspace_splitter.setHandleWidth(5)
+        self._workspace_splitter.addWidget(left_panel)
+        self._workspace_splitter.addWidget(center_panel)
+        self._workspace_splitter.addWidget(properties_scroll)
+        self._workspace_splitter.setStretchFactor(0, 0)
+        self._workspace_splitter.setStretchFactor(1, 1)
+        self._workspace_splitter.setStretchFactor(2, 0)
+        self._workspace_splitter.setSizes([250, 800, 340])
 
         top_controls = QVBoxLayout()
         top_controls.setContentsMargins(0, 0, 0, 0)
@@ -1514,23 +1635,24 @@ class GoldenWizard(QDialog):
         top_controls.addLayout(top_primary)
         top_controls.addLayout(top_secondary)
 
-        content_widget = QWidget(self)
-        content_widget_layout = QVBoxLayout(content_widget)
-        content_widget_layout.setContentsMargins(0, 0, 0, 0)
-        content_widget_layout.setSpacing(12)
-        content_widget_layout.addLayout(top_controls)
-        content_widget_layout.addLayout(content_layout, 1)
-
-        self._content_scroll = QScrollArea(self)
-        self._content_scroll.setWidgetResizable(True)
-        self._content_scroll.setFrameShape(QScrollArea.NoFrame)
-        self._content_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._content_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._content_scroll.setWidget(content_widget)
-
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
-        layout.addWidget(self._content_scroll)
+        layout.setSpacing(8)
+        layout.addLayout(top_controls)
+        layout.addWidget(self._workspace_splitter, 1)
+        self._status_bar = QLabel("Ready", self)
+        self._status_bar.setStyleSheet(
+            "color: #aab2bc; background: #20242a; border-top: 1px solid #3b4149; padding: 5px 8px;"
+        )
+        layout.addWidget(self._status_bar)
+
+        self.setStyleSheet(self.styleSheet() + """
+            QFrame#workspacePanel, QScrollArea#propertiesScroll {
+                background: #1b1f24; border: 1px solid #343a42;
+            }
+            QSplitter::handle { background: #3b424b; }
+            QTableWidget { background: #15181c; alternate-background-color: #1d2228; }
+        """)
 
         self._tool_panel.clear()
 
@@ -1544,6 +1666,7 @@ class GoldenWizard(QDialog):
         self.recipe_name.editingFinished.connect(self._on_recipe_changed)
         self.tools_table.itemSelectionChanged.connect(self._on_tool_selection_changed)
         self.tools_table.rowsReordered.connect(self._on_tools_reordered)
+        self.roi_editor.roiChanged.connect(self._on_workspace_roi_changed)
         self._tool_panel.paramChanged.connect(self._on_tool_param_changed)
         self._tool_panel.thresholdChanged.connect(self._on_tool_threshold_changed)
         self._tool_panel.testRequested.connect(self._on_tool_test_requested)
@@ -1650,6 +1773,7 @@ class GoldenWizard(QDialog):
     def _start_preview_session(self) -> None:
         # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
         self.view.hide()
+        self.roi_editor.hide()
         self.live_lbl.show()
         self._lp.start()
         self._live_timer.start()
@@ -1674,7 +1798,12 @@ class GoldenWizard(QDialog):
         self._live_on = False
         self.btn_live.setText("Live vypnuté")
         self.live_lbl.hide()
-        self.view.show()
+        if self.current_img is not None:
+            self._canvas_empty.hide()
+            self.roi_editor.show()
+        else:
+            self.roi_editor.hide()
+            self._canvas_empty.show()
         if clear_label:
             self.live_lbl.setText("—")
         if resume_runtime_camera:
@@ -1728,9 +1857,13 @@ class GoldenWizard(QDialog):
         h, w = img_u8.shape[:2]
         qimg = QImage(img_u8.data, w, h, w, QImage.Format_Grayscale8)
         pm = QPixmap.fromImage(qimg.copy())
+        self._canvas_empty.hide()
+        self.roi_editor.show()
         self.view.set_background(pm)
+        self.roi_editor.set_background(pm)
         print("[FIT_TO_VIEW] golden wizard initial image fit scheduled")
         self.view.schedule_fit_to_view(source="golden_wizard_set_pixmap")
+        self.roi_editor.schedule_fit_to_view(source="golden_wizard_workspace_set_pixmap")
 
     def _view_by_id(self, view_id: Optional[str]) -> Optional[RecipeView]:
         if not view_id:
@@ -1896,6 +2029,10 @@ class GoldenWizard(QDialog):
             self.current_img = None
             self.view.set_background(None)
             self.view.set_tool_overlay(None)
+            self.roi_editor.set_background(None)
+            self.view.hide()
+            self.roi_editor.hide()
+            self._canvas_empty.show()
             return
 
         view = self._view_by_id(view_id)
@@ -1920,6 +2057,10 @@ class GoldenWizard(QDialog):
             self.current_img = None
             self.view.set_background(None)
             self.view.set_tool_overlay(None)
+            self.roi_editor.set_background(None)
+            self.view.hide()
+            self.roi_editor.hide()
+            self._canvas_empty.show()
             state["golden_image"] = None
             return
 
@@ -1941,8 +2082,18 @@ class GoldenWizard(QDialog):
         row = getattr(self, "_selected_tool_row", -1)
         if tools is not None and 0 <= row < len(tools):
             self.view.set_tool_overlay(tools[row])
+            self._syncing_workspace_roi = True
+            try:
+                self.roi_editor.set_roi_data(tools[row].roi.to_dict())
+            finally:
+                self._syncing_workspace_roi = False
         else:
             self.view.set_tool_overlay(None)
+            self._syncing_workspace_roi = True
+            try:
+                self.roi_editor.set_roi_data({})
+            finally:
+                self._syncing_workspace_roi = False
 
     def _current_golden_image(self) -> Optional[np.ndarray]:
         if self.current_img is not None:
@@ -2679,6 +2830,7 @@ class GoldenWizard(QDialog):
                 self._err("Nie je vybraný žiadny view.")
                 return
             self.recipes.add_tool(recipe, tool, view_id=view_id)
+            self._selected_tool_row = len(self.recipes.get_draft_tools(recipe, view_id)) - 1
             self._refresh_tools_table()
             self._update_dirty_state(recipe, view_id)
         except Exception as exc:
@@ -2708,7 +2860,13 @@ class GoldenWizard(QDialog):
             order_flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
             order_item.setFlags(order_flags)
             name_item = QTableWidgetItem(tool.name)
-            type_item = QTableWidgetItem(tool.type)
+            try:
+                tool_meta = self.recipes.tool.get_tool_meta(tool.type)
+                secondary = getattr(tool_meta, "category", "") or getattr(tool_meta, "name", "")
+            except KeyError:
+                secondary = "Tool"
+            type_item = QTableWidgetItem(str(secondary))
+            type_item.setToolTip(tool.type)
             order_item.setTextAlignment(Qt.AlignCenter)
             is_locator = tool.type.startswith("locator.")
             if is_locator:
@@ -2716,7 +2874,7 @@ class GoldenWizard(QDialog):
                 type_item.setBackground(highlight)
                 order_item.setBackground(highlight)
                 name_item.setBackground(highlight)
-                type_item.setText(f"{tool.type}  (Locator)")
+                type_item.setText(f"{secondary} · Locator")
                 type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
             else:
                 type_item.setToolTip("Analyzátory bežia po locator nástrojoch.")
@@ -2752,9 +2910,13 @@ class GoldenWizard(QDialog):
             actions_layout.setContentsMargins(0, 0, 0, 0)
             actions_layout.setSpacing(4)
 
-            btn_edit = QPushButton("Upraviť", actions_widget)
+            btn_edit = QToolButton(actions_widget)
+            btn_edit.setText("⋯")
+            btn_edit.setToolTip("Legacy Edit for specialized configuration")
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
-            btn_del = QPushButton("Zmazať", actions_widget)
+            btn_del = QToolButton(actions_widget)
+            btn_del.setText("×")
+            btn_del.setToolTip("Delete selected tool")
             btn_del.clicked.connect(lambda _, idx=row: self._delete_tool(idx))
 
             actions_layout.addWidget(btn_edit)
@@ -2880,6 +3042,8 @@ class GoldenWizard(QDialog):
             tools = self.recipes.get_draft_tools(recipe, view_id)
         row = self.tools_table.currentRow()
         if 0 <= row < len(tools):
+            self._btn_legacy_edit.setEnabled(True)
+            self._btn_delete_selected.setEnabled(True)
             tool = tools[row]
             try:
                 meta = self.recipes.tool.get_tool_meta(tool.type)
@@ -2891,15 +3055,65 @@ class GoldenWizard(QDialog):
                 self.view.set_tool_overlay(None)
                 return
             self._tool_panel.set_tool(tool, meta, schema)
+            supports_roi = bool(getattr(getattr(meta, "meta", meta), "supports_roi", False))
+            self.roi_editor.setEnabled(supports_roi)
             self._tool_panel.set_locator_failure_policy(
                 self._current_locator_failure_policy
             )
             self._selected_tool_row = row
             self.view.set_tool_overlay(tool)
+            self._syncing_workspace_roi = True
+            try:
+                self.roi_editor.set_roi_data(tool.roi.to_dict())
+            finally:
+                self._syncing_workspace_roi = False
+            shape = tool.roi.shape().title() if tool.roi.rect() is not None else "No ROI"
+            state = "Enabled" if tool.enabled else "Disabled"
+            self._status_bar.setText(f"Tool: {tool.name}  |  ROI: {shape}  |  {state}  |  Ready")
         else:
+            self._btn_legacy_edit.setEnabled(False)
+            self._btn_delete_selected.setEnabled(False)
             self._tool_panel.clear()
+            self.roi_editor.setEnabled(False)
             self._selected_tool_row = -1
             self.view.set_tool_overlay(None)
+            self._syncing_workspace_roi = True
+            try:
+                self.roi_editor.set_roi_data({})
+            finally:
+                self._syncing_workspace_roi = False
+            self._status_bar.setText("No tool selected  |  Add a tool or select one from the list.")
+
+    def _on_workspace_roi_changed(self, _rect: object) -> None:
+        if self._syncing_workspace_roi:
+            return
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        roi_data = self.roi_editor.roi_data()
+        tool.roi = ToolRoi.from_obj(roi_data)
+        params = dict(getattr(tool.params, "values", {}) or {})
+        if roi_data:
+            params["roi"] = tool.roi.to_dict()
+        else:
+            params.pop("roi", None)
+        tool.params = ToolParams(params)
+        try:
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        except Exception as exc:
+            self._err(f"Uloženie ROI zlyhalo: {exc}")
+            return
+        self.view.set_tool_overlay(tool)
+        self._tool_panel.refresh_geometry(tool)
+        self._update_dirty_state(recipe, view_id)
+        shape = tool.roi.shape().title() if tool.roi.rect() is not None else "No ROI"
+        self._status_bar.setText(f"Tool: {tool.name}  |  ROI: {shape}  |  Draft updated")
 
     def _refresh_view_metadata(self) -> None:
         self._updating_view_selector = True
