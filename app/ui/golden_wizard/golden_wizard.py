@@ -98,6 +98,7 @@ from app.ui.golden_wizard.form_widgets import (
     _set_form_widget_value,
 )
 from app.ui.golden_wizard.session_settings_dialog import SessionSettingsDialog
+from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label
 from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog
 from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
 from app.ui.golden_wizard.view_config_dialog import (
@@ -191,16 +192,14 @@ class CollapsibleSection(QWidget):
 
     def __init__(self, title: str, content: QWidget, *, expanded: bool = True, parent=None):
         super().__init__(parent)
+        self.setObjectName("goldenWizard")
         self._header = QToolButton(self)
+        self._header.setObjectName("sectionHeader")
         self._header.setText(title)
         self._header.setCheckable(True)
         self._header.setChecked(expanded)
         self._header.setArrowType(Qt.DownArrow if expanded else Qt.RightArrow)
         self._header.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
-        self._header.setStyleSheet(
-            "QToolButton { text-align: left; font-weight: 600; padding: 7px; "
-            "background: #292d33; border: 1px solid #40454d; }"
-        )
         self._content = content
         self._content.setVisible(expanded)
         self._header.toggled.connect(self._toggle)
@@ -255,8 +254,8 @@ class ToolConfigPanel(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        title = QLabel("PROPERTIES", self)
-        title.setStyleSheet("font-weight: 700; font-size: 14px; color: #e8edf2;")
+        title = QLabel("VLASTNOSTI", self)
+        title.setProperty("role", "panelHeader")
         layout.addWidget(title)
 
         self._tool_label = QLabel("", self)
@@ -279,21 +278,21 @@ class ToolConfigPanel(QWidget):
         self._threshold_layout.setSpacing(6)
         self._threshold_layout.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
         self._geometry_summary = QLabel(
-            "No tool selected\nAdd a tool or select one from the list.", self
+            "Nie je vybraný nástroj\nPridajte nástroj alebo ho vyberte zo zoznamu.", self
         )
         self._geometry_summary.setWordWrap(True)
         self._geometry_summary.setStyleSheet("color: #aab2bc; padding: 8px;")
-        layout.addWidget(CollapsibleSection("Geometry", self._geometry_summary, parent=self))
-        layout.addWidget(CollapsibleSection("Detection", self._form_container, parent=self))
-        layout.addWidget(CollapsibleSection("Thresholds", self._threshold_container, parent=self))
+        layout.addWidget(CollapsibleSection("Geometria", self._geometry_summary, parent=self))
+        layout.addWidget(CollapsibleSection("Detekcia", self._form_container, parent=self))
+        layout.addWidget(CollapsibleSection("Prahy", self._threshold_container, parent=self))
 
         advanced_hint = QLabel(
-            "Specialized locator, template and ignore-mask controls remain available through Legacy Edit.",
+            "Špecializované nastavenia locatora, šablóny a ignorovacej masky sú dostupné cez Rozšírené nastavenie.",
             self,
         )
         advanced_hint.setWordWrap(True)
         advanced_hint.setStyleSheet("color: #89919b; padding: 8px;")
-        layout.addWidget(CollapsibleSection("Advanced", advanced_hint, expanded=False, parent=self))
+        layout.addWidget(CollapsibleSection("Pokročilé", advanced_hint, expanded=False, parent=self))
 
         self._form_error_label = QLabel("", self)
         self._form_error_label.setStyleSheet("color: #b03030; padding-top: 4px;")
@@ -327,7 +326,7 @@ class ToolConfigPanel(QWidget):
         controls_layout.addStretch(1)
         layout.addLayout(controls_layout)
 
-        self._diagnostics_group = QGroupBox("Diagnostics", self)
+        self._diagnostics_group = QGroupBox("Diagnostika", self)
         diag_layout = QVBoxLayout(self._diagnostics_group)
         diag_layout.setContentsMargins(8, 8, 8, 8)
         diag_layout.setSpacing(6)
@@ -365,7 +364,7 @@ class ToolConfigPanel(QWidget):
         diag_layout.addWidget(self._perf_overlay_label)
 
         self._metrics_table = QTableWidget(0, 2, self._diagnostics_group)
-        self._metrics_table.setHorizontalHeaderLabels(["Metric", "Value"])
+        self._metrics_table.setHorizontalHeaderLabels(["Metrika", "Hodnota"])
         self._metrics_table.horizontalHeader().setStretchLastSection(True)
         self._metrics_table.verticalHeader().setVisible(False)
         self._metrics_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -432,7 +431,7 @@ class ToolConfigPanel(QWidget):
 
         diag_layout.addWidget(self._preview_widget)
 
-        layout.addWidget(CollapsibleSection("Result", self._diagnostics_group, parent=self))
+        layout.addWidget(CollapsibleSection("Výsledok", self._diagnostics_group, parent=self))
 
         self._test_result_label = QLabel("", self)
         self._test_result_label.setStyleSheet(
@@ -461,9 +460,11 @@ class ToolConfigPanel(QWidget):
         self._threshold_specs.clear()
         self._current_metrics_spec = []
         self._clear_form()
-        self._tool_label.setText("No tool selected")
+        self._tool_label.setText("Nie je vybraný nástroj")
         self._description_label.clear()
-        self._geometry_summary.setText("No tool selected\nAdd a tool or select one from the list.")
+        self._geometry_summary.setText(
+            "Nie je vybraný nástroj\nPridajte nástroj alebo ho vyberte zo zoznamu."
+        )
         self._clear_test_result()
         self._update_visibility()
         self.locatorPolicyWarningChanged.emit("")
@@ -481,7 +482,8 @@ class ToolConfigPanel(QWidget):
         }
         self._current_metrics_spec = list(getattr(meta, "metrics_spec", []) or [])
 
-        self._tool_label.setText(f"{tool.name} ({tool.type})")
+        tool_kind = getattr(meta, "name", "") or getattr(meta, "category", "") or "Nástroj"
+        self._tool_label.setText(f"{tool.name} — {tool_kind}")
         description = getattr(meta, "description", "") or ""
         self._description_label.setText(description)
         self._description_label.setVisible(bool(description))
@@ -495,11 +497,11 @@ class ToolConfigPanel(QWidget):
     def refresh_geometry(self, tool: Tool) -> None:
         rect = tool.roi.rect()
         if rect is None:
-            geometry_text = "No ROI\nSelect a drawing tool and create ROI."
+            geometry_text = "Bez ROI\nVyberte kresliaci nástroj a vytvorte ROI."
         else:
             x, y, width, height = rect
-            shape = {"rect": "Rectangle", "ellipse": "Circle", "polygon": "Polygon"}.get(
-                tool.roi.shape(), "Rectangle"
+            shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+                tool.roi.shape(), "Obdĺžnik"
             )
             geometry_text = f"Shape: {shape}\nX: {x}   Y: {y}\nW: {width}   H: {height}"
         self._geometry_summary.setText(geometry_text)
@@ -514,7 +516,7 @@ class ToolConfigPanel(QWidget):
         if tool is None:
             return
         self._current_tool = tool
-        self._tool_label.setText(f"{tool.name} ({tool.type})")
+        self._tool_label.setText(tool.name)
         self._updating = True
         try:
             params = getattr(tool.params, "values", {}) or {}
@@ -556,11 +558,7 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label_text = spec.get("label")
-                if label_text is None:
-                    label_text = name
-                else:
-                    label_text = str(label_text)
+                label_text = field_label(name, spec.get("label"))
                 label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
@@ -585,11 +583,7 @@ class ToolConfigPanel(QWidget):
                 tooltip = _format_spec_tooltip(spec)
                 if tooltip:
                     widget.setToolTip(tooltip)
-                label_text = spec.get("label")
-                if label_text is None:
-                    label_text = name
-                else:
-                    label_text = str(label_text)
+                label_text = field_label(name, spec.get("label"))
                 label = QLabel(label_text, self)
                 if tooltip:
                     label.setToolTip(tooltip)
@@ -1443,7 +1437,7 @@ class GoldenWizard(QDialog):
         top_primary.setSpacing(8)
         top_primary.addWidget(QLabel("Recept:"))
         top_primary.addWidget(self.recipe_name, 1)
-        top_primary.addWidget(QLabel("View:", self))
+        top_primary.addWidget(QLabel("Pohľad:", self))
         top_primary.addWidget(self._view_selector)
         top_primary.addWidget(self.btn_add_view)
         top_primary.addWidget(self.btn_edit_view)
@@ -1484,13 +1478,10 @@ class GoldenWizard(QDialog):
         self.btn_save_tool = QPushButton("Uložiť nástroj")
         self.btn_test_tool = QPushButton("Otestovať")
         self.btn_test_tool.setEnabled(False)
-        self.btn_publish_recipe = QPushButton("Publikovať/Aktualizovať recept")
+        self.btn_publish_recipe = QPushButton("Publikovať / aktualizovať recept")
+        self.btn_publish_recipe.setProperty("role", "primary")
         self.btn_close_wizard = QPushButton("Zavrieť Golden Wizard")
-        self.btn_close_wizard.setStyleSheet(
-            "QPushButton { background-color: #c62828; color: white; font-weight: 600; }"
-            "QPushButton:hover { background-color: #b71c1c; }"
-            "QPushButton:pressed { background-color: #8e0000; }"
-        )
+        self.btn_close_wizard.setProperty("role", "destructive")
 
         buttons = QHBoxLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
@@ -1516,7 +1507,9 @@ class GoldenWizard(QDialog):
         self._tool_panel.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
 
         self.tools_table = ToolsTableWidget(0, 5, self)
-        self.tools_table.setHorizontalHeaderLabels(["Order", "Name", "Type", "Enabled", "Actions"])
+        self.tools_table.setHorizontalHeaderLabels(
+            ["Poradie", "Názov", "Typ", "Povolený", "Akcie"]
+        )
         header = self.tools_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -1551,8 +1544,8 @@ class GoldenWizard(QDialog):
         self.locator_policy_banner = QLabel("", self)
         self.locator_policy_banner.setWordWrap(True)
         self.locator_policy_banner.setStyleSheet(
-            "background-color: #fff4d6; border: 1px solid #f0c36d; "
-            "color: #8a6d1a; padding: 8px; border-radius: 4px; font-weight: 500;"
+            "background-color: #2b2518; border: 1px solid #6f581d; "
+            "color: #d29922; padding: 8px; border-radius: 4px; font-weight: 500;"
         )
         self.locator_policy_banner.setVisible(False)
 
@@ -1563,21 +1556,21 @@ class GoldenWizard(QDialog):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(10, 10, 10, 10)
         left_layout.setSpacing(8)
-        tools_label.setText("TOOLS")
-        tools_label.setStyleSheet("font-weight: 700; color: #e8edf2;")
-        self.btn_add_tool.setText("+ Add Tool")
+        tools_label.setText("NÁSTROJE")
+        tools_label.setProperty("role", "panelHeader")
+        self.btn_add_tool.setText("+ Pridať nástroj")
         left_layout.addWidget(tools_label)
         left_layout.addWidget(self.btn_add_tool)
         left_layout.addWidget(self.tools_table, 1)
         selected_actions = QHBoxLayout()
-        self._btn_legacy_edit = QPushButton("Legacy Edit", left_panel)
-        self._btn_legacy_edit.setToolTip("Open specialized or legacy tool configuration")
+        self._btn_legacy_edit = QPushButton("Rozšírené nastavenie", left_panel)
+        self._btn_legacy_edit.setToolTip("Otvoriť špecializované nastavenia nástroja")
         self._btn_legacy_edit.clicked.connect(
             lambda: self._edit_tool(self.tools_table.currentRow())
         )
         self._btn_delete_selected = QToolButton(left_panel)
         self._btn_delete_selected.setText("×")
-        self._btn_delete_selected.setToolTip("Delete selected tool")
+        self._btn_delete_selected.setToolTip("Odstrániť vybraný nástroj")
         self._btn_delete_selected.clicked.connect(
             lambda: self._delete_tool(self.tools_table.currentRow())
         )
@@ -1593,10 +1586,10 @@ class GoldenWizard(QDialog):
         center_layout = QVBoxLayout(center_panel)
         center_layout.setContentsMargins(10, 10, 10, 10)
         center_layout.setSpacing(8)
-        self._canvas_title = QLabel("MAIN IMAGE CANVAS", center_panel)
-        self._canvas_title.setStyleSheet("font-weight: 700; color: #e8edf2;")
+        self._canvas_title = QLabel("HLAVNÝ OBRAZ", center_panel)
+        self._canvas_title.setProperty("role", "panelHeader")
         self._canvas_empty = QLabel(
-            "No Golden image\nCapture or load Golden first", center_panel
+            "Nie je dostupný GOLDEN obraz\nNajprv ho získajte alebo načítajte", center_panel
         )
         self._canvas_empty.setAlignment(Qt.AlignCenter)
         self._canvas_empty.setStyleSheet(
@@ -1630,29 +1623,26 @@ class GoldenWizard(QDialog):
         self._workspace_splitter.setSizes([250, 800, 340])
 
         top_controls = QVBoxLayout()
-        top_controls.setContentsMargins(0, 0, 0, 0)
+        top_controls.setContentsMargins(10, 8, 10, 8)
         top_controls.setSpacing(6)
         top_controls.addLayout(top_primary)
         top_controls.addLayout(top_secondary)
+        top_bar = QFrame(self)
+        top_bar.setObjectName("goldenTopBar")
+        top_bar.setLayout(top_controls)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        layout.addLayout(top_controls)
+        layout.addWidget(top_bar)
         layout.addWidget(self._workspace_splitter, 1)
-        self._status_bar = QLabel("Ready", self)
+        self._status_bar = QLabel("Pripravené", self)
         self._status_bar.setStyleSheet(
             "color: #aab2bc; background: #20242a; border-top: 1px solid #3b4149; padding: 5px 8px;"
         )
         layout.addWidget(self._status_bar)
 
-        self.setStyleSheet(self.styleSheet() + """
-            QFrame#workspacePanel, QScrollArea#propertiesScroll {
-                background: #1b1f24; border: 1px solid #343a42;
-            }
-            QSplitter::handle { background: #3b424b; }
-            QTableWidget { background: #15181c; alternate-background-color: #1d2228; }
-        """)
+        self.setStyleSheet(GOLDEN_WIZARD_STYLE)
 
         self._tool_panel.clear()
 
@@ -2323,9 +2313,9 @@ class GoldenWizard(QDialog):
 
         tooltip_parts: list[str] = []
         if draft_at:
-            tooltip_parts.append(f"Draft updated: {draft_at}")
+            tooltip_parts.append(f"Koncept aktualizovaný: {draft_at}")
         if published_at:
-            tooltip_parts.append(f"Published: {published_at}")
+            tooltip_parts.append(f"Publikované: {published_at}")
         self._publish_state_label.setToolTip("\n".join(tooltip_parts) if tooltip_parts else "")
 
     # ---------- Draft state management ----------
@@ -2912,11 +2902,11 @@ class GoldenWizard(QDialog):
 
             btn_edit = QToolButton(actions_widget)
             btn_edit.setText("⋯")
-            btn_edit.setToolTip("Legacy Edit for specialized configuration")
+            btn_edit.setToolTip("Rozšírené nastavenie")
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
             btn_del = QToolButton(actions_widget)
             btn_del.setText("×")
-            btn_del.setToolTip("Delete selected tool")
+            btn_del.setToolTip("Odstrániť nástroj")
             btn_del.clicked.connect(lambda _, idx=row: self._delete_tool(idx))
 
             actions_layout.addWidget(btn_edit)
@@ -3067,9 +3057,13 @@ class GoldenWizard(QDialog):
                 self.roi_editor.set_roi_data(tool.roi.to_dict())
             finally:
                 self._syncing_workspace_roi = False
-            shape = tool.roi.shape().title() if tool.roi.rect() is not None else "No ROI"
-            state = "Enabled" if tool.enabled else "Disabled"
-            self._status_bar.setText(f"Tool: {tool.name}  |  ROI: {shape}  |  {state}  |  Ready")
+            shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+                tool.roi.shape(), "ROI"
+            ) if tool.roi.rect() is not None else "Bez ROI"
+            state = "Povolený" if tool.enabled else "Zakázaný"
+            self._status_bar.setText(
+                f"Nástroj: {tool.name}  |  ROI: {shape}  |  {state}  |  Pripravené"
+            )
         else:
             self._btn_legacy_edit.setEnabled(False)
             self._btn_delete_selected.setEnabled(False)
@@ -3082,7 +3076,9 @@ class GoldenWizard(QDialog):
                 self.roi_editor.set_roi_data({})
             finally:
                 self._syncing_workspace_roi = False
-            self._status_bar.setText("No tool selected  |  Add a tool or select one from the list.")
+            self._status_bar.setText(
+                "Nie je vybraný nástroj  |  Pridajte nástroj alebo ho vyberte zo zoznamu."
+            )
 
     def _on_workspace_roi_changed(self, _rect: object) -> None:
         if self._syncing_workspace_roi:
@@ -3112,8 +3108,12 @@ class GoldenWizard(QDialog):
         self.view.set_tool_overlay(tool)
         self._tool_panel.refresh_geometry(tool)
         self._update_dirty_state(recipe, view_id)
-        shape = tool.roi.shape().title() if tool.roi.rect() is not None else "No ROI"
-        self._status_bar.setText(f"Tool: {tool.name}  |  ROI: {shape}  |  Draft updated")
+        shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+            tool.roi.shape(), "ROI"
+        ) if tool.roi.rect() is not None else "Bez ROI"
+        self._status_bar.setText(
+            f"Nástroj: {tool.name}  |  ROI: {shape}  |  Koncept aktualizovaný"
+        )
 
     def _refresh_view_metadata(self) -> None:
         self._updating_view_selector = True

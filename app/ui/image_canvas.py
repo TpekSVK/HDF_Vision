@@ -306,16 +306,16 @@ class ImageNavigationToolbar(QWidget):
         self._mode_layout = layout
         self.draw_buttons: list[QToolButton] = []
         self.mode_buttons: dict[InteractionMode, QToolButton] = {}
-        for mode, label in ((InteractionMode.SELECT, "Select"),
-                            (InteractionMode.DRAW, "Draw"), (InteractionMode.PAN, "Pan")):
+        for mode, label in ((InteractionMode.SELECT, "Vybrať"),
+                            (InteractionMode.DRAW, "Kresliť"), (InteractionMode.PAN, "Posun")):
             button = self._button(label, lambda m=mode: view.set_interaction_mode(m))
             button.setCheckable(True)
             self._modes.addButton(button)
             self.mode_buttons[mode] = button
             layout.addWidget(button)
-        self.mode_buttons[InteractionMode.SELECT].setToolTip("Select: preserve existing geometry (Esc)")
-        self.mode_buttons[InteractionMode.DRAW].setToolTip("Draw with the current ROI or mask tool")
-        self.mode_buttons[InteractionMode.PAN].setToolTip("Pan: left drag; temporary pan: Space + drag or middle drag")
+        self.mode_buttons[InteractionMode.SELECT].setToolTip("Vybrať a upraviť existujúcu geometriu (Esc)")
+        self.mode_buttons[InteractionMode.DRAW].setToolTip("Kresliť aktuálnym ROI alebo maskovacím nástrojom")
+        self.mode_buttons[InteractionMode.PAN].setToolTip("Posun: ťahanie; dočasne Space + ťahanie alebo stredné tlačidlo")
         layout.addSpacing(8)
         self.zoom_out_button = self._button("−", view.zoom_out, "Zoom out (−)")
         layout.addWidget(self.zoom_out_button)
@@ -325,7 +325,7 @@ class ImageNavigationToolbar(QWidget):
         layout.addWidget(self.zoom_label)
         self.zoom_in_button = self._button("+", view.zoom_in, "Zoom in (+ or =)")
         layout.addWidget(self.zoom_in_button)
-        self.fit_button = self._button("Fit", view.fit_image_to_view, "Fit whole image (F)")
+        self.fit_button = self._button("Prispôsobiť", view.fit_image_to_view, "Prispôsobiť celý obraz (F)")
         layout.addWidget(self.fit_button)
         self.actual_size_button = self._button("1:1", view.reset_zoom_100, "100%: one image pixel per view pixel (1)")
         layout.addWidget(self.actual_size_button)
