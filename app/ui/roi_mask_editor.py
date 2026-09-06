@@ -38,7 +38,12 @@ from PySide6.QtWidgets import (
 )
 
 
-from app.ui.image_canvas import ImageView as _ImageView, ImageNavigationToolbar, InteractionMode
+from app.ui.image_canvas import (
+    CANVAS_TOOLBAR_STYLE,
+    ImageView as _ImageView,
+    ImageNavigationToolbar,
+    InteractionMode,
+)
 
 
 _ROI_COLOR = QColor(0, 200, 0, 200)
@@ -2285,6 +2290,7 @@ class LocatorROIEditor(ROIEditor):
         for button in self._locator_buttons:
             button.hide()
         self._mask_controls = QWidget(self)
+        self._mask_controls.setStyleSheet(CANVAS_TOOLBAR_STYLE)
         mask_row = QHBoxLayout(self._mask_controls)
         mask_row.setContentsMargins(0, 0, 0, 0)
         mask_row.setSpacing(4)
@@ -2316,15 +2322,15 @@ class LocatorROIEditor(ROIEditor):
             ("Kruh", _SharedCanvasView.MASK_CIRCLE),
             ("Polygón", _SharedCanvasView.MASK_POLYGON),
         )
-        tool_group = QButtonGroup(self)
-        tool_group.setExclusive(True)
+        self._mask_tool_group = QButtonGroup(self)
+        self._mask_tool_group.setExclusive(True)
         for index, (text, mode) in enumerate(mask_tools):
             button = QToolButton(self._mask_controls)
             button.setText(text)
             button.setCheckable(True)
             button.setChecked(index == 0)
             button.clicked.connect(lambda _checked=False, value=mode: self._start_mask_tool(value))
-            tool_group.addButton(button)
+            self._mask_tool_group.addButton(button)
             mask_row.addWidget(button)
             self._mask_tool_buttons.append(button)
         mask_row.addStretch(1)
@@ -2365,6 +2371,7 @@ class LocatorROIEditor(ROIEditor):
         self._mask_controls.setVisible(bool(enabled))
         self._btn_roi_mode.setChecked(True)
         self._view.configure_mask(enabled, mask)
+        self._sync_mask_tool_buttons(None)
         self._update_history_buttons()
 
     def set_mask_editing(self, editing: bool) -> None:
@@ -2376,15 +2383,22 @@ class LocatorROIEditor(ROIEditor):
         self._view.set_mask_editing(editing)
         if editing:
             self.set_mask_tool(self._view._mask_mode)
+        else:
+            self._sync_mask_tool_buttons(None)
         self._update_history_buttons()
 
     def set_mask_tool(self, mode: str) -> None:
         self._view.set_mask_mode(mode)
+        self._sync_mask_tool_buttons(mode if self._view._mask_editing else None)
+
+    def _sync_mask_tool_buttons(self, active_mode: Optional[str]) -> None:
+        self._mask_tool_group.setExclusive(False)
         for button, value in zip(self._mask_tool_buttons, (
                 _SharedCanvasView.MASK_BRUSH, _SharedCanvasView.MASK_ERASER,
                 _SharedCanvasView.MASK_RECTANGLE, _SharedCanvasView.MASK_CIRCLE,
                 _SharedCanvasView.MASK_POLYGON)):
-            button.setChecked(value == mode)
+            button.setChecked(value == active_mode)
+        self._mask_tool_group.setExclusive(True)
 
     def _start_mask_tool(self, mode: str) -> None:
         self.set_mask_editing(True)
