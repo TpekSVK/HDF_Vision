@@ -83,9 +83,34 @@ FIELD_LABELS_SK = {
     "threshold_corr": "Minimálna zhoda",
 }
 
+METRIC_LABELS_SK = {
+    "corr": "Skóre zhody",
+    "score": "Skóre",
+    "dx": "Posun X",
+    "dy": "Posun Y",
+    "x": "X",
+    "y": "Y",
+    "theta_deg": "Rotácia",
+    "rotation": "Rotácia",
+    "ssim": "SSIM",
+    "similarity": "Podobnosť",
+    "diff": "Rozdiel",
+    "count": "Počet",
+    "area": "Plocha",
+    "found": "Nájdené",
+    "match_attempts": "Pokusy o zhodu",
+    "edge_count": "Počet hrán",
+}
+
 
 def field_label(name: str, configured_label: object = None) -> str:
     return FIELD_LABELS_SK.get(name, str(configured_label or name).replace("_", " ").capitalize())
+
+
+def metric_label(name: str, configured_label: object = None) -> str:
+    return METRIC_LABELS_SK.get(
+        name, str(configured_label or name).replace("_", " ").capitalize()
+    )
 
 
 TOOL_CATALOG_STYLE = """
