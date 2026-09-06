@@ -81,6 +81,9 @@ FIELD_LABELS_SK = {
     "template_roi": "Oblasť šablóny",
     "angle_roi": "Oblasť uhla",
     "threshold_corr": "Minimálna zhoda",
+    "score_threshold": "Prah odchýlky",
+    "total_area_threshold": "Max. anomálna plocha",
+    "min_blob_area": "Min. veľkosť objektu",
 }
 
 METRIC_LABELS_SK = {
