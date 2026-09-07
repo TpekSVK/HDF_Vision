@@ -37,6 +37,15 @@ QLabel[role="metricValue"] { color: #e6e8eb; font-size: 18px; font-weight: 700; 
 QLabel[role="statusHero"] { font-size: 36px; font-weight: 800; }
 QLabel[role="resultName"] { color: #c8cdd3; font-size: 11pt; }
 QLabel[role="resultValue"] { font-size: 11pt; font-weight: 700; }
+QLabel[role="setupKicker"] {
+  color: #64a7df; font-size: 9pt; font-weight: 700; letter-spacing: 1px;
+}
+QLabel[role="setupHeroTitle"] { color: #f4f6f8; font-size: 25px; font-weight: 750; }
+QLabel[role="setupCardTitle"] { color: #f0f3f6; font-size: 18px; font-weight: 700; }
+QLabel[role="setupDescription"] { color: #9aa4af; font-size: 10pt; }
+QLabel[role="setupRecipeName"] { color: #ffffff; font-size: 22px; font-weight: 750; }
+QLabel[role="setupFieldLabel"] { color: #d9dde2; font-weight: 600; }
+QLabel[role="setupHint"] { color: #78838e; font-size: 9pt; }
 QLabel[status="ok"] { color: #22c55e; }
 QLabel[status="warn"] { color: #d29922; }
 QLabel[status="nok"] { color: #ef4444; }
@@ -72,6 +81,10 @@ QPushButton[role="mode"] { min-width: 96px; font-weight: 700; }
 QPushButton[role="mode"]:checked {
   background: #2f80c9; border-color: #3b91dc; color: white;
 }
+QPushButton[role="setupAction"] {
+  min-height: 30px; text-align: left; padding-left: 12px;
+}
+QPushButton#setupPrimaryAction { font-size: 12pt; }
 
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QDateEdit {
   min-height: 26px;
@@ -127,6 +140,18 @@ QFrame[frameShape="4"] {
 }
 
 QWidget#runContainer { background: transparent; }
+QWidget#setupWorkspace, QWidget#setupContent { background: transparent; }
+QFrame#setupHero {
+  background: #172431;
+  border: 1px solid #2d5f87;
+  border-radius: 8px;
+}
+QFrame[setupCard="true"] {
+  background: #181d23;
+  border: 1px solid #2a313a;
+  border-radius: 8px;
+}
+QFrame[setupCard="true"]:hover { border-color: #3b4855; }
 QLabel#liveInspectionView {
   background: #0d1115; border: 1px solid #343c46;
   border-radius: 6px; color: #6f7882;

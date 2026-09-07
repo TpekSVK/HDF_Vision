@@ -184,29 +184,14 @@ class MainWindow(QMainWindow):
 
         root_layout.addWidget(self.top_bar)
 
-        # Recipe management is SETUP-only; the active recipe remains visible
-        # in the shared top bar in both modes.
-        self.recipe_actions_container = QFrame(root)
-        self.recipe_actions_container.setProperty("role", "panel")
-        bar = QHBoxLayout(self.recipe_actions_container)
-        bar.setContentsMargins(10, 6, 10, 6)
-        bar.setSpacing(8)
-        recipe_actions_title = QLabel("Správa receptu")
-        recipe_actions_title.setProperty("role", "panelHeader")
-        bar.addWidget(recipe_actions_title)
-
+        # Recipe management actions are placed in the SETUP dashboard below.
         self.btn_new = QPushButton("Nový")
         self.btn_ren = QPushButton("Premenovať")
         self.btn_del = QPushButton("Zmazať")
-        bar.addWidget(self.btn_new); bar.addWidget(self.btn_ren); bar.addWidget(self.btn_del)
-
         self.btn_new.clicked.connect(self.on_recipe_new)
         self.btn_ren.clicked.connect(self.on_recipe_rename)
         self.btn_del.clicked.connect(self.on_recipe_delete)
         self.btn_del.setProperty("role", "destructive")
-        bar.addStretch(1)
-
-        root_layout.addWidget(self.recipe_actions_container)
 
         # ========== Stacked RUN/SETUP ==========
         self.stack = QStackedWidget()
@@ -446,13 +431,13 @@ class MainWindow(QMainWindow):
         power_actions_row.setContentsMargins(0, 0, 0, 0)
         power_actions_row.setSpacing(10)
 
-        self.btn_shutdown_pc = QPushButton("⏻ Vypnúť PC")
+        self.btn_shutdown_pc = QPushButton("Vypnúť počítač")
         self.btn_shutdown_pc.setToolTip("Bezpečne vypnúť aplikáciu aj počítač")
         self.btn_shutdown_pc.setProperty("role", "destructive")
         self.btn_shutdown_pc.clicked.connect(self._confirm_shutdown_pc)
         power_actions_row.addWidget(self.btn_shutdown_pc)
 
-        self.btn_reboot_pc = QPushButton("↻ Reštart PC")
+        self.btn_reboot_pc = QPushButton("Reštartovať počítač")
         self.btn_reboot_pc.setToolTip("Bezpečne reštartovať aplikáciu aj počítač")
         self.btn_reboot_pc.setProperty("role", "warning")
         self.btn_reboot_pc.clicked.connect(self._confirm_reboot_pc)
@@ -468,50 +453,166 @@ class MainWindow(QMainWindow):
         self._update_sidebar(view_id=self._active_view_id)
 
         # ---------- SETUP panel ----------
-        self.panel_setup = QWidget(); self.stack.addWidget(self.panel_setup)
-        s = QVBoxLayout(self.panel_setup); s.setSpacing(8)
+        self.panel_setup = QWidget(); self.panel_setup.setObjectName("setupWorkspace")
+        self.stack.addWidget(self.panel_setup)
+        setup_root = QVBoxLayout(self.panel_setup)
+        setup_root.setContentsMargins(0, 0, 0, 0)
 
-        row1 = QHBoxLayout();
-        self.btn_wizard = QPushButton("Sprievodca Golden", self)
+        setup_scroll = QScrollArea(self.panel_setup)
+        setup_scroll.setWidgetResizable(True)
+        setup_scroll.setFrameShape(QFrame.NoFrame)
+        setup_root.addWidget(setup_scroll)
+
+        setup_content = QWidget()
+        setup_content.setObjectName("setupContent")
+        setup_layout = QVBoxLayout(setup_content)
+        setup_layout.setContentsMargins(10, 10, 10, 10)
+        setup_layout.setSpacing(12)
+        setup_scroll.setWidget(setup_content)
+
+        setup_hero = QFrame(setup_content)
+        setup_hero.setObjectName("setupHero")
+        hero_layout = QHBoxLayout(setup_hero)
+        hero_layout.setContentsMargins(22, 18, 22, 18)
+        hero_layout.setSpacing(18)
+        hero_copy = QVBoxLayout()
+        hero_copy.setSpacing(4)
+        hero_kicker = QLabel("NASTAVENIE KONTROLY")
+        hero_kicker.setProperty("role", "setupKicker")
+        hero_copy.addWidget(hero_kicker)
+        hero_title = QLabel("Golden, ROI a nástroje")
+        hero_title.setProperty("role", "setupHeroTitle")
+        hero_copy.addWidget(hero_title)
+        hero_description = QLabel(
+            "Vytvorte referenčný obraz, nastavte kontrolované oblasti a nakonfigurujte pipeline."
+        )
+        hero_description.setProperty("role", "setupDescription")
+        hero_description.setWordWrap(True)
+        hero_copy.addWidget(hero_description)
+        hero_layout.addLayout(hero_copy, 1)
+
+        self.btn_wizard = QPushButton("Otvoriť Golden Setup", setup_hero)
+        self.btn_wizard.setObjectName("setupPrimaryAction")
         self.btn_wizard.setProperty("role", "primary")
+        self.btn_wizard.setMinimumSize(240, 44)
         self.btn_wizard.clicked.connect(self.open_wizard)
-        row1.addWidget(self.btn_wizard)
+        hero_layout.addWidget(self.btn_wizard, 0, Qt.AlignVCenter)
+        setup_layout.addWidget(setup_hero)
 
-        row1.addWidget(self.btn_export)
+        def create_setup_card(kicker: str, title: str, description: str):
+            card = QFrame(setup_content)
+            card.setProperty("role", "card")
+            card.setProperty("setupCard", True)
+            card.setMinimumHeight(220)
+            card_layout = QVBoxLayout(card)
+            card_layout.setContentsMargins(18, 16, 18, 16)
+            card_layout.setSpacing(8)
+            kicker_label = QLabel(kicker)
+            kicker_label.setProperty("role", "setupKicker")
+            card_layout.addWidget(kicker_label)
+            title_label = QLabel(title)
+            title_label.setProperty("role", "setupCardTitle")
+            card_layout.addWidget(title_label)
+            description_label = QLabel(description)
+            description_label.setProperty("role", "setupDescription")
+            description_label.setWordWrap(True)
+            card_layout.addWidget(description_label)
+            return card, card_layout
 
-        row1.addSpacing(12)
-        row1.addWidget(QLabel("Capture Mode (global):", self))
-        self.cmb_capture_mode = QComboBox(self)
+        setup_grid = QGridLayout()
+        setup_grid.setHorizontalSpacing(12)
+        setup_grid.setVerticalSpacing(12)
+        setup_grid.setColumnStretch(0, 1)
+        setup_grid.setColumnStretch(1, 1)
+
+        recipe_card, recipe_layout = create_setup_card(
+            "AKTÍVNY RECEPT",
+            "Správa receptu",
+            "Recept združuje Golden snímky, pohľady, nástroje a rozhodovacie pravidlá.",
+        )
+        self.setup_recipe_name = QLabel(self.current_recipe_name())
+        self.setup_recipe_name.setProperty("role", "setupRecipeName")
+        recipe_layout.addWidget(self.setup_recipe_name)
+        recipe_actions = QHBoxLayout()
+        recipe_actions.setSpacing(8)
+        recipe_actions.addWidget(self.btn_new)
+        recipe_actions.addWidget(self.btn_ren)
+        recipe_actions.addWidget(self.btn_del)
+        recipe_actions.addStretch(1)
+        recipe_layout.addLayout(recipe_actions)
+        recipe_layout.addStretch(1)
+        setup_grid.addWidget(recipe_card, 0, 0)
+
+        camera_card, camera_layout = create_setup_card(
+            "KAMERA",
+            "Snímanie a spúšťanie",
+            "Vyberte spôsob získania obrazu. Nastavenie konkrétnej kamery je súčasťou Golden Setupu.",
+        )
+        capture_row = QHBoxLayout()
+        capture_label = QLabel("Režim snímania")
+        capture_label.setProperty("role", "setupFieldLabel")
+        capture_row.addWidget(capture_label)
+        capture_row.addStretch(1)
+        self.cmb_capture_mode = QComboBox(camera_card)
+        self.cmb_capture_mode.setMinimumWidth(180)
         self.cmb_capture_mode.addItem("MASTER", "master")
         self.cmb_capture_mode.addItem("TRIGGER", "trigger")
         self.cmb_capture_mode.currentIndexChanged.connect(self._on_capture_mode_ui_changed)
-        row1.addWidget(self.cmb_capture_mode)
+        capture_row.addWidget(self.cmb_capture_mode)
+        camera_layout.addLayout(capture_row)
+        camera_hint = QLabel("MASTER pre živý obraz · TRIGGER pre externé spustenie linkou")
+        camera_hint.setProperty("role", "setupHint")
+        camera_hint.setWordWrap(True)
+        camera_layout.addWidget(camera_hint)
+        camera_layout.addStretch(1)
+        setup_grid.addWidget(camera_card, 0, 1)
 
-        self.btn_gpio_wizard = QPushButton("Sprievodca GPIO", self)
+        communication_card, communication_layout = create_setup_card(
+            "KOMUNIKÁCIA",
+            "Prepojenie s linkou",
+            "Nastavte vstupy pre snímanie a výstupy výsledkov OK/NOK.",
+        )
+        self.btn_gpio_wizard = QPushButton("GPIO vstupy a výstupy", communication_card)
+        self.btn_gpio_wizard.setProperty("role", "setupAction")
         self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
-        row1.addWidget(self.btn_gpio_wizard)
-
-        self.btn_modbus_wizard = QPushButton("Sprievodca Modbus", self)
+        communication_layout.addWidget(self.btn_gpio_wizard)
+        self.btn_modbus_wizard = QPushButton("Modbus TCP", communication_card)
+        self.btn_modbus_wizard.setProperty("role", "setupAction")
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
-        row1.addWidget(self.btn_modbus_wizard)
-
-        self.btn_pico_wizard = QPushButton("Sprievodca Raspberry Pi Pico", self)
+        communication_layout.addWidget(self.btn_modbus_wizard)
+        self.btn_pico_wizard = QPushButton("Raspberry Pi Pico", communication_card)
+        self.btn_pico_wizard.setProperty("role", "setupAction")
         self.btn_pico_wizard.clicked.connect(self.open_pico_wizard)
-        row1.addWidget(self.btn_pico_wizard)
+        communication_layout.addWidget(self.btn_pico_wizard)
+        communication_layout.addStretch(1)
+        setup_grid.addWidget(communication_card, 1, 0)
 
-        self.btn_change_log = QPushButton("Záznam zmien", self)
+        system_card, system_layout = create_setup_card(
+            "SYSTÉM",
+            "Dáta a diagnostika",
+            "Exportujte výsledky, skontrolujte zmeny receptu alebo zapnite servisné informácie.",
+        )
+        system_actions = QHBoxLayout()
+        system_actions.setSpacing(8)
+        self.btn_export.setText("Exportovať CSV")
+        self.btn_export.setProperty("role", "setupAction")
+        system_actions.addWidget(self.btn_export)
+        self.btn_change_log = QPushButton("Záznam zmien", system_card)
+        self.btn_change_log.setProperty("role", "setupAction")
         self.btn_change_log.clicked.connect(self.open_change_log)
-        row1.addWidget(self.btn_change_log)
-
-        self.chk_debug_overlay = QCheckBox("Zobraziť debug overlay výkonu", self)
-        self.chk_debug_overlay.setToolTip("Show performance debug overlay")
+        system_actions.addWidget(self.btn_change_log)
+        system_actions.addStretch(1)
+        system_layout.addLayout(system_actions)
+        self.chk_debug_overlay = QCheckBox("Zobraziť servisný overlay výkonu", system_card)
+        self.chk_debug_overlay.setToolTip("Zobraziť diagnostické informácie o výkone")
         self.chk_debug_overlay.toggled.connect(self._on_debug_overlay_toggled)
-        row1.addWidget(self.chk_debug_overlay)
+        system_layout.addWidget(self.chk_debug_overlay)
+        system_layout.addStretch(1)
+        system_layout.addWidget(self.power_actions_container)
+        setup_grid.addWidget(system_card, 1, 1)
 
-        row1.addStretch(1)
-        s.addLayout(row1)
-        s.addStretch(1)
-        s.addWidget(self.power_actions_container, 0, Qt.AlignLeft | Qt.AlignBottom)
+        setup_layout.addLayout(setup_grid)
+        setup_layout.addStretch(1)
 
 
         # default RUN zobrazenie
@@ -550,7 +651,6 @@ class MainWindow(QMainWindow):
         is_run = self.stack.currentWidget() is self.panel_run
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(not is_run)
-        self.recipe_actions_container.setVisible(not is_run)
 
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
@@ -2987,6 +3087,8 @@ class MainWindow(QMainWindow):
         if ix >= 0:
             self.cmb_recipe.setCurrentIndex(ix)
         self.cmb_recipe.blockSignals(False)
+        if hasattr(self, "setup_recipe_name"):
+            self.setup_recipe_name.setText(str(cur or "–"))
 
     def _resolve_startup_recipe(self) -> str:
         recipes = self.recipes.list()
@@ -3033,6 +3135,8 @@ class MainWindow(QMainWindow):
             self._reset_external_sequence_state()
             self.recipes.load(name)
             self.tool = self.recipes.tool
+            if hasattr(self, "setup_recipe_name"):
+                self.setup_recipe_name.setText(name)
             self._persist_last_recipe(name)
             self._refresh_views()
             self._reset_manual_trigger_progress(name)
@@ -3060,6 +3164,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(name)
         self.tool = self.recipes.tool
+        self.setup_recipe_name.setText(name)
         self._persist_last_recipe(name)
         self._refresh_views()
         self._reset_manual_trigger_progress(name)
@@ -3084,6 +3189,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
+        self.setup_recipe_name.setText(new)
         self._persist_last_recipe(new)
         self._refresh_views()
         self._reset_manual_trigger_progress(new)
@@ -3110,6 +3216,7 @@ class MainWindow(QMainWindow):
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        self.setup_recipe_name.setText("default")
         self._persist_last_recipe("default")
         self._refresh_views()
         self._reset_manual_trigger_progress("default")
