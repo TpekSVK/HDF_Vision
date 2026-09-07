@@ -37,9 +37,9 @@ outside the scope unless a stage explicitly says otherwise.
 
 ## Stage 5 — SETUP navigation and properties
 
-- [ ] Unify SETUP navigation with the same visual system.
-- [ ] Reorganize recipe, communication and camera entry points.
-- [ ] Keep the Golden Wizard as the primary tool/pipeline editor.
+- [x] Unify SETUP navigation with the same visual system.
+- [x] Reorganize recipe, communication and camera entry points.
+- [x] Keep the Golden Wizard as the primary tool/pipeline editor.
 - [ ] Standardize property sections and validation feedback.
 
 ## Stage 6 — Resolution and operator polish
