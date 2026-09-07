@@ -360,6 +360,7 @@ def tool_overlay_items(
     display_items: Any = None,
     label: Optional[str] = None,
     affine: Any = None,
+    include_ignore_mask: bool = True,
 ) -> List[OverlayItem]:
     from app.models.schema import Tool  # Local import to avoid circular dependencies
 
@@ -431,7 +432,7 @@ def tool_overlay_items(
                 )
 
         mask_value = getattr(tool.ignore_mask, "value", None)
-        if mask_value is not None:
+        if include_ignore_mask and mask_value is not None:
             warped_mask = mask_value
             if affine is not None:
                 warped = _warp_mask(np.asarray(mask_value), affine)
@@ -621,6 +622,100 @@ def apply_overlay(
     return composed.astype(np.uint8)
 
 
+def draw_overlay_items(
+    base_image: np.ndarray,
+    items: Sequence[OverlayItem],
+) -> np.ndarray:
+    """Draw lightweight runtime outlines without allocating alpha frame buffers."""
+
+    import cv2
+
+    frame = np.asarray(base_image)
+    if frame.ndim == 2:
+        output = cv2.cvtColor(frame.astype(np.uint8, copy=False), cv2.COLOR_GRAY2BGR)
+    elif frame.ndim == 3 and frame.shape[2] == 1:
+        output = cv2.cvtColor(frame[:, :, 0].astype(np.uint8, copy=False), cv2.COLOR_GRAY2BGR)
+    elif frame.ndim == 3:
+        output = frame[:, :, :3].astype(np.uint8, copy=True)
+    else:
+        output = frame.reshape(frame.shape[0], frame.shape[1], -1)[:, :, :3].astype(
+            np.uint8, copy=True
+        )
+
+    height, width = output.shape[:2]
+    line_type = cv2.LINE_AA
+    for _, item in sorted(
+        enumerate(items), key=lambda value: (value[1].z_index, value[0])
+    ):
+        label_anchor: Optional[Tuple[int, int]] = None
+        thickness = max(1, int(item.thickness))
+        if item.kind == "rect" and item.rect is not None:
+            x, y, rect_width, rect_height = item.rect
+            if rect_width <= 0 or rect_height <= 0:
+                continue
+            p1 = (int(round(x)), int(round(y)))
+            p2 = (
+                int(round(x + rect_width - 1)),
+                int(round(y + rect_height - 1)),
+            )
+            cv2.rectangle(output, p1, p2, item.color, thickness, line_type)
+            label_anchor = p1
+        elif item.kind in {"polyline", "polygon"} and item.points is not None:
+            if len(item.points) < 2:
+                continue
+            pts = np.round(item.points).astype(np.int32).reshape(-1, 1, 2)
+            cv2.polylines(
+                output,
+                [pts],
+                bool(item.closed),
+                item.color,
+                thickness,
+                line_type,
+            )
+            point_values = pts.reshape(-1, 2)
+            label_anchor = (
+                int(np.min(point_values[:, 0])),
+                int(np.min(point_values[:, 1])),
+            )
+        else:
+            continue
+
+        label_text = str(item.label or "").strip()
+        if not label_text or label_anchor is None:
+            continue
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.52
+        text_thickness = 1
+        (text_width, text_height), baseline = cv2.getTextSize(
+            label_text, font, font_scale, text_thickness
+        )
+        text_x = max(2, min(label_anchor[0], width - text_width - 8))
+        text_y = label_anchor[1] - 8
+        if text_y - text_height - baseline < 2:
+            text_y = min(height - baseline - 3, label_anchor[1] + text_height + 8)
+        cv2.rectangle(
+            output,
+            (text_x - 2, max(0, text_y - text_height - 3)),
+            (
+                min(width - 1, text_x + text_width + 4),
+                min(height - 1, text_y + baseline + 2),
+            ),
+            item.color,
+            cv2.FILLED,
+        )
+        cv2.putText(
+            output,
+            label_text,
+            (text_x, text_y),
+            font,
+            font_scale,
+            (255, 255, 255),
+            text_thickness,
+            line_type,
+        )
+    return output
+
+
 def extract_display_items_from_artifacts(artifacts: Any) -> list[Any]:
     if not isinstance(artifacts, Mapping):
         return []
@@ -631,6 +726,7 @@ __all__ = [
     "OverlayItem",
     "apply_overlay",
     "default_palette",
+    "draw_overlay_items",
     "extract_display_items_from_artifacts",
     "parse_display_items",
     "render_overlay",

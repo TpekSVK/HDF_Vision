@@ -1308,6 +1308,7 @@ class MainWindow(QMainWindow):
             "last_preview_frame": None,
             "last_view_id": None,
             "captured_frames": {},
+            "pending_overlays": {},
             "trigger_start_ts": time.monotonic(),
             "spec_lookup": {
                 getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
@@ -1347,6 +1348,7 @@ class MainWindow(QMainWindow):
         )
 
         golden = self._load_view_golden_array(recipe_name, view)
+        inspection_finished_ts: float | None = None
         source_view_id = spec.get("frame_source_view_id")
         view_frame_u8 = None
         injected_frame = spec.get("injected_frame")
@@ -1408,6 +1410,7 @@ class MainWindow(QMainWindow):
             result = None
             self._run_overlay_cache.pop(self._view_storage_key(view_id), None)
             last_preview_frame = view_frame_u8.copy()
+            inspection_finished_ts = time.monotonic()
         else:
             view_recipe = RecipeV2(
                 pose_enabled=recipe_cfg.pose_enabled,
@@ -1426,6 +1429,7 @@ class MainWindow(QMainWindow):
                 recipe_name=recipe_name,
                 notes=f"manual_trigger::{view_id}",
             )
+            inspection_finished_ts = time.monotonic()
             status = (result.status or "ok").lower()
             diagnostics_payload = [
                 self._simplify_value(diag) for diag in getattr(result, "diagnostics", []) or []
@@ -1437,15 +1441,23 @@ class MainWindow(QMainWindow):
             if context_frame is None:
                 context_frame = getattr(result.context, "frame", None)
             if isinstance(context_frame, np.ndarray):
-                self._cache_run_overlays(view_id, context_frame, view, result)
-                context_frame = self._render_run_overlay_frame(view_id)
+                trigger_state["pending_overlays"][view_id] = (
+                    context_frame,
+                    view,
+                    result,
+                )
+                context_frame = apply_view_image_transform(
+                    context_frame,
+                    view,
+                    stage="preview",
+                )
             last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
 
         per_view_statuses[view_id] = status
         if all_manual:
             self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
 
-        result_time_ts = time.monotonic()
+        result_time_ts = inspection_finished_ts or time.monotonic()
         cycle_time_value = float(result.cycle_time_ms) if result is not None else None
         total_cycle_time_value = (result_time_ts - trigger_state["trigger_start_ts"]) * 1000.0
         capture_time_value = (frame_received_ts - trigger_requested_ts) * 1000.0
@@ -1547,6 +1559,16 @@ class MainWindow(QMainWindow):
                 )
         self._update_operator_status_message(aggregated_status, relevant_reports)
         self._signal_outputs(aggregated_status)
+
+        for overlay_view_id, overlay_source in trigger_state.get("pending_overlays", {}).items():
+            frame, view, result = overlay_source
+            self._cache_run_overlays(overlay_view_id, frame, view, result)
+
+        overlay_view_id = trigger_state.get("last_view_id")
+        rendered_overlay_frame = self._render_run_overlay_frame(overlay_view_id)
+        if rendered_overlay_frame is not None:
+            trigger_state["last_preview_frame"] = rendered_overlay_frame
+            self._set_last_view_frame(overlay_view_id, rendered_overlay_frame)
 
         if trigger_state["last_preview_frame"] is not None:
             self._last_trigger_frame = self._clone_frame(trigger_state["last_preview_frame"])
@@ -1934,8 +1956,11 @@ class MainWindow(QMainWindow):
                 tool,
                 color=color,
                 label=tool_name,
+                include_ignore_mask=False,
             )
             roi_items = [item for item in tool_roi_items if item.z_index == 20]
+            for item in roi_items:
+                item.fill_alpha = None
             if roi_items:
                 roi_items_by_tool[tool_id] = roi_items
 
@@ -1970,7 +1995,6 @@ class MainWindow(QMainWindow):
                             color=(68, 68, 239),
                             thickness=4,
                             alpha=255,
-                            fill_alpha=45,
                             z_index=50,
                             label=f"{tool_name} · chyba {blob_index}",
                         )
@@ -1982,10 +2006,11 @@ class MainWindow(QMainWindow):
                     tool,
                     color=(68, 68, 239),
                     label=f"NOK · {tool_name}",
+                    include_ignore_mask=False,
                 )
                 for item in failed_roi_items:
                     if item.z_index == 20:
-                        item.fill_alpha = 45
+                        item.fill_alpha = None
                         item.z_index = 45
                         error_items.append(item)
 
@@ -2015,11 +2040,10 @@ class MainWindow(QMainWindow):
                     for tool_items in roi_items.values():
                         items.extend(tool_items or [])
 
-        rendered = frame.copy()
-        if items:
-            overlay_image = overlay_utils.render_overlay(rendered.shape[:2], items)
-            if overlay_image is not None:
-                rendered = overlay_utils.apply_overlay(rendered, overlay_image)
+        rendered = (
+            overlay_utils.draw_overlay_items(frame, items)
+            if items else frame.copy()
+        )
         return apply_view_image_transform(
             rendered,
             entry.get("view"),
