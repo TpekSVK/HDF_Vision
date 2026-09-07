@@ -21,6 +21,13 @@ CANVAS_TOOLBAR_STYLE = """
     QToolButton:checked { background: #245e99; border-color: #6ba8e5; }
     QToolButton:disabled { color: #777; }
     QLabel { color: #ddd; font-size: 12px; }
+    QSpinBox#canvasCompactSpin {
+        background: #30343b; color: #eee; border: 1px solid #505661;
+        border-radius: 3px; padding: 3px 5px; font-size: 12px;
+    }
+    QSpinBox#canvasCompactSpin:hover { background: #424b58; }
+    QSpinBox#canvasCompactSpin:focus { border-color: #6ba8e5; }
+    QSpinBox#canvasCompactSpin:disabled { color: #777; background: #252930; }
 """
 
 
