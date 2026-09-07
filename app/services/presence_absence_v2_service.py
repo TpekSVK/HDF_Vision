@@ -259,16 +259,34 @@ def evaluate_sample(
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
     binary[ignored] = 0
 
-    n_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
+    n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
+        binary, connectivity=8
+    )
     filtered = np.zeros_like(binary)
     blob_count = 0
     largest_blob_area = 0
+    blobs: list[dict[str, Any]] = []
     for idx in range(1, int(n_labels)):
         area = int(stats[idx, cv2.CC_STAT_AREA])
         if area >= float(min_blob_area):
             filtered[labels == idx] = 255
             blob_count += 1
             largest_blob_area = max(largest_blob_area, area)
+            x = int(stats[idx, cv2.CC_STAT_LEFT])
+            y = int(stats[idx, cv2.CC_STAT_TOP])
+            width = int(stats[idx, cv2.CC_STAT_WIDTH])
+            height = int(stats[idx, cv2.CC_STAT_HEIGHT])
+            blobs.append({
+                "x": x,
+                "y": y,
+                "width": width,
+                "height": height,
+                "area": area,
+                "centroid_x": float(centroids[idx, 0]),
+                "centroid_y": float(centroids[idx, 1]),
+            })
+
+    blobs.sort(key=lambda item: int(item["area"]), reverse=True)
 
     anomaly_area = float(np.count_nonzero(filtered))
     anomaly_score = float(np.max(robust[valid])) if valid_pixel_count else 0.0
@@ -308,6 +326,7 @@ def evaluate_sample(
         "anomaly_area_percent": float(anomaly_area_percent),
         "blob_count": int(blob_count),
         "largest_blob_area": int(largest_blob_area),
+        "blobs": blobs,
         "valid_pixel_count": valid_pixel_count,
         "ignored_pixel_count": ignored_pixel_count,
         "fail_area_px": bool(fail_area_px),

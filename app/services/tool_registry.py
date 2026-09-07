@@ -21,6 +21,7 @@ from app.models.schema import (
 )
 from app.tools.light_presence import LightPresenceCheckTool
 from app.tools.light_transmission import LightTransmissionCheckTool
+from app.tools.mold_protection import MoldProtectionV1Tool
 from app.tools.presence_absence import PresenceAbsenceCheckTool
 from app.tools.presence_absence_v2 import PresenceAbsenceV2Tool
 
@@ -737,6 +738,136 @@ def _register_default_tools() -> None:
                 {"key": "model_ready", "priority": 5, "description": "Pripravenosť modelu"},
                 {"key": "ok_sample_count", "priority": 4, "description": "Počet OK vzoriek"},
                 {"key": "nok_sample_count", "priority": 3, "description": "Počet NOK vzoriek"},
+                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
+            ],
+        },
+    )
+
+    ToolRegistry.register(
+        "mold.protection_v1",
+        factory=lambda: MoldProtectionV1Tool(),
+        meta={
+            "name": "Ochrana formy V1",
+            "description": (
+                "Fail-closed kontrola prázdnej formy po vyhodení dielov. "
+                "Lokalizuje zvyšky a pri náleze alebo chybe vráti NOK."
+            ),
+            "category": "Presence",
+            "supports_roi": True,
+            "supports_ignore_mask": True,
+            "schema": {
+                "params": {
+                    "expected_state": {
+                        "type": "enum",
+                        "default": "empty_required",
+                        "choices": [("empty_required", "ROI musí byť prázdna")],
+                        "label": "Požadovaný stav",
+                    },
+                    "reference_mode": {
+                        "type": "enum",
+                        "default": "statistical_golden",
+                        "choices": [("statistical_golden", "Štatistická prázdna forma")],
+                        "label": "Referenčný režim",
+                    },
+                    "capture_mode_default": {
+                        "type": "enum",
+                        "default": "manual",
+                        "choices": [("manual", "Manuálne"), ("auto", "Automaticky")],
+                        "label": "Predvolený zber",
+                    },
+                    "model_method": {
+                        "type": "enum",
+                        "default": "median_mad",
+                        "choices": [("median_mad", "Median + MAD")],
+                        "label": "Metóda modelu",
+                    },
+                    "polarity": {
+                        "type": "enum",
+                        "default": "any",
+                        "choices": [
+                            ("any", "Akákoľvek odchýlka"),
+                            ("darker_only", "Iba stmavnutie"),
+                            ("brighter_only", "Iba zosvetlenie"),
+                        ],
+                        "label": "Polarita zvyšku",
+                    },
+                    "min_ok_samples": {
+                        "type": "int", "default": 15, "min": 5, "max": 500,
+                        "label": "Minimum prázdnych vzoriek",
+                    },
+                    "recommended_ok_samples": {
+                        "type": "int", "default": 30, "min": 5, "max": 500,
+                        "label": "Odporúčané prázdne vzorky",
+                    },
+                    "use_nok_for_validation": {
+                        "type": "bool", "default": True,
+                        "label": "Použiť zvyšky pre validáciu",
+                    },
+                    "reference_model_ready": {
+                        "type": "bool", "default": False, "label": "Model pripravený",
+                    },
+                    "reference_model_invalidated": {
+                        "type": "bool", "default": False, "label": "Model neplatný",
+                    },
+                    "sample_count_ok": {
+                        "type": "int", "default": 0, "min": 0, "max": 9999,
+                        "label": "Počet prázdnych vzoriek",
+                    },
+                    "sample_count_nok": {
+                        "type": "int", "default": 0, "min": 0, "max": 9999,
+                        "label": "Počet vzoriek so zvyškom",
+                    },
+                    "reference_assets_dir": {
+                        "type": "text", "default": "", "label": "Assets dir",
+                    },
+                    "roi_hash": {"type": "text", "default": "", "label": "ROI hash"},
+                },
+                "thresholds": {
+                    "sensitivity": {
+                        "type": "int", "default": 60, "min": 0, "max": 100,
+                        "unit": "%", "label": "Citlivosť na zvyšok",
+                    },
+                    "max_anomaly_area_percent": {
+                        "type": "float", "default": 2.0, "min": 0.0, "max": 100.0,
+                        "unit": "%", "label": "Max. zmenená plocha (%)",
+                    },
+                    "max_largest_blob_area": {
+                        "type": "float", "default": 0.0, "min": 0.0,
+                        "unit": "px", "label": "Najväčší povolený zvyšok",
+                    },
+                    "max_blob_count": {
+                        "type": "int", "default": 0, "min": 0,
+                        "label": "Max. počet zvyškov",
+                    },
+                    "score_threshold": {
+                        "type": "float", "default": 4.0, "min": 0.1,
+                        "label": "Raw prah odchýlky",
+                    },
+                    "total_area_threshold": {
+                        "type": "float", "default": 50.0, "min": 0.0,
+                        "unit": "px", "label": "Max. celková plocha zvyškov",
+                    },
+                    "min_blob_area": {
+                        "type": "float", "default": 10.0, "min": 0.0,
+                        "unit": "px", "label": "Min. veľkosť zvyšku",
+                    },
+                },
+            },
+            "metrics_spec": [
+                {"key": "mold_empty", "priority": 12, "description": "Forma je prázdna"},
+                {"key": "residual_detected", "priority": 12, "description": "Nájdený zvyšok"},
+                {"key": "inspection_fault", "priority": 12, "description": "Blokujúca chyba kontroly"},
+                {"key": "inspection_state", "priority": 11, "description": "Stav ochrany formy"},
+                {"key": "residual_count", "priority": 10, "description": "Počet zvyškov"},
+                {"key": "candidate_count", "priority": 6, "description": "Počet kandidátov pred rozhodnutím"},
+                {"key": "residual_x", "unit": "px", "priority": 9, "description": "Poloha zvyšku X"},
+                {"key": "residual_y", "unit": "px", "priority": 9, "description": "Poloha zvyšku Y"},
+                {"key": "residual_width", "unit": "px", "priority": 9, "description": "Šírka zvyšku"},
+                {"key": "residual_height", "unit": "px", "priority": 9, "description": "Výška zvyšku"},
+                {"key": "largest_blob_area", "unit": "px", "priority": 9, "description": "Najväčší zvyšok"},
+                {"key": "anomaly_area", "unit": "px", "priority": 9, "description": "Celková zmenená plocha"},
+                {"key": "anomaly_area_percent", "unit": "%", "priority": 8, "description": "Zmenená plocha"},
+                {"key": "decision_reason", "priority": 8, "description": "Dôvod blokovania"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
