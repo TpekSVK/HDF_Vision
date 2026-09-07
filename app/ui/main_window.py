@@ -73,6 +73,7 @@ class MainWindow(QMainWindow):
         self._last_trigger_frame = None
         self._last_trigger_view_id: str | None = None
         self._last_trigger_frames: dict[str, Any] = {}
+        self._run_overlay_cache: dict[str, dict[str, Any]] = {}
         self._golden_cache: dict[tuple[str, str], tuple[int, np.ndarray]] = {}
 
         # Kamera
@@ -261,6 +262,17 @@ class MainWindow(QMainWindow):
         self.btn_export = QPushButton("Export CSV", actions_container)
         self.btn_export.clicked.connect(self.export_csv_today)
 
+        self.chk_show_roi = QCheckBox("Zobraziť ROI", actions_container)
+        self.chk_show_roi.setToolTip("Zobraziť kontrolovanú oblasť vybraného nástroja")
+        self.chk_show_roi.toggled.connect(self._on_run_overlay_controls_changed)
+        actions.addWidget(self.chk_show_roi)
+
+        self.cmb_roi_tool = QComboBox(actions_container)
+        self.cmb_roi_tool.setMinimumWidth(190)
+        self.cmb_roi_tool.setToolTip("Vybrať nástroj, ktorého ROI sa zobrazí")
+        self.cmb_roi_tool.currentIndexChanged.connect(self._on_run_overlay_controls_changed)
+        actions.addWidget(self.cmb_roi_tool)
+
         actions.addStretch(1)
         # Live toggle
         self.btn_live = QPushButton("Live vypnuté")
@@ -373,8 +385,9 @@ class MainWindow(QMainWindow):
         self.sb_total = QLabel("Celkom: –")
         self.sb_ok    = QLabel("OK: –")
         self.sb_nok   = QLabel("NOK: –")
-        self.sb_yield = QLabel("Yield: –")
+        self.sb_yield = QLabel("Úspešnosť: –")
         self.sb_total_test_time = QLabel("Čas testov (dnes): –")
+        self.sb_total_test_time.hide()
         self.sb_ok.setProperty("status", "ok")
         self.sb_nok.setProperty("status", "nok")
         daily_card = QFrame()
@@ -387,7 +400,6 @@ class MainWindow(QMainWindow):
         daily_layout.addWidget(self.sb_yield, 0, 1)
         daily_layout.addWidget(self.sb_ok, 1, 0)
         daily_layout.addWidget(self.sb_nok, 1, 1)
-        daily_layout.addWidget(self.sb_total_test_time, 2, 0, 1, 2)
         side.addWidget(daily_card)
 
         # Posledné meranie (TRIGGER)
@@ -1394,6 +1406,7 @@ class MainWindow(QMainWindow):
             combined_metrics = {}
             policy_applied = None
             result = None
+            self._run_overlay_cache.pop(self._view_storage_key(view_id), None)
             last_preview_frame = view_frame_u8.copy()
         else:
             view_recipe = RecipeV2(
@@ -1424,16 +1437,8 @@ class MainWindow(QMainWindow):
             if context_frame is None:
                 context_frame = getattr(result.context, "frame", None)
             if isinstance(context_frame, np.ndarray):
-                overlay_items = list(getattr(result, "overlay_items", None) or [])
-                if overlay_items:
-                    overlay_image = overlay_utils.render_overlay(
-                        context_frame.shape[:2], overlay_items
-                    )
-                    if overlay_image is not None:
-                        context_frame = overlay_utils.apply_overlay(
-                            context_frame, overlay_image
-                        )
-                context_frame = apply_view_image_transform(context_frame, view, stage="preview")
+                self._cache_run_overlays(view_id, context_frame, view, result)
+                context_frame = self._render_run_overlay_frame(view_id)
             last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
 
         per_view_statuses[view_id] = status
@@ -1907,6 +1912,134 @@ class MainWindow(QMainWindow):
             frame = self._last_trigger_frames.get("")
         return frame
 
+    def _cache_run_overlays(
+        self,
+        view_id: str,
+        frame: np.ndarray,
+        view: Any,
+        result: Any,
+    ) -> None:
+        palette = overlay_utils.default_palette()
+        roi_items_by_tool: dict[str, list[overlay_utils.OverlayItem]] = {}
+        error_items: list[overlay_utils.OverlayItem] = []
+
+        for index, report in enumerate(getattr(result, "per_tool", []) or []):
+            tool = getattr(report, "tool", None)
+            tool_id = str(getattr(report, "tool_id", "") or "")
+            if tool is None or not tool_id:
+                continue
+            color = palette[index % len(palette)]
+            tool_name = str(getattr(tool, "name", "") or getattr(tool, "type", "Nástroj"))
+            tool_roi_items = overlay_utils.tool_overlay_items(
+                tool,
+                color=color,
+                label=tool_name,
+            )
+            roi_items = [item for item in tool_roi_items if item.z_index == 20]
+            if roi_items:
+                roi_items_by_tool[tool_id] = roi_items
+
+            if str(getattr(report, "status", "") or "").lower() != "nok":
+                continue
+            tool_error_added = False
+            for display_item in getattr(report, "overlay_items", []) or []:
+                if getattr(display_item, "z_index", 0) >= 30:
+                    error_items.append(display_item)
+                    tool_error_added = True
+            metrics = getattr(report, "metrics", {})
+            metric_values = metrics if isinstance(metrics, Mapping) else {}
+            blobs = metric_values.get("blobs", [])
+            if not tool_error_added and isinstance(blobs, Sequence):
+                for blob_index, blob in enumerate(blobs, start=1):
+                    if not isinstance(blob, Mapping):
+                        continue
+                    try:
+                        rect = (
+                            int(blob.get("image_x", blob.get("x", 0))),
+                            int(blob.get("image_y", blob.get("y", 0))),
+                            int(blob.get("width", 0)),
+                            int(blob.get("height", 0)),
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if rect[2] <= 0 or rect[3] <= 0:
+                        continue
+                    error_items.append(
+                        overlay_utils.OverlayItem.from_rect(
+                            rect,
+                            color=(68, 68, 239),
+                            thickness=4,
+                            alpha=255,
+                            fill_alpha=45,
+                            z_index=50,
+                            label=f"{tool_name} · chyba {blob_index}",
+                        )
+                    )
+                    tool_error_added = True
+
+            if not tool_error_added:
+                failed_roi_items = overlay_utils.tool_overlay_items(
+                    tool,
+                    color=(68, 68, 239),
+                    label=f"NOK · {tool_name}",
+                )
+                for item in failed_roi_items:
+                    if item.z_index == 20:
+                        item.fill_alpha = 45
+                        item.z_index = 45
+                        error_items.append(item)
+
+        self._run_overlay_cache[self._view_storage_key(view_id)] = {
+            "frame": frame.copy(),
+            "view": view,
+            "roi_items": roi_items_by_tool,
+            "error_items": error_items,
+        }
+
+    def _render_run_overlay_frame(self, view_id: str | None) -> np.ndarray | None:
+        entry = self._run_overlay_cache.get(self._view_storage_key(view_id))
+        if not isinstance(entry, Mapping):
+            return None
+        frame = entry.get("frame")
+        if not isinstance(frame, np.ndarray):
+            return None
+
+        items = list(entry.get("error_items", []) or [])
+        if self.chk_show_roi.isChecked():
+            roi_items = entry.get("roi_items", {})
+            if isinstance(roi_items, Mapping):
+                selected_tool_id = self.cmb_roi_tool.currentData()
+                if selected_tool_id:
+                    items.extend(roi_items.get(str(selected_tool_id), []) or [])
+                else:
+                    for tool_items in roi_items.values():
+                        items.extend(tool_items or [])
+
+        rendered = frame.copy()
+        if items:
+            overlay_image = overlay_utils.render_overlay(rendered.shape[:2], items)
+            if overlay_image is not None:
+                rendered = overlay_utils.apply_overlay(rendered, overlay_image)
+        return apply_view_image_transform(
+            rendered,
+            entry.get("view"),
+            stage="preview",
+        )
+
+    def _on_run_overlay_controls_changed(self, *_args) -> None:
+        self.cmb_roi_tool.setEnabled(
+            self.chk_show_roi.isChecked() and self.cmb_roi_tool.count() > 0
+        )
+        view_id = self._active_view_id
+        rendered = self._render_run_overlay_frame(view_id)
+        if rendered is None:
+            return
+        self._set_last_view_frame(view_id, rendered)
+        self._last_trigger_frame = self._clone_frame(rendered)
+        self._last_trigger_view_id = view_id
+        if not self.live_enabled:
+            self._show_gray_or_bgr(self.live_view, rendered)
+
     def _clone_frame(self, frame: Any):
         if frame is None:
             return None
@@ -2008,7 +2141,15 @@ class MainWindow(QMainWindow):
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
-            self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
+            yield_raw = st.get("yield")
+            try:
+                yield_percent = float(yield_raw)
+                if yield_percent <= 1.0:
+                    yield_percent *= 100.0
+                yield_text = f"{yield_percent:.1f} %"
+            except (TypeError, ValueError):
+                yield_text = "–"
+            self.sb_yield.setText(f"Úspešnosť: {yield_text}")
             total_cycle_time = st.get("total_cycle_time_ms")
             self.sb_total_test_time.setText(
                 f"Čas testov (dnes): {self._format_total_test_duration(total_cycle_time)}"
@@ -2528,6 +2669,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_views(self):
         self._golden_cache.clear()
+        self._run_overlay_cache.clear()
         try:
             recipe_name = self.current_recipe_name()
         except Exception:
@@ -2660,6 +2802,7 @@ class MainWindow(QMainWindow):
         )
 
         entries: list[dict[str, Any]] = []
+        roi_entries: list[dict[str, Any]] = []
         used_ids: set[str] = set()
         for position, (tool, _) in enumerate(ordered_tools):
             tool_id, display_name, tool_order = compute_tool_identity(
@@ -2677,7 +2820,23 @@ class MainWindow(QMainWindow):
                     "index": position,
                 }
             )
+            if tool.roi.rect() is not None:
+                roi_entries.append(entries[-1])
         self._tool_selector_items = entries
+
+        self.cmb_roi_tool.blockSignals(True)
+        self.cmb_roi_tool.clear()
+        if roi_entries:
+            self.cmb_roi_tool.addItem("Všetky nástroje", None)
+            for entry in roi_entries:
+                self.cmb_roi_tool.addItem(entry["name"], entry["id"])
+        else:
+            self.cmb_roi_tool.addItem("Žiadne ROI", None)
+            self.chk_show_roi.setChecked(False)
+        self.cmb_roi_tool.setEnabled(bool(roi_entries) and self.chk_show_roi.isChecked())
+        self.chk_show_roi.setEnabled(bool(roi_entries))
+        self.cmb_roi_tool.blockSignals(False)
+        self._on_run_overlay_controls_changed()
 
         self.cmb_tool.blockSignals(True)
         self.cmb_tool.clear()

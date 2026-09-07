@@ -492,6 +492,7 @@ def render_overlay(
             tmp_alpha = np.zeros_like(overlay_alpha)
             line_type = cv2.LINE_AA
             alpha_value = _clamp_alpha(item.alpha, 220)
+            label_anchor: Optional[Tuple[int, int]] = None
 
             if item.kind == "rect" and item.rect is not None:
                 x, y, w, h = item.rect
@@ -499,6 +500,7 @@ def render_overlay(
                     continue
                 p1 = (int(round(x)), int(round(y)))
                 p2 = (int(round(x + w - 1)), int(round(y + h - 1)))
+                label_anchor = p1
                 thickness = max(1, int(item.thickness))
                 if item.fill_alpha and item.fill_alpha > 0:
                     fill_alpha = _clamp_alpha(item.fill_alpha, alpha_value)
@@ -512,6 +514,11 @@ def render_overlay(
                 cv2.rectangle(tmp_alpha, p1, p2, alpha_value, thickness, line_type)
             elif item.points is not None and len(item.points) >= 2:
                 pts = np.round(item.points).astype(np.int32).reshape(-1, 1, 2)
+                point_values = pts.reshape(-1, 2)
+                label_anchor = (
+                    int(np.min(point_values[:, 0])),
+                    int(np.min(point_values[:, 1])),
+                )
                 thickness = max(1, int(item.thickness))
                 if item.closed:
                     if item.fill_alpha:
@@ -525,6 +532,46 @@ def render_overlay(
                     cv2.polylines(tmp_alpha, [pts], False, alpha_value, thickness, line_type)
             else:
                 continue
+
+            label_text = str(item.label or "").strip()
+            if label_text and label_anchor is not None:
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                font_scale = 0.52
+                text_thickness = 1
+                (text_width, text_height), baseline = cv2.getTextSize(
+                    label_text, font, font_scale, text_thickness
+                )
+                text_x = max(2, min(label_anchor[0], width - text_width - 8))
+                text_y = label_anchor[1] - 8
+                if text_y - text_height - baseline < 2:
+                    text_y = min(height - baseline - 3, label_anchor[1] + text_height + 8)
+                box_p1 = (text_x - 2, max(0, text_y - text_height - 3))
+                box_p2 = (
+                    min(width - 1, text_x + text_width + 4),
+                    min(height - 1, text_y + baseline + 2),
+                )
+                cv2.rectangle(tmp_rgb, box_p1, box_p2, item.color, cv2.FILLED)
+                cv2.rectangle(tmp_alpha, box_p1, box_p2, 225, cv2.FILLED)
+                cv2.putText(
+                    tmp_rgb,
+                    label_text,
+                    (text_x, text_y),
+                    font,
+                    font_scale,
+                    (255, 255, 255),
+                    text_thickness,
+                    line_type,
+                )
+                cv2.putText(
+                    tmp_alpha,
+                    label_text,
+                    (text_x, text_y),
+                    font,
+                    font_scale,
+                    255,
+                    text_thickness,
+                    line_type,
+                )
 
             mask = tmp_alpha > 0
             overlay_rgb[mask] = tmp_rgb[mask]

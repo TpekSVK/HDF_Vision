@@ -31,7 +31,7 @@ outside the scope unless a stage explicitly says otherwise.
 ## Stage 4 — Results and diagnostics
 
 - [ ] Add a simple operator-facing results browser.
-- [ ] Show the inspected image with ROI and NOK localization overlays.
+- [x] Show the current inspected image with selectable ROI and NOK localization overlays.
 - [ ] Keep advanced metrics behind an optional detail area.
 - [ ] Support practical date/status filters and CSV export.
 
@@ -48,4 +48,3 @@ outside the scope unless a stage explicitly says otherwise.
 - [ ] Check long Slovak labels, scaling and touch-friendly hit targets.
 - [ ] Reduce visual noise and confirm status readability at distance.
 - [ ] Profile thumbnail/image handling and remove avoidable UI allocations.
-
