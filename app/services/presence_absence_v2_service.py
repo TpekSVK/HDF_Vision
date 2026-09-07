@@ -13,6 +13,9 @@ import imageio.v3 as iio
 import numpy as np
 
 
+FALSE_ACCEPT_COST_WEIGHT = 5
+
+
 @dataclass(slots=True)
 class PresenceV2Model:
     median: np.ndarray
@@ -317,6 +320,103 @@ def evaluate_sample(
         "binary_mask": filtered,
         "diff_map": np.clip(robust * 32.0, 0, 255).astype(np.uint8),
         "overlay": overlay,
+    }
+
+
+def evaluate_dataset(
+    ok_samples: list[np.ndarray],
+    nok_samples: list[np.ndarray],
+    median: np.ndarray,
+    mad: np.ndarray,
+    **evaluation_kwargs: Any,
+) -> dict[str, Any]:
+    """Evaluate labelled samples using exactly the runtime sample decision path."""
+    expected_shape = tuple(np.asarray(median).shape[:2])
+    compatible_ok, ignored_ok, _ = _split_samples_by_shape(
+        ok_samples, expected_shape=expected_shape
+    )
+    compatible_nok, ignored_nok, _ = _split_samples_by_shape(
+        nok_samples, expected_shape=expected_shape
+    )
+    ok_correct = sum(
+        evaluate_sample(sample, median, mad, **evaluation_kwargs)["status"] == "ok"
+        for sample in compatible_ok
+    )
+    nok_correct = sum(
+        evaluate_sample(sample, median, mad, **evaluation_kwargs)["status"] == "nok"
+        for sample in compatible_nok
+    )
+    ok_total, nok_total = len(compatible_ok), len(compatible_nok)
+    false_reject_count = ok_total - ok_correct
+    false_accept_count = nok_total - nok_correct
+    total = ok_total + nok_total
+    return {
+        "ok_total": ok_total,
+        "ok_correct": int(ok_correct),
+        "ok_failed": int(false_reject_count),
+        "nok_total": nok_total,
+        "nok_correct": int(nok_correct),
+        "nok_failed": int(false_accept_count),
+        "false_reject_count": int(false_reject_count),
+        "false_accept_count": int(false_accept_count),
+        "false_reject_rate": false_reject_count / ok_total if ok_total else 0.0,
+        "false_accept_rate": false_accept_count / nok_total if nok_total else 0.0,
+        "accuracy": (ok_correct + nok_correct) / total if total else 0.0,
+        "ignored_ok_samples": len(ignored_ok),
+        "ignored_nok_samples": len(ignored_nok),
+    }
+
+
+def optimize_sensitivity(
+    ok_samples: list[np.ndarray],
+    nok_samples: list[np.ndarray],
+    median: np.ndarray,
+    mad: np.ndarray,
+    *,
+    current_sensitivity: int = 60,
+    sweep_step: int = 2,
+    **evaluation_kwargs: Any,
+) -> dict[str, Any]:
+    """Recommend sensitivity while weighting a false accept five times higher."""
+    current = max(0, min(100, int(current_sensitivity)))
+    evaluation_kwargs.pop("score_threshold", None)
+    candidates: list[tuple[tuple[int, int, int, int], int, dict[str, Any]]] = []
+    for sensitivity in range(0, 101, max(1, int(sweep_step))):
+        summary = evaluate_dataset(
+            ok_samples,
+            nok_samples,
+            median,
+            mad,
+            score_threshold=sensitivity_to_score_threshold(sensitivity),
+            **evaluation_kwargs,
+        )
+        cost = (
+            summary["false_accept_count"] * FALSE_ACCEPT_COST_WEIGHT
+            + summary["false_reject_count"]
+        )
+        rank = (
+            int(cost),
+            int(summary["false_accept_count"]),
+            int(summary["false_reject_count"]),
+            abs(sensitivity - current),
+        )
+        candidates.append((rank, sensitivity, summary))
+    _, recommended, best_summary = min(candidates, key=lambda item: item[0])
+    current_summary = evaluate_dataset(
+        ok_samples,
+        nok_samples,
+        median,
+        mad,
+        score_threshold=sensitivity_to_score_threshold(current),
+        **evaluation_kwargs,
+    )
+    return {
+        "recommended_sensitivity": recommended,
+        "recommended_validation_summary": best_summary,
+        "current_sensitivity": current,
+        "current_validation_summary": current_summary,
+        "has_nok_samples": bool(best_summary["nok_total"]),
+        "cost_weight_false_accept": FALSE_ACCEPT_COST_WEIGHT,
     }
 
 
