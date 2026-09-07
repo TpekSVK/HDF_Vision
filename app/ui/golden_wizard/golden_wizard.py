@@ -93,7 +93,6 @@ from app.services.presence_absence_v2_service import (
     resolve_assets_dir,
     save_model,
     save_sample,
-    score_threshold_to_sensitivity,
     sensitivity_to_score_threshold,
 )
 from app.utils.tool_identity import compute_tool_identity
@@ -357,14 +356,9 @@ class ToolConfigPanel(QWidget):
             lambda: self.presenceLearningRequested.emit("rebuild")
         )
         learning_layout.addWidget(self._presence_rebuild)
-        self._presence_recommended = QLabel("Odporúčané nastavenia nie sú dostupné.", learning_content)
+        self._presence_recommended = QLabel("Základný odhad modelu nie je dostupný.", learning_content)
         self._presence_recommended.setWordWrap(True)
         learning_layout.addWidget(self._presence_recommended)
-        self._presence_apply = QPushButton("Použiť odporúčané nastavenia", learning_content)
-        self._presence_apply.clicked.connect(
-            lambda: self.presenceLearningRequested.emit("apply_recommended")
-        )
-        learning_layout.addWidget(self._presence_apply)
         reset_learning = QPushButton("Resetovať učenie", learning_content)
         reset_learning.setProperty("role", "destructive")
         reset_learning.clicked.connect(lambda: self.presenceLearningRequested.emit("reset"))
@@ -382,8 +376,10 @@ class ToolConfigPanel(QWidget):
         validation_layout.setSpacing(6)
         validate_samples = QPushButton("Otestovať vzorky", validation_content)
         validate_samples.clicked.connect(lambda: self.presenceLearningRequested.emit("validate"))
-        tune_sensitivity = QPushButton("Automaticky nastaviť citlivosť", validation_content)
-        tune_sensitivity.clicked.connect(lambda: self.presenceLearningRequested.emit("auto_tune"))
+        auto_settings = QPushButton("Automaticky navrhnúť nastavenia", validation_content)
+        auto_settings.clicked.connect(
+            lambda: self.presenceLearningRequested.emit("auto_settings")
+        )
         self._presence_validation_result = QLabel("Zatiaľ bez výsledku", validation_content)
         self._presence_validation_result.setWordWrap(True)
         self._presence_tuning_result = QLabel("", validation_content)
@@ -391,11 +387,11 @@ class ToolConfigPanel(QWidget):
         self._presence_tuning_result.hide()
         self._presence_apply_tuned = QPushButton("Použiť odporúčané nastavenie", validation_content)
         self._presence_apply_tuned.clicked.connect(
-            lambda: self.presenceLearningRequested.emit("apply_tuned")
+            lambda: self.presenceLearningRequested.emit("apply_auto_settings")
         )
         self._presence_apply_tuned.hide()
         validation_layout.addWidget(validate_samples)
-        validation_layout.addWidget(tune_sensitivity)
+        validation_layout.addWidget(auto_settings)
         validation_layout.addWidget(self._presence_validation_result)
         validation_layout.addWidget(self._presence_tuning_result)
         validation_layout.addWidget(self._presence_apply_tuned)
@@ -676,14 +672,13 @@ class ToolConfigPanel(QWidget):
         values = dict(recommended or {})
         if values:
             self._presence_recommended.setText(
-                "Odporúčané:\n"
+                "Základný odhad modelu:\n"
                 f"Prah odchýlky: {float(values.get('score_threshold', 0)):.2f}\n"
                 f"Max. anomálna plocha: {float(values.get('total_area_threshold', 0)):.0f} px\n"
                 f"Min. veľkosť objektu: {float(values.get('min_blob_area', 0)):.0f} px"
             )
         else:
-            self._presence_recommended.setText("Odporúčané nastavenia nie sú dostupné.")
-        self._presence_apply.setEnabled(bool(values))
+            self._presence_recommended.setText("Základný odhad modelu nie je dostupný.")
         self._presence_tuning_result.hide()
         self._presence_apply_tuned.hide()
         if validation_text is not None:
@@ -749,7 +744,12 @@ class ToolConfigPanel(QWidget):
                 "Skús upraviť ROI, Ignore Mask, osvetlenie alebo nazbierať viac vzoriek.\n\n"
             )
         text = (
-            f"{warning}Odporúčaná citlivosť: {int(tuning['recommended_sensitivity'])} %\n\n"
+            f"{warning}Odporúčané nastavenia:\n"
+            f"Citlivosť: {int(tuning['recommended_sensitivity'])} %\n"
+            f"Max. anomálna plocha: "
+            f"{float(tuning['recommended_thresholds']['total_area_threshold']):.0f} px\n"
+            f"Min. veľkosť objektu: "
+            f"{float(tuning['recommended_thresholds']['min_blob_area']):.0f} px\n\n"
             "Aktuálna:\n"
             f"False Accept: {float(current['false_accept_rate']) * 100:.1f} %\n"
             f"False Reject: {float(current['false_reject_rate']) * 100:.1f} %\n\n"
@@ -3588,6 +3588,47 @@ class GoldenWizard(QDialog):
             recommended=recommended,
         )
 
+    def _rebuild_presence_v2_model(
+        self, tool: Tool, dirs: dict[str, Path], view_id: str
+    ) -> Optional[tuple[np.ndarray, np.ndarray, dict[str, float]]]:
+        params = dict(tool.params.values or {})
+        ok_samples = load_samples(dirs["ok"])
+        nok_samples = load_samples(dirs["nok"])
+        try:
+            median, mad, recommended, warnings, info = build_model(
+                ok_samples,
+                polarity=str(params.get("polarity", "any")),
+                min_ok_samples=int(params.get("min_ok_samples", 15) or 15),
+                expected_shape=self._presence_v2_expected_shape(tool),
+                ignore_mask=self._presence_v2_ignore_mask(tool),
+            )
+        except ValueError as exc:
+            self._warn(str(exc))
+            return None
+        stats = {
+            "model_method": "median_mad",
+            "polarity": params.get("polarity", "any"),
+            "created_at": int(time.time()),
+            "sample_count_ok": info.used_ok_samples,
+            "sample_count_nok": len(nok_samples),
+            "recommended_thresholds": recommended,
+            "warnings": warnings,
+            "roi_hash": compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value),
+            "image_shape": list(median.shape),
+            "ignored_ok_samples": info.ignored_ok_samples,
+            "tool_type": tool.type,
+            "tool_name": tool.name,
+            "view_id": view_id,
+        }
+        save_model(dirs["model"], median, mad, stats)
+        params.update(
+            reference_model_ready=True,
+            reference_model_invalidated=False,
+            roi_hash=stats["roi_hash"],
+        )
+        tool.params = ToolParams(params)
+        return median, mad, recommended
+
     def _on_presence_v2_learning(self, action: str) -> None:
         context = self._presence_v2_context()
         if context is None:
@@ -3650,62 +3691,52 @@ class GoldenWizard(QDialog):
             params.pop("model_warnings", None)
             tool.params = ToolParams(params)
         elif action == "rebuild":
-            params = dict(tool.params.values or {})
-            try:
-                median, mad, recommended, warnings, info = build_model(
-                    load_samples(dirs["ok"]),
-                    polarity=str(params.get("polarity", "any")),
-                    min_ok_samples=int(params.get("min_ok_samples", 15) or 15),
-                    expected_shape=self._presence_v2_expected_shape(tool),
-                    ignore_mask=self._presence_v2_ignore_mask(tool),
-                )
-            except ValueError as exc:
-                self._warn(str(exc))
+            if self._rebuild_presence_v2_model(tool, dirs, view_id) is None:
                 return
-            stats = {
-                "model_method": "median_mad", "polarity": params.get("polarity", "any"),
-                "created_at": int(time.time()), "sample_count_ok": info.used_ok_samples,
-                "sample_count_nok": len(load_samples(dirs["nok"])),
-                "recommended_thresholds": recommended, "warnings": warnings,
-                "roi_hash": compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value),
-                "image_shape": list(median.shape), "ignored_ok_samples": info.ignored_ok_samples,
-                "tool_type": tool.type, "tool_name": tool.name, "view_id": view_id,
-            }
-            save_model(dirs["model"], median, mad, stats)
-            params.update(reference_model_ready=True, reference_model_invalidated=False,
-                          roi_hash=stats["roi_hash"])
-            tool.params = ToolParams(params)
-        elif action == "apply_recommended":
-            model = load_model(dirs["model"])
-            recommended = dict(model.stats.get("recommended_thresholds", {}) or {}) if model else {}
-            if not recommended:
-                self._warn("Odporúčané nastavenia nie sú dostupné.")
-                return
-            thresholds = dict(tool.thresholds.values or {})
-            for key in ("score_threshold", "total_area_threshold", "min_blob_area"):
-                if key in recommended:
-                    thresholds[key] = float(recommended[key])
-            if "sensitivity" in thresholds and "score_threshold" in recommended:
-                thresholds["sensitivity"] = int(round(score_threshold_to_sensitivity(
-                    recommended["score_threshold"]
-                )))
-            tool.thresholds = ToolThresholds(thresholds)
         elif action == "validate":
             self._validate_presence_v2_samples(tool, dirs)
             return
-        elif action == "auto_tune":
-            model = load_model(dirs["model"])
-            if model is None:
-                self._warn("Model nie je pripravený.")
+        elif action == "auto_settings":
+            rebuilt = self._rebuild_presence_v2_model(tool, dirs, view_id)
+            if rebuilt is None:
                 return
+            median, mad, model_recommended = rebuilt
+            ok_samples = load_samples(dirs["ok"])
+            nok_samples = load_samples(dirs["nok"])
             thresholds = dict(tool.thresholds.values or {})
             current = int(thresholds.get("sensitivity", 60) or 60)
-            tuning = optimize_sensitivity(
-                load_samples(dirs["ok"]), load_samples(dirs["nok"]),
-                model.median, model.mad,
-                current_sensitivity=current,
-                **self._presence_v2_evaluation_kwargs(tool, include_score=False),
+            current_summary = evaluate_dataset(
+                ok_samples,
+                nok_samples,
+                median,
+                mad,
+                **self._presence_v2_evaluation_kwargs(tool),
             )
+            recommended_area = float(model_recommended["total_area_threshold"])
+            recommended_min_blob = float(model_recommended["min_blob_area"])
+            recommended_kwargs = self._presence_v2_evaluation_kwargs(
+                tool, include_score=False
+            )
+            recommended_kwargs.update(
+                total_area_threshold=recommended_area,
+                min_blob_area=recommended_min_blob,
+            )
+            tuning = optimize_sensitivity(
+                ok_samples,
+                nok_samples,
+                median,
+                mad,
+                current_sensitivity=current,
+                **recommended_kwargs,
+            )
+            tuning["current_validation_summary"] = current_summary
+            tuned_sensitivity = int(tuning["recommended_sensitivity"])
+            tuning["recommended_thresholds"] = {
+                "sensitivity": tuned_sensitivity,
+                "score_threshold": sensitivity_to_score_threshold(tuned_sensitivity),
+                "total_area_threshold": recommended_area,
+                "min_blob_area": recommended_min_blob,
+            }
             key = (view_id, int(tool.order), tool.type)
             self._presence_tuning_results[key] = tuning
             params = dict(tool.params.values or {})
@@ -3714,19 +3745,24 @@ class GoldenWizard(QDialog):
                 < int(params.get("recommended_ok_samples", 30) or 30)
                 or (0 < int(tuning["recommended_validation_summary"]["nok_total"]) < 5)
             )
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+            self._tool_panel.refresh_values(tool)
+            self._refresh_presence_v2_learning(tool, row)
+            self._update_dirty_state(recipe, view_id)
             self._tool_panel.show_presence_validation(
                 tuning["current_validation_summary"], weak_dataset=weak
             )
             self._tool_panel.show_presence_tuning(tuning, weak_dataset=weak)
             return
-        elif action == "apply_tuned":
+        elif action == "apply_auto_settings":
             key = (view_id, int(tool.order), tool.type)
             tuning = self._presence_tuning_results.get(key)
             if tuning is None:
-                self._warn("Odporúčaná citlivosť nie je dostupná.")
+                self._warn("Odporúčané nastavenia nie sú dostupné.")
                 return
             thresholds = dict(tool.thresholds.values or {})
-            thresholds["sensitivity"] = int(tuning["recommended_sensitivity"])
+            for name, value in tuning["recommended_thresholds"].items():
+                thresholds[name] = value
             tool.thresholds = ToolThresholds(thresholds)
         self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         self._tool_panel.refresh_values(tool)
