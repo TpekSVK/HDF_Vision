@@ -25,7 +25,6 @@ from app.services.retention_service import RetentionService
 from app.services.camera_service import CameraService
 from app.services.storage_service import save_production_result, load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
-from app.ui.gpio_wizard import GPIOWizard
 from app.ui.modbus_wizard import ModbusWizard
 from app.ui.pico_wizard import PicoWizard
 from app.services.db_service import DbService
@@ -91,7 +90,6 @@ class MainWindow(QMainWindow):
         self.stats = StatsService(db=self.db)
 
         self.gpio = GPIOService()
-        self.gpio.register_trigger_callback(self._handle_gpio_trigger)
         self.modbus = ModbusService()
         self.pico = PicoService()
         self.pico_config = PicoConfigService()
@@ -114,6 +112,7 @@ class MainWindow(QMainWindow):
         self._pending_trigger_source: str | None = None
         self._pending_trigger_input_index: int | None = None
         self._external_sequence_index: dict[str, int] = {"pico": 0, "modbus": 0}
+        self._external_sequence_statuses: dict[str, dict[str, str]] = {}
         self._run_trigger_session_active = False
         # Tool/Recipe
         try:
@@ -127,8 +126,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
-        self.gpio.set_active_recipe(self.current_recipe_name())
-
         # ========== Root & Top bar ==========
         root = QWidget(); root.setObjectName("mainWindowRoot"); self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
@@ -572,10 +569,6 @@ class MainWindow(QMainWindow):
             "Prepojenie s linkou",
             "Nastavte vstupy pre snímanie a výstupy výsledkov OK/NOK.",
         )
-        self.btn_gpio_wizard = QPushButton("GPIO vstupy a výstupy", communication_card)
-        self.btn_gpio_wizard.setProperty("role", "setupAction")
-        self.btn_gpio_wizard.clicked.connect(self.open_gpio_wizard)
-        communication_layout.addWidget(self.btn_gpio_wizard)
         self.btn_modbus_wizard = QPushButton("Modbus TCP", communication_card)
         self.btn_modbus_wizard.setProperty("role", "setupAction")
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
@@ -736,6 +729,7 @@ class MainWindow(QMainWindow):
     def _reset_external_sequence_state(self) -> None:
         """Start every source-specific external sequence at its first view."""
         self._external_sequence_index = {"pico": 0, "modbus": 0}
+        self._external_sequence_statuses.clear()
 
     def _reset_view_sequence_state(self) -> None:
         for vid in self.view_strip.view_ids():
@@ -752,9 +746,7 @@ class MainWindow(QMainWindow):
         self._update_metrics_panel()
 
     def _signal_outputs(self, status: str) -> None:
-        self.gpio.emit_heartbeat()
         self.modbus.emit_heartbeat()
-        self.gpio.signal_result(status)
         self.modbus.signal_result(status)
 
     def _publish_recipe_flash_to_pico(self, recipe_name: str) -> tuple[bool, str]:
@@ -878,7 +870,7 @@ class MainWindow(QMainWindow):
 
         # manual = view sa spracuje iba po kliknutí TRIGGER (bez auto-sleep medzi viewmi)
         # timed = po spracovaní sa čaká trigger_interval_ms
-        # external = view čaká na externý trigger (GPIO/Modbus), interval sa nepoužíva
+        # external = view čaká na externý trigger (Pico/Modbus), interval sa nepoužíva
         trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").strip().lower()
         if trigger_mode not in {"timed", "external", "manual"}:
             trigger_mode = "timed"
@@ -991,8 +983,11 @@ class MainWindow(QMainWindow):
         ]
         if sequential:
             position = self._external_sequence_index[source] % len(sequential)
-            selected = sequential[position]
+            selected = dict(sequential[position])
             self._external_sequence_index[source] = (position + 1) % len(sequential)
+            selected["sequence_key"] = source
+            selected["sequence_position"] = position
+            selected["sequence_length"] = len(sequential)
             view = selected["view"]
             self._logger.info(
                 "[RUN] resolved external trigger mode=sequential source=%s index=%s view=%s",
@@ -1008,6 +1003,28 @@ class MainWindow(QMainWindow):
             input_index,
         )
         return None
+
+    def _resolve_manual_sequence_view(
+        self,
+        *,
+        recipe_name: str,
+        view_specs: list[dict[str, Any]],
+    ) -> dict[str, Any] | None:
+        """Let the RUN button simulate the next signal of an external sequence."""
+        sequential = [
+            spec for spec in view_specs
+            if spec.get("trigger_mode") == "external"
+            and spec.get("external_trigger_mode") == "sequential"
+        ]
+        if not sequential:
+            return None
+        position = self._manual_trigger_positions.get(recipe_name, 0) % len(sequential)
+        self._manual_trigger_positions[recipe_name] = (position + 1) % len(sequential)
+        selected = dict(sequential[position])
+        selected["sequence_key"] = f"manual:{recipe_name}"
+        selected["sequence_position"] = position
+        selected["sequence_length"] = len(sequential)
+        return selected
 
     def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
         view_id = requested_view_id or self._active_view_id
@@ -1277,7 +1294,7 @@ class MainWindow(QMainWindow):
             self._log_trigger_cycle("cycle_start", preview_state="paused")
             if trigger_state["recipe_cfg"] is None:
                 base_frame = self._capture_frame_for_trigger(
-                    trigger_mode_label="manual_gpio",
+                    trigger_mode_label="manual",
                     capture_request_source=resolved_source,
                 )
                 active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
@@ -1366,14 +1383,33 @@ class MainWindow(QMainWindow):
                 source=trigger_source,
                 input_index=int(trigger_input_index),
             )
+        elif trigger_source == "manual":
+            external_spec = self._resolve_manual_sequence_view(
+                recipe_name=recipe_name,
+                view_specs=view_specs,
+            )
+            if external_spec is not None:
+                all_manual = True
 
         if is_routed_external and external_spec is None:
             return None
         if external_spec is not None:
-            self._reset_view_sequence_state()
-            per_view_statuses = {}
+            sequence_key = str(external_spec.get("sequence_key") or "")
+            sequence_position = int(external_spec.get("sequence_position", 0))
+            if sequence_position == 0:
+                self._reset_view_sequence_state()
+                per_view_statuses = {}
+                if sequence_key.startswith("manual:"):
+                    self._manual_trigger_statuses[recipe_name] = {}
+                else:
+                    self._external_sequence_statuses[sequence_key] = {}
+            elif sequence_key.startswith("manual:"):
+                per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
+            else:
+                per_view_statuses = dict(self._external_sequence_statuses.get(sequence_key, {}))
             views_to_process = [external_spec]
-            self._reset_manual_trigger_progress(recipe_name)
+            if not sequence_key.startswith("manual:"):
+                self._reset_manual_trigger_progress(recipe_name)
         elif all_manual:
             cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
             index_in_cycle = cycle_position % len(manual_specs)
@@ -1392,6 +1428,15 @@ class MainWindow(QMainWindow):
             views_to_process = view_specs
             self._reset_manual_trigger_progress(recipe_name)
 
+        if len(views_to_process) == 1:
+            selected_view = views_to_process[0]["view"]
+            selected_view_id = (
+                getattr(selected_view, "id", None)
+                or f"view_{views_to_process[0]['index'] + 1}"
+            )
+            self._active_view_id = selected_view_id
+            self.view_strip.set_active(selected_view_id)
+
         self._last_total_cycle_time_ms = None
         self.sb_recipe_duration.setText("–")
         return {
@@ -1403,6 +1448,8 @@ class MainWindow(QMainWindow):
             "view_specs": view_specs,
             "views_to_process": views_to_process,
             "all_manual": all_manual,
+            "sequence_key": str(views_to_process[0].get("sequence_key") or "")
+            if len(views_to_process) == 1 else "",
             "per_view_statuses": per_view_statuses,
             "ignored_for_aggregation": set(),
             "last_preview_frame": None,
@@ -1556,6 +1603,9 @@ class MainWindow(QMainWindow):
         per_view_statuses[view_id] = status
         if all_manual:
             self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
+        sequence_key = trigger_state.get("sequence_key")
+        if sequence_key and not str(sequence_key).startswith("manual:"):
+            self._external_sequence_statuses[str(sequence_key)] = dict(per_view_statuses)
 
         result_time_ts = inspection_finished_ts or time.monotonic()
         cycle_time_value = float(result.cycle_time_ms) if result is not None else None
@@ -1797,15 +1847,6 @@ class MainWindow(QMainWindow):
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
 
-    def open_gpio_wizard(self):
-        self._exit_run_trigger_session(restore_master=False)
-        self.gpio.set_active_recipe(self.current_recipe_name())
-        dlg = GPIOWizard(self.gpio, self)
-        dlg.resize(720, 520)
-        dlg.exec()
-        if self.mode == "RUN":
-            self._apply_capture_mode(ensure_runtime_ready=True)
-
     def open_modbus_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
         dlg = ModbusWizard(self.modbus, self)
@@ -1901,9 +1942,6 @@ class MainWindow(QMainWindow):
         QMessageBox.critical(
             self, "Chyba", self.pico.last_error or "Pico nie je dostupné"
         )
-
-    def _handle_gpio_trigger(self):
-        self._handle_external_trigger("GPIO")
 
     def _handle_modbus_trigger(self, input_index: int | None = None):
         self._handle_external_trigger("Modbus", input_index=input_index)
@@ -3147,7 +3185,6 @@ class MainWindow(QMainWindow):
             # update sidebar (nový recept, reset posledných metrík)
             self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
-            self.gpio.set_active_recipe(name)
         except Exception as e:
             self.lbl_status.setText(f"Load failed: {e}")
 
@@ -3171,7 +3208,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(name)
 
     def on_recipe_rename(self):
         from PySide6.QtWidgets import QInputDialog
@@ -3184,7 +3220,6 @@ class MainWindow(QMainWindow):
         new = new.strip()
         self._reset_external_sequence_state()
         self.recipes.rename(old, new)
-        self.gpio.rename_profile(old, new)
         self._reset_manual_trigger_progress(old)
         self._refresh_recipe_list()
         self.recipes.load(new)
@@ -3196,7 +3231,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe(new)
 
     def on_recipe_delete(self):
         from PySide6.QtWidgets import QMessageBox
@@ -3211,7 +3245,6 @@ class MainWindow(QMainWindow):
             return
         self._reset_external_sequence_state()
         self.recipes.delete(name)
-        self.gpio.delete_profile(name)
         self._reset_manual_trigger_progress(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
@@ -3223,7 +3256,6 @@ class MainWindow(QMainWindow):
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
-        self.gpio.set_active_recipe("default")
 
     def export_csv_today(self):
         rid = self.db.recipe_id(self.current_recipe_name())
