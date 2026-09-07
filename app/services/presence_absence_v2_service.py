@@ -64,8 +64,16 @@ def _ignore_mask_bool(ignore_mask: np.ndarray | None, shape: tuple[int, int]) ->
     return mask > 0
 
 
-def compute_roi_hash(roi: tuple[int, int, int, int] | None, ignore_mask: np.ndarray | None) -> str:
-    payload: dict[str, Any] = {"roi": tuple(roi) if roi is not None else None}
+def compute_roi_hash(roi: Any, ignore_mask: np.ndarray | None) -> str:
+    if hasattr(roi, "to_dict"):
+        roi_payload = roi.to_dict()
+    elif isinstance(roi, dict):
+        roi_payload = dict(roi)
+    elif roi is not None:
+        roi_payload = tuple(roi)
+    else:
+        roi_payload = None
+    payload: dict[str, Any] = {"roi": roi_payload}
     if ignore_mask is not None:
         mask = np.asarray(ignore_mask)
         if mask.ndim == 3:

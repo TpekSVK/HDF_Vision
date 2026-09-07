@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 import numpy as np
 
 from app.models.schema import Tool, ToolParams, ToolThresholds
+from app.services.roi_geometry import roi_shape_mask
 from app.services.tool_service import BaseTool, ToolRunResult
 from app.services.tool_service import (
     _clamp_rect,
@@ -96,7 +97,8 @@ class PairTool(BaseTool):
 
     def _resolve_cached_mask(
         self,
-        mask_full: np.ndarray,
+        mask_full: Optional[np.ndarray],
+        roi: Any,
         roi_rect: Tuple[int, int, int, int],
         roi_shape: Tuple[int, int],
         dx_total: float,
@@ -104,9 +106,15 @@ class PairTool(BaseTool):
         theta_total: float,
     ) -> Optional[np.ndarray]:
         key = (
-            int(mask_full.__array_interface__["data"][0]),
-            mask_full.shape,
-            mask_full.dtype.str,
+            (
+                int(mask_full.__array_interface__["data"][0])
+                if mask_full is not None else None
+            ),
+            mask_full.shape if mask_full is not None else None,
+            mask_full.dtype.str if mask_full is not None else None,
+            _freeze_dict(
+                roi.to_dict() if hasattr(roi, "to_dict") else dict(roi or {})
+            ),
             roi_rect,
             round(dx_total, 4),
             round(dy_total, 4),
@@ -116,12 +124,14 @@ class PairTool(BaseTool):
         if cached and cached.get("key") == key:
             return cached.get("mask")
 
-        x, y, w, h = roi_rect
-        mask_roi = mask_full[y : y + h, x : x + w]
-        if mask_roi.shape != roi_shape:
-            mask = None
-        else:
-            mask = mask_roi == 0
+        shape_mask = roi_shape_mask(roi, roi_rect)
+        mask = shape_mask.copy() if shape_mask is not None else None
+        if mask_full is not None:
+            x, y, w, h = roi_rect
+            mask_roi = mask_full[y : y + h, x : x + w]
+            if mask_roi.shape == roi_shape:
+                ignore_valid = mask_roi == 0
+                mask = ignore_valid if mask is None else np.logical_and(mask, ignore_valid)
 
         self._roi_mask_cache_entry = {"key": key, "mask": mask}
         return mask
@@ -213,18 +223,28 @@ class PairTool(BaseTool):
         frame_roi = frame_source[y : y + h, x : x + w]
 
         mask = None
-        if tool is not None and tool.ignore_mask.value is not None:
-            mask_full = np.asarray(tool.ignore_mask.value, dtype=np.uint8)
-            if mask_full.shape[:2] != (gh, gw):
-                mask_full = mask_full[:gh, :gw]
+        if tool is not None:
+            mask_full = None
+            if tool.ignore_mask.value is not None:
+                mask_full = np.asarray(tool.ignore_mask.value, dtype=np.uint8)
+            if mask_full is not None:
+                if mask_full.shape[:2] != (gh, gw):
+                    mask_full = mask_full[:gh, :gw]
             mask = self._resolve_cached_mask(
                 mask_full,
+                tool.roi,
                 roi_rect,
                 (h, w),
                 dx_total,
                 dy_total,
                 theta_total,
             )
+
+        if mask is not None:
+            # Prevent excluded pixels from leaking into valid pixels through
+            # blur or other neighbourhood operations performed by a tool.
+            frame_roi = frame_roi.copy()
+            frame_roi[np.logical_not(mask)] = golden_roi[np.logical_not(mask)]
 
         return PreparedPair(
             golden_roi=golden_roi,

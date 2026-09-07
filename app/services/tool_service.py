@@ -16,6 +16,7 @@ import numpy as np
 
 from app.services.compare_service import analyze
 from app.services import logging_service, settings_service
+from app.services.roi_geometry import roi_shape_mask
 from app.models.schema import (
     RecipeData,
     RecipeV2,
@@ -1573,8 +1574,7 @@ def status_from_metrics(
 
 def _freeze_value(value: Any) -> Any:
     if isinstance(value, ToolRoi):
-        rect = value.rect()
-        return tuple(rect) if rect is not None else None
+        return _freeze_value(value.to_dict())
     if isinstance(value, ToolMask):
         mask = value.value
         if mask is None:
@@ -2059,9 +2059,15 @@ def run_ssim_tool(
     frame_crop = frame_u8[y : y + h, x : x + w]
 
     mask_note: str | None = None
-    include_mask_crop: np.ndarray | None = None
+    shape_mask = roi_shape_mask(roi, roi_rect)
+    include_mask_crop: np.ndarray | None = (
+        shape_mask.astype(np.uint8) * 255 if shape_mask is not None else None
+    )
     ignore_mask_pixels = 0
-    effective_mask_pixels = int(w * h)
+    effective_mask_pixels = (
+        int(np.count_nonzero(include_mask_crop))
+        if include_mask_crop is not None else int(w * h)
+    )
     if ignore_mask is not None:
         try:
             with imaging.time_block("prepare_ignore_mask", timings):
@@ -2090,29 +2096,42 @@ def run_ssim_tool(
                             f"mask_shape={mask_shape},overlap={(overlap_h, overlap_w)}"
                         )
                     else:
-                        include_mask_crop = None
                         mask_note = (
                             "ignore_mask_ignored:no_roi_overlap:"
                             f"mask_shape={mask_shape},roi_shape={(h, w)}"
                         )
 
                 if ignore_mask_crop_bool is not None:
-                    include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
+                    if include_mask_crop is None:
+                        include_mask_crop = np.ones((h, w), dtype=np.uint8) * 255
                     crop_h, crop_w = ignore_mask_crop_bool.shape[:2]
                     roi_view = include_mask_crop[:crop_h, :crop_w]
                     roi_view[ignore_mask_crop_bool] = 0
                     ignore_mask_pixels = int(np.count_nonzero(ignore_mask_crop_bool))
                     effective_mask_pixels = int(np.count_nonzero(include_mask_crop))
         except Exception as exc:
-            include_mask_crop = None
+            include_mask_crop = shape_mask.astype(np.uint8) * 255 if shape_mask is not None else None
             ignore_mask_pixels = 0
-            effective_mask_pixels = int(w * h)
+            effective_mask_pixels = (
+                int(np.count_nonzero(include_mask_crop))
+                if include_mask_crop is not None else int(w * h)
+            )
             mask_note = f"ignore_mask_ignored:{exc}"
 
+    if include_mask_crop is not None and effective_mask_pixels > 0:
+        frame_crop = frame_crop.copy()
+        frame_crop[include_mask_crop == 0] = golden_crop[include_mask_crop == 0]
+
     with imaging.time_block("ssim", timings):
-        ssim_val = float(imaging.ssim_u8(golden_crop, frame_crop, mask_u8=include_mask_crop))
+        ssim_val = (
+            float(imaging.ssim_u8(golden_crop, frame_crop, mask_u8=include_mask_crop))
+            if effective_mask_pixels > 0 else 0.0
+        )
     metrics = {"ssim": float(ssim_val)}
-    status = status_from_metrics("ssim", metrics, thresholds_dict)
+    status = (
+        status_from_metrics("ssim", metrics, thresholds_dict)
+        if effective_mask_pixels > 0 else "warn"
+    )
     diagnostics = {
         "ssim": ssim_val,
         "roi": {"x": x, "y": y, "w": w, "h": h},
@@ -2120,7 +2139,12 @@ def run_ssim_tool(
         "ssim_min": ssim_min,
         "dx_total": dx_total,
         "dy_total": dy_total,
-        "ignore_mask_used": include_mask_crop is not None,
+        "roi_shape": (
+            ToolRoi.from_obj(roi).shape()
+            if isinstance(roi, (ToolRoi, dict)) else "rect"
+        ),
+        "shape_mask_used": shape_mask is not None,
+        "ignore_mask_used": ignore_mask is not None and ignore_mask_pixels > 0,
         "ignore_mask_pixels": int(ignore_mask_pixels),
         "effective_mask_pixels": int(effective_mask_pixels),
     }

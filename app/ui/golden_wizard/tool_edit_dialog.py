@@ -63,6 +63,7 @@ from app.services.presence_absence_v2_service import (
     save_sample,
     sensitivity_to_score_threshold,
 )
+from app.services.roi_geometry import roi_local_exclusion_mask
 from app.utils.tool_identity import compute_tool_identity
 from .presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
 
@@ -1564,20 +1565,15 @@ class ToolEditDialog(QDialog):
             return None
         return int(h), int(w)
 
+    def _presence_v2_roi_descriptor(self) -> ToolRoi:
+        return (
+            ToolRoi.from_obj(self._roi_editor.roi_data())
+            if self._roi_editor is not None else self._tool.roi
+        )
+
     def _presence_v2_ignore_mask(self) -> np.ndarray | None:
         mask = self._mask_editor.mask() if self._mask_editor is not None else self._tool.ignore_mask.value
-        roi = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
-        if mask is None or roi is None:
-            return None
-        value = np.asarray(mask)
-        if value.ndim == 3:
-            value = value[:, :, 0]
-        x, y, width, height = roi
-        if value.shape[:2] == (height, width):
-            return value.copy()
-        if value.shape[0] >= y + height and value.shape[1] >= x + width:
-            return value[y:y + height, x:x + width].copy()
-        return None
+        return roi_local_exclusion_mask(self._presence_v2_roi_descriptor(), mask)
 
     def _confirm_capture_with_invalidated_samples(self, assets_dir: Path) -> bool:
         params = dict(self._tool.params.values or {})
@@ -1733,6 +1729,12 @@ class ToolEditDialog(QDialog):
             if self._learning_result_label is not None:
                 self._learning_result_label.setText(str(exc))
             return
+        current_roi = self._presence_v2_roi_descriptor()
+        current_ignore_mask = (
+            self._mask_editor.mask()
+            if self._mask_editor is not None else self._tool.ignore_mask.value
+        )
+        current_roi_hash = compute_roi_hash(current_roi, current_ignore_mask)
         stats = {
             "model_method": "median_mad",
             "polarity": polarity,
@@ -1741,7 +1743,7 @@ class ToolEditDialog(QDialog):
             "sample_count_nok": len(load_samples(dirs["nok"])),
             "recommended_thresholds": recommended,
             "warnings": warnings,
-            "roi_hash": params.get("roi_hash", ""),
+            "roi_hash": current_roi_hash,
             "image_shape": list(median.shape),
             "ignored_ok_samples": int(build_info.ignored_ok_samples),
             "tool_type": self._tool.type,
@@ -1752,6 +1754,7 @@ class ToolEditDialog(QDialog):
         self._recommended_thresholds = {k: float(v) for k, v in recommended.items()}
         params["reference_model_ready"] = True
         params["reference_model_invalidated"] = False
+        params["roi_hash"] = current_roi_hash
         self._tool.params = ToolParams(params)
         if self._learning_result_label is not None:
             self._learning_result_label.setText(
@@ -1875,7 +1878,7 @@ class ToolEditDialog(QDialog):
 
         if self._is_presence_v2:
             roi_hash_new = compute_roi_hash(
-                self._tool.roi.rect(),
+                self._tool.roi,
                 self._tool.ignore_mask.value if self._tool.ignore_mask.value is not None else None,
             )
             previous_hash = str(params_values.get("roi_hash", "") or "")
