@@ -12,6 +12,7 @@ from .light_transmission import (
     ToolContext as LightTransmissionContext,
     ToolResult as LightTransmissionResult,
 )
+from .mold_protection import MoldProtectionV1Tool
 from .presence_absence import (
     PresenceAbsenceCheckParams,
     PresenceAbsenceCheckTool,
@@ -32,6 +33,7 @@ __all__ = [
     "LightTransmissionCheckParams",
     "LightTransmissionContext",
     "LightTransmissionResult",
+    "MoldProtectionV1Tool",
     "PresenceAbsenceCheckTool",
     "PresenceAbsenceCheckParams",
     "PresenceAbsenceContext",

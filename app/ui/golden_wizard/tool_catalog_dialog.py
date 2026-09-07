@@ -15,10 +15,12 @@ from app.ui.golden_wizard.style import TOOL_CATALOG_STYLE
 _ALL = "__all__"
 _RECOMMENDED = "__recommended__"
 _RECOMMENDED_TYPES = {
-    "locator.template_match", "presence_absence", "presence.absence_v2", "ssim", "edge_change",
+    "locator.template_match", "mold.protection_v1", "presence_absence",
+    "presence.absence_v2", "ssim", "edge_change",
 }
 _NAME_SK = {
     "locator.template_match": "Locator – Template Match",
+    "mold.protection_v1": "Ochrana formy V1",
     "presence_absence": "Kontrola prítomnosti",
     "presence.absence_v2": "Kontrola prítomnosti V2",
     "ssim": "SSIM porovnanie",

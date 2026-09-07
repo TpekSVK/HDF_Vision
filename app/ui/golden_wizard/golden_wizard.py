@@ -117,6 +117,12 @@ from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label, metric_
 from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog
 from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
 from app.ui.golden_wizard.presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
+
+
+_STATISTICAL_PRESENCE_TYPES = frozenset({
+    "presence.absence_v2",
+    "mold.protection_v1",
+})
 from app.ui.golden_wizard.view_config_dialog import (
     ViewConfigDialog,
     _DEFAULT_CAMERA_RESOLUTIONS,
@@ -251,6 +257,7 @@ class ToolConfigPanel(QWidget):
         super().__init__(parent)
 
         self._current_tool: Optional[Tool] = None
+        self._presence_is_mold = False
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
         self._current_metrics_spec: list[ToolMetricSpec] = []
@@ -344,12 +351,14 @@ class ToolConfigPanel(QWidget):
         learning_layout.addWidget(self._presence_counts)
         learning_layout.addWidget(self._presence_warning)
         capture_row = QHBoxLayout()
+        self._presence_capture_buttons: dict[str, QPushButton] = {}
         for label, action in (("Zbierať OK", "capture_ok"), ("Zbierať NOK", "capture_nok")):
             button = QPushButton(label, learning_content)
             button.clicked.connect(
                 lambda _checked=False, value=action: self.presenceLearningRequested.emit(value)
             )
             capture_row.addWidget(button)
+            self._presence_capture_buttons[action] = button
         learning_layout.addLayout(capture_row)
         self._presence_rebuild = QPushButton("Prepočítať model", learning_content)
         self._presence_rebuild.clicked.connect(
@@ -602,7 +611,14 @@ class ToolConfigPanel(QWidget):
         self._description_label.setVisible(bool(description))
         self.refresh_geometry(tool)
         is_locator = tool.type == "locator.template_match"
-        is_presence_v2 = tool.type == "presence.absence_v2"
+        is_presence_v2 = tool.type in _STATISTICAL_PRESENCE_TYPES
+        self._presence_is_mold = tool.type == "mold.protection_v1"
+        self._presence_capture_buttons["capture_ok"].setText(
+            "Zbierať prázdnu formu" if self._presence_is_mold else "Zbierať OK"
+        )
+        self._presence_capture_buttons["capture_nok"].setText(
+            "Zbierať zvyšky (NOK)" if self._presence_is_mold else "Zbierať NOK"
+        )
         self._geometry_section.set_title(
             "Oblasť hľadania" if is_locator else
             "Oblasť kontroly" if is_presence_v2 else "Geometria"
@@ -647,7 +663,7 @@ class ToolConfigPanel(QWidget):
         recommended: Optional[dict[str, float]] = None,
         validation_text: Optional[str] = None,
     ) -> None:
-        if tool.type != "presence.absence_v2":
+        if tool.type not in _STATISTICAL_PRESENCE_TYPES:
             return
         params = dict(tool.params.values or {})
         ok_count = int(params.get("sample_count_ok", 0) if compatible_ok is None else compatible_ok)
@@ -666,7 +682,14 @@ class ToolConfigPanel(QWidget):
             warning = f"⚠ Minimum pre model: {minimum}" if ok_count < minimum else ""
         self._presence_model_state.setText(state)
         self._presence_model_state.setStyleSheet(f"color: {color}; font-weight: 600;")
-        self._presence_counts.setText(f"OK vzorky: {ok_count} / {target}\nNOK vzorky: {nok_value}")
+        if self._presence_is_mold:
+            self._presence_counts.setText(
+                f"Prázdna forma: {ok_count} / {target}\nVzorky so zvyškom: {nok_value}"
+            )
+        else:
+            self._presence_counts.setText(
+                f"OK vzorky: {ok_count} / {target}\nNOK vzorky: {nok_value}"
+            )
         self._presence_warning.setText(warning)
         self._presence_rebuild.setEnabled(tool.roi.rect() is not None and ok_count >= minimum)
         values = dict(recommended or {})
@@ -690,9 +713,11 @@ class ToolConfigPanel(QWidget):
         ok_total, nok_total = int(summary["ok_total"]), int(summary["nok_total"])
         false_rejects = int(summary["false_reject_count"])
         false_accepts = int(summary["false_accept_count"])
+        ok_label = "Prázdna forma" if self._presence_is_mold else "OK vzorky"
+        nok_label = "Vzorky so zvyškom" if self._presence_is_mold else "NOK vzorky"
         nok_line = (
-            f"NOK vzorky\n{int(summary['nok_correct'])} / {nok_total} správne"
-            if nok_total else "NOK validácia: bez vzoriek"
+            f"{nok_label}\n{int(summary['nok_correct'])} / {nok_total} správne"
+            if nok_total else f"{nok_label}: bez vzoriek"
         )
         false_accept_line = (
             f"False Accept\n{false_accepts} / {nok_total} = "
@@ -704,7 +729,7 @@ class ToolConfigPanel(QWidget):
             if weak_dataset else ""
         )
         text = (
-            f"OK vzorky\n{int(summary['ok_correct'])} / {ok_total} správne\n\n"
+            f"{ok_label}\n{int(summary['ok_correct'])} / {ok_total} správne\n\n"
             f"{nok_line}\n\n"
             f"False Reject\n{false_rejects} / {ok_total} = "
             f"{float(summary['false_reject_rate']) * 100:.1f} %\n\n"
@@ -826,14 +851,14 @@ class ToolConfigPanel(QWidget):
             for name, spec in self._param_specs.items():
                 if not self._is_supported_spec(spec):
                     continue
-                if (self._current_tool.type == "presence.absence_v2" and name in {
+                if (self._current_tool.type in _STATISTICAL_PRESENCE_TYPES and name in {
                         "reference_model_ready", "reference_model_invalidated",
                         "sample_count_ok", "sample_count_nok"}):
                     continue
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
-                if self._current_tool.type == "presence.absence_v2" and isinstance(
+                if self._current_tool.type in _STATISTICAL_PRESENCE_TYPES and isinstance(
                         widget, (QSpinBox, QDoubleSpinBox)):
                     unit = str(spec.get("unit", "") or "")
                     if unit:
@@ -856,7 +881,7 @@ class ToolConfigPanel(QWidget):
                 target_layout = self._advanced_layout if (
                     (self._current_tool.type == "locator.template_match"
                      and name in {"coarse_to_fine", "coarse_cap", "angle_smooth", "apply_alignment"})
-                    or self._current_tool.type == "presence.absence_v2"
+                    or self._current_tool.type in _STATISTICAL_PRESENCE_TYPES
                 ) else self._form_layout
                 target_layout.addRow(label, container)
                 added_fields = True
@@ -868,7 +893,7 @@ class ToolConfigPanel(QWidget):
                 widget = self._create_widget(spec)
                 if widget is None:
                     continue
-                if self._current_tool.type == "presence.absence_v2" and isinstance(
+                if self._current_tool.type in _STATISTICAL_PRESENCE_TYPES and isinstance(
                         widget, (QSpinBox, QDoubleSpinBox)):
                     unit = str(spec.get("unit", "") or "")
                     if unit:
@@ -889,13 +914,13 @@ class ToolConfigPanel(QWidget):
                 if tooltip:
                     container.setToolTip(tooltip)
                 target_layout = self._advanced_layout if (
-                    self._current_tool.type == "presence.absence_v2"
+                    self._current_tool.type in _STATISTICAL_PRESENCE_TYPES
                     and name in {"score_threshold", "total_area_threshold", "min_blob_area"}
                 ) else self._threshold_layout
                 target_layout.addRow(label, container)
                 added_fields = True
 
-        if self._current_tool.type == "presence.absence_v2":
+        if self._current_tool.type in _STATISTICAL_PRESENCE_TYPES:
             self._presence_live_values = QLabel("Zatiaľ bez výsledku", self._threshold_container)
             self._presence_live_values.setWordWrap(True)
             self._presence_live_values.setStyleSheet("color: #9aa4af; padding-top: 4px;")
@@ -978,18 +1003,35 @@ class ToolConfigPanel(QWidget):
                 }
             ]
 
-        if self._current_tool is not None and self._current_tool.type == "presence.absence_v2":
+        if (self._current_tool is not None
+                and self._current_tool.type in _STATISTICAL_PRESENCE_TYPES):
             reason = self._presence_decision_reason(metrics.get("decision_reason"))
             if reason and (result.status or "").lower() == "nok":
                 status_message = "\n".join(filter(None, (status_message, f"Dôvod: {reason}")))
             if self._presence_live_values is not None:
-                self._presence_live_values.setText(
-                    "Aktuálna anomália: "
-                    f"{float(metrics.get('anomaly_area_percent', 0.0)):.1f} %\n"
-                    "Najväčší objekt: "
-                    f"{float(metrics.get('largest_blob_area', 0.0)):.0f} px\n"
-                    f"Počet objektov: {int(metrics.get('blob_count', 0) or 0)}"
-                )
+                if self._current_tool.type == "mold.protection_v1":
+                    state_labels = {
+                        "empty": "Prázdna",
+                        "occupied": "Zvyšok nájdený",
+                        "fault": "Kontrola nepripravená",
+                    }
+                    state = state_labels.get(
+                        str(metrics.get("inspection_state", "")), "Neznámy"
+                    )
+                    self._presence_live_values.setText(
+                        f"Stav formy: {state}\n"
+                        f"Počet zvyškov: {int(metrics.get('residual_count', 0) or 0)}\n"
+                        "Najväčší zvyšok: "
+                        f"{float(metrics.get('largest_blob_area', 0.0)):.0f} px"
+                    )
+                else:
+                    self._presence_live_values.setText(
+                        "Aktuálna anomália: "
+                        f"{float(metrics.get('anomaly_area_percent', 0.0)):.1f} %\n"
+                        "Najväčší objekt: "
+                        f"{float(metrics.get('largest_blob_area', 0.0)):.0f} px\n"
+                        f"Počet objektov: {int(metrics.get('blob_count', 0) or 0)}"
+                    )
 
         self._update_diagnostics(
             result.status,
@@ -1008,6 +1050,8 @@ class ToolConfigPanel(QWidget):
             "area_percent": "prekročená chybná plocha %",
             "largest_blob": "príliš veľký objekt",
             "blob_count": "príliš veľa objektov",
+            "model_not_ready": "model ochrany formy nie je pripravený",
+            "no_valid_pixels": "Ignore Mask zakrýva celú kontrolovanú oblasť",
         }
         keys = [item.strip() for item in str(value or "").split(",") if item.strip()]
         return ", ".join(labels.get(key, key) for key in keys)
@@ -3408,7 +3452,7 @@ class GoldenWizard(QDialog):
             finally:
                 self._syncing_workspace_roi = False
             self._restore_tool_result(tool)
-            if tool.type == "presence.absence_v2":
+            if tool.type in _STATISTICAL_PRESENCE_TYPES:
                 self._refresh_presence_v2_learning(tool, row)
             shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
                 tool.roi.shape(), "ROI"
@@ -3467,7 +3511,7 @@ class GoldenWizard(QDialog):
         self.view.set_tool_overlay(tool)
         self._tool_panel.refresh_geometry(tool)
         self._update_dirty_state(recipe, view_id)
-        if tool.type == "presence.absence_v2":
+        if tool.type in _STATISTICAL_PRESENCE_TYPES:
             self._refresh_presence_v2_learning(tool, row)
         shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
             tool.roi.shape(), "ROI"
@@ -3504,14 +3548,14 @@ class GoldenWizard(QDialog):
             return
         self.view.set_tool_overlay(tool)
         self._update_dirty_state(recipe, view_id)
-        if tool.type == "presence.absence_v2":
+        if tool.type in _STATISTICAL_PRESENCE_TYPES:
             self._refresh_presence_v2_learning(tool, row)
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  Ignore mask aktualizovaná  |  Koncept aktualizovaný"
         )
 
     def _invalidate_presence_v2_model(self, tool: Tool) -> None:
-        if tool.type != "presence.absence_v2":
+        if tool.type not in _STATISTICAL_PRESENCE_TYPES:
             return
         params = dict(tool.params.values or {})
         current_hash = compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value)
@@ -3529,7 +3573,8 @@ class GoldenWizard(QDialog):
             return None
         recipe = self._current_recipe_name()
         tools = self.recipes.get_draft_tools(recipe, view_id)
-        if not (0 <= row < len(tools)) or tools[row].type != "presence.absence_v2":
+        if (not (0 <= row < len(tools))
+                or tools[row].type not in _STATISTICAL_PRESENCE_TYPES):
             return None
         tool = tools[row]
         identity, _, _ = compute_tool_identity(tool)
@@ -3658,7 +3703,12 @@ class GoldenWizard(QDialog):
                 tool.params = ToolParams(params)
                 self.recipes.update_tool(recipe, row, tool, view_id=view_id)
             dialog = PresenceV2SampleCaptureDialog(
-                title="Zber OK snímok" if mode == "ok" else "Zber NOK snímok",
+                title=(
+                    "Zber prázdnej formy" if mode == "ok"
+                    else "Zber vzoriek so zvyškom"
+                ) if tool.type == "mold.protection_v1" else (
+                    "Zber OK snímok" if mode == "ok" else "Zber NOK snímok"
+                ),
                 capture_fn=lambda: self._capture_frame_for_golden(
                     view_id=view_id,
                     trigger_mode_label="presence_v2_learning",

@@ -365,7 +365,9 @@ class ToolEditDialog(QDialog):
         self._btn_edge_auto_detect: Optional[QPushButton] = None
 
         self._is_locator_template = self._tool.type == "locator.template_match"
-        self._is_presence_v2 = self._tool.type == "presence.absence_v2"
+        self._is_presence_v2 = self._tool.type in {
+            "presence.absence_v2", "mold.protection_v1"
+        }
         self._learning_status_label: Optional[QLabel] = None
         self._learning_counts_label: Optional[QLabel] = None
         self._learning_model_label: Optional[QLabel] = None

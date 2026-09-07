@@ -72,6 +72,7 @@ class PresenceAbsenceV2Tool(PairTool):
                 "anomaly_area_percent": 0.0,
                 "blob_count": 0,
                 "largest_blob_area": 0,
+                "blobs": [],
                 "valid_pixel_count": valid_pixels,
                 "ignored_pixel_count": max(0, total_pixels - valid_pixels),
                 "fail_area_px": False,
@@ -124,12 +125,22 @@ class PresenceAbsenceV2Tool(PairTool):
         )
 
         latency_ms = (time.perf_counter() - start) * 1000.0
+        roi_x, roi_y, _, _ = prepared.roi_rect
+        blobs = [
+            {
+                **blob,
+                "image_x": roi_x + int(blob["x"]),
+                "image_y": roi_y + int(blob["y"]),
+            }
+            for blob in result["blobs"]
+        ]
         metrics = {
             "anomaly_score": float(result["anomaly_score"]),
             "anomaly_area": float(result["anomaly_area"]),
             "anomaly_area_percent": float(result["anomaly_area_percent"]),
             "blob_count": int(result["blob_count"]),
             "largest_blob_area": int(result["largest_blob_area"]),
+            "blobs": blobs,
             "valid_pixel_count": int(result["valid_pixel_count"]),
             "ignored_pixel_count": int(result["ignored_pixel_count"]),
             "fail_area_px": bool(result["fail_area_px"]),
@@ -147,6 +158,22 @@ class PresenceAbsenceV2Tool(PairTool):
         diagnostics = dict(metrics)
         if int(result["valid_pixel_count"]) == 0:
             diagnostics["message"] = "Ignore Mask zakrýva celú oblasť kontroly."
+        display_items = [
+            {
+                "kind": "rect",
+                "rect": (
+                    roi_x + int(blob["x"]),
+                    roi_y + int(blob["y"]),
+                    int(blob["width"]),
+                    int(blob["height"]),
+                ),
+                "color": "#ef4444",
+                "thickness": 3,
+                "label": f"Anomália {index}",
+                "z_index": 40,
+            }
+            for index, blob in enumerate(blobs, start=1)
+        ] if result["status"] == "nok" else []
         return ToolRunResult(
             status=str(result["status"]),
             metrics=metrics,
@@ -154,6 +181,7 @@ class PresenceAbsenceV2Tool(PairTool):
             debug_artifacts={
                 "type": "presence_absence_v2",
                 "diagnostics": diagnostics,
+                "display_items": display_items,
                 "preview": {
                     "current_sample": prepared.frame_roi,
                     "median_image": np.clip(model.median, 0, 255).astype(np.uint8),
