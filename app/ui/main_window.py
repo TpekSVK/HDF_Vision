@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
 )
 from PySide6.QtCore import Qt, QTimer, Signal, QSettings
-from PySide6.QtGui import QFont, QImage, QPixmap, QImageReader
+from PySide6.QtGui import QImage, QPixmap, QImageReader
 
 import json
 import logging
@@ -53,6 +53,8 @@ from app.ui.debug_overlay_widget import DebugOverlayWidget
 from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
 from app.services.security_service import SecurityService
 from app.ui.password_dialog import authorize_recipe_write
+from app.ui.theme import refresh_style
+from app.utils import overlay as overlay_utils
 
 
 class MainWindow(QMainWindow):
@@ -71,6 +73,7 @@ class MainWindow(QMainWindow):
         self._last_trigger_frame = None
         self._last_trigger_view_id: str | None = None
         self._last_trigger_frames: dict[str, Any] = {}
+        self._run_overlay_cache: dict[str, dict[str, Any]] = {}
         self._golden_cache: dict[tuple[str, str], tuple[int, np.ndarray]] = {}
 
         # Kamera
@@ -127,8 +130,10 @@ class MainWindow(QMainWindow):
         self.gpio.set_active_recipe(self.current_recipe_name())
 
         # ========== Root & Top bar ==========
-        root = QWidget(); self.setCentralWidget(root)
-        root_layout = QVBoxLayout(root); root_layout.setContentsMargins(10, 10, 10, 10); root_layout.setSpacing(8)
+        root = QWidget(); root.setObjectName("mainWindowRoot"); self.setCentralWidget(root)
+        root_layout = QVBoxLayout(root)
+        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setSpacing(8)
 
         self._jetson_stats_service = JetsonStatsService(self)
         self._debug_overlay = DebugOverlayWidget(root)
@@ -136,35 +141,59 @@ class MainWindow(QMainWindow):
         self._jetson_stats_service.stats_updated.connect(self._debug_overlay.update_stats)
         self._overlay_enabled = False
 
-        top = QHBoxLayout(); top.setSpacing(8)
+        self.top_bar = QFrame(root)
+        self.top_bar.setObjectName("appTopBar")
+        top = QHBoxLayout(self.top_bar)
+        top.setContentsMargins(14, 8, 14, 8)
+        top.setSpacing(8)
         title = QLabel("HDF Vision")
-        tf = QFont(); tf.setPointSize(14); tf.setBold(True)
-        title.setFont(tf)
+        title.setProperty("role", "appTitle")
         top.addWidget(title)
         top.addStretch(1)
+
+        self.btn_mode_run = QPushButton("RUN")
+        self.btn_mode_run.setCheckable(True)
+        self.btn_mode_run.setProperty("role", "mode")
+        self.btn_mode_run.clicked.connect(lambda: self._request_mode("RUN"))
+        top.addWidget(self.btn_mode_run)
+
+        self.mode_btn = QPushButton("SETUP")
+        self.mode_btn.setCheckable(True)
+        self.mode_btn.setProperty("role", "mode")
+        self.mode_btn.clicked.connect(lambda: self._request_mode("SETUP"))
+        top.addWidget(self.mode_btn)
+        top.addStretch(1)
+
+        recipe_label = QLabel("Recept:")
+        recipe_label.setProperty("role", "secondary")
+        top.addWidget(recipe_label)
+        self.cmb_recipe = QComboBox(); self._refresh_recipe_list()
+        self.cmb_recipe.setMinimumWidth(190)
+        self.cmb_recipe.currentTextChanged.connect(self.on_recipe_changed)
+        top.addWidget(self.cmb_recipe)
 
         self.security_status = QLabel(
             "ADMIN MODE" if self.security.is_admin_mode()
             else ("Ochrana receptov: ZAPNUTÁ" if self.security.has_password()
                   else "Ochrana receptov: VYPNUTÁ")
         )
+        self.security_status.setProperty("role", "secondary")
         if self.security.is_admin_mode():
             self.security_status.setStyleSheet("color: #e6a23c; font-weight: bold;")
         top.addWidget(self.security_status)
 
-        # prepínač režimu (ikonový text)
-        self.mode_btn = QPushButton("⚙ SETUP")
-        self.mode_btn.clicked.connect(self.toggle_mode)
-        top.addWidget(self.mode_btn)
+        root_layout.addWidget(self.top_bar)
 
-        root_layout.addLayout(top)
-
-        # ========== Recipe bar (pod titulkom) ==========
-        bar = QHBoxLayout(); bar.setSpacing(8)
-        bar.addWidget(QLabel("Recept:"))
-        self.cmb_recipe = QComboBox(); self._refresh_recipe_list()
-        self.cmb_recipe.currentTextChanged.connect(self.on_recipe_changed)
-        bar.addWidget(self.cmb_recipe)
+        # Recipe management is SETUP-only; the active recipe remains visible
+        # in the shared top bar in both modes.
+        self.recipe_actions_container = QFrame(root)
+        self.recipe_actions_container.setProperty("role", "panel")
+        bar = QHBoxLayout(self.recipe_actions_container)
+        bar.setContentsMargins(10, 6, 10, 6)
+        bar.setSpacing(8)
+        recipe_actions_title = QLabel("Správa receptu")
+        recipe_actions_title.setProperty("role", "panelHeader")
+        bar.addWidget(recipe_actions_title)
 
         self.btn_new = QPushButton("Nový")
         self.btn_ren = QPushButton("Premenovať")
@@ -174,12 +203,10 @@ class MainWindow(QMainWindow):
         self.btn_new.clicked.connect(self.on_recipe_new)
         self.btn_ren.clicked.connect(self.on_recipe_rename)
         self.btn_del.clicked.connect(self.on_recipe_delete)
+        self.btn_del.setProperty("role", "destructive")
+        bar.addStretch(1)
 
-        root_layout.addLayout(bar)
-
-        # deliaca čiara
-        line = QFrame(); line.setFrameShape(QFrame.HLine); line.setFrameShadow(QFrame.Sunken)
-        root_layout.addWidget(line)
+        root_layout.addWidget(self.recipe_actions_container)
 
         # ========== Stacked RUN/SETUP ==========
         self.stack = QStackedWidget()
@@ -196,34 +223,55 @@ class MainWindow(QMainWindow):
         run = QVBoxLayout(run_container); run.setSpacing(8)
         run_root.addWidget(run_container, 1)
 
-        # Status + metriky + štatistiky v jednom riadku
-        status_container = QWidget()
+        # Prominent operator result card (placed in the right RUN column).
+        status_container = QFrame()
+        status_container.setObjectName("runStatusCard")
+        status_container.setProperty("role", "card")
+        status_container.setProperty("status", "idle")
         status_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        status_row = QHBoxLayout(status_container); status_row.setSpacing(16)
+        status_row = QVBoxLayout(status_container)
+        status_row.setContentsMargins(14, 12, 14, 12)
+        status_row.setSpacing(3)
+        status_caption = QLabel("VÝSLEDOK KONTROLY")
+        status_caption.setProperty("role", "secondary")
+        status_row.addWidget(status_caption)
         self.lbl_status = QLabel("–")
-        sf = QFont(); sf.setPointSize(34); sf.setBold(True)
-        self.lbl_status.setFont(sf)
+        self.lbl_status.setProperty("role", "statusHero")
+        self.lbl_status.setProperty("status", "idle")
         self.lbl_status.setAlignment(Qt.AlignLeft)
-        status_row.addWidget(self.lbl_status, 0)
-
-        status_container.setMaximumHeight(status_container.sizeHint().height())
-        run.addWidget(status_container)
+        status_row.addWidget(self.lbl_status)
+        self._run_status_message = QLabel("Čaká na prvú kontrolu")
+        self._run_status_message.setProperty("role", "secondary")
+        self._run_status_message.setWordWrap(True)
+        status_row.addWidget(self._run_status_message)
+        self.run_status_card = status_container
 
         # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
-        actions_container = QWidget()
+        actions_container = QFrame()
+        actions_container.setProperty("role", "panel")
         actions_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        actions = QHBoxLayout(actions_container); actions.setSpacing(8)
+        actions = QHBoxLayout(actions_container)
+        actions.setContentsMargins(10, 6, 10, 6)
+        actions.setSpacing(8)
         self.btn_trigger = QPushButton("TRIGGER")  # berie posledný kontinuálny frame
+        self.btn_trigger.setProperty("role", "primary")
+        self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self.manual_trigger)
         actions.addWidget(self.btn_trigger)
 
-        self.btn_export = QPushButton("Export CSV (dnes)")
+        self.btn_export = QPushButton("Export CSV", actions_container)
         self.btn_export.clicked.connect(self.export_csv_today)
-        actions.addWidget(self.btn_export)
 
-        self.btn_wizard_quick = QPushButton("Sprievodca Golden")
-        self.btn_wizard_quick.clicked.connect(self.open_wizard)
-        actions.addWidget(self.btn_wizard_quick)
+        self.chk_show_roi = QCheckBox("Zobraziť ROI", actions_container)
+        self.chk_show_roi.setToolTip("Zobraziť kontrolovanú oblasť vybraného nástroja")
+        self.chk_show_roi.toggled.connect(self._on_run_overlay_controls_changed)
+        actions.addWidget(self.chk_show_roi)
+
+        self.cmb_roi_tool = QComboBox(actions_container)
+        self.cmb_roi_tool.setMinimumWidth(190)
+        self.cmb_roi_tool.setToolTip("Vybrať nástroj, ktorého ROI sa zobrazí")
+        self.cmb_roi_tool.currentIndexChanged.connect(self._on_run_overlay_controls_changed)
+        actions.addWidget(self.cmb_roi_tool)
 
         actions.addStretch(1)
         # Live toggle
@@ -239,84 +287,125 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self._refresh_manual_light)
 
         # Heatmap toggle
-        self.chk_heatmap = QCheckBox("Heatmap")
+        self.chk_heatmap = QCheckBox("Mapa rozdielov", actions_container)
         self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
-        actions.addWidget(self.chk_heatmap)
+        self.chk_heatmap.hide()
 
-        self.lbl_tool_selector = QLabel("Tool:")
-        actions.addWidget(self.lbl_tool_selector)
-        self.cmb_tool = QComboBox()
+        self.lbl_tool_selector = QLabel("Detail nástroja:", actions_container)
+        self.lbl_tool_selector.setProperty("role", "secondary")
+        self.lbl_tool_selector.hide()
+        self.cmb_tool = QComboBox(actions_container)
         self.cmb_tool.setEnabled(False)
         self.cmb_tool.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
-        actions.addWidget(self.cmb_tool)
+        self.cmb_tool.hide()
 
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
 
-        view_strip_container = QWidget()
+        view_strip_container = QFrame()
+        view_strip_container.setProperty("role", "panel")
+        view_strip_container.setMinimumWidth(126)
+        view_strip_container.setMaximumWidth(146)
         view_strip_layout = QVBoxLayout(view_strip_container)
-        view_strip_layout.setContentsMargins(0, 0, 0, 0)
-        view_strip_layout.setSpacing(4)
-        view_strip_label = QLabel("Pohľady")
-        vf = QFont(); vf.setBold(True)
-        view_strip_label.setFont(vf)
+        view_strip_layout.setContentsMargins(10, 7, 10, 7)
+        view_strip_layout.setSpacing(6)
+        view_strip_label = QLabel("POHĽADY")
+        view_strip_label.setProperty("role", "secondary")
         view_strip_layout.addWidget(view_strip_label)
-        self.view_strip = ViewStrip(on_view_selected=self._on_view_selected_view)
-        view_strip_layout.addWidget(self.view_strip)
-        run.addWidget(view_strip_container)
+        self.view_strip = ViewStrip(
+            on_view_selected=self._on_view_selected_view,
+            orientation=Qt.Vertical,
+        )
+        self.view_strip_scroll = QScrollArea()
+        self.view_strip_scroll.setWidgetResizable(True)
+        self.view_strip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.view_strip_scroll.setFrameShape(QFrame.NoFrame)
+        self.view_strip_scroll.setWidget(self.view_strip)
+        view_strip_layout.addWidget(self.view_strip_scroll, 1)
+        self.view_strip_container = view_strip_container
         self.strip = None
 
         # Live view + pravý sidebar so štatistikami
         preview_container = QWidget()
         preview_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        preview_row = QHBoxLayout(preview_container); preview_row.setSpacing(12)
+        preview_row = QHBoxLayout(preview_container)
+        preview_row.setContentsMargins(0, 0, 0, 0)
+        preview_row.setSpacing(10)
+
+        preview_row.addWidget(self.view_strip_container, 0)
 
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
+        self.live_view.setObjectName("liveInspectionView")
+        self.live_view.setProperty("status", "idle")
         self.live_view.setAlignment(Qt.AlignCenter)
         self.live_view.setMinimumSize(640, 360)
         self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self._live_view_base_style = "border-radius: 6px; background:#181818;"
-        self._set_live_view_border()
         self.live_view.setContentsMargins(0,0,0,0)
         preview_row.addWidget(self.live_view, 4)
 
         # Pravý panel (štatistiky + posledné metriky)
-        self.side_panel = QWidget(); self.side_panel.setObjectName("sidePanel")
-        self.side_panel.setMaximumWidth(420)
+        self.side_panel = QFrame(); self.side_panel.setObjectName("sidePanel")
+        self.side_panel.setProperty("role", "panel")
+        self.side_panel.setMinimumWidth(300)
+        self.side_panel.setMaximumWidth(380)
         self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        side = QVBoxLayout(self.side_panel); side.setSpacing(8); side.setContentsMargins(10,10,10,10)
-        self.side_panel.setStyleSheet("#sidePanel{border:1px solid #333; border-radius:6px; background:#111;} QLabel{color:#ddd}")
+        side = QVBoxLayout(self.side_panel)
+        side.setSpacing(8)
+        side.setContentsMargins(10,10,10,10)
+
+        side.addWidget(self.run_status_card)
 
         # Nadpis a recept
-        t = QLabel("Štatistiky & Metriky"); tf = QFont(); tf.setPointSize(12); tf.setBold(True); t.setFont(tf)
+        t = QLabel("PREVÁDZKOVÝ PREHĽAD")
+        t.setProperty("role", "secondary")
         side.addWidget(t)
         self.sb_recipe = QLabel("Recept: –")
-        side.addWidget(self.sb_recipe)
+        self.sb_recipe.hide()
         self.sb_pose = QLabel("Pose alignment: –")
-        side.addWidget(self.sb_pose)
-        self.sb_recipe_duration = QLabel("Čas receptu: –")
-        side.addWidget(self.sb_recipe_duration)
+        self.sb_pose.hide()
+        cycle_card = QFrame()
+        cycle_card.setProperty("role", "card")
+        cycle_layout = QVBoxLayout(cycle_card)
+        cycle_layout.setContentsMargins(10, 8, 10, 8)
+        cycle_layout.setSpacing(2)
+        cycle_caption = QLabel("ČAS CYKLU")
+        cycle_caption.setProperty("role", "secondary")
+        cycle_layout.addWidget(cycle_caption)
+        self.sb_recipe_duration = QLabel("–")
+        self.sb_recipe_duration.setProperty("role", "metricValue")
+        cycle_layout.addWidget(self.sb_recipe_duration)
+        side.addWidget(cycle_card)
 
         # Denné štatistiky
-        side.addWidget(QLabel("— Dnes —"))
+        today_label = QLabel("DNES")
+        today_label.setProperty("role", "secondary")
+        side.addWidget(today_label)
         self.sb_total = QLabel("Celkom: –")
         self.sb_ok    = QLabel("OK: –")
         self.sb_nok   = QLabel("NOK: –")
-        self.sb_yield = QLabel("Yield: –")
+        self.sb_yield = QLabel("Úspešnosť: –")
         self.sb_total_test_time = QLabel("Čas testov (dnes): –")
-        for w in (
-            self.sb_total,
-            self.sb_ok,
-            self.sb_nok,
-            self.sb_yield,
-            self.sb_total_test_time,
-        ):
-            side.addWidget(w)
+        self.sb_total_test_time.hide()
+        self.sb_ok.setProperty("status", "ok")
+        self.sb_nok.setProperty("status", "nok")
+        daily_card = QFrame()
+        daily_card.setProperty("role", "card")
+        daily_layout = QGridLayout(daily_card)
+        daily_layout.setContentsMargins(10, 8, 10, 8)
+        daily_layout.setHorizontalSpacing(12)
+        daily_layout.setVerticalSpacing(5)
+        daily_layout.addWidget(self.sb_total, 0, 0)
+        daily_layout.addWidget(self.sb_yield, 0, 1)
+        daily_layout.addWidget(self.sb_ok, 1, 0)
+        daily_layout.addWidget(self.sb_nok, 1, 1)
+        side.addWidget(daily_card)
 
         # Posledné meranie (TRIGGER)
-        side.addWidget(QLabel("— Posledné meranie —"))
+        last_measurement = QLabel("POSLEDNÁ KONTROLA")
+        last_measurement.setProperty("role", "secondary")
+        side.addWidget(last_measurement)
         self.metrics_scroll = QScrollArea()
         self.metrics_scroll.setWidgetResizable(True)
         self.metrics_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -334,15 +423,15 @@ class MainWindow(QMainWindow):
         self._metrics_widgets: list[QLabel] = []
         self._metric_name_labels: list[tuple[QLabel, str]] = []
         self._metrics_placeholder = QLabel("Žiadne dáta")
-        self._metrics_placeholder.setStyleSheet("color:#777;")
+        self._metrics_placeholder.setProperty("role", "secondary")
         self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
         self.metrics_scroll.setWidget(self.metrics_container)
         side.addWidget(self.metrics_scroll, 1)
 
-        side.addStretch(1)
         preview_row.addWidget(self.side_panel, 1)
-        preview_row.setStretch(0, 4)
-        preview_row.setStretch(1, 1)
+        preview_row.setStretch(0, 0)
+        preview_row.setStretch(1, 4)
+        preview_row.setStretch(2, 1)
 
         run.addWidget(preview_container, 1)
 
@@ -359,44 +448,18 @@ class MainWindow(QMainWindow):
 
         self.btn_shutdown_pc = QPushButton("⏻ Vypnúť PC")
         self.btn_shutdown_pc.setToolTip("Bezpečne vypnúť aplikáciu aj počítač")
-        self.btn_shutdown_pc.setStyleSheet(
-            """
-            QPushButton {
-                background: #c62828;
-                color: #ffffff;
-                border: 2px solid #8e0000;
-                border-radius: 22px;
-                padding: 8px 16px;
-                font-weight: 700;
-            }
-            QPushButton:hover { background: #d32f2f; }
-            QPushButton:pressed { background: #8e0000; }
-            """
-        )
+        self.btn_shutdown_pc.setProperty("role", "destructive")
         self.btn_shutdown_pc.clicked.connect(self._confirm_shutdown_pc)
         power_actions_row.addWidget(self.btn_shutdown_pc)
 
         self.btn_reboot_pc = QPushButton("↻ Reštart PC")
         self.btn_reboot_pc.setToolTip("Bezpečne reštartovať aplikáciu aj počítač")
-        self.btn_reboot_pc.setStyleSheet(
-            """
-            QPushButton {
-                background: #d35400;
-                color: #ffffff;
-                border: 2px solid #9c3e00;
-                border-radius: 22px;
-                padding: 8px 16px;
-                font-weight: 700;
-            }
-            QPushButton:hover { background: #e67e22; }
-            QPushButton:pressed { background: #9c3e00; }
-            """
-        )
+        self.btn_reboot_pc.setProperty("role", "warning")
         self.btn_reboot_pc.clicked.connect(self._confirm_reboot_pc)
         power_actions_row.addWidget(self.btn_reboot_pc)
 
         power_actions_row.addStretch(1)
-        run_root.addWidget(power_actions_container, 0, Qt.AlignLeft | Qt.AlignBottom)
+        self.power_actions_container = power_actions_container
         # spúšťa sa až pri Live zapnuté v _toggle_live()
 
         # inicializuj pohľady a pravý panel
@@ -410,8 +473,11 @@ class MainWindow(QMainWindow):
 
         row1 = QHBoxLayout();
         self.btn_wizard = QPushButton("Sprievodca Golden", self)
+        self.btn_wizard.setProperty("role", "primary")
         self.btn_wizard.clicked.connect(self.open_wizard)
         row1.addWidget(self.btn_wizard)
+
+        row1.addWidget(self.btn_export)
 
         row1.addSpacing(12)
         row1.addWidget(QLabel("Capture Mode (global):", self))
@@ -444,10 +510,13 @@ class MainWindow(QMainWindow):
 
         row1.addStretch(1)
         s.addLayout(row1)
+        s.addStretch(1)
+        s.addWidget(self.power_actions_container, 0, Qt.AlignLeft | Qt.AlignBottom)
 
 
         # default RUN zobrazenie
         self.stack.setCurrentWidget(self.panel_run)
+        self._sync_mode_chrome()
 
         self._sync_capture_mode_ui()
         self._apply_capture_mode(ensure_runtime_ready=True)
@@ -469,6 +538,20 @@ class MainWindow(QMainWindow):
         self._refresh_metric_name_elision()
 
     # ---------- UI akcie ----------
+    def _request_mode(self, target: str) -> None:
+        target_mode = str(target or "").upper()
+        current_mode = "RUN" if self.stack.currentWidget() is self.panel_run else "SETUP"
+        if target_mode in {"RUN", "SETUP"} and target_mode != current_mode:
+            self.toggle_mode()
+        else:
+            self._sync_mode_chrome()
+
+    def _sync_mode_chrome(self) -> None:
+        is_run = self.stack.currentWidget() is self.panel_run
+        self.btn_mode_run.setChecked(is_run)
+        self.mode_btn.setChecked(not is_run)
+        self.recipe_actions_container.setVisible(not is_run)
+
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
             self._logger.info("[PAGE_SWITCH] from=run to=setup capture_mode=%s", self.capture_mode)
@@ -478,14 +561,12 @@ class MainWindow(QMainWindow):
             self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
-            self.mode_btn.setText("▶ RUN")
         else:
             self._logger.info("[PAGE_SWITCH] from=setup to=run capture_mode=%s", self.capture_mode)
             self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_run)
             self.mode = "RUN"
             self._reset_external_sequence_state()
-            self.mode_btn.setText("⚙ SETUP")
             self._refresh_manual_light()
             if self.capture_mode == "trigger":
                 self._enter_run_trigger_session()
@@ -499,27 +580,33 @@ class MainWindow(QMainWindow):
                     self.cam.start(caller="page_switch_run_master")
             if not self.live_enabled:
                 self._apply_run_camera_profile()
+        self._sync_mode_chrome()
 
-    def _set_live_view_border(self, color: str | None = None) -> None:
-        border_color = color or "#444"
-        self.live_view.setStyleSheet(
-            f"border: 2px solid {border_color}; {self._live_view_base_style}"
-        )
+    def _set_live_view_border(self, status: str | None = None) -> None:
+        status_key = str(status or "idle").lower()
+        if status_key not in {"ok", "warn", "nok"}:
+            status_key = "idle"
+        self.live_view.setProperty("status", status_key)
+        refresh_style(self.live_view)
 
     def _apply_run_status_style(self, status: str | None) -> None:
-        color_map = {"ok": "#33dd66", "warn": "#e67e22", "nok": "#ff3366"}
         status_key = str(status or "").lower()
-        color = color_map.get(status_key, "#33dd66")
-
-        font = self.lbl_status.font()
-        font.setPointSize(34)
-        font.setBold(True)
-        self.lbl_status.setFont(font)
+        if status_key not in {"ok", "warn", "nok"}:
+            status_key = "idle"
 
         self.lbl_status.setText(str(status or "–").upper())
-        self.lbl_status.setStyleSheet(f"color: {color};")
-        border_color = color if status_key in color_map else None
-        self._set_live_view_border(border_color)
+        self.lbl_status.setProperty("status", status_key)
+        self.run_status_card.setProperty("status", status_key)
+        messages = {
+            "ok": "Kontrola úspešná",
+            "warn": "Kontrola vyžaduje overenie",
+            "nok": "Vyžaduje pozornosť operátora",
+            "idle": "Čaká na prvú kontrolu",
+        }
+        self._run_status_message.setText(messages[status_key])
+        refresh_style(self.lbl_status)
+        refresh_style(self.run_status_card)
+        self._set_live_view_border(status_key)
 
     def _manual_trigger_capture_result(self) -> str:
         status = str(getattr(self.cam, "get_last_trigger_capture_status", lambda: "normal")() or "normal").lower()
@@ -1206,7 +1293,7 @@ class MainWindow(QMainWindow):
             self._reset_manual_trigger_progress(recipe_name)
 
         self._last_total_cycle_time_ms = None
-        self.sb_recipe_duration.setText("Čas receptu: –")
+        self.sb_recipe_duration.setText("–")
         return {
             "gst_starts_before": gst_starts_before,
             "recipe_name": recipe_name,
@@ -1293,7 +1380,9 @@ class MainWindow(QMainWindow):
             self._update_manual_trigger_feedback()
             if view_frame is None:
                 self._update_manual_trigger_feedback(force_fail=True)
-                self.lbl_status.setText("Žiadny snímok z kamery.")
+                self._apply_run_status_style("nok")
+                self.lbl_status.setText("CHYBA SNÍMANIA")
+                self._run_status_message.setText("Žiadny snímok z kamery")
                 self._reset_manual_trigger_progress(recipe_name)
                 return {"should_break": True}
             view_frame_u8 = view_frame.copy()
@@ -1317,6 +1406,7 @@ class MainWindow(QMainWindow):
             combined_metrics = {}
             policy_applied = None
             result = None
+            self._run_overlay_cache.pop(self._view_storage_key(view_id), None)
             last_preview_frame = view_frame_u8.copy()
         else:
             view_recipe = RecipeV2(
@@ -1347,7 +1437,8 @@ class MainWindow(QMainWindow):
             if context_frame is None:
                 context_frame = getattr(result.context, "frame", None)
             if isinstance(context_frame, np.ndarray):
-                context_frame = apply_view_image_transform(context_frame, view, stage="preview")
+                self._cache_run_overlays(view_id, context_frame, view, result)
+                context_frame = self._render_run_overlay_frame(view_id)
             last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
 
         per_view_statuses[view_id] = status
@@ -1444,6 +1535,17 @@ class MainWindow(QMainWindow):
             trigger_state["ignored_for_aggregation"],
         )
         self._apply_run_status_style(aggregated_status)
+        relevant_reports: list[Mapping[str, Any]] = []
+        for candidate_view_id, candidate_status in per_view_statuses.items():
+            if candidate_status != aggregated_status:
+                continue
+            state = self._view_states.get(candidate_view_id, {})
+            reports = state.get("reports", []) if isinstance(state, Mapping) else []
+            if isinstance(reports, Sequence):
+                relevant_reports.extend(
+                    entry for entry in reports if isinstance(entry, Mapping)
+                )
+        self._update_operator_status_message(aggregated_status, relevant_reports)
         self._signal_outputs(aggregated_status)
 
         if trigger_state["last_preview_frame"] is not None:
@@ -1810,6 +1912,134 @@ class MainWindow(QMainWindow):
             frame = self._last_trigger_frames.get("")
         return frame
 
+    def _cache_run_overlays(
+        self,
+        view_id: str,
+        frame: np.ndarray,
+        view: Any,
+        result: Any,
+    ) -> None:
+        palette = overlay_utils.default_palette()
+        roi_items_by_tool: dict[str, list[overlay_utils.OverlayItem]] = {}
+        error_items: list[overlay_utils.OverlayItem] = []
+
+        for index, report in enumerate(getattr(result, "per_tool", []) or []):
+            tool = getattr(report, "tool", None)
+            tool_id = str(getattr(report, "tool_id", "") or "")
+            if tool is None or not tool_id:
+                continue
+            color = palette[index % len(palette)]
+            tool_name = str(getattr(tool, "name", "") or getattr(tool, "type", "Nástroj"))
+            tool_roi_items = overlay_utils.tool_overlay_items(
+                tool,
+                color=color,
+                label=tool_name,
+            )
+            roi_items = [item for item in tool_roi_items if item.z_index == 20]
+            if roi_items:
+                roi_items_by_tool[tool_id] = roi_items
+
+            if str(getattr(report, "status", "") or "").lower() != "nok":
+                continue
+            tool_error_added = False
+            for display_item in getattr(report, "overlay_items", []) or []:
+                if getattr(display_item, "z_index", 0) >= 30:
+                    error_items.append(display_item)
+                    tool_error_added = True
+            metrics = getattr(report, "metrics", {})
+            metric_values = metrics if isinstance(metrics, Mapping) else {}
+            blobs = metric_values.get("blobs", [])
+            if not tool_error_added and isinstance(blobs, Sequence):
+                for blob_index, blob in enumerate(blobs, start=1):
+                    if not isinstance(blob, Mapping):
+                        continue
+                    try:
+                        rect = (
+                            int(blob.get("image_x", blob.get("x", 0))),
+                            int(blob.get("image_y", blob.get("y", 0))),
+                            int(blob.get("width", 0)),
+                            int(blob.get("height", 0)),
+                        )
+                    except (TypeError, ValueError):
+                        continue
+                    if rect[2] <= 0 or rect[3] <= 0:
+                        continue
+                    error_items.append(
+                        overlay_utils.OverlayItem.from_rect(
+                            rect,
+                            color=(68, 68, 239),
+                            thickness=4,
+                            alpha=255,
+                            fill_alpha=45,
+                            z_index=50,
+                            label=f"{tool_name} · chyba {blob_index}",
+                        )
+                    )
+                    tool_error_added = True
+
+            if not tool_error_added:
+                failed_roi_items = overlay_utils.tool_overlay_items(
+                    tool,
+                    color=(68, 68, 239),
+                    label=f"NOK · {tool_name}",
+                )
+                for item in failed_roi_items:
+                    if item.z_index == 20:
+                        item.fill_alpha = 45
+                        item.z_index = 45
+                        error_items.append(item)
+
+        self._run_overlay_cache[self._view_storage_key(view_id)] = {
+            "frame": frame.copy(),
+            "view": view,
+            "roi_items": roi_items_by_tool,
+            "error_items": error_items,
+        }
+
+    def _render_run_overlay_frame(self, view_id: str | None) -> np.ndarray | None:
+        entry = self._run_overlay_cache.get(self._view_storage_key(view_id))
+        if not isinstance(entry, Mapping):
+            return None
+        frame = entry.get("frame")
+        if not isinstance(frame, np.ndarray):
+            return None
+
+        items = list(entry.get("error_items", []) or [])
+        if self.chk_show_roi.isChecked():
+            roi_items = entry.get("roi_items", {})
+            if isinstance(roi_items, Mapping):
+                selected_tool_id = self.cmb_roi_tool.currentData()
+                if selected_tool_id:
+                    items.extend(roi_items.get(str(selected_tool_id), []) or [])
+                else:
+                    for tool_items in roi_items.values():
+                        items.extend(tool_items or [])
+
+        rendered = frame.copy()
+        if items:
+            overlay_image = overlay_utils.render_overlay(rendered.shape[:2], items)
+            if overlay_image is not None:
+                rendered = overlay_utils.apply_overlay(rendered, overlay_image)
+        return apply_view_image_transform(
+            rendered,
+            entry.get("view"),
+            stage="preview",
+        )
+
+    def _on_run_overlay_controls_changed(self, *_args) -> None:
+        self.cmb_roi_tool.setEnabled(
+            self.chk_show_roi.isChecked() and self.cmb_roi_tool.count() > 0
+        )
+        view_id = self._active_view_id
+        rendered = self._render_run_overlay_frame(view_id)
+        if rendered is None:
+            return
+        self._set_last_view_frame(view_id, rendered)
+        self._last_trigger_frame = self._clone_frame(rendered)
+        self._last_trigger_view_id = view_id
+        if not self.live_enabled:
+            self._show_gray_or_bgr(self.live_view, rendered)
+
     def _clone_frame(self, frame: Any):
         if frame is None:
             return None
@@ -1911,7 +2141,15 @@ class MainWindow(QMainWindow):
             self.sb_total.setText(f"Celkom: {st.get('total','–')}")
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
-            self.sb_yield.setText(f"Yield: {st.get('yield','–')}%")
+            yield_raw = st.get("yield")
+            try:
+                yield_percent = float(yield_raw)
+                if yield_percent <= 1.0:
+                    yield_percent *= 100.0
+                yield_text = f"{yield_percent:.1f} %"
+            except (TypeError, ValueError):
+                yield_text = "–"
+            self.sb_yield.setText(f"Úspešnosť: {yield_text}")
             total_cycle_time = st.get("total_cycle_time_ms")
             self.sb_total_test_time.setText(
                 f"Čas testov (dnes): {self._format_total_test_duration(total_cycle_time)}"
@@ -1936,7 +2174,7 @@ class MainWindow(QMainWindow):
                 recipe_cycle_ms = self._last_total_cycle_time_ms
 
             self.sb_recipe_duration.setText(
-                f"Čas receptu: {self._format_total_test_duration(recipe_cycle_ms)}"
+                self._format_total_test_duration(recipe_cycle_ms)
             )
 
             if per_tool is not None:
@@ -1960,10 +2198,43 @@ class MainWindow(QMainWindow):
             if per_tool is not None:
                 state["combined_metrics"] = self._merge_pipeline_metrics(per_tool)
 
+            if status is not None:
+                self._update_operator_status_message(status, per_tool or state.get("reports", []))
+
             if active_view == self._active_view_id:
                 self._update_metrics_panel()
         except Exception:
             pass
+
+    def _update_operator_status_message(
+        self,
+        status: str,
+        reports: Sequence[Mapping[str, Any]],
+    ) -> None:
+        normalized = str(status or "").lower()
+        if normalized == "ok":
+            self._run_status_message.setText("Kontrola úspešná")
+            return
+        failed = next(
+            (entry for entry in reports if str(entry.get("status") or "").lower() == "nok"),
+            None,
+        )
+        if failed is None:
+            self._run_status_message.setText(
+                "Kontrola vyžaduje overenie"
+                if normalized == "warn" else "Vyžaduje pozornosť operátora"
+            )
+            return
+        name = str(failed.get("name") or "Nástroj")
+        metrics = failed.get("metrics")
+        metric_values = metrics if isinstance(metrics, Mapping) else {}
+        if bool(metric_values.get("residual_detected")):
+            message = f"Nájdený zvyšok · {name}"
+        elif bool(metric_values.get("inspection_fault")):
+            message = f"Kontrola nie je pripravená · {name}"
+        else:
+            message = f"NOK · {name}"
+        self._run_status_message.setText(message)
 
     def _set_metrics_rows(self, rows: Sequence[tuple[str, str]]):
         with suppress(Exception):
@@ -1992,12 +2263,17 @@ class MainWindow(QMainWindow):
             for row_index, (label_text, value_text) in enumerate(rows):
                 full_label = str(label_text)
                 name_label = QLabel(full_label)
+                name_label.setProperty("role", "resultName")
                 name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 name_label.setWordWrap(False)
                 name_label.setToolTip(full_label)
                 name_label.setMaximumWidth(240)
                 name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 value_label = QLabel(value_text if value_text else "-")
+                value_label.setProperty("role", "resultValue")
+                normalized_value = str(value_text or "").strip().lower()
+                if normalized_value in {"ok", "warn", "nok"}:
+                    value_label.setProperty("status", normalized_value)
                 value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 value_label.setWordWrap(False)
                 value_label.setMinimumWidth(110)
@@ -2132,20 +2408,10 @@ class MainWindow(QMainWindow):
         processing_time_ms: float | None,
     ) -> list[tuple[str, str]]:
         rows: list[tuple[str, str]] = []
-        if status:
-            rows.append(("Celkový status", str(status).upper()))
-        if cycle_time_ms is not None:
-            rows.append(("Cycle Time [ms]", self._format_metric_value(cycle_time_ms)))
-        if capture_time_ms is not None:
-            rows.append(("Capture Time [ms]", self._format_metric_value(capture_time_ms)))
-        if processing_time_ms is not None:
-            rows.append(("Processing Time [ms]", self._format_metric_value(processing_time_ms)))
-        if total_cycle_time_ms is not None:
-            rows.append(("Total Cycle Time [ms]", self._format_metric_value(total_cycle_time_ms)))
         for report in reports:
             name = str(report.get("name") or report.get("id") or "Tool")
-            status = str(report.get("status") or "").upper() or "—"
-            rows.append((name, status))
+            tool_status = str(report.get("status") or "").upper() or "—"
+            rows.append((name, tool_status))
         return rows or [("Informácia", "Žiadne dáta")]
 
     def _build_tool_metric_rows(
@@ -2403,6 +2669,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_views(self):
         self._golden_cache.clear()
+        self._run_overlay_cache.clear()
         try:
             recipe_name = self.current_recipe_name()
         except Exception:
@@ -2535,6 +2802,7 @@ class MainWindow(QMainWindow):
         )
 
         entries: list[dict[str, Any]] = []
+        roi_entries: list[dict[str, Any]] = []
         used_ids: set[str] = set()
         for position, (tool, _) in enumerate(ordered_tools):
             tool_id, display_name, tool_order = compute_tool_identity(
@@ -2552,7 +2820,23 @@ class MainWindow(QMainWindow):
                     "index": position,
                 }
             )
+            if tool.roi.rect() is not None:
+                roi_entries.append(entries[-1])
         self._tool_selector_items = entries
+
+        self.cmb_roi_tool.blockSignals(True)
+        self.cmb_roi_tool.clear()
+        if roi_entries:
+            self.cmb_roi_tool.addItem("Všetky nástroje", None)
+            for entry in roi_entries:
+                self.cmb_roi_tool.addItem(entry["name"], entry["id"])
+        else:
+            self.cmb_roi_tool.addItem("Žiadne ROI", None)
+            self.chk_show_roi.setChecked(False)
+        self.cmb_roi_tool.setEnabled(bool(roi_entries) and self.chk_show_roi.isChecked())
+        self.chk_show_roi.setEnabled(bool(roi_entries))
+        self.cmb_roi_tool.blockSignals(False)
+        self._on_run_overlay_controls_changed()
 
         self.cmb_tool.blockSignals(True)
         self.cmb_tool.clear()
@@ -2567,8 +2851,7 @@ class MainWindow(QMainWindow):
                 self.cmb_tool.addItem(label, entry)
             self.cmb_tool.setEnabled(True)
             self.lbl_tool_selector.setEnabled(True)
-            default_index = 1 if self.cmb_tool.count() > 1 else 0
-            self.cmb_tool.setCurrentIndex(default_index)
+            self.cmb_tool.setCurrentIndex(0)
         else:
             self.cmb_tool.addItem("—", None)
             self.cmb_tool.setCurrentIndex(0)
