@@ -175,6 +175,7 @@ class RecipeService:
         settle_ms: int | None = None,
         flash_delay_ms: int | None = None,
         flash_pulse_ms: int | None = None,
+        pico_profile: str | None = None,
         trigger_mode: str | None = None,
         external_trigger_mode: str | None | object = _UNSET,
         external_source: str | None | object = _UNSET,
@@ -222,6 +223,7 @@ class RecipeService:
         source_settle: Optional[int] = None
         source_flash_delay_ms: int = 0
         source_flash_pulse_ms: int = 200
+        source_pico_profile: str | None = None
         source_trigger_mode: str | None = None
         source_external_trigger_mode: str | None = None
         source_external_source: str | None = None
@@ -247,6 +249,7 @@ class RecipeService:
                 source_settle = source_view.settle_ms
                 source_flash_delay_ms = int(getattr(source_view, "flash_delay_ms", 0) or 0)
                 source_flash_pulse_ms = int(getattr(source_view, "flash_pulse_ms", 200) or 200)
+                source_pico_profile = getattr(source_view, "pico_profile", None)
                 source_trigger_mode = source_view.trigger_mode
                 source_external_trigger_mode = getattr(
                     source_view, "external_trigger_mode", None
@@ -286,6 +289,7 @@ class RecipeService:
         target_flash_pulse = (
             int(flash_pulse_ms) if flash_pulse_ms is not None else int(source_flash_pulse_ms)
         )
+        target_pico_profile = pico_profile or source_pico_profile
         target_trigger_mode = self._normalize_trigger_mode(trigger_mode or source_trigger_mode)
         target_external_trigger_mode = (
             external_trigger_mode
@@ -339,6 +343,7 @@ class RecipeService:
             settle_ms=target_settle,
             flash_delay_ms=max(0, int(target_flash_delay)),
             flash_pulse_ms=max(1, int(target_flash_pulse)),
+            pico_profile=target_pico_profile,
             trigger_mode=target_trigger_mode,
             external_trigger_mode=target_external_trigger_mode,
             external_source=target_external_source,
@@ -386,6 +391,7 @@ class RecipeService:
         settle_ms: int | None,
         flash_delay_ms: int | None = None,
         flash_pulse_ms: int | None = None,
+        pico_profile: str | None = None,
         trigger_mode: str,
         external_trigger_mode: str | None = None,
         external_source: str | None = None,
@@ -427,6 +433,7 @@ class RecipeService:
             settle_ms=settle_ms,
             flash_delay_ms=max(0, int(flash_delay_ms if flash_delay_ms is not None else getattr(view, "flash_delay_ms", 0))),
             flash_pulse_ms=max(1, int(flash_pulse_ms if flash_pulse_ms is not None else getattr(view, "flash_pulse_ms", 200))),
+            pico_profile=pico_profile or getattr(view, "pico_profile", None),
             trigger_mode=normalized_mode,
             external_trigger_mode=external_trigger_mode,
             external_source=external_source,
@@ -586,7 +593,13 @@ class RecipeService:
         recipe = self._load_published_recipe_config(name) if published else self._load_recipe_config(name)
         mapping: dict[str, dict[str, int]] = {}
         for view in recipe.views:
-            mapping[view.id] = {
+            is_sequential = (
+                str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
+                and str(getattr(view, "external_trigger_mode", "") or "").lower() == "sequential"
+            )
+            profile = str(getattr(view, "pico_profile", "V1") or "V1").upper()
+            target = profile if is_sequential and profile in {"V1", "V2"} else view.id
+            mapping[target] = {
                 "delay_ms": max(0, int(getattr(view, "flash_delay_ms", 0) or 0)),
                 "pulse_ms": max(1, int(getattr(view, "flash_pulse_ms", 200) or 200)),
             }

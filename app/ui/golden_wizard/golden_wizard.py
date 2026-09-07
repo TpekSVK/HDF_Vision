@@ -3018,6 +3018,7 @@ class GoldenWizard(QDialog):
             flash_pulse_ms=int(getattr(source_view, "flash_pulse_ms", 200) or 200)
             if source_view
             else 200,
+            pico_profile=getattr(source_view, "pico_profile", None) if source_view else None,
             pico_config_snapshot=self._read_pico_config_snapshot(),
             trigger_mode=getattr(source_view, "trigger_mode", "timed") if source_view else "timed",
             external_trigger_mode=getattr(source_view, "external_trigger_mode", None)
@@ -3077,6 +3078,7 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 flash_delay_ms=data.get("flash_delay_ms"),
                 flash_pulse_ms=data.get("flash_pulse_ms"),
+                pico_profile=data.get("pico_profile"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
                 external_source=data.get("external_source"),
@@ -3117,6 +3119,7 @@ class GoldenWizard(QDialog):
             settle_ms=view.settle_ms,
             flash_delay_ms=int(getattr(view, "flash_delay_ms", 0) or 0),
             flash_pulse_ms=int(getattr(view, "flash_pulse_ms", 200) or 200),
+            pico_profile=getattr(view, "pico_profile", None),
             pico_config_snapshot=self._read_pico_config_snapshot(),
             trigger_mode=getattr(view, "trigger_mode", "timed"),
             external_trigger_mode=getattr(view, "external_trigger_mode", None),
@@ -3157,6 +3160,7 @@ class GoldenWizard(QDialog):
                 settle_ms=data.get("settle_ms"),
                 flash_delay_ms=data.get("flash_delay_ms"),
                 flash_pulse_ms=data.get("flash_pulse_ms"),
+                pico_profile=data.get("pico_profile"),
                 trigger_mode=data.get("trigger_mode"),
                 external_trigger_mode=data.get("external_trigger_mode"),
                 external_source=data.get("external_source"),

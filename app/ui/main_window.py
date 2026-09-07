@@ -773,9 +773,19 @@ class MainWindow(QMainWindow):
         is_pico_request = source == "pico"
         view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
         if not is_pico_request:
-            fired = self.pico.fire(str(view_id))
+            is_sequential = (
+                str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
+                and str(getattr(view, "external_trigger_mode", "") or "").lower() == "sequential"
+            )
+            pico_target = getattr(view, "pico_profile", None) if is_sequential else view_id
+            fired = self.pico.fire(str(pico_target or view_id))
             if not fired:
-                self._logger.warning("[PICO] fire failed view=%s error=%s", view_id, self.pico.last_error)
+                self._logger.warning(
+                    "[PICO] fire failed view=%s profile=%s error=%s",
+                    view_id,
+                    pico_target,
+                    self.pico.last_error,
+                )
         wait_ms = flash_delay_ms + settle_ms
         if wait_ms > 0:
             time.sleep(wait_ms / 1000.0)
