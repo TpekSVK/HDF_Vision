@@ -2292,7 +2292,10 @@ class LocatorROIEditor(ROIEditor):
             button.hide()
         self._mask_controls = QWidget(self)
         self._mask_controls.setStyleSheet(CANVAS_TOOLBAR_STYLE)
-        mask_row = QHBoxLayout(self._mask_controls)
+        mask_layout = QVBoxLayout(self._mask_controls)
+        mask_layout.setContentsMargins(0, 0, 0, 0)
+        mask_layout.setSpacing(4)
+        mask_row = QHBoxLayout()
         mask_row.setContentsMargins(0, 0, 0, 0)
         mask_row.setSpacing(4)
         mask_row.addWidget(QLabel("Režim:", self._mask_controls))
@@ -2335,6 +2338,50 @@ class LocatorROIEditor(ROIEditor):
             mask_row.addWidget(button)
             self._mask_tool_buttons.append(button)
         mask_row.addStretch(1)
+        mask_layout.addLayout(mask_row)
+
+        settings_row = QHBoxLayout()
+        settings_row.setContentsMargins(0, 0, 0, 0)
+        settings_row.setSpacing(4)
+        settings_row.addStretch(1)
+        settings_row.addWidget(QLabel("Veľkosť:", self._mask_controls))
+        self._mask_brush_size = QSpinBox(self._mask_controls)
+        self._mask_brush_size.setObjectName("canvasCompactSpin")
+        self._mask_brush_size.setRange(1, 200)
+        self._mask_brush_size.setValue(25)
+        self._mask_brush_size.setSuffix(" px")
+        self._mask_brush_size.setMaximumWidth(76)
+        self._mask_brush_size.valueChanged.connect(self._view.set_mask_brush_size)
+        settings_row.addWidget(self._mask_brush_size)
+        settings_row.addSpacing(8)
+        settings_row.addWidget(QLabel("Priehľadnosť:", self._mask_controls))
+        self._mask_opacity = QSpinBox(self._mask_controls)
+        self._mask_opacity.setObjectName("canvasCompactSpin")
+        self._mask_opacity.setRange(10, 90)
+        self._mask_opacity.setValue(40)
+        self._mask_opacity.setSuffix(" %")
+        self._mask_opacity.setMaximumWidth(68)
+        self._mask_opacity.valueChanged.connect(self._view.set_mask_opacity)
+        settings_row.addWidget(self._mask_opacity)
+        settings_row.addSpacing(8)
+        self._btn_mask_visible = QToolButton(self._mask_controls)
+        self._btn_mask_visible.setText("Zobraziť")
+        self._btn_mask_visible.setToolTip("Zobraziť alebo skryť Ignore Mask")
+        self._btn_mask_visible.setCheckable(True)
+        self._btn_mask_visible.setChecked(True)
+        self._btn_mask_visible.toggled.connect(self._view.set_mask_visible)
+        settings_row.addWidget(self._btn_mask_visible)
+        self._btn_clear_mask = QToolButton(self._mask_controls)
+        self._btn_clear_mask.setText("Vymazať masku")
+        self._btn_clear_mask.clicked.connect(self.clear_ignore_mask)
+        settings_row.addWidget(self._btn_clear_mask)
+        mask_layout.addLayout(settings_row)
+        self._mask_setting_controls = (
+            self._mask_brush_size,
+            self._mask_opacity,
+            self._btn_mask_visible,
+            self._btn_clear_mask,
+        )
         self.layout().insertWidget(1, self._mask_controls)
         self._mask_controls.hide()
         self._view.maskChanged.connect(self.ignoreMaskChanged)
@@ -2420,6 +2467,7 @@ class LocatorROIEditor(ROIEditor):
         self._btn_roi_mode.setChecked(True)
         self._view.configure_mask(enabled, mask)
         self._sync_mask_tool_buttons(None)
+        self._set_mask_settings_enabled(False)
         self._update_history_buttons()
 
     def set_mask_editing(self, editing: bool) -> None:
@@ -2433,7 +2481,12 @@ class LocatorROIEditor(ROIEditor):
             self.set_mask_tool(self._view._mask_mode)
         else:
             self._sync_mask_tool_buttons(None)
+        self._set_mask_settings_enabled(editing)
         self._update_history_buttons()
+
+    def _set_mask_settings_enabled(self, enabled: bool) -> None:
+        for control in self._mask_setting_controls:
+            control.setEnabled(enabled)
 
     def set_mask_tool(self, mode: str) -> None:
         self._view.set_mask_mode(mode)
@@ -2453,12 +2506,15 @@ class LocatorROIEditor(ROIEditor):
         self.set_mask_tool(mode)
 
     def set_mask_brush_size(self, size: int) -> None:
+        self._mask_brush_size.setValue(int(size))
         self._view.set_mask_brush_size(size)
 
     def set_mask_visible(self, visible: bool) -> None:
+        self._btn_mask_visible.setChecked(bool(visible))
         self._view.set_mask_visible(visible)
 
     def set_mask_opacity(self, opacity: int) -> None:
+        self._mask_opacity.setValue(int(opacity))
         self._view.set_mask_opacity(opacity)
 
     def clear_ignore_mask(self) -> None:
