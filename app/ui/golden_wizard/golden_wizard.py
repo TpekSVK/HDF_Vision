@@ -86,9 +86,10 @@ from app.services.presence_absence_v2_service import (
     build_model,
     compute_roi_hash,
     ensure_assets_dirs,
-    evaluate_sample,
+    evaluate_dataset,
     load_model,
     load_samples,
+    optimize_sensitivity,
     reset_learning_assets,
     resolve_assets_dir,
     save_model,
@@ -387,10 +388,23 @@ class ToolConfigPanel(QWidget):
         validation_layout.setSpacing(6)
         validate_samples = QPushButton("Otestovať vzorky", validation_content)
         validate_samples.clicked.connect(lambda: self.presenceLearningRequested.emit("validate"))
+        tune_sensitivity = QPushButton("Automaticky nastaviť citlivosť", validation_content)
+        tune_sensitivity.clicked.connect(lambda: self.presenceLearningRequested.emit("auto_tune"))
         self._presence_validation_result = QLabel("Zatiaľ bez výsledku", validation_content)
         self._presence_validation_result.setWordWrap(True)
+        self._presence_tuning_result = QLabel("", validation_content)
+        self._presence_tuning_result.setWordWrap(True)
+        self._presence_tuning_result.hide()
+        self._presence_apply_tuned = QPushButton("Použiť odporúčané nastavenie", validation_content)
+        self._presence_apply_tuned.clicked.connect(
+            lambda: self.presenceLearningRequested.emit("apply_tuned")
+        )
+        self._presence_apply_tuned.hide()
         validation_layout.addWidget(validate_samples)
+        validation_layout.addWidget(tune_sensitivity)
         validation_layout.addWidget(self._presence_validation_result)
+        validation_layout.addWidget(self._presence_tuning_result)
+        validation_layout.addWidget(self._presence_apply_tuned)
         self._presence_validation_section = CollapsibleSection(
             "Validácia", validation_content, parent=self
         )
@@ -718,8 +732,82 @@ class ToolConfigPanel(QWidget):
         else:
             self._presence_recommended.setText("Odporúčané nastavenia nie sú dostupné.")
         self._presence_apply.setEnabled(bool(values))
+        self._presence_tuning_result.hide()
+        self._presence_apply_tuned.hide()
         if validation_text is not None:
             self._presence_validation_result.setText(validation_text)
+
+    def show_presence_validation(
+        self, summary: dict[str, Any], *, weak_dataset: bool = False
+    ) -> None:
+        ok_total, nok_total = int(summary["ok_total"]), int(summary["nok_total"])
+        false_rejects = int(summary["false_reject_count"])
+        false_accepts = int(summary["false_accept_count"])
+        nok_line = (
+            f"NOK vzorky\n{int(summary['nok_correct'])} / {nok_total} správne"
+            if nok_total else "NOK validácia: bez vzoriek"
+        )
+        false_accept_line = (
+            f"False Accept\n{false_accepts} / {nok_total} = "
+            f"{float(summary['false_accept_rate']) * 100:.1f} %"
+            if nok_total else "False Accept\nbez NOK vzoriek"
+        )
+        warning = (
+            "\n\n⚠ Validačný dataset je malý. Výsledok môže byť nespoľahlivý."
+            if weak_dataset else ""
+        )
+        text = (
+            f"OK vzorky\n{int(summary['ok_correct'])} / {ok_total} správne\n\n"
+            f"{nok_line}\n\n"
+            f"False Reject\n{false_rejects} / {ok_total} = "
+            f"{float(summary['false_reject_rate']) * 100:.1f} %\n\n"
+            f"{false_accept_line}\n\n"
+            f"Celková úspešnosť\n{float(summary['accuracy']) * 100:.1f} %"
+            f"{warning}"
+        )
+        good = (
+            nok_total > 0
+            and false_accepts == 0
+            and float(summary["false_reject_rate"]) <= 0.1
+        )
+        quality = "● Dobré rozlíšenie" if good else "● Slabé rozlíšenie"
+        color = "#22c55e" if good else "#d29922"
+        self._presence_validation_result.setText(f"{quality}\n\n{text}")
+        self._presence_validation_result.setStyleSheet(f"color: {color};")
+
+    def show_presence_tuning(self, tuning: dict[str, Any], *, weak_dataset: bool) -> None:
+        current = tuning["current_validation_summary"]
+        recommended = tuning["recommended_validation_summary"]
+        warning = ""
+        if not tuning["has_nok_samples"]:
+            warning = ("⚠ Nie sú dostupné NOK vzorky. Nastavenie je optimalizované iba "
+                       "tak, aby neodmietalo OK kusy.\n\n")
+        elif weak_dataset:
+            warning = "⚠ Validačný dataset je malý. Výsledok môže byť nespoľahlivý.\n\n"
+        overlap = (
+            tuning["has_nok_samples"]
+            and (
+                recommended["false_accept_count"] > 0
+                or float(recommended["false_reject_rate"]) > 0.1
+            )
+        )
+        if overlap:
+            warning += (
+                "⚠ OK a NOK vzorky sa pri aktuálnom ROI výrazne prekrývajú.\n"
+                "Skús upraviť ROI, Ignore Mask, osvetlenie alebo nazbierať viac vzoriek.\n\n"
+            )
+        text = (
+            f"{warning}Odporúčaná citlivosť: {int(tuning['recommended_sensitivity'])} %\n\n"
+            "Aktuálna:\n"
+            f"False Accept: {float(current['false_accept_rate']) * 100:.1f} %\n"
+            f"False Reject: {float(current['false_reject_rate']) * 100:.1f} %\n\n"
+            "Odporúčaná:\n"
+            f"False Accept: {float(recommended['false_accept_rate']) * 100:.1f} %\n"
+            f"False Reject: {float(recommended['false_reject_rate']) * 100:.1f} %"
+        )
+        self._presence_tuning_result.setText(text)
+        self._presence_tuning_result.show()
+        self._presence_apply_tuned.show()
 
     def _on_mask_opacity_changed(self, value: int) -> None:
         self._mask_opacity.setToolTip(f"Priehľadnosť masky: {value} %")
@@ -1632,6 +1720,7 @@ class GoldenWizard(QDialog):
         self._dirty_views: dict[str, dict[str, bool]] = {}
         self._view_states: dict[str, dict[str, Any]] = {}
         self._last_tool_results: dict[tuple[str, int, str], tuple[Any, ...]] = {}
+        self._presence_tuning_results: dict[tuple[str, int, str], dict[str, Any]] = {}
         self._views: list[RecipeView] = []
         self._active_view_id: Optional[str] = None
         self._updating_view_selector = False
@@ -3661,6 +3750,41 @@ class GoldenWizard(QDialog):
         elif action == "validate":
             self._validate_presence_v2_samples(tool, dirs)
             return
+        elif action == "auto_tune":
+            model = load_model(dirs["model"])
+            if model is None:
+                self._warn("Model nie je pripravený.")
+                return
+            thresholds = dict(tool.thresholds.values or {})
+            current = int(thresholds.get("sensitivity", 60) or 60)
+            tuning = optimize_sensitivity(
+                load_samples(dirs["ok"]), load_samples(dirs["nok"]),
+                model.median, model.mad,
+                current_sensitivity=current,
+                **self._presence_v2_evaluation_kwargs(tool, include_score=False),
+            )
+            key = (view_id, int(tool.order), tool.type)
+            self._presence_tuning_results[key] = tuning
+            params = dict(tool.params.values or {})
+            weak = (
+                int(tuning["recommended_validation_summary"]["ok_total"])
+                < int(params.get("recommended_ok_samples", 30) or 30)
+                or (0 < int(tuning["recommended_validation_summary"]["nok_total"]) < 5)
+            )
+            self._tool_panel.show_presence_validation(
+                tuning["current_validation_summary"], weak_dataset=weak
+            )
+            self._tool_panel.show_presence_tuning(tuning, weak_dataset=weak)
+            return
+        elif action == "apply_tuned":
+            key = (view_id, int(tool.order), tool.type)
+            tuning = self._presence_tuning_results.get(key)
+            if tuning is None:
+                self._warn("Odporúčaná citlivosť nie je dostupná.")
+                return
+            thresholds = dict(tool.thresholds.values or {})
+            thresholds["sensitivity"] = int(tuning["recommended_sensitivity"])
+            tool.thresholds = ToolThresholds(thresholds)
         self.recipes.update_tool(recipe, row, tool, view_id=view_id)
         self._tool_panel.refresh_values(tool)
         self._refresh_presence_v2_learning(tool, row)
@@ -3681,13 +3805,29 @@ class GoldenWizard(QDialog):
         if model is None:
             self._warn("Model nie je pripravený.")
             return
-        thresholds, params = dict(tool.thresholds.values or {}), dict(tool.params.values or {})
-        score_threshold = (
-            sensitivity_to_score_threshold(thresholds["sensitivity"])
-            if "sensitivity" in thresholds
-            else float(thresholds.get("score_threshold", 4.0))
+        ok_samples, nok_samples = load_samples(dirs["ok"]), load_samples(dirs["nok"])
+        summary = evaluate_dataset(
+            ok_samples, nok_samples, model.median, model.mad,
+            **self._presence_v2_evaluation_kwargs(tool),
         )
-        decision_limits = {
+        params = dict(tool.params.values or {})
+        weak = (
+            int(summary["ok_total"])
+            < int(params.get("recommended_ok_samples", 30) or 30)
+            or (0 < int(summary["nok_total"]) < 5)
+        )
+        self._tool_panel.show_presence_validation(summary, weak_dataset=weak)
+
+    def _presence_v2_evaluation_kwargs(
+        self, tool: Tool, *, include_score: bool = True
+    ) -> dict[str, Any]:
+        thresholds = dict(tool.thresholds.values or {})
+        params = dict(tool.params.values or {})
+        values: dict[str, Any] = {
+            "polarity": str(params.get("polarity", "any")),
+            "total_area_threshold": float(thresholds.get("total_area_threshold", 50.0)),
+            "min_blob_area": float(thresholds.get("min_blob_area", 10.0)),
+            "ignore_mask": self._presence_v2_ignore_mask(tool),
             "max_blob_count": int(thresholds.get("max_blob_count", 0) or 0),
             "max_largest_blob_area": float(
                 thresholds.get("max_largest_blob_area", 0.0) or 0.0
@@ -3696,30 +3836,13 @@ class GoldenWizard(QDialog):
                 thresholds.get("max_anomaly_area_percent", 0.0) or 0.0
             ),
         }
-        correct_ok = correct_nok = 0
-        ok_samples, nok_samples = load_samples(dirs["ok"]), load_samples(dirs["nok"])
-        for sample in ok_samples:
-            result = evaluate_sample(sample, model.median, model.mad,
-                polarity=str(params.get("polarity", "any")),
-                score_threshold=score_threshold,
-                total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
-                min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
-                ignore_mask=self._presence_v2_ignore_mask(tool), **decision_limits)
-            correct_ok += result["status"] == "ok"
-        for sample in nok_samples:
-            result = evaluate_sample(sample, model.median, model.mad,
-                polarity=str(params.get("polarity", "any")),
-                score_threshold=score_threshold,
-                total_area_threshold=float(thresholds.get("total_area_threshold", 50.0)),
-                min_blob_area=float(thresholds.get("min_blob_area", 10.0)),
-                ignore_mask=self._presence_v2_ignore_mask(tool), **decision_limits)
-            correct_nok += result["status"] == "nok"
-        total = len(ok_samples) + len(nok_samples)
-        accuracy = 100.0 * (correct_ok + correct_nok) / total if total else 0.0
-        text = (f"OK: {correct_ok} / {len(ok_samples)} správne\n"
-                f"NOK: {correct_nok} / {len(nok_samples)} správne\n\n"
-                f"Úspešnosť: {accuracy:.1f} %")
-        self._tool_panel.refresh_presence_learning(tool, validation_text=text)
+        if include_score:
+            values["score_threshold"] = (
+                sensitivity_to_score_threshold(thresholds["sensitivity"])
+                if "sensitivity" in thresholds
+                else float(thresholds.get("score_threshold", 4.0))
+            )
+        return values
 
     def _on_locator_roi_changed(self, target: str, rect: object) -> None:
         if self._syncing_workspace_roi:
