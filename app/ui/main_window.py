@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
         actions.setSpacing(8)
         self.btn_trigger = QPushButton("TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.setProperty("role", "primary")
+        self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self.manual_trigger)
         actions.addWidget(self.btn_trigger)
 
@@ -276,13 +277,16 @@ class MainWindow(QMainWindow):
         # Heatmap toggle
         self.chk_heatmap = QCheckBox("Mapa rozdielov", actions_container)
         self.chk_heatmap.setToolTip("Zobraziť farebnú mapu rozdielov voči golden")
+        self.chk_heatmap.hide()
 
         self.lbl_tool_selector = QLabel("Detail nástroja:", actions_container)
         self.lbl_tool_selector.setProperty("role", "secondary")
+        self.lbl_tool_selector.hide()
         self.cmb_tool = QComboBox(actions_container)
         self.cmb_tool.setEnabled(False)
         self.cmb_tool.setSizeAdjustPolicy(QComboBox.AdjustToContents)
         self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
+        self.cmb_tool.hide()
 
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
@@ -294,7 +298,7 @@ class MainWindow(QMainWindow):
         view_strip_layout = QVBoxLayout(view_strip_container)
         view_strip_layout.setContentsMargins(10, 7, 10, 7)
         view_strip_layout.setSpacing(6)
-        view_strip_label = QLabel("KAMERY A POHĽADY")
+        view_strip_label = QLabel("POHĽADY")
         view_strip_label.setProperty("role", "secondary")
         view_strip_layout.addWidget(view_strip_label)
         self.view_strip = ViewStrip(
@@ -1526,6 +1530,17 @@ class MainWindow(QMainWindow):
             trigger_state["ignored_for_aggregation"],
         )
         self._apply_run_status_style(aggregated_status)
+        relevant_reports: list[Mapping[str, Any]] = []
+        for candidate_view_id, candidate_status in per_view_statuses.items():
+            if candidate_status != aggregated_status:
+                continue
+            state = self._view_states.get(candidate_view_id, {})
+            reports = state.get("reports", []) if isinstance(state, Mapping) else []
+            if isinstance(reports, Sequence):
+                relevant_reports.extend(
+                    entry for entry in reports if isinstance(entry, Mapping)
+                )
+        self._update_operator_status_message(aggregated_status, relevant_reports)
         self._signal_outputs(aggregated_status)
 
         if trigger_state["last_preview_frame"] is not None:
@@ -2107,13 +2122,14 @@ class MainWindow(QMainWindow):
             for row_index, (label_text, value_text) in enumerate(rows):
                 full_label = str(label_text)
                 name_label = QLabel(full_label)
-                name_label.setProperty("role", "secondary")
+                name_label.setProperty("role", "resultName")
                 name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
                 name_label.setWordWrap(False)
                 name_label.setToolTip(full_label)
                 name_label.setMaximumWidth(240)
                 name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
                 value_label = QLabel(value_text if value_text else "-")
+                value_label.setProperty("role", "resultValue")
                 normalized_value = str(value_text or "").strip().lower()
                 if normalized_value in {"ok", "warn", "nok"}:
                     value_label.setProperty("status", normalized_value)

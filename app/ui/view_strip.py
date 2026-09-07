@@ -145,6 +145,9 @@ class ViewStrip(QWidget):
             if not view_id:
                 continue
             item = _ViewItem(view_id, name, on_click=self._handle_click)
+            if self._orientation == Qt.Vertical:
+                item.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                item.setMaximumHeight(144)
             item.set_status(None)
             if thumbnail_loader is not None:
                 try:
