@@ -373,22 +373,50 @@ def tool_overlay_items(
     if rect is not None:
         normalized = _normalize_rect(rect)
         if normalized is not None:
-            if affine is not None:
+            shape = tool.roi.shape()
+            shape_points: Optional[np.ndarray] = None
+            if shape == "polygon":
+                points = tool.roi.points()
+                if len(points) >= 3:
+                    shape_points = np.asarray(points, dtype=np.float32)
+            elif shape == "ellipse":
+                x, y, width, height = normalized
+                angles = np.linspace(0.0, 2.0 * np.pi, 64, endpoint=False)
+                shape_points = np.column_stack((
+                    x + width / 2.0 + np.cos(angles) * width / 2.0,
+                    y + height / 2.0 + np.sin(angles) * height / 2.0,
+                )).astype(np.float32)
+
+            if shape_points is not None:
+                if affine is not None:
+                    shape_points = _apply_affine_to_points(shape_points, affine)
+                polygon = OverlayItem.polyline(
+                    shape_points,
+                    color=color,
+                    thickness=3,
+                    alpha=255,
+                    closed=True,
+                    fill_alpha=70,
+                    z_index=20,
+                    label=label_value,
+                ) if shape_points is not None else None
+                if polygon is not None:
+                    items.append(polygon)
+            elif affine is not None:
                 corners = _rect_corners(normalized)
                 transformed = _apply_affine_to_points(corners, affine)
-                if transformed is not None:
-                    polygon = OverlayItem.polyline(
-                        transformed,
-                        color=color,
-                        thickness=3,
-                        alpha=255,
-                        closed=True,
-                        fill_alpha=70,
-                        z_index=20,
-                        label=label_value,
-                    )
-                    if polygon is not None:
-                        items.append(polygon)
+                polygon = OverlayItem.polyline(
+                    transformed,
+                    color=color,
+                    thickness=3,
+                    alpha=255,
+                    closed=True,
+                    fill_alpha=70,
+                    z_index=20,
+                    label=label_value,
+                ) if transformed is not None else None
+                if polygon is not None:
+                    items.append(polygon)
             else:
                 items.append(
                     OverlayItem.from_rect(
@@ -561,4 +589,3 @@ __all__ = [
     "render_overlay",
     "tool_overlay_items",
 ]
-

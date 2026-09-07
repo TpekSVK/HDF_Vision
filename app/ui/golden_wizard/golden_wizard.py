@@ -70,6 +70,7 @@ from app.models.schema import (
     ToolThresholds,
 )
 from app.services.recipe_service import RecipeService
+from app.services.roi_geometry import roi_local_exclusion_mask
 from app.services.tool_registry import ToolRegistry
 from app.services import settings_service
 from app.services.tool_service import (
@@ -3558,7 +3559,7 @@ class GoldenWizard(QDialog):
         if tool.type not in _STATISTICAL_PRESENCE_TYPES:
             return
         params = dict(tool.params.values or {})
-        current_hash = compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value)
+        current_hash = compute_roi_hash(tool.roi, tool.ignore_mask.value)
         previous_hash = str(params.get("roi_hash", "") or "")
         params["roi_hash"] = current_hash
         if previous_hash and previous_hash != current_hash:
@@ -3589,19 +3590,7 @@ class GoldenWizard(QDialog):
 
     @staticmethod
     def _presence_v2_ignore_mask(tool: Tool) -> Optional[np.ndarray]:
-        mask = tool.ignore_mask.value
-        rect = tool.roi.rect()
-        if mask is None or rect is None:
-            return None
-        value = np.asarray(mask)
-        if value.ndim == 3:
-            value = value[:, :, 0]
-        x, y, width, height = rect
-        if value.shape[:2] == (height, width):
-            return value.copy()
-        if value.shape[0] >= y + height and value.shape[1] >= x + width:
-            return value[y:y + height, x:x + width].copy()
-        return None
+        return roi_local_exclusion_mask(tool.roi, tool.ignore_mask.value)
 
     def _refresh_presence_v2_learning(self, tool: Tool, row: int) -> None:
         context = self._presence_v2_context()
@@ -3658,7 +3647,7 @@ class GoldenWizard(QDialog):
             "sample_count_nok": len(nok_samples),
             "recommended_thresholds": recommended,
             "warnings": warnings,
-            "roi_hash": compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value),
+            "roi_hash": compute_roi_hash(tool.roi, tool.ignore_mask.value),
             "image_shape": list(median.shape),
             "ignored_ok_samples": info.ignored_ok_samples,
             "tool_type": tool.type,

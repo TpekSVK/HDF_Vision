@@ -52,7 +52,7 @@ class PresenceAbsenceV2Tool(PairTool):
         model = load_model(assets_dir / "model") if assets_dir else None
         tool = self._resolve_tool()
         if model_ready and model is not None and tool is not None:
-            current_hash = compute_roi_hash(tool.roi.rect(), tool.ignore_mask.value)
+            current_hash = compute_roi_hash(tool.roi, tool.ignore_mask.value)
             model_hash = str(model.stats.get("roi_hash", "") or "")
             configured_hash = str(params_dict.get("roi_hash", "") or "")
             if (model_hash and model_hash != current_hash) or (
