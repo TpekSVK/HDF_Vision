@@ -12,13 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
-
-_STATUS_STYLES = {
-    "ok": "background-color:#1f7a39; color:#ffffff;",
-    "warn": "background-color:#c97b10; color:#ffffff;",
-    "nok": "background-color:#b22222; color:#ffffff;",
-}
+from app.ui.theme import refresh_style
 
 
 class _ViewItem(QFrame):
@@ -33,11 +27,9 @@ class _ViewItem(QFrame):
         self.view_id = view_id
         self._on_click = on_click
         self.setObjectName("viewStripItem")
+        self.setProperty("active", False)
         self.setFrameShape(QFrame.StyledPanel)
         self.setFrameShadow(QFrame.Plain)
-        self.setStyleSheet(
-            "#viewStripItem{border:1px solid #333;border-radius:6px;background-color:#202020;}"
-        )
         self.setCursor(Qt.PointingHandCursor)
 
         layout = QVBoxLayout(self)
@@ -45,16 +37,15 @@ class _ViewItem(QFrame):
         layout.setSpacing(4)
 
         self.thumbnail = QLabel(self)
+        self.thumbnail.setObjectName("viewThumbnail")
         self.thumbnail.setFixedSize(96, 72)
-        self.thumbnail.setStyleSheet("border:1px solid #2a2a2a; background:#111;")
         self.thumbnail.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.thumbnail)
 
         self.status = QLabel("—", self)
+        self.status.setObjectName("viewStatus")
+        self.status.setProperty("status", "idle")
         self.status.setAlignment(Qt.AlignCenter)
-        self.status.setStyleSheet(
-            "border-radius:10px;padding:2px 6px;background-color:#444;color:#ddd;"
-        )
         layout.addWidget(self.status, alignment=Qt.AlignCenter)
 
         self.label = QLabel(name, self)
@@ -70,28 +61,21 @@ class _ViewItem(QFrame):
         return super().mousePressEvent(event)
 
     def set_active(self, active: bool) -> None:
-        if active:
-            self.setStyleSheet(
-                "#viewStripItem{border:2px solid #4a90e2;border-radius:6px;background-color:#282828;}"
-            )
-        else:
-            self.setStyleSheet(
-                "#viewStripItem{border:1px solid #333;border-radius:6px;background-color:#202020;}"
-            )
+        self.setProperty("active", bool(active))
+        refresh_style(self)
 
     def set_status(self, status: Optional[str]) -> None:
         if not status:
             self.status.setText("—")
-            self.status.setStyleSheet(
-                "border-radius:10px;padding:2px 6px;background-color:#444;color:#ddd;"
-            )
+            self.status.setProperty("status", "idle")
+            refresh_style(self.status)
             return
         normalized = str(status).strip().lower()
         self.status.setText(normalized.upper())
-        style = _STATUS_STYLES.get(normalized, "background-color:#444;color:#ddd;")
-        self.status.setStyleSheet(
-            f"border-radius:10px;padding:2px 6px;{style}"
+        self.status.setProperty(
+            "status", normalized if normalized in {"ok", "warn", "nok"} else "idle"
         )
+        refresh_style(self.status)
 
     def set_thumbnail(self, pixmap: Optional[QPixmap]) -> None:
         if pixmap is None or pixmap.isNull():
@@ -113,16 +97,26 @@ class ViewStrip(QWidget):
         *,
         parent: QWidget | None = None,
         on_view_selected: Callable[[str], None] | None = None,
+        orientation: Qt.Orientation = Qt.Horizontal,
     ) -> None:
         super().__init__(parent)
         self._on_view_selected = on_view_selected or (lambda _vid: None)
+        self._orientation = orientation
         self._items: dict[str, _ViewItem] = {}
-        self._layout = QHBoxLayout(self)
+        self._layout = (
+            QVBoxLayout(self) if orientation == Qt.Vertical else QHBoxLayout(self)
+        )
         self._layout.setContentsMargins(0, 0, 0, 0)
         self._layout.setSpacing(8)
         self._stretch = QWidget(self)
-        self._stretch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._configure_stretch()
         self._layout.addWidget(self._stretch)
+
+    def _configure_stretch(self) -> None:
+        if self._orientation == Qt.Vertical:
+            self._stretch.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        else:
+            self._stretch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
     def set_views(
         self,
@@ -137,7 +131,7 @@ class ViewStrip(QWidget):
         if self._stretch is not None:
             self._layout.removeWidget(self._stretch)
         self._stretch = QWidget(self)
-        self._stretch.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        self._configure_stretch()
 
         for entry in views:
             if isinstance(entry, Mapping):
