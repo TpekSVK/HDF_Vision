@@ -1,6 +1,6 @@
 # Raspberry Pi Pico firmware
 
-Tento adresár obsahuje produkčný MicroPython firmware HDF_Vision. Súbor `main.py` sa kopíruje priamo na Pico ako `main.py`; firmware sa identifikuje ako `pico_hdf_controller 3.2.0-master-capture`.
+Tento adresár obsahuje produkčný MicroPython firmware HDF_Vision. Aktuálna verzia je [`main_v3.3.py`](main_v3.3.py); pri nasadení sa kopíruje na Pico ako `main.py`. Firmware sa identifikuje ako `pico_hdf_controller 3.3-master-production-capture`.
 
 ## Úloha Raspberry Pi Pico
 
@@ -47,7 +47,7 @@ CAPTURE IN2
 CAPTURE IN8
 ```
 
-Nepoužíva sa `CAPTURE V1`/`CAPTURE V2`, pretože View určuje recept. Event nemá ID ani poradové číslo. Vzniká iba z fyzického INx v MASTER režime; manuálne `FIRE` nemá fyzický zdroj, a preto event nevysiela. Po evente nasleduje výsledok cyklu `OK FIRED ...`.
+Fyzický alebo softvérovo aktivovaný explicitný vstup emituje `CAPTURE INx`. Pri sekvenčnom softvérovom requeste `FIRE V1/V2` Pico emituje `CAPTURE V1/V2`; Jetson ho priradí k pohľadu, ktorý request začal. Event nemá ID ani poradové číslo. Po evente nasleduje výsledok cyklu `OK FIRED ...`.
 
 ## Timing svetla
 
@@ -89,10 +89,11 @@ ASCII príkazy sú ukončené novým riadkom a nie sú case-sensitive. `STATUS` 
 
 | Príkaz | Účel | Príklad | Typická odpoveď |
 |---|---|---|---|
-| `STATUS` | Firmware, piny, profily, mapovanie a globálne timingy. | `STATUS` | `FIRMWARE pico_hdf_controller 3.2.0-master-capture` … `END` |
+| `STATUS` | Firmware, piny, profily, mapovanie a globálne timingy. | `STATUS` | `FIRMWARE pico_hdf_controller 3.3-master-production-capture` … `END` |
 | `SAVE` | Uloží aktuálnu konfiguráciu. | `SAVE` | `OK SAVED` |
 | `INPUTS` | Active-low stav IN1–IN8. | `INPUTS` | `INPUTS IN1=ACTIVE IN2=OFF ...`, `END` |
-| `FIRE <view>` | Manuálne spustí V1/V2 bez capture eventu. | `FIRE V1` | `OK FIRED V1 ... SOURCE=USB ...` alebo `BUSY V1` |
+| `FIRE <view>` | Softvérový request sekvenčného profilu; v MASTER vykoná produkčné časovanie a emituje `CAPTURE V1/V2`. | `FIRE V1` | `CAPTURE V1`, potom `OK FIRED V1 ...` alebo `BUSY V1` |
+| `TRIGGER INx` | Softvérový request explicitného pohľadu cez existujúce mapovanie `INx → V1/V2`; v MASTER emituje `CAPTURE INx`. | `TRIGGER IN5` | `CAPTURE IN5`, potom `OK FIRED V1 ...` |
 | `SET <view> MODE <mode>` | `MASTER` alebo `TRIGGER`. | `SET V1 MODE MASTER` | `OK SET V1 MODE MASTER` |
 | `SET <view> DELAY <ms>` | Vstupné oneskorenie. | `SET V1 DELAY 20` | `OK SET V1 DELAY 20` |
 | `SET <view> PULSE <ms>` | Dĺžka svetla. | `SET V1 PULSE 200` | `OK SET V1 PULSE 200` |
