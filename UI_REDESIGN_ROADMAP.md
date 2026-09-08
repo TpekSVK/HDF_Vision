@@ -42,6 +42,13 @@ outside the scope unless a stage explicitly says otherwise.
 - [x] Keep the Golden Wizard as the primary tool/pipeline editor.
 - [ ] Standardize property sections and validation feedback.
 
+### Locator follow-up
+
+- [ ] Overiť režim zarovnania podľa referenčnej hrany A–B na reálnych snímkach.
+- [ ] Vyhodnotiť kvalitu šablóny a upozorniť na nejednoznačné zhody.
+- [ ] Pri template matchingu presne rešpektovať otočený tvar search/template oblasti,
+      nie iba jej osovo zarovnaný bounding box.
+
 ## Stage 6 — Resolution and operator polish
 
 - [ ] Verify layouts at the target Jetson display resolutions.
