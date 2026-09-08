@@ -9,6 +9,7 @@ from PySide6.QtGui import QImage, QPixmap, QImageReader
 import json
 import logging
 import math
+import re
 from pathlib import Path
 import time
 import uuid
@@ -57,7 +58,7 @@ from app.utils import overlay as overlay_utils
 
 
 class MainWindow(QMainWindow):
-    external_triggered = Signal()
+    external_triggered = Signal(str, object)
     _UI_STATE_PATH = Path("/data/config.json")
     _LAST_RECIPE_STATE_KEY = "last_recipe"
 
@@ -109,8 +110,7 @@ class MainWindow(QMainWindow):
         self._active_view_id: str | None = None
         self._manual_trigger_positions: dict[str, int] = {}
         self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
-        self._pending_trigger_source: str | None = None
-        self._pending_trigger_input_index: int | None = None
+        self._pending_pico_software_request: dict[str, Any] | None = None
         self._external_sequence_index: dict[str, int] = {"pico": 0, "modbus": 0}
         self._external_sequence_statuses: dict[str, dict[str, str]] = {}
         self._run_trigger_session_active = False
@@ -238,7 +238,7 @@ class MainWindow(QMainWindow):
         self.btn_trigger = QPushButton("TRIGGER")  # berie posledný kontinuálny frame
         self.btn_trigger.setProperty("role", "primary")
         self.btn_trigger.setMinimumWidth(132)
-        self.btn_trigger.clicked.connect(self.manual_trigger)
+        self.btn_trigger.clicked.connect(self._request_software_trigger)
         actions.addWidget(self.btn_trigger)
 
         self.btn_export = QPushButton("Export CSV", actions_container)
@@ -769,16 +769,29 @@ class MainWindow(QMainWindow):
         settle_ms = max(0, int(getattr(view, "settle_ms", 0) or 0))
         source = str(capture_request_source or "manual").strip().lower()
         # A Pico CAPTURE event is emitted after Pico has already driven the light.
-        # Other request sources (including Modbus) still need the normal FIRE path.
-        is_pico_request = source == "pico"
+        # Never add a second app-side delay after the production Pico sequence.
+        is_pico_request = source in {"pico", "picosoftware"}
         view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
+        if is_pico_request:
+            return
+
         if not is_pico_request:
             is_sequential = (
                 str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
                 and str(getattr(view, "external_trigger_mode", "") or "").lower() == "sequential"
             )
-            pico_target = getattr(view, "pico_profile", None) if is_sequential else view_id
-            fired = self.pico.fire(str(pico_target or view_id))
+            is_explicit_pico = (
+                str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
+                and str(getattr(view, "external_trigger_mode", "") or "").lower() == "explicit"
+                and str(getattr(view, "external_source", "") or "").lower() == "pico"
+            )
+            input_index = getattr(view, "external_request_input", None)
+            if is_explicit_pico and isinstance(input_index, Integral) and 1 <= int(input_index) <= 8:
+                fired = self.pico.trigger_input(int(input_index))
+                pico_target = "IN{}".format(int(input_index))
+            else:
+                pico_target = getattr(view, "pico_profile", None) if is_sequential else view_id
+                fired = self.pico.fire(str(pico_target or view_id))
             if not fired:
                 self._logger.warning(
                     "[PICO] fire failed view=%s profile=%s error=%s",
@@ -786,6 +799,8 @@ class MainWindow(QMainWindow):
                     pico_target,
                     self.pico.last_error,
                 )
+            else:
+                return
         wait_ms = flash_delay_ms + settle_ms
         if wait_ms > 0:
             time.sleep(wait_ms / 1000.0)
@@ -1019,12 +1034,17 @@ class MainWindow(QMainWindow):
         *,
         recipe_name: str,
         view_specs: list[dict[str, Any]],
+        external_source: str | None = None,
     ) -> dict[str, Any] | None:
         """Let the RUN button simulate the next signal of an external sequence."""
         sequential = [
             spec for spec in view_specs
             if spec.get("trigger_mode") == "external"
             and spec.get("external_trigger_mode") == "sequential"
+            and (
+                external_source is None
+                or spec.get("external_source") == str(external_source).lower()
+            )
         ]
         if not sequential:
             return None
@@ -1035,6 +1055,73 @@ class MainWindow(QMainWindow):
         selected["sequence_position"] = position
         selected["sequence_length"] = len(sequential)
         return selected
+
+    def _request_software_trigger(self) -> None:
+        """Start RUN through the same Pico MASTER timing as a line signal."""
+        if self.mode != "RUN":
+            self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
+            return
+        if self.get_capture_mode() != "master" or not self.pico.is_available():
+            self.manual_trigger("manual", None)
+            return
+
+        recipe_name = self.current_recipe_name()
+        try:
+            recipe_cfg = load_recipe_config(recipe_name)
+            view_specs = [
+                self._build_runtime_view_spec(view, index)
+                for index, view in enumerate(getattr(recipe_cfg, "views", []) or [])
+            ]
+        except Exception as exc:
+            self._logger.warning("[PICO] software trigger preparation failed: %s", exc)
+            self.manual_trigger("manual", None)
+            return
+
+        active_view_id = str(self._active_view_id or "")
+        explicit_spec = next(
+            (
+                spec for spec in view_specs
+                if str(getattr(spec["view"], "id", "")) == active_view_id
+                and spec.get("trigger_mode") == "external"
+                and spec.get("external_source") == "pico"
+                and spec.get("external_trigger_mode") == "explicit"
+                and isinstance(spec.get("external_request_input"), Integral)
+            ),
+            None,
+        )
+        if explicit_spec is not None:
+            source = "IN{}".format(int(explicit_spec["external_request_input"]))
+            send_request = lambda: self.pico.trigger_input(int(explicit_spec["external_request_input"]))
+            selected = dict(explicit_spec)
+        else:
+            selected = self._resolve_manual_sequence_view(
+                recipe_name=recipe_name,
+                view_specs=view_specs,
+                external_source="pico",
+            )
+            profile = getattr(selected["view"], "pico_profile", None) if selected else None
+            profile = str(profile or "").upper()
+            if selected is None or profile not in {"V1", "V2"}:
+                self.manual_trigger("manual", None)
+                return
+            source = profile
+            send_request = lambda: self.pico.fire(profile)
+
+        self._pending_pico_software_request = {"source": source, "spec": selected}
+        if not send_request():
+            self._pending_pico_software_request = None
+            self.lbl_status.setText(self.pico.last_error or "Pico trigger sa nepodarilo odoslať.")
+
+    def _consume_software_pico_request(self, capture_source: str) -> dict[str, Any] | None:
+        pending = getattr(self, "_pending_pico_software_request", None)
+        if not isinstance(pending, Mapping):
+            return None
+        expected = str(pending.get("source") or "").upper()
+        if str(capture_source or "").upper() != expected:
+            return None
+        self._pending_pico_software_request = None
+        spec = pending.get("spec")
+        return dict(spec) if isinstance(spec, Mapping) else None
 
     def _resolve_active_capture_view(self, *, requested_view_id: str | None = None) -> Any | None:
         view_id = requested_view_id or self._active_view_id
@@ -1272,14 +1359,18 @@ class MainWindow(QMainWindow):
             )
         return self.cam.last_frame(caller="run_manual_trigger_master")
 
-    def manual_trigger(self, trigger_source: str | None = None):
+    def manual_trigger(
+        self,
+        trigger_source: str | None = None,
+        trigger_context: object | None = None,
+    ):
         if self.mode != "RUN":
             self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
             return
-        resolved_source = str(trigger_source or self._pending_trigger_source or "manual").strip().lower()
-        trigger_input_index = self._pending_trigger_input_index
-        self._pending_trigger_source = None
-        self._pending_trigger_input_index = None
+        context = dict(trigger_context) if isinstance(trigger_context, Mapping) else {}
+        resolved_source = str(trigger_source or "manual").strip().lower()
+        trigger_input_index = context.get("input_index")
+        requested_spec = context.get("spec")
         self._logger.info(
             "[CAPTURE_REQUEST] trigger_source=%s trigger_input_index=%s capture_mode=%s",
             resolved_source,
@@ -1291,6 +1382,7 @@ class MainWindow(QMainWindow):
             trigger_state = self._prepare_run_trigger(
                 trigger_source=resolved_source,
                 trigger_input_index=trigger_input_index,
+                requested_spec=requested_spec,
             )
         except Exception as exc:
             self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
@@ -1345,6 +1437,7 @@ class MainWindow(QMainWindow):
         *,
         trigger_source: str,
         trigger_input_index: int | None = None,
+        requested_spec: object | None = None,
     ) -> dict[str, Any] | None:
         was_live_enabled = self._pause_live_preview_for_trigger()
         gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
@@ -1386,20 +1479,42 @@ class MainWindow(QMainWindow):
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
         external_spec = None
+        requested_view_id = ""
+        if isinstance(requested_spec, Mapping):
+            requested_view_id = str(
+                getattr(requested_spec.get("view"), "id", "")
+                or requested_spec.get("view_id")
+                or ""
+            )
+            for spec in view_specs:
+                if str(getattr(spec["view"], "id", "")) == requested_view_id:
+                    external_spec = dict(spec)
+                    for key in ("sequence_key", "sequence_position", "sequence_length"):
+                        if key in requested_spec:
+                            external_spec[key] = requested_spec[key]
+                    all_manual = True
+                    break
         is_routed_external = trigger_source in {"pico", "modbus"}
-        if is_routed_external and isinstance(trigger_input_index, Integral):
+        if external_spec is None and is_routed_external and isinstance(trigger_input_index, Integral):
             external_spec = self._resolve_external_trigger_view(
                 view_specs=view_specs,
                 source=trigger_source,
                 input_index=int(trigger_input_index),
             )
-        elif trigger_source == "manual":
+        elif external_spec is None and trigger_source == "manual":
             external_spec = self._resolve_manual_sequence_view(
                 recipe_name=recipe_name,
                 view_specs=view_specs,
             )
             if external_spec is not None:
                 all_manual = True
+
+        if isinstance(requested_spec, Mapping) and external_spec is None:
+            self._logger.warning(
+                "[RUN] software Pico trigger ignored reason=requested_view_not_found view=%s",
+                requested_view_id or "unknown",
+            )
+            return None
 
         if is_routed_external and external_spec is None:
             return None
@@ -1956,29 +2071,54 @@ class MainWindow(QMainWindow):
     def _handle_modbus_trigger(self, input_index: int | None = None):
         self._handle_external_trigger("Modbus", input_index=input_index)
 
-    def _handle_pico_trigger(self, input_index: int) -> None:
-        if not isinstance(input_index, Integral) or isinstance(input_index, bool):
-            self._logger.warning("[PICO] ignored invalid capture event input=%r", input_index)
+    def _handle_pico_trigger(self, capture_source: str) -> None:
+        source = str(capture_source or "").upper().strip()
+        if source in {"V1", "V2"}:
+            requested_spec = self._consume_software_pico_request(source)
+            if requested_spec is None:
+                self._logger.warning("[PICO] ignored unexpected capture event source=%s", source)
+                return
+            self._logger.info("[PICO] software capture event profile=%s", source)
+            self._handle_external_trigger("PicoSoftware", requested_spec=requested_spec)
             return
-        parsed_input = int(input_index)
-        if not 1 <= parsed_input <= 8:
-            self._logger.warning("[PICO] ignored invalid capture event input=%r", input_index)
-            return
-        self._logger.info("[PICO] capture event input=%s", parsed_input)
-        self._handle_external_trigger("Pico", input_index=parsed_input)
 
-    def _handle_external_trigger(self, source: str, *, input_index: int | None = None) -> None:
+        match = re.fullmatch(r"IN([1-8])", source)
+        if match is None:
+            self._logger.warning("[PICO] ignored invalid capture event source=%r", capture_source)
+            return
+        input_index = int(match.group(1))
+        requested_spec = self._consume_software_pico_request(source)
+        if requested_spec is not None:
+            self._logger.info("[PICO] software capture event input=%s", input_index)
+            self._handle_external_trigger(
+                "PicoSoftware",
+                input_index=input_index,
+                requested_spec=requested_spec,
+            )
+            return
+        self._logger.info("[PICO] physical capture event input=%s", input_index)
+        self._handle_external_trigger("Pico", input_index=input_index)
+
+    def _handle_external_trigger(
+        self,
+        source: str,
+        *,
+        input_index: int | None = None,
+        requested_spec: dict[str, Any] | None = None,
+    ) -> None:
         self._logger.info("[RUN] %s trigger received input=%s mode=%s", source, input_index, self.mode)
         if self.mode != "RUN":
             return
         resolved_source = str(source or "external").strip().lower()
-        self._pending_trigger_source = resolved_source
         if resolved_source in {"modbus", "pico"} and isinstance(input_index, Integral):
             parsed_input = int(input_index)
-            self._pending_trigger_input_index = parsed_input if 1 <= parsed_input <= 8 else None
+            parsed_input = parsed_input if 1 <= parsed_input <= 8 else None
         else:
-            self._pending_trigger_input_index = None
-        self.external_triggered.emit()
+            parsed_input = None
+        self.external_triggered.emit(
+            resolved_source,
+            {"input_index": parsed_input, "spec": requested_spec},
+        )
 
     def _update_live_view(self):
         try:

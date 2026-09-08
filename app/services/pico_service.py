@@ -28,7 +28,7 @@ class PicoStatus:
 
 
 _DISCONNECTED = object()
-_CAPTURE_RE = re.compile(r"^CAPTURE\s+IN([1-8])$", re.IGNORECASE)
+_CAPTURE_RE = re.compile(r"^CAPTURE\s+(IN[1-8]|V[12])$", re.IGNORECASE)
 
 
 class PicoService:
@@ -54,7 +54,7 @@ class PicoService:
         self._rx_stop: threading.Event | None = None
         self._pending_response: queue.Queue[object] | None = None
         self._pending_command: str | None = None
-        self._trigger_callbacks: list[Callable[[int], None]] = []
+        self._trigger_callbacks: list[Callable[[str], None]] = []
         self._manual_light: bool | None = None
         self.last_error: str = ""
 
@@ -116,14 +116,14 @@ class PicoService:
                 and self._rx_thread.is_alive()
             )
 
-    def register_trigger_callback(self, callback: Callable[[int], None]) -> None:
+    def register_trigger_callback(self, callback: Callable[[str], None]) -> None:
         if not callable(callback):
             raise TypeError("callback must be callable")
         with self._state_lock:
             if callback not in self._trigger_callbacks:
                 self._trigger_callbacks.append(callback)
 
-    def unregister_trigger_callback(self, callback: Callable[[int], None]) -> None:
+    def unregister_trigger_callback(self, callback: Callable[[str], None]) -> None:
         with self._state_lock:
             if callback in self._trigger_callbacks:
                 self._trigger_callbacks.remove(callback)
@@ -145,6 +145,14 @@ class PicoService:
     def fire(self, channel_or_view_id: str | int) -> bool:
         target = self._normalize_target(channel_or_view_id)
         ok, _ = self._send_command(f"FIRE {target}")
+        return ok
+
+    def trigger_input(self, input_index: int) -> bool:
+        """Request the configured Pico input path without a physical edge."""
+        if isinstance(input_index, bool) or not isinstance(input_index, int) or not 1 <= input_index <= 8:
+            self.last_error = f"Invalid Pico input: {input_index!r} (expected 1..8)"
+            return False
+        ok, _ = self._send_command(f"TRIGGER IN{input_index}")
         return ok
 
     def set_manual_light(self, enabled: bool) -> bool:
@@ -308,9 +316,9 @@ class PicoService:
         return sorted(glob.glob("/dev/ttyACM*"))
 
     @staticmethod
-    def _parse_capture(line: str) -> int | None:
+    def _parse_capture(line: str) -> str | None:
         match = _CAPTURE_RE.fullmatch(line.strip())
-        return int(match.group(1)) if match else None
+        return match.group(1).upper() if match else None
 
     def _rx_loop(self, dev: object, stop: threading.Event) -> None:
         disconnect_error = ""
@@ -330,9 +338,9 @@ class PicoService:
                 if not line:
                     continue
                 self._logger.debug("[PICO] RX %s", line)
-                input_index = self._parse_capture(line)
-                if input_index is not None:
-                    self._dispatch_trigger(input_index)
+                capture_source = self._parse_capture(line)
+                if capture_source is not None:
+                    self._dispatch_trigger(capture_source)
                     continue
                 with self._state_lock:
                     pending = self._pending_response
@@ -364,15 +372,15 @@ class PicoService:
             if owns_connection and not stop.is_set():
                 self._logger.warning("[PICO] disconnected: %s", disconnect_error or "reader stopped")
 
-    def _dispatch_trigger(self, input_index: int) -> None:
+    def _dispatch_trigger(self, capture_source: str) -> None:
         with self._state_lock:
             callbacks = tuple(self._trigger_callbacks)
-        self._logger.info("[PICO] event CAPTURE input=%s", input_index)
+        self._logger.info("[PICO] event CAPTURE source=%s", capture_source)
         for callback in callbacks:
             try:
-                callback(input_index)
+                callback(capture_source)
             except Exception:
-                self._logger.exception("[PICO] trigger callback failed input=%s", input_index)
+                self._logger.exception("[PICO] trigger callback failed source=%s", capture_source)
 
     @staticmethod
     def _line_matches_command(line: str, command: str | None) -> bool:
@@ -392,6 +400,7 @@ class PicoService:
             "SET": ("OK SET",),
             "MAP": ("OK MAP",),
             "FIRE": ("OK FIRED", "BUSY "),
+            "TRIGGER": ("OK FIRED", "BUSY "),
             "LIGHT": ("OK",),
         }
         return upper.startswith(prefixes.get(verb, ("OK",)))
