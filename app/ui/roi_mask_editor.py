@@ -45,6 +45,7 @@ from app.ui.image_canvas import (
     ImageNavigationToolbar,
     InteractionMode,
 )
+from app.models.schema import ToolRoi
 
 
 _ROI_COLOR = QColor(0, 200, 0, 200)
@@ -3062,7 +3063,7 @@ class ROIEditor(QWidget):
 
 
 class LocatorROIEditor(ROIEditor):
-    """One-scene editor for Locator search, template and angle rectangles."""
+    """One-scene editor for Locator search/template regions and reference edge."""
 
     locatorRoiChanged = Signal(str, object)
     ignoreMaskChanged = Signal(object)
@@ -3070,18 +3071,16 @@ class LocatorROIEditor(ROIEditor):
     edgeRefineRequested = Signal()
     COLORS = {
         "search": QColor("#2F80ED"), "template": QColor("#22C55E"),
-        "angle": QColor("#D946EF"),
     }
-    LABELS = {"search": "HĽADANIE", "template": "ŠABLÓNA", "angle": "UHOL"}
+    LABELS = {"search": "HĽADANIE", "template": "ŠABLÓNA"}
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._locator_mode = False
         self._active_area = "search"
-        self._areas = {"search": None, "template": None, "angle": None}
+        self._areas = {"search": None, "template": None}
         self._locator_syncing = False
         self._use_golden_crop = False
-        self._angle_enabled = False
         self._mask_available = False
         self._edge_available = False
         self._area_items: List[QGraphicsItem] = []
@@ -3089,7 +3088,6 @@ class LocatorROIEditor(ROIEditor):
         self._locator_buttons = self._navigation.set_draw_tools([
             ("Hľadanie", lambda: self._start_area_draw("search"), "Nakresliť oblasť hľadania"),
             ("Šablóna", lambda: self._start_area_draw("template"), "Nakresliť oblasť šablóny"),
-            ("Uhol", lambda: self._start_area_draw("angle"), "Nakresliť oblasť merania uhla"),
         ])
         for button in self._locator_buttons:
             button.hide()
@@ -3215,13 +3213,12 @@ class LocatorROIEditor(ROIEditor):
                 and self._view.interaction_mode() == InteractionMode.SELECT):
             point = self._view.mapToScene(event.position().toPoint())
             candidates = []
-            for target in ("angle", "template", "search"):
-                rect = self._areas.get(target)
-                if rect is None or not QRectF(*rect).contains(point):
+            for target in ("template", "search"):
+                area = self._areas.get(target)
+                rect = self._area_rect(area)
+                if rect is None or not self._area_path(area).contains(point):
                     continue
                 if target == "template" and self._use_golden_crop:
-                    continue
-                if target == "angle" and not self._angle_enabled:
                     continue
                 candidates.append((rect[2] * rect[3], target))
             if candidates:
@@ -3235,6 +3232,25 @@ class LocatorROIEditor(ROIEditor):
         self._result_items.clear()
         super().set_background(pixmap)
         self._render_areas()
+
+    def _sync_geometry_controls(self) -> None:
+        super()._sync_geometry_controls()
+        self._sync_locator_area_labels()
+
+    def _update_history_buttons(self) -> None:
+        super()._update_history_buttons()
+        self._sync_locator_area_labels()
+
+    def _sync_locator_area_labels(self) -> None:
+        if not getattr(self, "_locator_mode", False) or self._active_edit_context() != "roi":
+            return
+        area = "šablónu" if getattr(self, "_active_area", "search") == "template" else "oblasť hľadania"
+        locked = self._view.is_roi_locked()
+        self._btn_reset.setText(f"Obnoviť {area}")
+        self._btn_lock.setText(f"{area.capitalize()} zamknutá" if locked else f"Zamknúť {area}")
+        self._btn_lock.setToolTip(
+            f"Odomknúť úpravu: {area}" if locked else f"Zamknúť úpravu: {area}"
+        )
 
     def set_result_overlay(
         self,
@@ -3302,8 +3318,14 @@ class LocatorROIEditor(ROIEditor):
         point_a: Optional[Tuple[float, float]] = None,
         point_b: Optional[Tuple[float, float]] = None,
         search_half_window: int = 20,
+        *,
+        label: str = "Hrana A-B",
+        refine_label: str = "Spresniť hranu",
+        activate: bool = True,
     ) -> None:
         self._edge_available = bool(enabled)
+        self._btn_edge_mode.setText(label)
+        self._btn_edge_refine.setText(refine_label)
         self._btn_roi_mode.setVisible(self._mask_available or self._edge_available)
         self._btn_edge_mode.setVisible(self._edge_available)
         self._view.configure_edge_anchors(
@@ -3312,7 +3334,10 @@ class LocatorROIEditor(ROIEditor):
             point_b,
             search_half_window,
         )
-        self.set_edit_context("edge" if self._edge_available else "roi")
+        if activate:
+            self.set_edit_context("edge" if self._edge_available else "roi")
+        else:
+            self.set_edit_context("roi")
 
     def _on_edge_anchors_changed(self, point_a: object, point_b: object) -> None:
         self._sync_edge_controls()
@@ -3373,7 +3398,6 @@ class LocatorROIEditor(ROIEditor):
             button.setEnabled(
                 context == "roi" and self._locator_mode
                 and (index != 1 or not self._use_golden_crop)
-                and (index != 2 or self._angle_enabled)
             )
         for button in self._mask_tool_buttons:
             button.setVisible(mask_editing)
@@ -3459,22 +3483,23 @@ class LocatorROIEditor(ROIEditor):
     def ignore_mask(self) -> Optional[np.ndarray]:
         return self._view.mask()
 
-    def set_locator_mode(self, enabled: bool, *, search=None, template=None, angle=None,
-                         use_golden_crop: bool = False, angle_enabled: bool = False) -> None:
+    def set_locator_mode(self, enabled: bool, *, search=None, template=None,
+                         use_golden_crop: bool = False) -> None:
         self._locator_mode = bool(enabled)
         for button in self._shape_buttons:
             button.setVisible(not enabled and not self._view._mask_editing)
         for index, button in enumerate(self._locator_buttons):
             button.setVisible(enabled and not self._view._mask_editing)
             button.setEnabled(enabled and not self._view._mask_editing
-                              and (index != 1 or not use_golden_crop)
-                              and (index != 2 or angle_enabled))
+                              and (index != 1 or not use_golden_crop))
         if not enabled:
             self._clear_area_items()
             return
         self._use_golden_crop = bool(use_golden_crop)
-        self._angle_enabled = bool(angle_enabled)
-        self._areas = {"search": search, "template": template, "angle": angle}
+        self._areas = {
+            "search": self._normalize_area(search),
+            "template": self._normalize_area(template),
+        }
         self._activate_area("search")
 
     def select_locator_roi(self, target: str) -> None:
@@ -3485,11 +3510,16 @@ class LocatorROIEditor(ROIEditor):
         template = self._areas.get("template")
         if template is None:
             return
-        x, y, width, height = template
+        rect = self._area_rect(template)
+        if rect is None:
+            return
+        x, y, width, height = rect
         mx, my = max(1, round(width * 0.2)), max(1, round(height * 0.2))
         proposed = self._clamp_scene((x - mx, y - my, width + 2 * mx, height + 2 * my))
-        current = self._areas.get("search")
-        self._areas["search"] = self._clamp_scene(self._union(current, proposed)) if current else proposed
+        current = self._area_rect(self._areas.get("search"))
+        self._areas["search"] = self._rect_area(
+            self._clamp_scene(self._union(current, proposed)) if current else proposed
+        )
         self._activate_area("search")
         self.locatorRoiChanged.emit("search", self._areas["search"])
 
@@ -3498,8 +3528,7 @@ class LocatorROIEditor(ROIEditor):
             self._hint_label.setText("Najprv nastav oblasť hľadania.")
             self._hint_label.setVisible(True)
             return
-        if (target == "template" and self._use_golden_crop) or (
-                target == "angle" and not self._angle_enabled):
+        if target == "template" and self._use_golden_crop:
             return
         self._activate_area(target)
         self._view.set_draw_shape("rect")
@@ -3508,7 +3537,7 @@ class LocatorROIEditor(ROIEditor):
         self._active_area = target
         self._locator_syncing = True
         try:
-            self.set_roi(self._areas.get(target))
+            self.set_roi_data(self._areas.get(target) or {})
             self._view._shape_history.clear()
             self._view._shape_redo.clear()
             self._view.historyChanged.emit()
@@ -3517,21 +3546,26 @@ class LocatorROIEditor(ROIEditor):
             self._locator_syncing = False
         self._style_active_area()
         self._render_areas()
+        self._sync_geometry_controls()
 
     def _active_area_changed(self, rect: object) -> None:
         if not self._locator_mode or self._locator_syncing:
             return
-        value = tuple(int(v) for v in rect) if rect is not None else None
+        value = self._normalize_area(self._view.roi_data())
         if value is not None and self._active_area == "template":
             search = self._areas.get("search")
-            value = self._inside(value, search) if search else None
+            contained = self._inside(value, search) if search else None
+            value = contained if contained is not None else self._areas.get("template")
         elif value is not None and self._active_area == "search" and self._areas.get("template"):
-            value = self._clamp_scene(self._union(value, self._areas["template"]))
+            template_rect = self._area_rect(self._areas["template"])
+            value = self._rect_area(self._clamp_scene(self._union(
+                self._area_rect(value), template_rect
+            ))) if template_rect is not None else value
         self._areas[self._active_area] = value
-        if value != rect:
+        if value != self._view.roi_data():
             self._locator_syncing = True
             try:
-                self.set_roi(value)
+                self.set_roi_data(value or {})
             finally:
                 self._locator_syncing = False
         self._style_active_area()
@@ -3547,17 +3581,16 @@ class LocatorROIEditor(ROIEditor):
         self._clear_area_items()
         if not self._locator_mode:
             return
-        for target in ("search", "template", "angle"):
-            rect = self._areas.get(target)
+        for target in ("search", "template"):
+            area = self._areas.get(target)
+            rect = self._area_rect(area)
             if rect is None:
                 continue
             if target == "template" and self._use_golden_crop:
                 continue
-            if target == "angle" and not self._angle_enabled:
-                continue
             color = self.COLORS[target]
             if target != self._active_area:
-                item = QGraphicsRectItem(QRectF(*rect))
+                item = QGraphicsPathItem(self._area_path(area))
                 pen = QPen(color); pen.setWidthF(1.5)
                 item.setPen(pen); item.setBrush(Qt.transparent); item.setZValue(20)
                 item.setAcceptedMouseButtons(Qt.NoButton)
@@ -3580,7 +3613,66 @@ class LocatorROIEditor(ROIEditor):
         return self._view._clamp_integer_rect(rect)
 
     @staticmethod
-    def _inside(rect, bounds):
+    def _rect_area(rect):
+        if rect is None:
+            return None
+        x, y, width, height = rect
+        return {"x": int(x), "y": int(y), "w": int(width), "h": int(height)}
+
+    @staticmethod
+    def _normalize_area(value):
+        descriptor = ToolRoi.from_obj(value)
+        return descriptor.to_dict() or None
+
+    @staticmethod
+    def _area_rect(value):
+        return ToolRoi.from_obj(value).rect()
+
+    @staticmethod
+    def _area_path(value) -> QPainterPath:
+        descriptor = ToolRoi.from_obj(value)
+        path = QPainterPath()
+        if descriptor.shape() == "polygon":
+            points = descriptor.points()
+            if points:
+                path.moveTo(*points[0])
+                for point in points[1:]:
+                    path.lineTo(*point)
+                path.closeSubpath()
+            return path
+        rect = descriptor.rect()
+        if rect is not None:
+            rectf = QRectF(*rect)
+            if descriptor.shape() == "ellipse":
+                path.addEllipse(rectf)
+            else:
+                path.addRect(rectf)
+        return path
+
+    @classmethod
+    def _inside(cls, value, bounds):
+        if value is None or bounds is None:
+            return None
+        bounds_path = cls._area_path(bounds)
+        candidate = ToolRoi.from_obj(value)
+        points = candidate.points()
+        if not points:
+            rect = candidate.rect()
+            if rect is None:
+                return None
+            x, y, width, height = rect
+            points = [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
+        if all(bounds_path.contains(QPointF(float(x), float(y))) for x, y in points):
+            return candidate.to_dict()
+        # Axis-aligned areas can be safely clamped.  Rotated areas remain
+        # unchanged rather than silently distorting their geometry.
+        if candidate.is_rotated_rect() or ToolRoi.from_obj(bounds).is_rotated_rect():
+            return None
+        rect = candidate.rect(); bounds_rect = ToolRoi.from_obj(bounds).rect()
+        return cls._rect_area(cls._inside_rect(rect, bounds_rect))
+
+    @staticmethod
+    def _inside_rect(rect, bounds):
         x, y, width, height = rect; bx, by, bw, bh = bounds
         width, height = min(width, bw), min(height, bh)
         return (min(max(x, bx), bx + bw - width), min(max(y, by), by + bh - height),

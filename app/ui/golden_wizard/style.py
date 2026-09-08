@@ -47,6 +47,20 @@ QDialog#goldenWizard QLineEdit:focus,
 QDialog#goldenWizard QComboBox:focus,
 QDialog#goldenWizard QSpinBox:focus,
 QDialog#goldenWizard QDoubleSpinBox:focus { border-color: #2f80c9; }
+QDialog#goldenWizard QCheckBox { color: #d7dde4; spacing: 7px; }
+QDialog#goldenWizard QCheckBox::indicator {
+    width: 15px; height: 15px; background: #11161b;
+    border: 1px solid #607080; border-radius: 3px;
+}
+QDialog#goldenWizard QCheckBox::indicator:hover {
+    background: #172431; border-color: #64a7df;
+}
+QDialog#goldenWizard QCheckBox::indicator:checked {
+    background: #2f80c9; border-color: #69aeeb;
+}
+QDialog#goldenWizard QCheckBox::indicator:disabled {
+    background: #1a1f25; border-color: #303842;
+}
 QDialog#goldenWizard QTableWidget {
     background: #15191e; alternate-background-color: #1a2026;
     border: 1px solid #2a313a; gridline-color: #252c34; selection-background-color: #1f5f91;
@@ -66,20 +80,19 @@ QDialog#goldenWizard QSplitter::handle { background: #2a313a; }
 
 FIELD_LABELS_SK = {
     "use_golden_crop": "Použiť výrez z GOLDEN",
-    "coarse_to_fine": "Hrubé → presné hľadanie",
-    "coarse_cap": "Maximálna veľkosť hrubého hľadania",
-    "angle_enabled": "Kompenzovať rotáciu",
-    "angle_method": "Metóda uhla",
-    "angle_ref_deg": "Referenčný uhol",
-    "angle_max_dev_deg": "Max. odchýlka uhla",
-    "angle_smooth": "Vyhladenie uhla",
-    "angle_range_deg": "Rozsah hľadania uhla",
-    "angle_step_deg": "Krok uhla",
+    "coarse_cap": "Limit veľkosti rýchleho hľadania",
+    "alignment_mode": "Režim zarovnania",
+    "reference_search_half_window": "Okolie A–B na každú stranu",
+    "reference_blur_sigma": "Vyhladenie referenčnej hrany (σ)",
+    "reference_scan_step": "Rozostup meracích bodov",
+    "reference_edge_polarity": "Prechod referenčnej hrany",
+    "reference_grad_threshold": "Minimálna sila referenčnej hrany",
+    "reference_min_coverage": "Minimálne pokrytie referenčnej hrany",
+    "reference_max_angle_deg": "Maximálne otočenie",
+    "reference_use_subpixel": "Subpixelová presnosť referenčnej hrany",
     "apply_alignment": "Použiť zarovnanie",
-    "rotation_enabled": "Hľadať rotáciu",
-    "angle_enabled": "Určiť výsledný uhol",
+    "rotation_enabled": "Hľadať otočenie šablóny",
     "template_roi": "Oblasť šablóny",
-    "angle_roi": "Oblasť uhla",
     "threshold_corr": "Minimálna zhoda",
     "score_threshold": "Prah odchýlky",
     "total_area_threshold": "Max. anomálna plocha",
@@ -102,6 +115,7 @@ METRIC_LABELS_SK = {
     "area": "Plocha",
     "found": "Nájdené",
     "match_attempts": "Pokusy o zhodu",
+    "reference_coverage": "Pokrytie referenčnej hrany",
     "edge_count": "Počet hrán",
 }
 

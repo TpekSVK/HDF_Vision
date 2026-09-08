@@ -164,7 +164,12 @@ class LocatorTemplateMatchTool(BaseTool):
             thresholds if isinstance(thresholds, ToolThresholds) else ToolThresholds.from_obj(thresholds)
         )
 
-        params_dict = params_obj.values or {}
+        params_dict = dict(params_obj.values or {})
+        if "template_roi" not in params_dict and isinstance(tool, Tool):
+            template_roi = getattr(tool, "template_roi", ToolRoi()).to_dict()
+            if template_roi:
+                params_dict["template_roi"] = template_roi
+                params_obj = ToolParams(params_dict)
         thresholds_dict = thresholds_obj.values or {}
 
         template_signature = (
@@ -174,6 +179,7 @@ class LocatorTemplateMatchTool(BaseTool):
                 _freeze_value(params_dict.get("template_roi")),
                 _safe_int(params_dict.get("coarse_cap", 600), 600),
                 bool(params_dict.get("rotation_enabled", False)),
+                str(params_dict.get("alignment_mode", "translation")),
                 round(_safe_float(params_dict.get("angle_range_deg", 15.0), 15.0), 4),
                 round(_safe_float(params_dict.get("angle_step_deg", 1.0), 1.0), 4),
                 bool(params_dict.get("angle_enabled", False)),
@@ -182,6 +188,11 @@ class LocatorTemplateMatchTool(BaseTool):
                 round(_safe_float(params_dict.get("angle_ref_deg", 0.0), 0.0), 4),
                 round(_safe_float(params_dict.get("angle_max_dev_deg", 15.0), 15.0), 4),
                 round(_safe_float(params_dict.get("angle_smooth", 0.0), 0.0), 4),
+                _freeze_value(params_dict.get("reference_point_a")),
+                _freeze_value(params_dict.get("reference_point_b")),
+                _safe_int(params_dict.get("reference_search_half_window", 20), 20),
+                _safe_int(params_dict.get("reference_scan_step", 2), 2),
+                round(_safe_float(params_dict.get("reference_grad_threshold", 15.0), 15.0), 4),
             ),
             (_safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),),
         )
@@ -1695,18 +1706,28 @@ def run_locator_template_match(
     search_rect = _rect_from_any(roi)
     search_rect = _clamp_rect(search_rect, frame_w, frame_h)
 
-    use_golden_crop = bool(params_dict.get("use_golden_crop", True))
+    # A locator needs a smaller template inside a larger search area.  The
+    # historical golden-crop fallback is retained only when explicitly set.
+    use_golden_crop = bool(params_dict.get("use_golden_crop", False))
     template_source = None
     if not use_golden_crop:
         template_source = _rect_from_any(params_dict.get("template_roi"))
-    if template_source is None:
+    elif template_source is None:
         template_source = _rect_from_any(search_rect)
 
     template_rect = _clamp_rect(template_source, golden_w, golden_h)
 
     coarse_cap = _safe_int(params_dict.get("coarse_cap", 600), 600)
-    rotation_enabled = bool(params_dict.get("rotation_enabled", False))
-    angle_enabled = bool(params_dict.get("angle_enabled", False))
+    alignment_mode = str(params_dict.get("alignment_mode", "") or "").strip().lower()
+    if alignment_mode not in {"translation", "template_rotation", "guided_edge"}:
+        # Keep existing recipes functional while the old Angle ROI controls
+        # disappear from the editor.
+        alignment_mode = "legacy_angle" if bool(params_dict.get("angle_enabled", False)) else (
+            "template_rotation" if bool(params_dict.get("rotation_enabled", False)) else "translation"
+        )
+    rotation_enabled = alignment_mode == "template_rotation"
+    guided_edge = alignment_mode == "guided_edge"
+    angle_enabled = alignment_mode == "legacy_angle"
     angle_range_deg = _safe_float(params_dict.get("angle_range_deg", 15.0), 15.0)
     angle_step_deg = _safe_float(params_dict.get("angle_step_deg", 1.0), 1.0)
     angle_method = str(params_dict.get("angle_method", "fitline")).strip().lower()
@@ -1739,6 +1760,8 @@ def run_locator_template_match(
     theta_raw: Optional[float] = None
     angle_roi_rect: Optional[tuple[int, int, int, int]] = None
     angle_fallback: Optional[str] = None
+    reference_diagnostics: Dict[str, Any] = {}
+    alignment_failure: Optional[str] = None
 
     def _normalize_angle_deg(angle: float) -> float:
         normalized = ((angle + 90.0) % 180.0) - 90.0
@@ -1960,11 +1983,108 @@ def run_locator_template_match(
                     dx = float(cf_x - (cos_t * cg_x - sin_t * cg_y))
                     dy = float(cf_y - (sin_t * cg_x + cos_t * cg_y))
 
+    if guided_edge:
+        from app.services.tools.edge_profile_deviation import detect_guided_reference_edge
+
+        def _reference_point(value: Any) -> Optional[tuple[float, float]]:
+            if isinstance(value, dict) and {"x", "y"}.issubset(value):
+                return float(value["x"]), float(value["y"])
+            if isinstance(value, (tuple, list)) and len(value) >= 2:
+                return float(value[0]), float(value[1])
+            return None
+
+        reference_a = _reference_point(params_dict.get("reference_point_a"))
+        reference_b = _reference_point(params_dict.get("reference_point_b"))
+        required_coverage = min(1.0, max(0.0, _safe_float(
+            params_dict.get("reference_min_coverage", 0.6), 0.6
+        )))
+        max_angle = max(0.0, _safe_float(
+            params_dict.get("reference_max_angle_deg", 15.0), 15.0
+        ))
+        reference_diagnostics = {
+            "required_coverage": required_coverage,
+            "max_angle_deg": max_angle,
+            "found": False,
+        }
+        if reference_a is None or reference_b is None or search_rect is None:
+            reference_diagnostics["failure"] = "missing_reference_edge"
+        else:
+            # Template matching provides a coarse translation.  The A-B band
+            # is then moved with it and measures the actual physical edge.
+            coarse_a = (reference_a[0] + dx, reference_a[1] + dy)
+            coarse_b = (reference_b[0] + dx, reference_b[1] + dy)
+            try:
+                with imaging.time_block("reference_edge", timings):
+                    detection = detect_guided_reference_edge(
+                        frame_u8,
+                        search_rect,
+                        coarse_a,
+                        coarse_b,
+                        blur_sigma=_safe_float(params_dict.get("reference_blur_sigma", 1.0), 1.0),
+                        scan_step=max(1, _safe_int(params_dict.get("reference_scan_step", 2), 2)),
+                        edge_polarity=str(params_dict.get("reference_edge_polarity", "any")),
+                        grad_threshold=max(0.0, _safe_float(
+                            params_dict.get("reference_grad_threshold", 15.0), 15.0
+                        )),
+                        search_half_window=max(1, _safe_int(
+                            params_dict.get("reference_search_half_window", 20), 20
+                        )),
+                        outlier_trim_pct=0.1,
+                        use_subpixel=bool(params_dict.get("reference_use_subpixel", False)),
+                    )
+                found_a = detection["point_a"]
+                found_b = detection["point_b"]
+                golden_angle = math.degrees(math.atan2(
+                    reference_b[1] - reference_a[1], reference_b[0] - reference_a[0]
+                ))
+                found_angle = math.degrees(math.atan2(
+                    found_b[1] - found_a[1], found_b[0] - found_a[0]
+                ))
+                theta_deg = ((found_angle - golden_angle + 180.0) % 360.0) - 180.0
+                golden_mid = ((reference_a[0] + reference_b[0]) / 2.0,
+                              (reference_a[1] + reference_b[1]) / 2.0)
+                found_mid = ((found_a[0] + found_b[0]) / 2.0,
+                             (found_a[1] + found_b[1]) / 2.0)
+                theta_rad = math.radians(theta_deg)
+                dx = found_mid[0] - (
+                    math.cos(theta_rad) * golden_mid[0] - math.sin(theta_rad) * golden_mid[1]
+                )
+                dy = found_mid[1] - (
+                    math.sin(theta_rad) * golden_mid[0] + math.cos(theta_rad) * golden_mid[1]
+                )
+                coverage = float(detection["coverage"])
+                reference_diagnostics.update({
+                    "found": coverage >= required_coverage and abs(theta_deg) <= max_angle,
+                    "coverage": coverage,
+                    "found_points": int(detection["found_points"]),
+                    "scan_lines": int(detection["scan_lines"]),
+                    "point_a": {"x": float(found_a[0]), "y": float(found_a[1])},
+                    "point_b": {"x": float(found_b[0]), "y": float(found_b[1])},
+                    "theta_deg": float(theta_deg),
+                })
+                if coverage < required_coverage:
+                    reference_diagnostics["failure"] = "low_reference_coverage"
+                elif abs(theta_deg) > max_angle:
+                    reference_diagnostics["failure"] = "reference_angle_out_of_range"
+            except (TypeError, ValueError) as exc:
+                reference_diagnostics["failure"] = "reference_edge_not_found"
+                reference_diagnostics["message"] = str(exc)
+
+    max_shift_x = max(0.0, _safe_float(thresholds_dict.get("max_shift_x", 200.0), 200.0))
+    max_shift_y = max(0.0, _safe_float(thresholds_dict.get("max_shift_y", 200.0), 200.0))
+    if abs(dx) > max_shift_x:
+        alignment_failure = "shift_x_out_of_range"
+    elif abs(dy) > max_shift_y:
+        alignment_failure = "shift_y_out_of_range"
+
     cos_theta = math.cos(math.radians(theta_deg))
     sin_theta = math.sin(math.radians(theta_deg))
     T = np.array([[cos_theta, -sin_theta, dx], [sin_theta, cos_theta, dy]], dtype=np.float32)
 
     found = bool(used > 0 and abs(float(corr)) > 1e-6)
+    if guided_edge:
+        found = found and bool(reference_diagnostics.get("found", False))
+    found = found and alignment_failure is None
 
     metrics = {
         "dx": float(dx),
@@ -1974,6 +2094,8 @@ def run_locator_template_match(
         "match_attempts": float(used),
         "found": found,
     }
+    if guided_edge:
+        metrics["reference_coverage"] = float(reference_diagnostics.get("coverage", 0.0))
     status = status_from_metrics("locator.template_match", metrics, thresholds_dict)
 
     diagnostics = {
@@ -1981,7 +2103,14 @@ def run_locator_template_match(
         "T": T,
         "status": status,
         "threshold_corr": _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55),
+        "max_shift_x": max_shift_x,
+        "max_shift_y": max_shift_y,
+        "alignment_mode": alignment_mode,
     }
+    if guided_edge:
+        diagnostics["reference_edge"] = reference_diagnostics
+    if alignment_failure:
+        diagnostics["alignment_failure"] = alignment_failure
     if angle_enabled:
         diagnostics["theta_method"] = angle_method
         diagnostics["theta_raw"] = theta_raw
@@ -1997,6 +2126,9 @@ def run_locator_template_match(
 
     latency_ms = (time.perf_counter() - start_time) * 1000.0
     diagnostics["latency_ms"] = latency_ms
+    if alignment_failure or (guided_edge and not bool(reference_diagnostics.get("found", False))):
+        status = "nok"
+        diagnostics["status"] = status
     result = ToolRunResult(
         status=status,
         metrics={**metrics, "latency_ms": float(latency_ms)},

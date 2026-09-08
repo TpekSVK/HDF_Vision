@@ -268,6 +268,7 @@ class ToolConfigPanel(QWidget):
         self._updating = False
         self._param_wrappers: dict[str, QWidget] = {}
         self._threshold_wrappers: dict[str, QWidget] = {}
+        self._param_labels: dict[str, QLabel] = {}
         self._param_error_labels: dict[str, QLabel] = {}
         self._threshold_error_labels: dict[str, QLabel] = {}
         self._validation_ok: bool = True
@@ -323,8 +324,7 @@ class ToolConfigPanel(QWidget):
         locator_actions = QVBoxLayout(self._locator_geometry_actions)
         locator_actions.setContentsMargins(0, 0, 0, 0)
         for text, target in (("Vybrať oblasť hľadania", "search"),
-                             ("Vybrať oblasť šablóny", "template"),
-                             ("Vybrať oblasť uhla", "angle")):
+                             ("Vybrať oblasť šablóny", "template")):
             button = QPushButton(text, self._locator_geometry_actions)
             button.clicked.connect(lambda _checked=False, value=target: self.locatorAreaRequested.emit(value))
             locator_actions.addWidget(button)
@@ -626,10 +626,10 @@ class ToolConfigPanel(QWidget):
             "Oblasť kontroly" if is_presence_v2 else "Geometria"
         )
         self._detection_section.set_title(
-            "Šablóna · Rotácia · Meranie uhla" if is_locator else "Detekcia"
+            "Zarovnanie" if is_locator else "Detekcia"
         )
         self._threshold_section.set_title(
-            "Prah" if is_locator else "Citlivosť" if is_presence_v2 else "Prahy"
+            "Prijatie výsledku" if is_locator else "Citlivosť" if is_presence_v2 else "Prahy"
         )
         self._locator_geometry_actions.setVisible(is_locator)
         capabilities = getattr(meta, "meta", meta)
@@ -638,9 +638,7 @@ class ToolConfigPanel(QWidget):
         if is_locator:
             params = dict(getattr(tool.params, "values", {}) or {})
             use_crop = bool(params.get("use_golden_crop", False))
-            angle_enabled = bool(params.get("angle_enabled", False))
             self._locator_template_button.setEnabled(not use_crop)
-            self._locator_angle_button.setEnabled(angle_enabled)
             has_template = (ToolRoi.from_obj(params.get("template_roi")).rect() is not None
                             or tool.template_roi.rect() is not None)
             self._locator_fit_button.setEnabled(has_template and not use_crop)
@@ -790,6 +788,36 @@ class ToolConfigPanel(QWidget):
 
     def refresh_geometry(self, tool: Tool) -> None:
         rect = tool.roi.rect()
+        if tool.type == "locator.template_match":
+            params = dict(getattr(tool.params, "values", {}) or {})
+            template = ToolRoi.from_obj(params.get("template_roi"))
+            if template.rect() is None:
+                template = tool.template_roi.copy()
+            template_rect = template.rect()
+            if rect is None:
+                geometry_text = "Oblasť hľadania nie je nastavená."
+            else:
+                x, y, width, height = rect
+                geometry_text = f"Hľadanie: {width}×{height} px @ ({x}, {y})"
+                if template_rect is None:
+                    geometry_text += "\nŠablóna nie je nastavená."
+                else:
+                    tx, ty, tw, th = template_rect
+                    search_area = max(1, width * height)
+                    ratio = (tw * th) / search_area
+                    geometry_text += f"\nŠablóna: {tw}×{th} px @ ({tx}, {ty})"
+                    if ratio >= 0.85:
+                        geometry_text += "\n⚠ Šablóna je príliš veľká; nezostáva priestor na posun."
+                    elif ratio <= 0.01:
+                        geometry_text += "\n⚠ Šablóna je veľmi malá; skontroluj jej jednoznačnosť."
+                    else:
+                        geometry_text += "\n✓ Veľkosť šablóny ponecháva priestor na hľadanie."
+            self._geometry_summary.setText(geometry_text)
+            has_template = template_rect is not None
+            self._locator_fit_button.setEnabled(
+                has_template and not bool(params.get("use_golden_crop", False))
+            )
+            return
         if rect is None:
             geometry_text = "Bez ROI\nVyberte kresliaci nástroj a vytvorte ROI."
         else:
@@ -802,13 +830,6 @@ class ToolConfigPanel(QWidget):
             )
             geometry_text = f"Shape: {shape}\nX: {x}   Y: {y}\nW: {width}   H: {height}"
         self._geometry_summary.setText(geometry_text)
-        if tool.type == "locator.template_match":
-            params = dict(getattr(tool.params, "values", {}) or {})
-            has_template = (ToolRoi.from_obj(params.get("template_roi")).rect() is not None
-                            or tool.template_roi.rect() is not None)
-            self._locator_fit_button.setEnabled(
-                has_template and not bool(params.get("use_golden_crop", False))
-            )
 
     def set_locator_failure_policy(self, policy: str) -> None:
         normalized = "fail" if str(policy or "").strip().lower() == "fail" else "continue_without_alignment"
@@ -834,6 +855,7 @@ class ToolConfigPanel(QWidget):
         finally:
             self._updating = False
 
+        self._update_locator_mode_visibility()
         self._validate_current_values()
 
     def _rebuild_form(self) -> None:
@@ -881,11 +903,12 @@ class ToolConfigPanel(QWidget):
                 container, error_label = self._create_field_container(widget)
                 self._param_wrappers[name] = container
                 self._param_error_labels[name] = error_label
+                self._param_labels[name] = label
                 if tooltip:
                     container.setToolTip(tooltip)
                 target_layout = self._advanced_layout if (
                     (self._current_tool.type == "locator.template_match"
-                     and name in {"coarse_to_fine", "coarse_cap", "angle_smooth", "apply_alignment"})
+                     and name in {"coarse_cap", "apply_alignment"})
                     or self._current_tool.type in _STATISTICAL_PRESENCE_TYPES
                 ) else self._form_layout
                 target_layout.addRow(label, container)
@@ -943,6 +966,7 @@ class ToolConfigPanel(QWidget):
         self._btn_defaults.setEnabled(added_fields)
 
         if added_fields:
+            self._update_locator_mode_visibility()
             self._validate_current_values()
 
     def _clear_form(self) -> None:
@@ -956,6 +980,7 @@ class ToolConfigPanel(QWidget):
         self._threshold_widgets.clear()
         self._param_wrappers.clear()
         self._threshold_wrappers.clear()
+        self._param_labels.clear()
         self._param_error_labels.clear()
         self._threshold_error_labels.clear()
         self._form_error_label.clear()
@@ -964,6 +989,30 @@ class ToolConfigPanel(QWidget):
     def _is_supported_spec(self, spec: dict[str, Any]) -> bool:
         field_type = (spec or {}).get("type")
         return field_type in _SUPPORTED_FORM_FIELD_TYPES
+
+    def _update_locator_mode_visibility(self) -> None:
+        """Show reference-edge tuning only for the guided A-B locator mode."""
+        tool = self._current_tool
+        if tool is None or tool.type != "locator.template_match":
+            return
+        mode_widget = self._param_widgets.get("alignment_mode")
+        mode = (
+            str(mode_widget.currentData()) if isinstance(mode_widget, QComboBox)
+            else str(getattr(tool.params, "values", {}).get("alignment_mode", "translation"))
+        )
+        reference_names = {
+            "reference_search_half_window", "reference_blur_sigma", "reference_scan_step",
+            "reference_edge_polarity", "reference_grad_threshold", "reference_min_coverage",
+            "reference_max_angle_deg", "reference_use_subpixel",
+        }
+        visible = mode == "guided_edge"
+        for name in reference_names:
+            wrapper = self._param_wrappers.get(name)
+            label = self._param_labels.get(name)
+            if wrapper is not None:
+                wrapper.setVisible(visible)
+            if label is not None:
+                label.setVisible(visible)
     def _clear_test_result(self) -> None:
         self._reset_diagnostics()
         self.locatorPolicyWarningChanged.emit("")
@@ -1284,10 +1333,23 @@ class ToolConfigPanel(QWidget):
 
         message = ""
         if not found_flag:
+            reference = diagnostics.get("reference_edge")
+            failure = reference.get("failure") if isinstance(reference, dict) else None
+            reasons = {
+                "missing_reference_edge": "referenčná hrana A–B nie je nastavená",
+                "reference_edge_not_found": "referenčná hrana A–B nebola nájdená",
+                "low_reference_coverage": "pokrytie referenčnej hrany je príliš nízke",
+                "reference_angle_out_of_range": "otočenie referenčnej hrany je mimo povoleného limitu",
+                "shift_x_out_of_range": "posun X je mimo povoleného limitu",
+                "shift_y_out_of_range": "posun Y je mimo povoleného limitu",
+            }
+            detail = reasons.get(
+                str(failure or diagnostics.get("alignment_failure") or ""),
+                "nenašiel platnú pozíciu",
+            )
             message = (
-                "Pozor: Locator nenašiel pozíciu (found = False). "
-                "Pri politike „Pokračovať bez zarovnania“ zostane frame nezarovnaný. "
-                "Skontroluj downstream nástroje a nastavenia locatora."
+                f"Pozor: Locator {detail}. Pri politike „Pokračovať bez zarovnania“ "
+                "zostane frame nezarovnaný. Skontroluj downstream nástroje a nastavenia locatora."
             )
         elif corr_value < threshold_corr:
             message = (
@@ -1629,6 +1691,8 @@ class ToolConfigPanel(QWidget):
     def _on_field_changed(self, kind: str, name: str, value: Any) -> None:
         if self._updating:
             return
+        if kind == "param" and name == "alignment_mode":
+            self._update_locator_mode_visibility()
         ok, _, normalized = self._validate_current_values()
         if not ok:
             return
@@ -2484,17 +2548,14 @@ class GoldenWizard(QDialog):
         is_locator = tool.type == "locator.template_match"
         params = dict(getattr(tool.params, "values", {}) or {})
         if is_locator:
-            template = ToolRoi.from_obj(params.get("template_roi")).rect()
-            if template is None:
-                template = tool.template_roi.rect()
-            angle = ToolRoi.from_obj(params.get("angle_roi")).rect()
+            template_roi = ToolRoi.from_obj(params.get("template_roi"))
+            if template_roi.rect() is None:
+                template_roi = tool.template_roi.copy()
             self.roi_editor.set_locator_mode(
                 True,
-                search=tool.roi.rect(),
-                template=template,
-                angle=angle,
+                search=tool.roi.to_dict(),
+                template=template_roi.to_dict(),
                 use_golden_crop=bool(params.get("use_golden_crop", False)),
-                angle_enabled=bool(params.get("angle_enabled", False)),
             )
         else:
             self.roi_editor.set_locator_mode(False)
@@ -2507,11 +2568,22 @@ class GoldenWizard(QDialog):
         mask_value = getattr(getattr(tool, "ignore_mask", None), "value", None)
         self.roi_editor.configure_ignore_mask(supports_mask, mask_value)
         is_edge_profile = tool.type == "edge_profile_deviation"
+        is_guided_locator = is_locator and str(
+            params.get("alignment_mode", "translation")
+        ) == "guided_edge"
+        anchor_a_key = "reference_point_a" if is_guided_locator else "point_a"
+        anchor_b_key = "reference_point_b" if is_guided_locator else "point_b"
+        window_key = "reference_search_half_window" if is_guided_locator else "search_half_window"
         self.roi_editor.configure_edge_anchors(
-            is_edge_profile,
-            self._parse_edge_point(params.get("point_a")),
-            self._parse_edge_point(params.get("point_b")),
-            int(params.get("search_half_window", 20) or 20),
+            is_edge_profile or is_guided_locator,
+            self._parse_edge_point(params.get(anchor_a_key)),
+            self._parse_edge_point(params.get(anchor_b_key)),
+            int(params.get(window_key, 20) or 20),
+            label="Referenčná hrana A-B" if is_guided_locator else "Hrana A-B",
+            refine_label=(
+                "Spresniť referenčnú hranu" if is_guided_locator else "Spresniť hranu"
+            ),
+            activate=is_edge_profile,
         )
 
     @staticmethod
@@ -3461,7 +3533,7 @@ class GoldenWizard(QDialog):
             self._btn_legacy_edit.setEnabled(True)
             self._btn_delete_selected.setEnabled(True)
             tool = tools[row]
-            if tool.type == "edge_profile_deviation":
+            if tool.type in {"edge_profile_deviation", "locator.template_match"}:
                 self._btn_legacy_edit.setVisible(False)
             else:
                 self._btn_legacy_edit.setVisible(True)
@@ -3619,16 +3691,21 @@ class GoldenWizard(QDialog):
         if not (0 <= row < len(tools)):
             return
         tool = tools[row]
-        if tool.type != "edge_profile_deviation":
+        is_guided_locator = tool.type == "locator.template_match" and str(
+            getattr(tool.params, "values", {}).get("alignment_mode", "translation")
+        ) == "guided_edge"
+        if tool.type != "edge_profile_deviation" and not is_guided_locator:
             return
 
         parsed_a = self._parse_edge_point(point_a)
         parsed_b = self._parse_edge_point(point_b)
         params = dict(getattr(tool.params, "values", {}) or {})
-        params["point_a"] = (
+        point_a_key = "reference_point_a" if is_guided_locator else "point_a"
+        point_b_key = "reference_point_b" if is_guided_locator else "point_b"
+        params[point_a_key] = (
             {"x": parsed_a[0], "y": parsed_a[1]} if parsed_a is not None else None
         )
-        params["point_b"] = (
+        params[point_b_key] = (
             {"x": parsed_b[0], "y": parsed_b[1]} if parsed_b is not None else None
         )
         tool.params = ToolParams(params)
@@ -3638,9 +3715,8 @@ class GoldenWizard(QDialog):
             self._err(f"Uloženie bodov A-B zlyhalo: {exc}")
             return
         self._update_dirty_state(recipe, view_id)
-        self._status_bar.setText(
-            f"Nástroj: {tool.name}  |  Body A-B aktualizované  |  Koncept uložený"
-        )
+        label = "Referenčná hrana A-B" if is_guided_locator else "Body A-B"
+        self._status_bar.setText(f"Nástroj: {tool.name}  |  {label} aktualizovaná  |  Koncept uložený")
 
     def _on_workspace_edge_refine_requested(self) -> None:
         row = getattr(self, "_selected_tool_row", -1)
@@ -3652,7 +3728,10 @@ class GoldenWizard(QDialog):
         if not (0 <= row < len(tools)):
             return
         tool = tools[row]
-        if tool.type != "edge_profile_deviation":
+        is_guided_locator = tool.type == "locator.template_match" and str(
+            getattr(tool.params, "values", {}).get("alignment_mode", "translation")
+        ) == "guided_edge"
+        if tool.type != "edge_profile_deviation" and not is_guided_locator:
             return
         image = self._current_golden_image()
         roi_rect = tool.roi.rect()
@@ -3673,13 +3752,25 @@ class GoldenWizard(QDialog):
                 roi_rect,
                 point_a,
                 point_b,
-                blur_sigma=float(params.get("blur_sigma", 1.0)),
-                scan_step=int(params.get("scan_step", 2)),
-                edge_polarity=str(params.get("edge_polarity", "any")),
-                grad_threshold=float(params.get("grad_threshold", 15.0)),
-                search_half_window=int(params.get("search_half_window", 20)),
+                blur_sigma=float(params.get(
+                    "reference_blur_sigma" if is_guided_locator else "blur_sigma", 1.0
+                )),
+                scan_step=int(params.get(
+                    "reference_scan_step" if is_guided_locator else "scan_step", 2
+                )),
+                edge_polarity=str(params.get(
+                    "reference_edge_polarity" if is_guided_locator else "edge_polarity", "any"
+                )),
+                grad_threshold=float(params.get(
+                    "reference_grad_threshold" if is_guided_locator else "grad_threshold", 15.0
+                )),
+                search_half_window=int(params.get(
+                    "reference_search_half_window" if is_guided_locator else "search_half_window", 20
+                )),
                 outlier_trim_pct=float(params.get("outlier_trim_pct", 0.1)),
-                use_subpixel=bool(params.get("use_subpixel", False)),
+                use_subpixel=bool(params.get(
+                    "reference_use_subpixel" if is_guided_locator else "use_subpixel", False
+                )),
                 valid_mask=valid_mask,
             )
         except (TypeError, ValueError) as exc:
@@ -3687,9 +3778,10 @@ class GoldenWizard(QDialog):
             return
 
         coverage = float(detection["coverage"])
-        required_coverage = min(
-            1.0, max(0.0, float(thresholds.get("coverage_min", 0.6)))
-        )
+        required_coverage = min(1.0, max(0.0, float(
+            params.get("reference_min_coverage", 0.6)
+            if is_guided_locator else thresholds.get("coverage_min", 0.6)
+        )))
         if coverage < required_coverage:
             self.roi_editor.set_edge_status(
                 f"Hrana nie je dostatočne súvislá: {coverage * 100.0:.0f} %, "
@@ -3706,9 +3798,15 @@ class GoldenWizard(QDialog):
             detection["edge_points"],
         )
         recommended = dict(detection.get("recommended_params", {}) or {})
-        params.update(recommended)
-        params["point_a"] = {"x": float(refined_a[0]), "y": float(refined_a[1])}
-        params["point_b"] = {"x": float(refined_b[0]), "y": float(refined_b[1])}
+        if is_guided_locator:
+            if "grad_threshold" in recommended:
+                params["reference_grad_threshold"] = recommended["grad_threshold"]
+            params["reference_point_a"] = {"x": float(refined_a[0]), "y": float(refined_a[1])}
+            params["reference_point_b"] = {"x": float(refined_b[0]), "y": float(refined_b[1])}
+        else:
+            params.update(recommended)
+            params["point_a"] = {"x": float(refined_a[0]), "y": float(refined_a[1])}
+            params["point_b"] = {"x": float(refined_b[0]), "y": float(refined_b[1])}
         tool.params = ToolParams(params)
         try:
             self.recipes.update_tool(recipe, row, tool, view_id=view_id)
@@ -3717,7 +3815,9 @@ class GoldenWizard(QDialog):
             return
         self._tool_panel.refresh_values(tool)
         self.roi_editor.set_edge_search_half_window(
-            int(params.get("search_half_window", 20))
+            int(params.get(
+                "reference_search_half_window" if is_guided_locator else "search_half_window", 20
+            ))
         )
         self.roi_editor.set_edge_status(
             f"Hrana spresnená: {coverage * 100.0:.0f} % bodov "
@@ -4032,7 +4132,7 @@ class GoldenWizard(QDialog):
             )
         return values
 
-    def _on_locator_roi_changed(self, target: str, rect: object) -> None:
+    def _on_locator_roi_changed(self, target: str, area: object) -> None:
         if self._syncing_workspace_roi:
             return
         row = getattr(self, "_selected_tool_row", -1)
@@ -4044,8 +4144,7 @@ class GoldenWizard(QDialog):
         if not (0 <= row < len(tools)) or tools[row].type != "locator.template_match":
             return
         tool = tools[row]
-        roi = ToolRoi()
-        roi.set_rect(tuple(int(v) for v in rect) if rect is not None else None)
+        roi = ToolRoi.from_obj(area)
         params = dict(getattr(tool.params, "values", {}) or {})
         if target == "search":
             tool.roi = roi
@@ -4056,8 +4155,6 @@ class GoldenWizard(QDialog):
         elif target == "template":
             tool.template_roi = roi
             params["template_roi"] = roi.to_dict() or None
-        elif target == "angle":
-            params["angle_roi"] = roi.to_dict() or None
         else:
             return
         tool.params = ToolParams(params)
@@ -4069,7 +4166,7 @@ class GoldenWizard(QDialog):
         self.view.set_tool_overlay(tool)
         self._tool_panel.refresh_geometry(tool)
         self._update_dirty_state(recipe, view_id)
-        label = {"search": "Hľadanie", "template": "Šablóna", "angle": "Uhol"}[target]
+        label = {"search": "Hľadanie", "template": "Šablóna"}[target]
         self._status_bar.setText(f"Locator | {label}: aktualizované | Koncept uložený")
 
     def _refresh_view_metadata(self) -> None:
@@ -4109,12 +4206,14 @@ class GoldenWizard(QDialog):
         self._tool_panel.refresh_values(tool)
         if tool.type == "edge_profile_deviation" and name == "search_half_window":
             self.roi_editor.set_edge_search_half_window(int(value))
-        if tool.type == "locator.template_match" and name in ("use_golden_crop", "angle_enabled"):
+        if tool.type == "locator.template_match" and name in ("use_golden_crop", "alignment_mode"):
             self._syncing_workspace_roi = True
             try:
                 self._configure_workspace_editor(tool)
             finally:
                 self._syncing_workspace_roi = False
+        if tool.type == "locator.template_match" and name == "reference_search_half_window":
+            self.roi_editor.set_edge_search_half_window(int(value))
         self._update_dirty_state(recipe, view_id)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:

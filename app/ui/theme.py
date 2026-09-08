@@ -102,7 +102,19 @@ QComboBox QAbstractItemView {
   background: #181d23; border: 1px solid #343c46;
   selection-background-color: #1f5f91; outline: none;
 }
-QCheckBox { spacing: 6px; color: #c6ccd3; }
+QCheckBox { spacing: 7px; color: #d7dde4; }
+QCheckBox:hover { color: #f4f6f8; }
+QCheckBox:disabled { color: #6f7882; }
+QCheckBox::indicator {
+  width: 15px; height: 15px;
+  background: #11161b;
+  border: 1px solid #607080;
+  border-radius: 3px;
+}
+QCheckBox::indicator:hover { border-color: #64a7df; background: #172431; }
+QCheckBox::indicator:checked { background: #2f80c9; border-color: #69aeeb; }
+QCheckBox::indicator:checked:hover { background: #3b91dc; border-color: #9acbfa; }
+QCheckBox::indicator:disabled { background: #1a1f25; border-color: #303842; }
 
 QScrollArea, QScrollArea > QWidget > QWidget { background: transparent; border: none; }
 QScrollBar:vertical { background: #14181d; width: 10px; margin: 0; }
