@@ -11,6 +11,7 @@ import cv2
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
+    QBrush,
     QColor,
     QImage,
     QPainterPath,
@@ -1723,6 +1724,8 @@ class _SharedCanvasView(_ShapeROIView):
 
     maskChanged = Signal(object)
     maskHistoryChanged = Signal()
+    edgeAnchorsChanged = Signal(object, object)
+    edgeHistoryChanged = Signal()
     MASK_BRUSH = "brush"
     MASK_ERASER = "eraser"
     MASK_RECTANGLE = "rectangle"
@@ -1747,21 +1750,304 @@ class _SharedCanvasView(_ShapeROIView):
         self._mask_preview: Optional[QGraphicsPathItem] = None
         self._mask_undo: List[np.ndarray] = []
         self._mask_redo: List[np.ndarray] = []
+        self._edge_enabled = False
+        self._edge_editing = False
+        self._edge_point_a: Optional[Tuple[float, float]] = None
+        self._edge_point_b: Optional[Tuple[float, float]] = None
+        self._edge_search_half_window = 20
+        self._edge_detected_points: List[Tuple[float, float]] = []
+        self._edge_detected_line: Optional[
+            Tuple[Tuple[float, float], Tuple[float, float]]
+        ] = None
+        self._edge_items: List[QGraphicsItem] = []
+        self._edge_undo: List[
+            Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]
+        ] = []
+        self._edge_redo: List[
+            Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]
+        ] = []
+        self._edge_drag_target: Optional[str] = None
+        self._edge_drag_before: Optional[
+            Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]
+        ] = None
+        self._edge_selected_target: Optional[str] = None
+        self._edge_scene_resetting = False
 
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:  # type: ignore[override]
-        self.cancel_drawing()
-        # The base view clears the scene; discard its scene-owned wrappers first.
-        self._mask_item = None
-        self._mask_preview = None
-        super().set_pixmap(pixmap)
+        self._edge_scene_resetting = True
+        self._edge_items.clear()
+        try:
+            self.cancel_drawing()
+            # The base view clears the scene; discard its scene-owned wrappers first.
+            self._mask_item = None
+            self._mask_preview = None
+            super().set_pixmap(pixmap)
+        finally:
+            self._edge_scene_resetting = False
         if pixmap is None or pixmap.isNull():
             self._mask = None
         else:
             self._mask = np.zeros((pixmap.height(), pixmap.width()), dtype=np.uint8)
         self._mask_undo.clear()
         self._mask_redo.clear()
+        self._edge_point_a = None
+        self._edge_point_b = None
+        self._edge_detected_points.clear()
+        self._edge_detected_line = None
+        self._edge_undo.clear()
+        self._edge_redo.clear()
+        self._edge_drag_target = None
+        self._edge_drag_before = None
         self._update_mask_overlay()
+        self._render_edge_anchors()
         self.maskHistoryChanged.emit()
+        self.edgeHistoryChanged.emit()
+
+    def configure_edge_anchors(
+        self,
+        enabled: bool,
+        point_a: Optional[Tuple[float, float]] = None,
+        point_b: Optional[Tuple[float, float]] = None,
+        search_half_window: int = 20,
+    ) -> None:
+        self.cancel_drawing()
+        self._edge_enabled = bool(enabled)
+        self._edge_editing = bool(enabled)
+        self._edge_point_a = self._coerce_edge_point(point_a) if enabled else None
+        self._edge_point_b = self._coerce_edge_point(point_b) if enabled else None
+        self._edge_search_half_window = max(1, int(search_half_window))
+        self._edge_detected_points.clear()
+        self._edge_detected_line = None
+        self._edge_undo.clear()
+        self._edge_redo.clear()
+        self._edge_selected_target = None
+        self.set_interaction_mode(InteractionMode.SELECT)
+        self._render_edge_anchors()
+        self.edgeHistoryChanged.emit()
+
+    def set_edge_editing(self, editing: bool) -> None:
+        self.cancel_drawing()
+        self._edge_editing = bool(editing) and self._edge_enabled
+        if self._edge_editing:
+            self._mask_editing = False
+            self.set_interaction_mode(InteractionMode.SELECT)
+        self._render_edge_anchors()
+        self._update_cursor()
+
+    def _update_cursor(self) -> None:
+        super()._update_cursor()
+        if (
+            getattr(self, "_edge_editing", False)
+            and not self._panning
+            and not self._space_pressed
+        ):
+            self.setCursor(Qt.CrossCursor)
+
+    def set_edge_search_half_window(self, pixels: int) -> None:
+        self._edge_search_half_window = max(1, int(pixels))
+        self._render_edge_anchors()
+
+    def edge_points(
+        self,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        return self._edge_snapshot()
+
+    def edge_can_undo(self) -> bool:
+        return bool(self._edge_undo)
+
+    def edge_can_redo(self) -> bool:
+        return bool(self._edge_redo)
+
+    def edge_undo(self) -> None:
+        if not self._edge_undo:
+            return
+        self._edge_redo.append(self._edge_snapshot())
+        self._restore_edge_snapshot(self._edge_undo.pop())
+
+    def edge_redo(self) -> None:
+        if not self._edge_redo:
+            return
+        self._edge_undo.append(self._edge_snapshot())
+        self._restore_edge_snapshot(self._edge_redo.pop())
+
+    def reset_edge_anchors(self) -> None:
+        self._commit_edge_points(None, None)
+
+    def set_edge_detection_result(
+        self,
+        point_a: Tuple[float, float],
+        point_b: Tuple[float, float],
+        detected_points: List[Tuple[float, float]],
+    ) -> None:
+        self._commit_edge_points(point_a, point_b, render=False)
+        self._edge_detected_points = [
+            (float(point[0]), float(point[1])) for point in detected_points
+        ]
+        self._edge_detected_line = (
+            (float(point_a[0]), float(point_a[1])),
+            (float(point_b[0]), float(point_b[1])),
+        )
+        self._render_edge_anchors()
+
+    @staticmethod
+    def _coerce_edge_point(
+        point: Optional[Tuple[float, float]],
+    ) -> Optional[Tuple[float, float]]:
+        if point is None:
+            return None
+        return float(point[0]), float(point[1])
+
+    def _edge_snapshot(
+        self,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        return self._edge_point_a, self._edge_point_b
+
+    def _restore_edge_snapshot(
+        self,
+        state: Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]],
+    ) -> None:
+        self._edge_point_a, self._edge_point_b = state
+        self._edge_detected_points.clear()
+        self._edge_detected_line = None
+        self._edge_selected_target = None
+        self._render_edge_anchors()
+        self.edgeAnchorsChanged.emit(self._edge_point_a, self._edge_point_b)
+        self.edgeHistoryChanged.emit()
+
+    def _commit_edge_points(
+        self,
+        point_a: Optional[Tuple[float, float]],
+        point_b: Optional[Tuple[float, float]],
+        *,
+        render: bool = True,
+    ) -> None:
+        before = self._edge_snapshot()
+        after = self._coerce_edge_point(point_a), self._coerce_edge_point(point_b)
+        if before == after:
+            return
+        self._edge_undo.append(before)
+        self._edge_undo = self._edge_undo[-100:]
+        self._edge_redo.clear()
+        self._edge_point_a, self._edge_point_b = after
+        self._edge_detected_points.clear()
+        self._edge_detected_line = None
+        if render:
+            self._render_edge_anchors()
+        self.edgeAnchorsChanged.emit(self._edge_point_a, self._edge_point_b)
+        self.edgeHistoryChanged.emit()
+
+    def _clear_edge_items(self) -> None:
+        if self._edge_scene_resetting:
+            self._edge_items.clear()
+            return
+        scene = self.scene()
+        for item in self._edge_items:
+            if item.scene() is scene:
+                scene.removeItem(item)
+        self._edge_items.clear()
+
+    def _render_edge_anchors(self) -> None:
+        self._clear_edge_items()
+        if not self._edge_enabled:
+            return
+        scene = self.scene()
+        point_a, point_b = self._edge_point_a, self._edge_point_b
+        if point_a is not None and point_b is not None:
+            ax, ay = point_a
+            bx, by = point_b
+            dx, dy = bx - ax, by - ay
+            length = math.hypot(dx, dy)
+            if length > 1e-6:
+                nx = -dy / length * self._edge_search_half_window
+                ny = dx / length * self._edge_search_half_window
+                path = QPainterPath(QPointF(ax + nx, ay + ny))
+                path.lineTo(QPointF(bx + nx, by + ny))
+                path.lineTo(QPointF(bx - nx, by - ny))
+                path.lineTo(QPointF(ax - nx, ay - ny))
+                path.closeSubpath()
+                band = QGraphicsPathItem(path)
+                band_pen = QPen(QColor(70, 150, 255, 180), 1, Qt.DashLine)
+                band_pen.setCosmetic(True)
+                band.setPen(band_pen)
+                band.setBrush(QBrush(QColor(70, 150, 255, 35)))
+                band.setZValue(110)
+                band.setAcceptedMouseButtons(Qt.NoButton)
+                scene.addItem(band)
+                self._edge_items.append(band)
+
+            rough_pen = QPen(QColor(255, 210, 110), 2)
+            rough_pen.setCosmetic(True)
+            rough = scene.addLine(ax, ay, bx, by, rough_pen)
+            rough.setZValue(112)
+            rough.setAcceptedMouseButtons(Qt.NoButton)
+            self._edge_items.append(rough)
+
+        if self._edge_detected_line is not None:
+            detected_a, detected_b = self._edge_detected_line
+            detected_pen = QPen(QColor(34, 197, 94), 2.5)
+            detected_pen.setCosmetic(True)
+            line = scene.addLine(
+                detected_a[0], detected_a[1], detected_b[0], detected_b[1], detected_pen
+            )
+            line.setZValue(114)
+            line.setAcceptedMouseButtons(Qt.NoButton)
+            self._edge_items.append(line)
+        stride = max(1, int(math.ceil(len(self._edge_detected_points) / 160)))
+        for x, y in self._edge_detected_points[::stride]:
+            marker = scene.addEllipse(
+                x - 1.75, y - 1.75, 3.5, 3.5,
+                QPen(Qt.NoPen), QBrush(QColor(50, 220, 120, 220)),
+            )
+            marker.setZValue(115)
+            marker.setAcceptedMouseButtons(Qt.NoButton)
+            self._edge_items.append(marker)
+
+        for target, point, label_text in (
+            ("a", point_a, "A"),
+            ("b", point_b, "B"),
+        ):
+            if point is None:
+                continue
+            selected = self._edge_editing and target == self._edge_selected_target
+            color = QColor("#FBBF24" if selected else "#60A5FA")
+            marker_pen = QPen(color, 2)
+            marker_pen.setCosmetic(True)
+            marker = scene.addEllipse(
+                point[0] - 5, point[1] - 5, 10, 10,
+                marker_pen, QBrush(QColor(17, 24, 39, 210)),
+            )
+            marker.setZValue(118)
+            marker.setAcceptedMouseButtons(Qt.NoButton)
+            label = scene.addSimpleText(label_text)
+            label.setBrush(color)
+            label.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            label.setPos(point[0] + 7, point[1] - 14)
+            label.setZValue(119)
+            label.setAcceptedMouseButtons(Qt.NoButton)
+            self._edge_items.extend((marker, label))
+
+    def _edge_hit_target(self, viewport_pos) -> Optional[str]:
+        scene_pos = self.mapToScene(viewport_pos)
+        radius = 11.0 / max(0.01, self.zoom())
+        candidates = []
+        for target, point in (("a", self._edge_point_a), ("b", self._edge_point_b)):
+            if point is not None:
+                distance = math.hypot(scene_pos.x() - point[0], scene_pos.y() - point[1])
+                if distance <= radius:
+                    candidates.append((distance, target))
+        return min(candidates)[1] if candidates else None
+
+    def _edge_event_point(self, event) -> Tuple[float, float]:
+        point = self._clamp_edge_point(
+            self.mapToScene(event.position().toPoint())
+        )
+        return float(point.x()), float(point.y())
+
+    def _clamp_edge_point(self, point: QPointF) -> QPointF:
+        point = _clamp_point_to_rect(point, self.scene_rect())
+        if self._roi_rect is not None:
+            point = _clamp_point_to_rect(point, QRectF(*self._roi_rect))
+        return point
 
     def configure_mask(self, enabled: bool, mask: Optional[np.ndarray] = None) -> None:
         self.cancel_drawing()
@@ -1849,6 +2135,12 @@ class _SharedCanvasView(_ShapeROIView):
         self._finish_mask_change()
 
     def cancel_drawing(self) -> None:
+        if self._edge_drag_before is not None:
+            self._edge_point_a, self._edge_point_b = self._edge_drag_before
+        self._edge_drag_target = None
+        self._edge_drag_before = None
+        if not self._edge_scene_resetting:
+            self._render_edge_anchors()
         if self._mask_before is not None:
             self._mask = self._mask_before
             self._update_mask_overlay()
@@ -1860,6 +2152,35 @@ class _SharedCanvasView(_ShapeROIView):
         super().cancel_drawing()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
+        if self._edge_editing and not self.is_pan_gesture(event):
+            self.setFocus(Qt.MouseFocusReason)
+            if event.button() != Qt.LeftButton:
+                event.accept()
+                return
+            target = self._edge_hit_target(event.position().toPoint())
+            scene_point = self.mapToScene(event.position().toPoint())
+            valid_area = (
+                QRectF(*self._roi_rect)
+                if self._roi_rect is not None
+                else self.scene_rect()
+            )
+            if target is None and not valid_area.contains(scene_point):
+                event.accept()
+                return
+            point = self._edge_event_point(event)
+            if target is not None:
+                self._edge_selected_target = target
+                self._edge_drag_target = target
+                self._edge_drag_before = self._edge_snapshot()
+                self._render_edge_anchors()
+            elif self._edge_point_a is None:
+                self._edge_selected_target = "a"
+                self._commit_edge_points(point, self._edge_point_b)
+            elif self._edge_point_b is None:
+                self._edge_selected_target = "b"
+                self._commit_edge_points(self._edge_point_a, point)
+            event.accept()
+            return
         if (not self._mask_editing or self.is_pan_gesture(event)
                 or not self.can_draw() or self._mask is None):
             super().mousePressEvent(event)
@@ -1882,6 +2203,22 @@ class _SharedCanvasView(_ShapeROIView):
         event.accept()
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if self._edge_editing and self._edge_drag_target is not None:
+            point = self._edge_event_point(event)
+            if self._edge_drag_target == "a":
+                self._edge_point_a = point
+            else:
+                self._edge_point_b = point
+            self._edge_detected_points.clear()
+            self._edge_detected_line = None
+            self._render_edge_anchors()
+            event.accept()
+            return
+        if self._edge_editing and event.buttons() == Qt.NoButton:
+            target = self._edge_hit_target(event.position().toPoint())
+            self.setCursor(Qt.SizeAllCursor if target is not None else Qt.CrossCursor)
+            event.accept()
+            return
         if self._panning or self._space_pressed or not self._mask_editing:
             super().mouseMoveEvent(event)
             return
@@ -1896,6 +2233,23 @@ class _SharedCanvasView(_ShapeROIView):
         event.accept()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if (
+            self._edge_editing
+            and self._edge_drag_target is not None
+            and event.button() == Qt.LeftButton
+        ):
+            before = self._edge_drag_before
+            self._edge_drag_target = None
+            self._edge_drag_before = None
+            if before is not None and before != self._edge_snapshot():
+                self._edge_undo.append(before)
+                self._edge_undo = self._edge_undo[-100:]
+                self._edge_redo.clear()
+                self.edgeAnchorsChanged.emit(self._edge_point_a, self._edge_point_b)
+                self.edgeHistoryChanged.emit()
+            self._render_edge_anchors()
+            event.accept()
+            return
         if not self._mask_editing or event.button() != Qt.LeftButton:
             super().mouseReleaseEvent(event)
             return
@@ -1926,6 +2280,40 @@ class _SharedCanvasView(_ShapeROIView):
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
+        if self._edge_editing:
+            directions = {
+                Qt.Key_Left: (-1, 0), Qt.Key_Right: (1, 0),
+                Qt.Key_Up: (0, -1), Qt.Key_Down: (0, 1),
+            }
+            if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
+                if self._edge_selected_target == "a":
+                    self._commit_edge_points(None, self._edge_point_b)
+                elif self._edge_selected_target == "b":
+                    self._commit_edge_points(self._edge_point_a, None)
+                event.accept()
+                return
+            if event.key() in directions and self._edge_selected_target in {"a", "b"}:
+                dx, dy = directions[event.key()]
+                step = 10 if event.modifiers() & Qt.ShiftModifier else 1
+                point = (
+                    self._edge_point_a
+                    if self._edge_selected_target == "a"
+                    else self._edge_point_b
+                )
+                if point is not None:
+                    target = self._clamp_edge_point(
+                        QPointF(point[0] + dx * step, point[1] + dy * step)
+                    )
+                    if self._edge_selected_target == "a":
+                        self._commit_edge_points(
+                            (target.x(), target.y()), self._edge_point_b
+                        )
+                    else:
+                        self._commit_edge_points(
+                            self._edge_point_a, (target.x(), target.y())
+                        )
+                event.accept()
+                return
         if (self._mask_editing and self._mask_mode == self.MASK_POLYGON
                 and event.key() in (Qt.Key_Return, Qt.Key_Enter)):
             self._commit_mask_polygon()
@@ -2047,6 +2435,7 @@ class ROIEditor(QWidget):
         self._view = _SharedCanvasView(self)
         self._view.historyChanged.connect(self._update_history_buttons)
         self._view.maskHistoryChanged.connect(self._update_history_buttons)
+        self._view.edgeHistoryChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
         self._btn_undo = QToolButton(self)
@@ -2204,7 +2593,14 @@ class ROIEditor(QWidget):
 
     # ------------------------------------------------------------------
     def _update_history_buttons(self) -> None:
-        if self._active_edit_context() == "mask":
+        if self._active_edit_context() == "edge":
+            self._btn_reset.setText("Obnoviť A-B")
+            self._btn_undo.setEnabled(self._view.edge_can_undo())
+            self._btn_redo.setEnabled(self._view.edge_can_redo())
+            self._btn_reset.setEnabled(
+                self._view._edge_point_a is not None or self._view._edge_point_b is not None
+            )
+        elif self._active_edit_context() == "mask":
             self._btn_reset.setText("Vymazať masku")
             self._btn_undo.setEnabled(bool(self._view._mask_undo))
             self._btn_redo.setEnabled(bool(self._view._mask_redo))
@@ -2218,16 +2614,33 @@ class ROIEditor(QWidget):
             self._btn_reset.setEnabled(not self._view.is_roi_locked())
 
     def _active_edit_context(self) -> str:
+        if self._view._edge_editing:
+            return "edge"
         return "mask" if self._view._mask_editing else "roi"
 
     def _undo_active_editor(self) -> None:
-        self._view.mask_undo() if self._active_edit_context() == "mask" else self._view.undo()
+        context = self._active_edit_context()
+        if context == "edge":
+            self._view.edge_undo()
+        elif context == "mask":
+            self._view.mask_undo()
+        else:
+            self._view.undo()
 
     def _redo_active_editor(self) -> None:
-        self._view.mask_redo() if self._active_edit_context() == "mask" else self._view.redo()
+        context = self._active_edit_context()
+        if context == "edge":
+            self._view.edge_redo()
+        elif context == "mask":
+            self._view.mask_redo()
+        else:
+            self._view.redo()
 
     def _reset_active_editor(self) -> None:
-        if self._active_edit_context() == "mask":
+        context = self._active_edit_context()
+        if context == "edge":
+            self._view.reset_edge_anchors()
+        elif context == "mask":
             self._view.clear_mask()
         else:
             self._view.reset_roi()
@@ -2271,6 +2684,8 @@ class LocatorROIEditor(ROIEditor):
 
     locatorRoiChanged = Signal(str, object)
     ignoreMaskChanged = Signal(object)
+    edgeAnchorsChanged = Signal(object, object)
+    edgeRefineRequested = Signal()
     COLORS = {
         "search": QColor("#2F80ED"), "template": QColor("#22C55E"),
         "angle": QColor("#D946EF"),
@@ -2286,6 +2701,7 @@ class LocatorROIEditor(ROIEditor):
         self._use_golden_crop = False
         self._angle_enabled = False
         self._mask_available = False
+        self._edge_available = False
         self._area_items: List[QGraphicsItem] = []
         self._result_items: List[QGraphicsItem] = []
         self._locator_buttons = self._navigation.set_draw_tools([
@@ -2305,13 +2721,34 @@ class LocatorROIEditor(ROIEditor):
         self._btn_mask_mode.setToolTip(
             "Ignorovaná oblasť – táto časť obrazu sa pri kontrole vynechá."
         )
+        self._btn_edge_mode = QToolButton(self._navigation)
+        self._btn_edge_mode.setText("Hrana A-B")
+        self._btn_edge_mode.setCheckable(True)
+        self._btn_edge_mode.setToolTip(
+            "Označiť približnú hranu bodmi A a B alebo upraviť existujúce body"
+        )
         edit_group = QButtonGroup(self)
         edit_group.setExclusive(True)
         edit_group.addButton(self._btn_roi_mode)
         edit_group.addButton(self._btn_mask_mode)
-        self._btn_roi_mode.clicked.connect(lambda: self.set_mask_editing(False))
-        self._btn_mask_mode.clicked.connect(lambda: self.set_mask_editing(True))
-        self._navigation.add_context_buttons([self._btn_roi_mode, self._btn_mask_mode])
+        edit_group.addButton(self._btn_edge_mode)
+        self._btn_roi_mode.clicked.connect(lambda: self.set_edit_context("roi"))
+        self._btn_mask_mode.clicked.connect(lambda: self.set_edit_context("mask"))
+        self._btn_edge_mode.clicked.connect(lambda: self.set_edit_context("edge"))
+        self._btn_edge_refine = QToolButton(self._navigation)
+        self._btn_edge_refine.setText("Spresniť hranu")
+        self._btn_edge_refine.setToolTip(
+            "Automaticky nájsť skutočnú hranu v modrom okolí čiary A-B"
+        )
+        self._btn_edge_refine.clicked.connect(
+            lambda _checked=False: self.edgeRefineRequested.emit()
+        )
+        self._navigation.add_context_buttons([
+            self._btn_roi_mode,
+            self._btn_mask_mode,
+            self._btn_edge_mode,
+            self._btn_edge_refine,
+        ])
         self._mask_tool_buttons: List[QToolButton] = []
         mask_tools = (
             ("Štetec", _SharedCanvasView.MASK_BRUSH),
@@ -2379,9 +2816,12 @@ class LocatorROIEditor(ROIEditor):
         self._mask_controls.hide()
         self._btn_roi_mode.hide()
         self._btn_mask_mode.hide()
+        self._btn_edge_mode.hide()
+        self._btn_edge_refine.hide()
         for button in self._mask_tool_buttons:
             button.hide()
         self._view.maskChanged.connect(self.ignoreMaskChanged)
+        self._view.edgeAnchorsChanged.connect(self._on_edge_anchors_changed)
         self._view.interactionModeChanged.connect(self._sync_mask_interaction_mode)
         self.roiChanged.connect(self._active_area_changed)
         self._view.viewport().installEventFilter(self)
@@ -2474,32 +2914,116 @@ class LocatorROIEditor(ROIEditor):
         self._set_mask_settings_enabled(False)
         self._update_history_buttons()
 
-    def set_mask_editing(self, editing: bool) -> None:
-        editing = bool(editing) and self._mask_available
-        self._btn_mask_mode.setChecked(editing)
-        self._btn_roi_mode.setChecked(not editing)
-        self._geometry_controls.setVisible(not editing)
+    def configure_edge_anchors(
+        self,
+        enabled: bool,
+        point_a: Optional[Tuple[float, float]] = None,
+        point_b: Optional[Tuple[float, float]] = None,
+        search_half_window: int = 20,
+    ) -> None:
+        self._edge_available = bool(enabled)
+        self._btn_roi_mode.setVisible(self._mask_available or self._edge_available)
+        self._btn_edge_mode.setVisible(self._edge_available)
+        self._view.configure_edge_anchors(
+            self._edge_available,
+            point_a,
+            point_b,
+            search_half_window,
+        )
+        self.set_edit_context("edge" if self._edge_available else "roi")
+
+    def _on_edge_anchors_changed(self, point_a: object, point_b: object) -> None:
+        self._sync_edge_controls()
+        self.edgeAnchorsChanged.emit(point_a, point_b)
+
+    def set_edge_search_half_window(self, pixels: int) -> None:
+        self._view.set_edge_search_half_window(pixels)
+
+    def edge_points(
+        self,
+    ) -> Tuple[Optional[Tuple[float, float]], Optional[Tuple[float, float]]]:
+        return self._view.edge_points()
+
+    def set_edge_detection_result(
+        self,
+        point_a: Tuple[float, float],
+        point_b: Tuple[float, float],
+        detected_points: List[Tuple[float, float]],
+    ) -> None:
+        self._view.set_edge_detection_result(point_a, point_b, detected_points)
+        self._sync_edge_controls()
+
+    def set_edge_status(self, message: str, *, error: bool = False) -> None:
+        self._hint_label.setText(str(message))
+        self._hint_label.setStyleSheet(
+            "color: #ef4444; font-size: 11px;" if error
+            else "color: #22c55e; font-size: 11px;"
+        )
+        self._hint_label.setVisible(bool(message))
+
+    def set_edit_context(self, context: str) -> None:
+        context = str(context or "roi")
+        if context == "edge" and not self._edge_available:
+            context = "roi"
+        if context == "mask" and not self._mask_available:
+            context = "roi"
+
+        edge_editing = context == "edge"
+        mask_editing = context == "mask"
+        self._view.set_edge_editing(edge_editing)
+        self._view.set_mask_editing(mask_editing)
+
+        for button, checked in (
+            (self._btn_roi_mode, context == "roi"),
+            (self._btn_mask_mode, mask_editing),
+            (self._btn_edge_mode, edge_editing),
+        ):
+            blocked = button.blockSignals(True)
+            button.setChecked(checked)
+            button.blockSignals(blocked)
+
+        self._geometry_controls.setVisible(context == "roi")
         for button in self._shape_buttons:
-            button.setVisible(not editing and not self._locator_mode)
-            button.setEnabled(not editing)
+            button.setVisible(context == "roi" and not self._locator_mode)
+            button.setEnabled(context == "roi")
         for index, button in enumerate(self._locator_buttons):
-            button.setVisible(not editing and self._locator_mode)
+            button.setVisible(context == "roi" and self._locator_mode)
             button.setEnabled(
-                not editing and self._locator_mode
+                context == "roi" and self._locator_mode
                 and (index != 1 or not self._use_golden_crop)
                 and (index != 2 or self._angle_enabled)
             )
         for button in self._mask_tool_buttons:
-            button.setVisible(editing)
-            button.setEnabled(editing)
-        self._mask_controls.setVisible(editing)
-        self._view.set_mask_editing(editing)
-        if editing:
+            button.setVisible(mask_editing)
+            button.setEnabled(mask_editing)
+        self._mask_controls.setVisible(mask_editing)
+        if mask_editing:
             self.set_mask_tool(self._view._mask_mode)
         else:
             self._sync_mask_tool_buttons(None)
-        self._set_mask_settings_enabled(editing)
+        self._set_mask_settings_enabled(mask_editing)
+        self._sync_edge_controls()
         self._update_history_buttons()
+
+    def _sync_edge_controls(self) -> None:
+        edge_editing = self._view._edge_editing
+        point_a, point_b = self._view.edge_points()
+        self._btn_edge_refine.setVisible(edge_editing)
+        self._btn_edge_refine.setEnabled(point_a is not None and point_b is not None)
+        if edge_editing:
+            if point_a is None:
+                self.set_edge_status("Klikni do obrazu a umiestni bod A.")
+            elif point_b is None:
+                self.set_edge_status("Bod A je nastavený. Klikni a umiestni bod B.")
+            else:
+                self.set_edge_status(
+                    "Body A/B môžeš presúvať myšou alebo šípkami; Shift + šípka = 10 px."
+                )
+        else:
+            self._update_info_label()
+
+    def set_mask_editing(self, editing: bool) -> None:
+        self.set_edit_context("mask" if editing else "roi")
 
     def _sync_mask_interaction_mode(self, mode: InteractionMode) -> None:
         if not self._view._mask_editing:
