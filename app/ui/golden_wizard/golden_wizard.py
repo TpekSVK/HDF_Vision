@@ -794,8 +794,11 @@ class ToolConfigPanel(QWidget):
             geometry_text = "Bez ROI\nVyberte kresliaci nástroj a vytvorte ROI."
         else:
             x, y, width, height = rect
-            shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
-                tool.roi.shape(), "Obdĺžnik"
+            shape = (
+                "Otočený obdĺžnik" if tool.roi.is_rotated_rect()
+                else {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+                    tool.roi.shape(), "Obdĺžnik"
+                )
             )
             geometry_text = f"Shape: {shape}\nX: {x}   Y: {y}\nW: {width}   H: {height}"
         self._geometry_summary.setText(geometry_text)
@@ -3492,8 +3495,11 @@ class GoldenWizard(QDialog):
             self._restore_tool_result(tool)
             if tool.type in _STATISTICAL_PRESENCE_TYPES:
                 self._refresh_presence_v2_learning(tool, row)
-            shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
-                tool.roi.shape(), "ROI"
+            shape = (
+                "Otočený obdĺžnik" if tool.roi.is_rotated_rect()
+                else {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+                    tool.roi.shape(), "ROI"
+                )
             ) if tool.roi.rect() is not None else "Bez ROI"
             state = "Povolený" if tool.enabled else "Zakázaný"
             self._status_bar.setText(
@@ -3555,8 +3561,11 @@ class GoldenWizard(QDialog):
         self._update_dirty_state(recipe, view_id)
         if tool.type in _STATISTICAL_PRESENCE_TYPES:
             self._refresh_presence_v2_learning(tool, row)
-        shape = {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
-            tool.roi.shape(), "ROI"
+        shape = (
+            "Otočený obdĺžnik" if tool.roi.is_rotated_rect()
+            else {"rect": "Obdĺžnik", "ellipse": "Kruh", "polygon": "Polygón"}.get(
+                tool.roi.shape(), "ROI"
+            )
         ) if tool.roi.rect() is not None else "Bez ROI"
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  ROI: {shape}  |  Koncept aktualizovaný"

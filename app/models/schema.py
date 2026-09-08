@@ -149,13 +149,19 @@ class ToolRoi:
 
         shape = str(self.data.get("shape", "rect")).lower()
         if shape == "polygon":
+            rotated_rect = bool(self.data.get("rotated_rect", False))
             try:
                 points = [[int(round(float(x))), int(round(float(y)))]
                           for x, y in self.data.get("points", [])]
             except Exception:
                 self.data = {}
                 return
-            self.data = {"shape": "polygon", "points": points} if len(points) >= 3 else {}
+            if len(points) < 3:
+                self.data = {}
+                return
+            self.data = {"shape": "polygon", "points": points}
+            if rotated_rect and len(points) == 4:
+                self.data["rotated_rect"] = True
             return
         if shape not in ("rect", "ellipse"):
             self.data = {}
@@ -214,6 +220,9 @@ class ToolRoi:
             return []
         return [(int(x), int(y)) for x, y in self.data.get("points", [])]
 
+    def is_rotated_rect(self) -> bool:
+        return bool(self.data.get("rotated_rect", False)) and len(self.points()) == 4
+
     def set_shape_rect(self, shape: str, rect: Optional[Tuple[int, int, int, int]]) -> None:
         self.set_rect(rect)
         if self.data and shape == "ellipse":
@@ -225,7 +234,10 @@ class ToolRoi:
 
     def to_dict(self) -> Dict[str, Any]:
         if self.data.get("shape") == "polygon":
-            return {"shape": "polygon", "points": [list(point) for point in self.points()]}
+            result = {"shape": "polygon", "points": [list(point) for point in self.points()]}
+            if self.is_rotated_rect():
+                result["rotated_rect"] = True
+            return result
         rect = self.rect()
         if rect is None:
             return {}
