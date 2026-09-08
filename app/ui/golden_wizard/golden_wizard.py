@@ -3703,12 +3703,30 @@ class GoldenWizard(QDialog):
             refined_b,
             detection["edge_points"],
         )
-        used_threshold = float(detection["grad_threshold"])
-        if used_threshold != float(params.get("grad_threshold", 15.0)):
-            self._on_tool_param_changed("grad_threshold", used_threshold)
+        recommended = dict(detection.get("recommended_params", {}) or {})
+        params.update(recommended)
+        params["point_a"] = {"x": float(refined_a[0]), "y": float(refined_a[1])}
+        params["point_b"] = {"x": float(refined_b[0]), "y": float(refined_b[1])}
+        tool.params = ToolParams(params)
+        try:
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        except Exception as exc:
+            self._err(f"Uloženie odporúčaných nastavení hrany zlyhalo: {exc}")
+            return
+        self._tool_panel.refresh_values(tool)
+        self.roi_editor.set_edge_search_half_window(
+            int(params.get("search_half_window", 20))
+        )
+        polarity_label = {
+            "dark_to_light": "tmavá → svetlá",
+            "light_to_dark": "svetlá → tmavá",
+            "any": "automatický",
+        }.get(str(params.get("edge_polarity", "any")), "automatický")
         self.roi_editor.set_edge_status(
             f"Hrana spresnená: {coverage * 100.0:.0f} % bodov "
-            f"({detection['found_points']}/{detection['scan_lines']})."
+            f"({detection['found_points']}/{detection['scan_lines']}). "
+            f"Použité odporúčania: smer, prechod ({polarity_label}), "
+            "sila hrany a okolie A-B."
         )
 
     def _invalidate_presence_v2_model(self, tool: Tool) -> None:

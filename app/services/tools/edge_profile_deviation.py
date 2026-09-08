@@ -314,6 +314,26 @@ def detect_guided_reference_edge(
     refined_a = project(ax, ay)
     refined_b = project(bx, by)
     global_points = [(px + x0, py + y0) for px, py in trimmed_points]
+    # These values are based only on the successfully detected reference edge.
+    # They are intentionally conservative: refining an A-B line must not make
+    # the next runtime inspection more fragile than the setup result proved.
+    gradient_values = []
+    for px, py in trimmed_points:
+        ix = min(max(int(round(px)), 0), grad.shape[1] - 1)
+        iy = min(max(int(round(py)), 0), grad.shape[0] - 1)
+        gradient_values.append(float(grad[iy, ix]))
+    positive = sum(value > 0.0 for value in gradient_values)
+    negative = sum(value < 0.0 for value in gradient_values)
+    if positive > negative * 1.5:
+        recommended_polarity = "dark_to_light"
+    elif negative > positive * 1.5:
+        recommended_polarity = "light_to_dark"
+    else:
+        recommended_polarity = "any"
+
+    offsets = [abs(value) for value in _compute_distances(trimmed_points, line)]
+    recommended_window = max(6, int(math.ceil(np.percentile(offsets, 95))) + 4)
+    recommended_window = min(max(1, int(search_half_window)), recommended_window)
     return {
         "point_a": (refined_a[0] + x0, refined_a[1] + y0),
         "point_b": (refined_b[0] + x0, refined_b[1] + y0),
@@ -323,6 +343,12 @@ def detect_guided_reference_edge(
         "scan_lines": len(scan_positions),
         "orientation": resolved_orientation,
         "grad_threshold": float(used_threshold),
+        "recommended_params": {
+            "orientation": resolved_orientation,
+            "edge_polarity": recommended_polarity,
+            "grad_threshold": float(used_threshold),
+            "search_half_window": recommended_window,
+        },
     }
 
 
