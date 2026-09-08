@@ -707,6 +707,7 @@ class RecipeView:
     settle_ms: Optional[int] = None
     flash_delay_ms: int = 0
     flash_pulse_ms: int = 200
+    pico_profile: Optional[str] = None
     trigger_mode: Literal["timed", "external"] = "timed"
     external_trigger_mode: Optional[str] = None
     external_source: Optional[str] = None
@@ -755,6 +756,16 @@ class RecipeView:
             self.flash_pulse_ms = 200
         if self.flash_pulse_ms <= 0:
             self.flash_pulse_ms = 200
+
+        pico_profile = str(self.pico_profile or "").strip().upper()
+        if pico_profile not in {"V1", "V2"}:
+            suffix = self.id.rsplit("_", 1)[-1]
+            try:
+                view_number = int(suffix)
+            except (TypeError, ValueError):
+                view_number = 1
+            pico_profile = "V2" if view_number % 2 == 0 else "V1"
+        self.pico_profile = pico_profile
 
         mode = str(self.trigger_mode or "timed").strip().lower()
         mode = {
@@ -860,6 +871,7 @@ class RecipeView:
             "settle_ms": self.settle_ms,
             "flash_delay_ms": int(self.flash_delay_ms),
             "flash_pulse_ms": int(self.flash_pulse_ms),
+            "pico_profile": self.pico_profile,
             "trigger_mode": self.trigger_mode,
             "external_trigger_mode": self.external_trigger_mode,
             "external_source": self.external_source,
@@ -888,6 +900,7 @@ class RecipeView:
             settle_ms=data.get("settle_ms"),
             flash_delay_ms=data.get("flash_delay_ms", 0),
             flash_pulse_ms=data.get("flash_pulse_ms", 200),
+            pico_profile=data.get("pico_profile"),
             trigger_mode=data.get("trigger_mode", "timed"),
             external_trigger_mode=data.get("external_trigger_mode"),
             external_source=data.get("external_source"),
@@ -914,6 +927,7 @@ class RecipeView:
             settle_ms=self.settle_ms,
             flash_delay_ms=self.flash_delay_ms,
             flash_pulse_ms=self.flash_pulse_ms,
+            pico_profile=self.pico_profile,
             trigger_mode=self.trigger_mode,
             external_trigger_mode=self.external_trigger_mode,
             external_source=self.external_source,

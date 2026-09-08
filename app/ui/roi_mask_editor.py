@@ -2049,9 +2049,12 @@ class ROIEditor(QWidget):
         self._view.maskHistoryChanged.connect(self._update_history_buttons)
         self._view.roiChanged.connect(self._on_roi_changed)
 
-        self._btn_undo = QPushButton("Späť", self)
-        self._btn_redo = QPushButton("Znova", self)
-        self._btn_reset = QPushButton("Obnoviť", self)
+        self._btn_undo = QToolButton(self)
+        self._btn_undo.setText("Späť")
+        self._btn_redo = QToolButton(self)
+        self._btn_redo.setText("Znova")
+        self._btn_reset = QToolButton(self)
+        self._btn_reset.setText("Obnoviť ROI")
         self._btn_undo.clicked.connect(self._undo_active_editor)
         self._btn_redo.clicked.connect(self._redo_active_editor)
         self._btn_reset.clicked.connect(self._reset_active_editor)
@@ -2071,24 +2074,16 @@ class ROIEditor(QWidget):
             ("Kruh", lambda: self._view.set_draw_shape("ellipse"), "Ťahaním nakresliť kruh alebo elipsu"),
             ("Polygón", lambda: self._view.set_draw_shape("polygon"), "Klikajte vrcholy; dvojklik alebo Enter dokončí polygón"),
         ])
+        self._navigation.add_history_buttons([
+            self._btn_undo,
+            self._btn_redo,
+            self._btn_reset,
+        ])
         layout.addWidget(self._navigation)
-        layout.addLayout(self._build_geometry_controls())
+        self._geometry_controls = QWidget(self)
+        self._geometry_controls.setLayout(self._build_geometry_controls())
+        layout.addWidget(self._geometry_controls)
         layout.addWidget(self._view, 1)
-
-        toolbar = QHBoxLayout()
-        toolbar.setContentsMargins(0, 0, 0, 0)
-        toolbar.setSpacing(8)
-        toolbar.addWidget(self._btn_undo)
-        toolbar.addWidget(self._btn_redo)
-        toolbar.addWidget(self._btn_reset)
-        toolbar.addStretch(1)
-        info_box = QVBoxLayout()
-        info_box.setContentsMargins(0, 0, 0, 0)
-        info_box.setSpacing(2)
-        info_box.addWidget(self._info_label)
-        info_box.addWidget(self._hint_label)
-        toolbar.addLayout(info_box)
-        layout.addLayout(toolbar)
 
         if not show_toolbar:
             self._btn_undo.hide()
@@ -2124,6 +2119,12 @@ class ROIEditor(QWidget):
         self._btn_lock.toggled.connect(self._view.set_roi_locked)
         row.addWidget(self._btn_lock)
         row.addStretch(1)
+        info_box = QVBoxLayout()
+        info_box.setContentsMargins(0, 0, 0, 0)
+        info_box.setSpacing(2)
+        info_box.addWidget(self._info_label)
+        info_box.addWidget(self._hint_label)
+        row.addLayout(info_box)
         return row
 
     def _apply_geometry_controls(self, _value: int) -> None:
@@ -2157,7 +2158,8 @@ class ROIEditor(QWidget):
         self._btn_lock.setText("ROI zamknuté" if locked else "Zamknúť ROI")
         self._btn_lock.setToolTip("Odomknúť úpravu ROI" if locked else "Zamknúť úpravu ROI v tomto editore")
         self._btn_lock.setEnabled(available)
-        self._btn_reset.setEnabled(not locked)
+        if self._active_edit_context() == "roi":
+            self._btn_reset.setEnabled(available and not locked)
         self._navigation.mode_buttons[InteractionMode.DRAW].setEnabled(not locked)
         for button in self._shape_buttons:
             button.setEnabled(not locked)
@@ -2203,12 +2205,14 @@ class ROIEditor(QWidget):
     # ------------------------------------------------------------------
     def _update_history_buttons(self) -> None:
         if self._active_edit_context() == "mask":
+            self._btn_reset.setText("Vymazať masku")
             self._btn_undo.setEnabled(bool(self._view._mask_undo))
             self._btn_redo.setEnabled(bool(self._view._mask_redo))
             self._btn_reset.setEnabled(
                 self._view._mask is not None and bool(np.any(self._view._mask))
             )
         else:
+            self._btn_reset.setText("Obnoviť ROI")
             self._btn_undo.setEnabled(self._view.can_undo())
             self._btn_redo.setEnabled(self._view.can_redo())
             self._btn_reset.setEnabled(not self._view.is_roi_locked())
@@ -2281,6 +2285,7 @@ class LocatorROIEditor(ROIEditor):
         self._locator_syncing = False
         self._use_golden_crop = False
         self._angle_enabled = False
+        self._mask_available = False
         self._area_items: List[QGraphicsItem] = []
         self._result_items: List[QGraphicsItem] = []
         self._locator_buttons = self._navigation.set_draw_tools([
@@ -2290,20 +2295,11 @@ class LocatorROIEditor(ROIEditor):
         ])
         for button in self._locator_buttons:
             button.hide()
-        self._mask_controls = QWidget(self)
-        self._mask_controls.setStyleSheet(CANVAS_TOOLBAR_STYLE)
-        mask_layout = QVBoxLayout(self._mask_controls)
-        mask_layout.setContentsMargins(0, 0, 0, 0)
-        mask_layout.setSpacing(4)
-        mask_row = QHBoxLayout()
-        mask_row.setContentsMargins(0, 0, 0, 0)
-        mask_row.setSpacing(4)
-        mask_row.addWidget(QLabel("Režim:", self._mask_controls))
-        self._btn_roi_mode = QToolButton(self._mask_controls)
+        self._btn_roi_mode = QToolButton(self._navigation)
         self._btn_roi_mode.setText("ROI")
         self._btn_roi_mode.setCheckable(True)
         self._btn_roi_mode.setChecked(True)
-        self._btn_mask_mode = QToolButton(self._mask_controls)
+        self._btn_mask_mode = QToolButton(self._navigation)
         self._btn_mask_mode.setText("Ignore mask")
         self._btn_mask_mode.setCheckable(True)
         self._btn_mask_mode.setToolTip(
@@ -2315,9 +2311,7 @@ class LocatorROIEditor(ROIEditor):
         edit_group.addButton(self._btn_mask_mode)
         self._btn_roi_mode.clicked.connect(lambda: self.set_mask_editing(False))
         self._btn_mask_mode.clicked.connect(lambda: self.set_mask_editing(True))
-        mask_row.addWidget(self._btn_roi_mode)
-        mask_row.addWidget(self._btn_mask_mode)
-        mask_row.addSpacing(8)
+        self._navigation.add_context_buttons([self._btn_roi_mode, self._btn_mask_mode])
         self._mask_tool_buttons: List[QToolButton] = []
         mask_tools = (
             ("Štetec", _SharedCanvasView.MASK_BRUSH),
@@ -2329,21 +2323,24 @@ class LocatorROIEditor(ROIEditor):
         self._mask_tool_group = QButtonGroup(self)
         self._mask_tool_group.setExclusive(True)
         for index, (text, mode) in enumerate(mask_tools):
-            button = QToolButton(self._mask_controls)
+            button = QToolButton(self._navigation)
             button.setText(text)
             button.setCheckable(True)
             button.setChecked(index == 0)
             button.clicked.connect(lambda _checked=False, value=mode: self._start_mask_tool(value))
             self._mask_tool_group.addButton(button)
-            mask_row.addWidget(button)
             self._mask_tool_buttons.append(button)
-        mask_row.addStretch(1)
-        mask_layout.addLayout(mask_row)
+        self._navigation.add_tool_buttons(self._mask_tool_buttons)
+
+        self._mask_controls = QWidget(self)
+        self._mask_controls.setStyleSheet(CANVAS_TOOLBAR_STYLE)
+        mask_layout = QVBoxLayout(self._mask_controls)
+        mask_layout.setContentsMargins(0, 0, 0, 0)
+        mask_layout.setSpacing(4)
 
         settings_row = QHBoxLayout()
         settings_row.setContentsMargins(0, 0, 0, 0)
         settings_row.setSpacing(4)
-        settings_row.addStretch(1)
         settings_row.addWidget(QLabel("Veľkosť:", self._mask_controls))
         self._mask_brush_size = QSpinBox(self._mask_controls)
         self._mask_brush_size.setObjectName("canvasCompactSpin")
@@ -2365,26 +2362,27 @@ class LocatorROIEditor(ROIEditor):
         settings_row.addWidget(self._mask_opacity)
         settings_row.addSpacing(8)
         self._btn_mask_visible = QToolButton(self._mask_controls)
-        self._btn_mask_visible.setText("Zobraziť")
+        self._btn_mask_visible.setText("Zobraziť masku")
         self._btn_mask_visible.setToolTip("Zobraziť alebo skryť Ignore Mask")
         self._btn_mask_visible.setCheckable(True)
         self._btn_mask_visible.setChecked(True)
         self._btn_mask_visible.toggled.connect(self._view.set_mask_visible)
         settings_row.addWidget(self._btn_mask_visible)
-        self._btn_clear_mask = QToolButton(self._mask_controls)
-        self._btn_clear_mask.setText("Vymazať masku")
-        self._btn_clear_mask.clicked.connect(self.clear_ignore_mask)
-        settings_row.addWidget(self._btn_clear_mask)
+        settings_row.addStretch(1)
         mask_layout.addLayout(settings_row)
         self._mask_setting_controls = (
             self._mask_brush_size,
             self._mask_opacity,
             self._btn_mask_visible,
-            self._btn_clear_mask,
         )
         self.layout().insertWidget(1, self._mask_controls)
         self._mask_controls.hide()
+        self._btn_roi_mode.hide()
+        self._btn_mask_mode.hide()
+        for button in self._mask_tool_buttons:
+            button.hide()
         self._view.maskChanged.connect(self.ignoreMaskChanged)
+        self._view.interactionModeChanged.connect(self._sync_mask_interaction_mode)
         self.roiChanged.connect(self._active_area_changed)
         self._view.viewport().installEventFilter(self)
 
@@ -2463,7 +2461,13 @@ class LocatorROIEditor(ROIEditor):
         self._result_items.clear()
 
     def configure_ignore_mask(self, enabled: bool, mask: Optional[np.ndarray] = None) -> None:
-        self._mask_controls.setVisible(bool(enabled))
+        enabled = bool(enabled)
+        self._mask_available = enabled
+        self._btn_roi_mode.setVisible(enabled)
+        self._btn_mask_mode.setVisible(enabled)
+        self._mask_controls.hide()
+        for button in self._mask_tool_buttons:
+            button.hide()
         self._btn_roi_mode.setChecked(True)
         self._view.configure_mask(enabled, mask)
         self._sync_mask_tool_buttons(None)
@@ -2471,11 +2475,24 @@ class LocatorROIEditor(ROIEditor):
         self._update_history_buttons()
 
     def set_mask_editing(self, editing: bool) -> None:
-        editing = bool(editing) and self._mask_controls.isVisible()
+        editing = bool(editing) and self._mask_available
         self._btn_mask_mode.setChecked(editing)
         self._btn_roi_mode.setChecked(not editing)
-        for button in self._shape_buttons + self._locator_buttons:
+        self._geometry_controls.setVisible(not editing)
+        for button in self._shape_buttons:
+            button.setVisible(not editing and not self._locator_mode)
             button.setEnabled(not editing)
+        for index, button in enumerate(self._locator_buttons):
+            button.setVisible(not editing and self._locator_mode)
+            button.setEnabled(
+                not editing and self._locator_mode
+                and (index != 1 or not self._use_golden_crop)
+                and (index != 2 or self._angle_enabled)
+            )
+        for button in self._mask_tool_buttons:
+            button.setVisible(editing)
+            button.setEnabled(editing)
+        self._mask_controls.setVisible(editing)
         self._view.set_mask_editing(editing)
         if editing:
             self.set_mask_tool(self._view._mask_mode)
@@ -2483,6 +2500,13 @@ class LocatorROIEditor(ROIEditor):
             self._sync_mask_tool_buttons(None)
         self._set_mask_settings_enabled(editing)
         self._update_history_buttons()
+
+    def _sync_mask_interaction_mode(self, mode: InteractionMode) -> None:
+        if not self._view._mask_editing:
+            return
+        self._sync_mask_tool_buttons(
+            self._view._mask_mode if mode == InteractionMode.DRAW else None
+        )
 
     def _set_mask_settings_enabled(self, enabled: bool) -> None:
         for control in self._mask_setting_controls:
@@ -2533,10 +2557,11 @@ class LocatorROIEditor(ROIEditor):
                          use_golden_crop: bool = False, angle_enabled: bool = False) -> None:
         self._locator_mode = bool(enabled)
         for button in self._shape_buttons:
-            button.setVisible(not enabled)
+            button.setVisible(not enabled and not self._view._mask_editing)
         for index, button in enumerate(self._locator_buttons):
-            button.setVisible(enabled)
-            button.setEnabled(enabled and (index != 1 or not use_golden_crop)
+            button.setVisible(enabled and not self._view._mask_editing)
+            button.setEnabled(enabled and not self._view._mask_editing
+                              and (index != 1 or not use_golden_crop)
                               and (index != 2 or angle_enabled))
         if not enabled:
             self._clear_area_items()

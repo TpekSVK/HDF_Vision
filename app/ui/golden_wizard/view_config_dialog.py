@@ -63,6 +63,7 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int] = None,
         flash_delay_ms: int = 0,
         flash_pulse_ms: int = 200,
+        pico_profile: Optional[str] = None,
         pico_config_snapshot: Optional[dict[str, object]] = None,
         trigger_mode: str = "timed",
         external_trigger_mode: Optional[str] = None,
@@ -260,6 +261,15 @@ class ViewConfigDialog(QDialog):
         )
         timing_form.addRow(self._external_mode_label, self._external_mode_combo)
 
+        self._pico_profile_label = QLabel("Profil blesku:")
+        self._pico_profile_combo = QComboBox(timing_group)
+        self._pico_profile_combo.addItem("Pico V1", "V1")
+        self._pico_profile_combo.addItem("Pico V2", "V2")
+        self._pico_profile_combo.setToolTip(
+            "Profil časovania blesku použitý pre tento pohľad v sekvenčnom režime."
+        )
+        timing_form.addRow(self._pico_profile_label, self._pico_profile_combo)
+
         self._external_source_label = QLabel("Externý zdroj:")
         self._external_source_combo = QComboBox(timing_group)
         self._external_source_combo.addItem("Pico USB", "pico")
@@ -350,6 +360,7 @@ class ViewConfigDialog(QDialog):
             settle_ms,
             flash_delay_ms,
             flash_pulse_ms,
+            pico_profile,
             trigger_mode,
             external_trigger_mode,
             external_source,
@@ -497,6 +508,7 @@ class ViewConfigDialog(QDialog):
             "name": name,
             "camera_profile": profile,
             "settle_ms": settle_ms,
+            "pico_profile": str(self._pico_profile_combo.currentData() or "V1"),
             "trigger_mode": trigger_mode,
             "external_trigger_mode": external_mode,
             "external_source": external_source,
@@ -638,6 +650,7 @@ class ViewConfigDialog(QDialog):
         settle_ms: Optional[int],
         flash_delay_ms: int,
         flash_pulse_ms: int,
+        pico_profile: Optional[str],
         trigger_mode: str,
         external_trigger_mode: Optional[str],
         external_source: Optional[str],
@@ -664,6 +677,18 @@ class ViewConfigDialog(QDialog):
         external_mode_idx = self._external_mode_combo.findData(normalized_external_mode)
         if external_mode_idx >= 0:
             self._external_mode_combo.setCurrentIndex(external_mode_idx)
+
+        normalized_pico_profile = str(pico_profile or "").strip().upper()
+        if normalized_pico_profile not in {"V1", "V2"}:
+            suffix = self._view_id.rsplit("_", 1)[-1]
+            try:
+                view_number = int(suffix)
+            except (TypeError, ValueError):
+                view_number = 1
+            normalized_pico_profile = "V2" if view_number % 2 == 0 else "V1"
+        pico_profile_idx = self._pico_profile_combo.findData(normalized_pico_profile)
+        if pico_profile_idx >= 0:
+            self._pico_profile_combo.setCurrentIndex(pico_profile_idx)
 
         normalized_source = str(external_source or ("modbus" if normalized_mode == "external" else "pico")).lower()
         source_idx = self._external_source_combo.findData(normalized_source)
@@ -770,6 +795,10 @@ class ViewConfigDialog(QDialog):
         trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
         external_mode = str(self._external_mode_combo.currentData() or "sequential")
         explicit_active = trigger_mode == "external" and external_mode == "explicit"
+        sequential_active = trigger_mode == "external" and external_mode == "sequential"
+        self._pico_profile_label.setVisible(sequential_active)
+        self._pico_profile_combo.setVisible(sequential_active)
+        self._pico_profile_combo.setEnabled(sequential_active)
         self._external_input_combo.setEnabled(explicit_active and self._external_input_combo.count() > 0)
         if not explicit_active:
             self._external_input_combo.setCurrentIndex(-1)

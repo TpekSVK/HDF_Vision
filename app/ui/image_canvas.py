@@ -312,6 +312,10 @@ class ImageNavigationToolbar(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+        self._context_layout = QHBoxLayout()
+        self._context_layout.setContentsMargins(0, 0, 0, 0)
+        self._context_layout.setSpacing(4)
+        layout.addLayout(self._context_layout)
         self._modes = QButtonGroup(self)
         self._mode_layout = layout
         self.draw_buttons: list[QToolButton] = []
@@ -326,7 +330,16 @@ class ImageNavigationToolbar(QWidget):
         self.mode_buttons[InteractionMode.SELECT].setToolTip("Vybrať a upraviť existujúcu geometriu (Esc)")
         self.mode_buttons[InteractionMode.DRAW].setToolTip("Kresliť aktuálnym ROI alebo maskovacím nástrojom")
         self.mode_buttons[InteractionMode.PAN].setToolTip("Posun: ťahanie; dočasne Space + ťahanie alebo stredné tlačidlo")
+        self._tool_extension_layout = QHBoxLayout()
+        self._tool_extension_layout.setContentsMargins(0, 0, 0, 0)
+        self._tool_extension_layout.setSpacing(4)
+        layout.addLayout(self._tool_extension_layout)
         layout.addSpacing(8)
+        self._history_layout = QHBoxLayout()
+        self._history_layout.setContentsMargins(0, 0, 0, 0)
+        self._history_layout.setSpacing(4)
+        layout.addLayout(self._history_layout)
+        layout.addStretch(1)
         self.zoom_out_button = self._button("−", view.zoom_out, "Zoom out (−)")
         layout.addWidget(self.zoom_out_button)
         self.zoom_label = QLabel(self)
@@ -339,7 +352,6 @@ class ImageNavigationToolbar(QWidget):
         layout.addWidget(self.fit_button)
         self.actual_size_button = self._button("1:1", view.reset_zoom_100, "100%: one image pixel per view pixel (1)")
         layout.addWidget(self.actual_size_button)
-        layout.addStretch(1)
         view.zoomChanged.connect(self._update_zoom)
         view.interactionModeChanged.connect(self._update_mode)
         view.imageChanged.connect(self.setEnabled)
@@ -361,6 +373,20 @@ class ImageNavigationToolbar(QWidget):
             self.draw_buttons.append(button)
             new_buttons.append(button)
         return new_buttons
+
+    def add_context_buttons(self, buttons: list[QToolButton]) -> None:
+        for button in buttons:
+            self._context_layout.addWidget(button)
+        if buttons:
+            self._context_layout.addSpacing(8)
+
+    def add_tool_buttons(self, buttons: list[QToolButton]) -> None:
+        for button in buttons:
+            self._tool_extension_layout.addWidget(button)
+
+    def add_history_buttons(self, buttons: list[QToolButton]) -> None:
+        for button in buttons:
+            self._history_layout.addWidget(button)
 
     def _button(self, text: str, action: Callable, tooltip: str = "") -> QToolButton:
         button = QToolButton(self)
