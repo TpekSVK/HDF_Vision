@@ -6,7 +6,7 @@ HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný 
 
 - RUN obrazovka s výberom receptu, manuálnym `TRIGGER`, Live preview, pásom View, OK/NOK výsledkom, metrikami a dennými štatistikami.
 - Golden Wizard pre Golden snímku, ROI/masku, vision tools, konfiguráciu View, validáciu a publish.
-- CU55 MASTER flow s kontinuálnym streamom a routovaním asynchrónnych Pico eventov `CAPTURE IN1` až `CAPTURE IN8`.
+- CU55 MASTER flow s kontinuálnym streamom a routovaním asynchrónnych Pico eventov `CAPTURE IN1` až `CAPTURE IN8` aj softvérových `CAPTURE V1/V2`.
 - Pico Wizard pre V1/V2 timing profily, mapovanie vstupov a HDF whitelist.
 - Manual light v RUN aj Golden Wizard, nezávislé od Live preview.
 
@@ -27,9 +27,9 @@ physical external input INx
 
 Pico režim `TRIGGER`, v ktorom GP16 generuje hardvérové trigger pulzy kamery, zostáva legacy/test režim.
 
-## Raspberry Pi Pico firmware 3.2.2
+## Raspberry Pi Pico firmware 3.3
 
-Zdrojom pravdy pre túto sekciu je firmware `pico_hdf_controller 3.2.2-master-capture-sim-manual-light` dodaný k dokumentácii.
+Zdrojom pravdy pre túto sekciu je `firmware/pico/main_v3.3.py` (`pico_hdf_controller 3.3-master-production-capture`).
 
 ### Hardware
 
@@ -53,7 +53,7 @@ Zdrojom pravdy pre túto sekciu je firmware `pico_hdf_controller 3.2.2-master-ca
 | Trigger gap | `GAP` | prestávka medzi GP16 pulzmi v TRIGGER | 1..60000 ms |
 | Trigger count | `COUNT` | počet GP16 pulzov v TRIGGER | 1..10 |
 
-`DEBOUNCE_MS` a `LOCKOUT_MS` sú perzistentné konfiguračné hodnoty, ale firmware 3.2.2 pre ne neposkytuje serial `SET` command.
+`DEBOUNCE_MS` a `LOCKOUT_MS` sú perzistentné konfiguračné hodnoty, ale firmware 3.3 pre ne neposkytuje serial `SET` command.
 
 ### MASTER timing
 
@@ -85,7 +85,7 @@ MAP IN8 OFF
 - IN7 spustí V2 timing profile.
 - OFF nespustí timing cyklus.
 
-Mapovanie nemení identitu vstupu. HDF_Vision dostane a routuje `CAPTURE IN1` alebo `CAPTURE IN7`, nie `CAPTURE V1`/`V2`.
+Mapovanie nemení identitu fyzického vstupu. HDF_Vision dostane a routuje `CAPTURE IN1` alebo `CAPTURE IN7`; softvérová sekvencia cez `FIRE V1/V2` používa samostatný event `CAPTURE V1/V2`.
 
 ### MASTER vs TRIGGER
 
@@ -96,20 +96,20 @@ SET V1 MODE MASTER
 SET V2 MODE MASTER
 ```
 
-- **MASTER:** CU55 kontinuálne streamuje, Pico riadi svetlo a pri fyzickom alebo simulovanom vstupe odošle `CAPTURE INx`.
+- **MASTER:** CU55 kontinuálne streamuje, Pico riadi svetlo a pri fyzickom alebo explicitnom softvérovom vstupe odošle `CAPTURE INx`; pri softvérovej sekvencii odošle `CAPTURE V1/V2`.
 - **TRIGGER:** Pico riadi svetlo a generuje `COUNT` hardvérových pulzov na GP16; `TRIG` určuje dĺžku pulzu a `GAP` medzeru. Je to legacy/test režim.
 
 ### CAPTURE INx eventy a serial reader
 
 `CAPTURE IN1` až `CAPTURE IN8` sú asynchrónne eventy, nie odpovede na command. `PicoService` používa jeden permanentný serial RX reader, ktorý rozdeľuje eventy a command responses. Nepridávajte druhý thread/UI reader volajúci `readline()` nad tým istým portom.
 
-### Fyzický input, FIRE a SIM
+### Fyzický input, FIRE a softvérový trigger
 
 - Fyzický active-LOW edge prejde debounce, použije `INx → V1/V2` mapping a v MASTER odošle príslušné `CAPTURE INx`.
-- `FIRE V1` / `FIRE V2` manuálne vykoná profil. V MASTER nemá fyzický `source_input`, preto **neodošle** `CAPTURE INx`.
-- `SIM IN1` až `SIM IN8` simulujú fyzický input: použijú rovnaký mapping aj timing a v MASTER odošlú napr. `CAPTURE IN1`. Ak je vstup `OFF`, odpoveď je `ERR INPUT INx NOT_MAPPED`.
+- `FIRE V1` / `FIRE V2` spustí produkčné časovanie sekvenčného profilu a v MASTER odošle `CAPTURE V1` / `CAPTURE V2`.
+- `TRIGGER IN1` až `TRIGGER IN8` použijú rovnaký mapping aj timing ako fyzický explicitný vstup a v MASTER odošlú napr. `CAPTURE IN1`. Ak je vstup `OFF`, odpoveď je `ERR INPUT INx NOT_MAPPED`.
 
-Na servisný test routovania používajte `SIM INx`, nie `FIRE V1/V2`.
+`SIM INx` zostáva iba kompatibilný alias `TRIGGER INx`.
 
 ### Manual light
 
@@ -136,7 +136,7 @@ INPUTS
 
 FIRE V1
 FIRE V2
-SIM IN1 ... SIM IN8
+TRIGGER IN1 ... TRIGGER IN8
 
 SET V1 MODE MASTER|TRIGGER
 SET V1 DELAY <ms>
@@ -172,10 +172,10 @@ Podporované `SET` aliasy sú `CAPTURE_DELAY`; `TRIGGER`, `TRIGGER_PULSE`; `TRIG
 
 ### STATUS príklad
 
-Presná syntax a default hodnoty firmware 3.2.2:
+Presná syntax a default hodnoty firmware 3.3:
 
 ```text
-FIRMWARE pico_hdf_controller 3.2.2-master-capture-sim-manual-light
+FIRMWARE pico_hdf_controller 3.3-master-production-capture
 PINS LED=GP17 TRIG=GP16
 V1_MODE MASTER
 V1_DELAY 0
@@ -195,8 +195,8 @@ INPUT_MAP IN1=V1 IN2=OFF IN3=OFF IN4=OFF IN5=OFF IN6=OFF IN7=V2 IN8=OFF
 DEBOUNCE_MS 30
 LOCKOUT_MS 100
 MANUAL_LIGHT OFF
-NOTE MASTER physical input emits CAPTURE INx
-NOTE SIM IN1..IN8 simulates a physical input
+NOTE MASTER FIRE V1/V2 emits CAPTURE V1/V2
+NOTE TRIGGER IN1..IN8 follows physical input mapping
 NOTE COUNT=2 means trigger #1 dummy, trigger #2 capture
 END
 ```
@@ -323,13 +323,13 @@ a PBKDF2-HMAC-SHA256 hash a má oprávnenia `0600`. Pico Wizard a runtime akcie
 
 ## Raspberry Pi Pico firmware update
 
-Repozitárový firmware je v `firmware/pico/main.py`. Nahrajte požadovanú verziu na Pico pod presným názvom `main.py`, Pico reštartujte a cez serial odošlite:
+Repozitárový firmware je v `firmware/pico/main_v3.3.py`. Nahrajte ho na Pico pod presným názvom `main.py`, Pico reštartujte a cez serial odošlite:
 
 ```text
 STATUS
 ```
 
-Pred produkciou musí prvý riadok potvrdiť `FIRMWARE pico_hdf_controller 3.2.2-master-capture-sim-manual-light`.
+Pred produkciou musí prvý riadok potvrdiť `FIRMWARE pico_hdf_controller 3.3-master-production-capture`.
 
 ## Troubleshooting
 
@@ -347,11 +347,11 @@ alebo `MAP IN7 V2`, potom `SAVE`.
 
 ### CAPTURE INx neprichádza
 
-Overte mapping, MASTER mode, `DEBOUNCE_MS`, active-LOW fyzický vstup a správanie pomocou `SIM INx`. `FIRE V1/V2` nie je test `CAPTURE INx`.
+Overte mapping, MASTER mode, `DEBOUNCE_MS`, active-LOW fyzický vstup a správanie pomocou `TRIGGER INx`.
 
 ### LIGHT ON vracia ERR UNKNOWN
 
-Pico pravdepodobne používa firmware starší než 3.2.2. Overte prvý riadok `STATUS` a aktualizujte `main.py`.
+Pico pravdepodobne používa firmware starší než 3.3. Overte prvý riadok `STATUS` a aktualizujte `main.py`.
 
 ### Svetlo zostalo zapnuté
 
@@ -363,5 +363,5 @@ AI/TensorRT, PLC/I/O rozšírenia, multi-camera a ďalšie integrácie nie sú v
 
 ## Známe nesúlady v repozitári
 
-- `firmware/pico/main.py` v aktuálnom checkout-e sa identifikuje ako 3.2.0 a nepodporuje `SIM` ani `LIGHT`; pred použitím Manual light/SIM musí byť nahradený dodaným firmware 3.2.2.
+- `firmware/pico/main_v3.3.py` je aktuálny firmware pre MASTER production trigger routing.
 - Recipe model a niektoré legacy metódy stále obsahujú `flash_delay_ms`/`flash_pulse_ms` a cestu na publish timingov do Pico. Pico Wizard je však aktuálne určené miesto pre V1/V2 hardware timing; View config ich iba informatívne zobrazuje pre zvolený INx.
