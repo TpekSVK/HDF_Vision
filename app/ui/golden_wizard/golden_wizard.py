@@ -4226,8 +4226,13 @@ class GoldenWizard(QDialog):
             preceding_tools = [tool.copy() for tool in tools if tool.order < target_tool.order]
             preceding_tools.sort(key=lambda tool: tool.order)
 
-            params_payload = dict(params or {})
-            thresholds_payload = dict(thresholds or {})
+            # The properties panel only submits fields it renders.  Preserve
+            # tool-specific stored values (for example Edge Profile A/B
+            # anchors) which are intentionally edited on the canvas instead.
+            params_payload = dict(getattr(target_tool.params, "values", {}) or {})
+            params_payload.update(params or {})
+            thresholds_payload = dict(getattr(target_tool.thresholds, "values", {}) or {})
+            thresholds_payload.update(thresholds or {})
 
             target_copy = target_tool.copy()
             target_copy.params = ToolParams(params_payload)
