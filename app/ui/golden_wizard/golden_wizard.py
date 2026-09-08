@@ -3431,6 +3431,14 @@ class GoldenWizard(QDialog):
             self._btn_legacy_edit.setEnabled(True)
             self._btn_delete_selected.setEnabled(True)
             tool = tools[row]
+            if tool.type == "edge_profile_deviation":
+                self._btn_legacy_edit.setText("Nastaviť hranu A-B")
+                self._btn_legacy_edit.setToolTip(
+                    "Nakresliť približnú hranu a automaticky ju spresniť v jej okolí"
+                )
+            else:
+                self._btn_legacy_edit.setText("Rozšírené nastavenie")
+                self._btn_legacy_edit.setToolTip("Otvoriť špecializované nastavenia nástroja")
             try:
                 meta = self.recipes.tool.get_tool_meta(tool.type)
                 schema = self.recipes.tool.get_tool_schema(tool.type)
@@ -3468,6 +3476,8 @@ class GoldenWizard(QDialog):
             )
         else:
             self._btn_legacy_edit.setEnabled(False)
+            self._btn_legacy_edit.setText("Rozšírené nastavenie")
+            self._btn_legacy_edit.setToolTip("Otvoriť špecializované nastavenia nástroja")
             self._btn_delete_selected.setEnabled(False)
             self._tool_panel.clear()
             self.roi_editor.setEnabled(False)

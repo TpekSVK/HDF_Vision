@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -9,7 +10,7 @@ from typing import Any, Optional
 import cv2
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QBrush, QColor, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGraphicsEllipseItem,
     QGraphicsLineItem,
+    QGraphicsPolygonItem,
     QGraphicsRectItem,
     QGraphicsSimpleTextItem,
     QGroupBox,
@@ -40,6 +42,7 @@ from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi, ToolThreshold
 from app.services.live_preview_service import LivePreviewService
 from app.services.tool_registry import ToolRegistry
 from app.services.tool_service import ToolRunResult, run_locator_template_match
+from app.services.tools.edge_profile_deviation import detect_guided_reference_edge
 from app.ui.roi_mask_editor import MaskEditor, ROIEditor, _ImageView
 
 from .form_widgets import (
@@ -169,6 +172,9 @@ class EdgeAnchorEditor(_ImageView):
         self._roi_item: Optional[QGraphicsRectItem] = None
         self._segment_item: Optional[QGraphicsLineItem] = None
         self._line_item: Optional[QGraphicsLineItem] = None
+        self._search_band_item: Optional[QGraphicsPolygonItem] = None
+        self._detected_point_items: list[QGraphicsEllipseItem] = []
+        self._search_half_window = 20
         self._point_a_item: Optional[QGraphicsEllipseItem] = None
         self._point_b_item: Optional[QGraphicsEllipseItem] = None
         self._point_a_label: Optional[QGraphicsSimpleTextItem] = None
@@ -178,17 +184,73 @@ class EdgeAnchorEditor(_ImageView):
         self.setMouseTracking(True)
 
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
-        self.set_pixmap(pixmap)
         self._roi_item = None
         self._segment_item = None
         self._line_item = None
+        self._search_band_item = None
+        self._detected_point_items.clear()
         self._point_a_item = None
         self._point_b_item = None
         self._point_a_label = None
         self._point_b_label = None
+        self.set_pixmap(pixmap)
         self.set_roi_rect(self._roi_rect)
         self.set_detected_line(self._detected_line)
         self.set_points(self._point_a, self._point_b)
+
+    def set_search_half_window(self, pixels: int) -> None:
+        self._search_half_window = max(1, int(pixels))
+        self._refresh_search_band()
+
+    def _refresh_search_band(self) -> None:
+        scene = self.scene()
+        if scene is None:
+            return
+        if self._search_band_item is not None:
+            scene.removeItem(self._search_band_item)
+            self._search_band_item = None
+        if self._point_a is None or self._point_b is None:
+            return
+        ax, ay = self._point_a
+        bx, by = self._point_b
+        dx, dy = bx - ax, by - ay
+        length = float(np.hypot(dx, dy))
+        if length < 1e-6:
+            return
+        nx = -dy / length * self._search_half_window
+        ny = dx / length * self._search_half_window
+        polygon = QPolygonF([
+            QPointF(ax + nx, ay + ny),
+            QPointF(bx + nx, by + ny),
+            QPointF(bx - nx, by - ny),
+            QPointF(ax - nx, ay - ny),
+        ])
+        self._search_band_item = scene.addPolygon(
+            polygon,
+            QPen(QColor(70, 150, 255, 180), 1, Qt.DashLine),
+            QBrush(QColor(70, 150, 255, 35)),
+        )
+        self._search_band_item.setZValue(6)
+
+    def set_detected_points(self, points: list[tuple[float, float]]) -> None:
+        scene = self.scene()
+        if scene is None:
+            return
+        for item in self._detected_point_items:
+            scene.removeItem(item)
+        self._detected_point_items.clear()
+        stride = max(1, int(math.ceil(len(points) / 160)))
+        for x, y in points[::stride]:
+            item = scene.addEllipse(
+                float(x) - 1.75,
+                float(y) - 1.75,
+                3.5,
+                3.5,
+                QPen(Qt.NoPen),
+                QBrush(QColor(50, 220, 120, 220)),
+            )
+            item.setZValue(8)
+            self._detected_point_items.append(item)
 
     def set_roi_rect(self, roi_rect: Optional[tuple[int, int, int, int]]) -> None:
         self._roi_rect = roi_rect
@@ -231,13 +293,14 @@ class EdgeAnchorEditor(_ImageView):
             float(p2[1]),
             QPen(QColor(255, 235, 59), 2),
         )
-        self._line_item.setZValue(7)
+        self._line_item.setZValue(9)
 
     def clear_points(self) -> None:
         self._point_a = None
         self._point_b = None
         self._next_target = "a"
         self.set_detected_line(None)
+        self.set_detected_points([])
         self.set_points(self._point_a, self._point_b)
 
     def set_points(
@@ -303,7 +366,8 @@ class EdgeAnchorEditor(_ImageView):
                     float(point_b[1]),
                     QPen(QColor(255, 210, 110), 2),
                 )
-                self._segment_item.setZValue(9)
+                self._segment_item.setZValue(7)
+        self._refresh_search_band()
         self.pointsChanged.emit(self._point_a, self._point_b)
 
     def points(self) -> tuple[Optional[tuple[float, float]], Optional[tuple[float, float]]]:
@@ -321,6 +385,7 @@ class EdgeAnchorEditor(_ImageView):
                     self._point_b = (point.x(), point.y())
                     self._next_target = "a"
                 self.set_detected_line(None)
+                self.set_detected_points([])
                 self.set_points(self._point_a, self._point_b)
                 event.accept()
                 return
@@ -885,6 +950,8 @@ class ToolEditDialog(QDialog):
     ) -> None:
         if self._edge_anchor_status is None:
             return
+        if self._btn_edge_auto_detect is not None:
+            self._btn_edge_auto_detect.setEnabled(point_a is not None and point_b is not None)
         if point_a is None and point_b is None:
             self._edge_anchor_status.setText("Klikni do obrázka: najprv bod A, potom bod B.")
             return
@@ -919,8 +986,9 @@ class ToolEditDialog(QDialog):
         group_layout.setSpacing(6)
 
         hint = QLabel(
-            "Najprv nastav ROI oblasť. Potom klikni do obrázka pre bod A a následne pre bod B. "
-            "Medzi A-B sa bude sledovať priamkovosť/rovinatosť hrany.",
+            "V ROI približne označ sledovanú hranu: klikni bod A a potom bod B. "
+            "Modrý pás ukazuje okolie, v ktorom sa bude hrana hľadať. "
+            "Tlačidlo Spresniť potom prispôsobí A-B skutočnej hrane na golden snímke.",
             group,
         )
         hint.setWordWrap(True)
@@ -935,6 +1003,8 @@ class ToolEditDialog(QDialog):
         params_values = dict(getattr(self._tool.params, "values", {}) or {})
         pa = self._parse_point(params_values.get("point_a"))
         pb = self._parse_point(params_values.get("point_b"))
+        search_half_window = max(1, int(params_values.get("search_half_window", 20) or 20))
+        self._edge_anchor_editor.set_search_half_window(search_half_window)
         self._edge_anchor_editor.set_points(pa, pb)
         roi_rect = self._roi_editor.roi() if self._roi_editor is not None else self._tool.roi.rect()
         self._edge_anchor_editor.set_roi_rect(roi_rect)
@@ -946,10 +1016,10 @@ class ToolEditDialog(QDialog):
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
-        btn_clear = QPushButton("Vymazať A-B", group)
+        btn_clear = QPushButton("Znova nakresliť A-B", group)
         btn_clear.clicked.connect(self._edge_anchor_editor.clear_points)
         controls.addWidget(btn_clear)
-        self._btn_edge_auto_detect = QPushButton("Automaticky nájsť hranu v ROI", group)
+        self._btn_edge_auto_detect = QPushButton("Spresniť hranu podľa A-B", group)
         self._btn_edge_auto_detect.clicked.connect(self._on_edge_auto_detect_clicked)
         controls.addWidget(self._btn_edge_auto_detect)
         controls.addStretch(1)
@@ -959,6 +1029,9 @@ class ToolEditDialog(QDialog):
         self._edge_anchor_status.setStyleSheet("color: #444;")
         group_layout.addWidget(self._edge_anchor_status)
         self._update_edge_anchor_status(pa, pb)
+        search_widget = self._param_fields.get("search_half_window")
+        if isinstance(search_widget, QSpinBox):
+            search_widget.valueChanged.connect(self._edge_anchor_editor.set_search_half_window)
         parent_layout.addWidget(group, 1)
 
     def _detect_edge_line_in_roi(self) -> tuple[bool, str]:
@@ -973,6 +1046,10 @@ class ToolEditDialog(QDialog):
         if roi_rect is None:
             return False, "Najprv nastav ROI oblasť pre auto detekciu hrany."
 
+        point_a, point_b = self._edge_anchor_editor.points()
+        if point_a is None or point_b is None:
+            return False, "Najprv približne označ hranu bodmi A a B."
+
         x, y, w, h = roi_rect
         if w <= 2 or h <= 2:
             return False, "ROI je príliš malá."
@@ -981,48 +1058,54 @@ class ToolEditDialog(QDialog):
         if img is None:
             return False, "Golden snímku sa nepodarilo previesť."
 
-        ih, iw = img.shape[:2]
-        x0 = max(0, min(iw - 1, int(x)))
-        y0 = max(0, min(ih - 1, int(y)))
-        x1 = max(0, min(iw, int(x + w)))
-        y1 = max(0, min(ih, int(y + h)))
-        if x1 - x0 < 3 or y1 - y0 < 3:
-            return False, "ROI po orezaní mimo obraz je príliš malá."
+        params = self._gather_params_from_widgets()
+        try:
+            detection = detect_guided_reference_edge(
+                img,
+                (int(x), int(y), int(w), int(h)),
+                point_a,
+                point_b,
+                orientation=str(params.get("orientation", "auto")),
+                blur_sigma=float(params.get("blur_sigma", 1.0)),
+                scan_step=int(params.get("scan_step", 2)),
+                edge_polarity=str(params.get("edge_polarity", "any")),
+                grad_threshold=float(params.get("grad_threshold", 15.0)),
+                search_half_window=int(params.get("search_half_window", 20)),
+                outlier_trim_pct=float(params.get("outlier_trim_pct", 0.1)),
+                use_subpixel=bool(params.get("use_subpixel", False)),
+            )
+        except (TypeError, ValueError) as exc:
+            return False, str(exc)
 
-        roi = img[y0:y1, x0:x1]
-        blur = cv2.GaussianBlur(roi, (5, 5), 0)
-        edges = cv2.Canny(blur, 60, 180)
-        lines = cv2.HoughLinesP(
-            edges,
-            rho=1,
-            theta=np.pi / 180.0,
-            threshold=max(20, int(min(roi.shape[:2]) * 0.25)),
-            minLineLength=max(20, int(min(roi.shape[:2]) * 0.4)),
-            maxLineGap=max(8, int(min(roi.shape[:2]) * 0.08)),
+        thresholds = self._gather_thresholds_from_widgets()
+        required_coverage = min(
+            1.0,
+            max(0.0, float(thresholds.get("coverage_min", 0.6))),
         )
-        if lines is None or len(lines) == 0:
-            return False, "V ROI sa nepodarilo nájsť hranu."
+        detected_coverage = float(detection["coverage"])
+        if detected_coverage < required_coverage:
+            return False, (
+                f"Hrana nie je dostatočne súvislá: nájdených {detected_coverage * 100.0:.0f} %, "
+                f"požadovaných aspoň {required_coverage * 100.0:.0f} %. "
+                "Skontroluj A-B, šírku okolia alebo silu hrany."
+            )
 
-        best = None
-        best_len = -1.0
-        for entry in lines.reshape(-1, 4):
-            lx1, ly1, lx2, ly2 = [float(v) for v in entry]
-            length = float(np.hypot(lx2 - lx1, ly2 - ly1))
-            if length > best_len:
-                best_len = length
-                best = (lx1, ly1, lx2, ly2)
+        refined_a = detection["point_a"]
+        refined_b = detection["point_b"]
+        self._edge_anchor_editor.set_points(refined_a, refined_b)
+        self._edge_anchor_editor.set_detected_points(detection["edge_points"])
+        self._edge_anchor_editor.set_detected_line((refined_a, refined_b))
 
-        if best is None:
-            return False, "Detekcia hrany zlyhala."
-
-        lx1, ly1, lx2, ly2 = best
-        point_a = (x0 + lx1, y0 + ly1)
-        point_b = (x0 + lx2, y0 + ly2)
-
-        self._edge_anchor_editor.set_points(point_a, point_b)
-        self._edge_anchor_editor.set_roi_rect((x0, y0, x1 - x0, y1 - y0))
-        self._edge_anchor_editor.set_detected_line((point_a, point_b))
-        return True, f"Auto detekcia úspešná (dĺžka hrany: {best_len:.1f}px)."
+        used_threshold = float(detection["grad_threshold"])
+        threshold_widget = self._param_fields.get("grad_threshold")
+        if isinstance(threshold_widget, QDoubleSpinBox):
+            threshold_widget.setValue(used_threshold)
+        coverage_pct = detected_coverage * 100.0
+        return True, (
+            f"Hrana spresnená: {coverage_pct:.0f} % bodov "
+            f"({detection['found_points']}/{detection['scan_lines']}), "
+            f"prah gradientu {used_threshold:.1f}."
+        )
 
     def _on_edge_auto_detect_clicked(self) -> None:
         ok, message = self._detect_edge_line_in_roi()
