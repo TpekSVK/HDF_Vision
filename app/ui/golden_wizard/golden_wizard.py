@@ -3665,13 +3665,14 @@ class GoldenWizard(QDialog):
 
         params = dict(getattr(tool.params, "values", {}) or {})
         thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
+        excluded_mask = roi_local_exclusion_mask(tool.roi, tool.ignore_mask.value)
+        valid_mask = None if excluded_mask is None else np.asarray(excluded_mask) == 0
         try:
             detection = detect_guided_reference_edge(
                 image,
                 roi_rect,
                 point_a,
                 point_b,
-                orientation=str(params.get("orientation", "auto")),
                 blur_sigma=float(params.get("blur_sigma", 1.0)),
                 scan_step=int(params.get("scan_step", 2)),
                 edge_polarity=str(params.get("edge_polarity", "any")),
@@ -3679,6 +3680,7 @@ class GoldenWizard(QDialog):
                 search_half_window=int(params.get("search_half_window", 20)),
                 outlier_trim_pct=float(params.get("outlier_trim_pct", 0.1)),
                 use_subpixel=bool(params.get("use_subpixel", False)),
+                valid_mask=valid_mask,
             )
         except (TypeError, ValueError) as exc:
             self.roi_editor.set_edge_status(str(exc), error=True)
@@ -3717,16 +3719,10 @@ class GoldenWizard(QDialog):
         self.roi_editor.set_edge_search_half_window(
             int(params.get("search_half_window", 20))
         )
-        polarity_label = {
-            "dark_to_light": "tmavá → svetlá",
-            "light_to_dark": "svetlá → tmavá",
-            "any": "automatický",
-        }.get(str(params.get("edge_polarity", "any")), "automatický")
         self.roi_editor.set_edge_status(
             f"Hrana spresnená: {coverage * 100.0:.0f} % bodov "
             f"({detection['found_points']}/{detection['scan_lines']}). "
-            f"Použité odporúčania: smer, prechod ({polarity_label}), "
-            "sila hrany a okolie A-B."
+            "Použitá odporúčaná sila hrany."
         )
 
     def _invalidate_presence_v2_model(self, tool: Tool) -> None:

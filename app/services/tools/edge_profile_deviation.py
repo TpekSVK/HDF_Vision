@@ -38,7 +38,6 @@ class EdgeProfileDeviationTool(PairTool):
         point_a = _parse_point(params_dict.get("point_a"))
         point_b = _parse_point(params_dict.get("point_b"))
         points_in_roi = bool(params_dict.get("points_in_roi", False))
-        orientation = str(params_dict.get("orientation", "auto")).lower()
 
         if point_a is None or point_b is None:
             latency_ms = (time.perf_counter() - start) * 1000.0
@@ -81,30 +80,24 @@ class EdgeProfileDeviationTool(PairTool):
             with time_block("blur", timings):
                 frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        dx = bx - ax
-        dy = by - ay
-        if orientation == "auto":
-            orientation = "horizontal" if abs(dx) >= abs(dy) else "vertical"
-
-        if orientation not in {"horizontal", "vertical"}:
-            orientation = "horizontal"
-
-        grad = _compute_gradient(frame_roi, orientation)
+        tangent, normal = _line_vectors(ax, ay, bx, by)
+        grad = _compute_normal_gradient(frame_roi, normal)
 
         line = _line_from_points(ax, ay, bx, by)
         h, w = frame_roi.shape[:2]
 
-        scan_positions = _scan_positions(ax, ay, bx, by, orientation, scan_step, w, h)
+        scan_positions = _scan_distances(ax, ay, bx, by, scan_step)
         total_scan_lines = len(scan_positions)
 
         edge_points: list[tuple[float, float]] = []
         with time_block("scan", timings):
             for pos in scan_positions:
-                point = _find_edge_point(
+                point = _find_edge_point_normal(
                     grad,
                     prepared.valid_mask,
-                    line,
-                    orientation,
+                    (ax, ay),
+                    tangent,
+                    normal,
                     pos,
                     search_half_window,
                     edge_polarity,
@@ -126,7 +119,7 @@ class EdgeProfileDeviationTool(PairTool):
         max_dev = float(max(abs_distances)) if abs_distances else 0.0
         p95_dev = float(np.percentile(abs_distances, 95)) if abs_distances else 0.0
 
-        scale_info = _resolve_scale(context, self._prepared_context, orientation)
+        scale_info = _resolve_scale(context, self._prepared_context, normal)
         unit = scale_info.unit
         scale = scale_info.scale
         max_dev_scaled = max_dev * scale
@@ -143,7 +136,7 @@ class EdgeProfileDeviationTool(PairTool):
             "dx_total": prepared.dx_total,
             "dy_total": prepared.dy_total,
             "virtual_alignment": prepared.virtual_alignment,
-            "orientation": orientation,
+            "scan_geometry": "normal_to_ab",
             "points_in_roi": points_in_roi,
             "point_a_roi": {"x": float(ax), "y": float(ay)},
             "point_b_roi": {"x": float(bx), "y": float(by)},
@@ -206,7 +199,6 @@ def detect_guided_reference_edge(
     point_a: tuple[float, float],
     point_b: tuple[float, float],
     *,
-    orientation: str = "auto",
     blur_sigma: float = 1.0,
     scan_step: int = 2,
     edge_polarity: str = "any",
@@ -214,6 +206,7 @@ def detect_guided_reference_edge(
     search_half_window: int = 20,
     outlier_trim_pct: float = 0.1,
     use_subpixel: bool = False,
+    valid_mask: Optional[np.ndarray] = None,
 ) -> dict[str, Any]:
     """Refine an approximate A-B line by scanning only its nearby band.
 
@@ -235,32 +228,23 @@ def detect_guided_reference_edge(
     roi = image[y0:y1, x0:x1]
     if roi.shape[0] < 3 or roi.shape[1] < 3:
         raise ValueError("ROI je príliš malá pre navádzanú detekciu hrany.")
+    if valid_mask is not None:
+        valid_mask = np.asarray(valid_mask, dtype=bool)
+        if valid_mask.shape != roi.shape:
+            raise ValueError("Maska ROI nemá rovnaký rozmer ako zvolená oblasť.")
 
     ax, ay = float(point_a[0] - x0), float(point_a[1] - y0)
     bx, by = float(point_b[0] - x0), float(point_b[1] - y0)
     if math.hypot(bx - ax, by - ay) < 2.0:
         raise ValueError("Body A a B sú príliš blízko pri sebe.")
 
-    resolved_orientation = str(orientation or "auto").lower()
-    if resolved_orientation == "auto":
-        resolved_orientation = "horizontal" if abs(bx - ax) >= abs(by - ay) else "vertical"
-    if resolved_orientation not in {"horizontal", "vertical"}:
-        resolved_orientation = "horizontal"
+    tangent, normal = _line_vectors(ax, ay, bx, by)
 
     sigma = max(0.0, float(blur_sigma))
     prepared = imaging.blur_gaussian_u8(roi, sigma) if sigma > 1e-6 else roi
-    grad = _compute_gradient(prepared, resolved_orientation)
+    grad = _compute_normal_gradient(prepared, normal)
     line = _line_from_points(ax, ay, bx, by)
-    scan_positions = _scan_positions(
-        ax,
-        ay,
-        bx,
-        by,
-        resolved_orientation,
-        max(1, int(scan_step)),
-        roi.shape[1],
-        roi.shape[0],
-    )
+    scan_positions = _scan_distances(ax, ay, bx, by, max(1, int(scan_step)))
     if not scan_positions:
         raise ValueError("Čiara A-B neprechádza zvolenou ROI.")
 
@@ -274,11 +258,12 @@ def detect_guided_reference_edge(
     for candidate_threshold in threshold_candidates:
         points = []
         for position in scan_positions:
-            point = _find_edge_point(
+            point = _find_edge_point_normal(
                 grad,
-                None,
-                line,
-                resolved_orientation,
+                valid_mask,
+                (ax, ay),
+                tangent,
+                normal,
                 position,
                 max(1, int(search_half_window)),
                 str(edge_polarity or "any").lower(),
@@ -314,26 +299,6 @@ def detect_guided_reference_edge(
     refined_a = project(ax, ay)
     refined_b = project(bx, by)
     global_points = [(px + x0, py + y0) for px, py in trimmed_points]
-    # These values are based only on the successfully detected reference edge.
-    # They are intentionally conservative: refining an A-B line must not make
-    # the next runtime inspection more fragile than the setup result proved.
-    gradient_values = []
-    for px, py in trimmed_points:
-        ix = min(max(int(round(px)), 0), grad.shape[1] - 1)
-        iy = min(max(int(round(py)), 0), grad.shape[0] - 1)
-        gradient_values.append(float(grad[iy, ix]))
-    positive = sum(value > 0.0 for value in gradient_values)
-    negative = sum(value < 0.0 for value in gradient_values)
-    if positive > negative * 1.5:
-        recommended_polarity = "dark_to_light"
-    elif negative > positive * 1.5:
-        recommended_polarity = "light_to_dark"
-    else:
-        recommended_polarity = "any"
-
-    offsets = [abs(value) for value in _compute_distances(trimmed_points, line)]
-    recommended_window = max(6, int(math.ceil(np.percentile(offsets, 95))) + 4)
-    recommended_window = min(max(1, int(search_half_window)), recommended_window)
     return {
         "point_a": (refined_a[0] + x0, refined_a[1] + y0),
         "point_b": (refined_b[0] + x0, refined_b[1] + y0),
@@ -341,13 +306,10 @@ def detect_guided_reference_edge(
         "coverage": float(len(trimmed_points) / len(scan_positions)),
         "found_points": len(trimmed_points),
         "scan_lines": len(scan_positions),
-        "orientation": resolved_orientation,
+        "scan_geometry": "normal_to_ab",
         "grad_threshold": float(used_threshold),
         "recommended_params": {
-            "orientation": resolved_orientation,
-            "edge_polarity": recommended_polarity,
             "grad_threshold": float(used_threshold),
-            "search_half_window": recommended_window,
         },
     }
 
@@ -357,10 +319,22 @@ def _format_roi(rect: tuple[int, int, int, int]) -> dict[str, int]:
     return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}
 
 
-def _compute_gradient(frame: np.ndarray, orientation: str) -> np.ndarray:
-    if orientation == "horizontal":
-        return cv2.Sobel(frame, cv2.CV_32F, 0, 1, ksize=3)
-    return cv2.Sobel(frame, cv2.CV_32F, 1, 0, ksize=3)
+def _line_vectors(
+    ax: float, ay: float, bx: float, by: float,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    length = math.hypot(bx - ax, by - ay)
+    if length < 1e-6:
+        raise ValueError("Body A a B sú príliš blízko pri sebe.")
+    tangent = ((bx - ax) / length, (by - ay) / length)
+    return tangent, (-tangent[1], tangent[0])
+
+
+def _compute_normal_gradient(
+    frame: np.ndarray, normal: tuple[float, float]
+) -> np.ndarray:
+    grad_x = cv2.Sobel(frame, cv2.CV_32F, 1, 0, ksize=3)
+    grad_y = cv2.Sobel(frame, cv2.CV_32F, 0, 1, ksize=3)
+    return grad_x * float(normal[0]) + grad_y * float(normal[1])
 
 
 def _line_from_points(ax: float, ay: float, bx: float, by: float) -> tuple[float, float, float]:
@@ -370,100 +344,73 @@ def _line_from_points(ax: float, ay: float, bx: float, by: float) -> tuple[float
     return a, b, c
 
 
-def _scan_positions(
-    ax: float,
-    ay: float,
-    bx: float,
-    by: float,
-    orientation: str,
-    scan_step: int,
-    width: int,
-    height: int,
+def _scan_distances(
+    ax: float, ay: float, bx: float, by: float, scan_step: int,
 ) -> list[int]:
-    if orientation == "horizontal":
-        start = int(round(min(ax, bx)))
-        end = int(round(max(ax, bx)))
-        start = max(0, min(width - 1, start))
-        end = max(0, min(width - 1, end))
-        if end < start:
-            return []
-        return list(range(start, end + 1, scan_step))
-
-    start = int(round(min(ay, by)))
-    end = int(round(max(ay, by)))
-    start = max(0, min(height - 1, start))
-    end = max(0, min(height - 1, end))
-    if end < start:
+    length = math.hypot(bx - ax, by - ay)
+    if length < 1.0:
         return []
-    return list(range(start, end + 1, scan_step))
+    return list(range(0, int(math.floor(length)) + 1, max(1, int(scan_step))))
 
 
-def _expected_position(
-    line: tuple[float, float, float],
-    orientation: str,
-    scan_pos: int,
-    fallback: float,
-) -> float:
-    a, b, c = line
-    if orientation == "horizontal":
-        if abs(b) < 1e-6:
-            return fallback
-        return -(a * scan_pos + c) / b
-    if abs(a) < 1e-6:
-        return fallback
-    return -(b * scan_pos + c) / a
-
-
-def _find_edge_point(
+def _find_edge_point_normal(
     grad: np.ndarray,
     valid_mask: Optional[np.ndarray],
-    line: tuple[float, float, float],
-    orientation: str,
-    scan_pos: int,
+    origin: tuple[float, float],
+    tangent: tuple[float, float],
+    normal: tuple[float, float],
+    scan_distance: int,
     search_half_window: int,
     edge_polarity: str,
     grad_threshold: float,
     use_subpixel: bool,
 ) -> Optional[tuple[float, float]]:
     h, w = grad.shape[:2]
-    if orientation == "horizontal":
-        x = scan_pos
-        if x < 0 or x >= w:
-            return None
-        expected = _expected_position(line, orientation, x, fallback=0.0)
-        start = int(round(expected - search_half_window))
-        end = int(round(expected + search_half_window))
-        start = max(0, min(h - 1, start))
-        end = max(0, min(h - 1, end))
-        if end < start:
-            return None
-        values = grad[start : end + 1, x]
-        mask = None
-        if valid_mask is not None:
-            mask = valid_mask[start : end + 1, x]
-        pos = _pick_edge_position(values, mask, edge_polarity, grad_threshold, use_subpixel)
-        if pos is None:
-            return None
-        return float(x), float(start + pos)
-
-    y = scan_pos
-    if y < 0 or y >= h:
+    base_x = origin[0] + tangent[0] * float(scan_distance)
+    base_y = origin[1] + tangent[1] * float(scan_distance)
+    offsets = np.arange(-int(search_half_window), int(search_half_window) + 1, dtype=np.float32)
+    xs = base_x + offsets * normal[0]
+    ys = base_y + offsets * normal[1]
+    values, inside = _sample_bilinear(grad, xs, ys)
+    if not np.any(inside):
         return None
-    expected = _expected_position(line, orientation, y, fallback=0.0)
-    start = int(round(expected - search_half_window))
-    end = int(round(expected + search_half_window))
-    start = max(0, min(w - 1, start))
-    end = max(0, min(w - 1, end))
-    if end < start:
-        return None
-    values = grad[y, start : end + 1]
-    mask = None
+    mask = np.zeros(offsets.shape, dtype=bool)
+    mask[inside] = True
     if valid_mask is not None:
-        mask = valid_mask[y, start : end + 1]
+        sample_x = np.rint(xs[inside]).astype(np.int32)
+        sample_y = np.rint(ys[inside]).astype(np.int32)
+        mask[inside] = valid_mask[sample_y, sample_x]
     pos = _pick_edge_position(values, mask, edge_polarity, grad_threshold, use_subpixel)
     if pos is None:
         return None
-    return float(start + pos), float(y)
+    offset = float(-int(search_half_window) + pos)
+    return base_x + offset * normal[0], base_y + offset * normal[1]
+
+
+def _sample_bilinear(
+    image: np.ndarray, xs: np.ndarray, ys: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Sample a 1D profile without staircase artefacts on diagonal edges."""
+    height, width = image.shape[:2]
+    inside = (xs >= 0.0) & (xs <= width - 1) & (ys >= 0.0) & (ys <= height - 1)
+    values = np.full(xs.shape, -np.inf, dtype=np.float32)
+    if not np.any(inside):
+        return values, inside
+    sample_x = xs[inside]
+    sample_y = ys[inside]
+    x0 = np.floor(sample_x).astype(np.int32)
+    y0 = np.floor(sample_y).astype(np.int32)
+    x1 = np.minimum(x0 + 1, width - 1)
+    y1 = np.minimum(y0 + 1, height - 1)
+    dx = sample_x - x0
+    dy = sample_y - y0
+    values[inside] = (
+        image[y0, x0] * (1.0 - dx) * (1.0 - dy)
+        + image[y0, x1] * dx * (1.0 - dy)
+        + image[y1, x0] * (1.0 - dx) * dy
+        + image[y1, x1] * dx * dy
+    )
+    return values, inside
 
 
 def _pick_edge_position(
@@ -505,6 +452,8 @@ def _pick_edge_position(
     v1 = float(metric[idx - 1])
     v2 = float(metric[idx])
     v3 = float(metric[idx + 1])
+    if not all(math.isfinite(value) for value in (v1, v2, v3)):
+        return float(idx)
     denom = v1 - 2.0 * v2 + v3
     if abs(denom) < 1e-6:
         return float(idx)
@@ -572,7 +521,7 @@ class _ScaleInfo:
 def _resolve_scale(
     context: Dict[str, Any],
     prepared_context: Dict[str, Any],
-    orientation: str,
+    normal: tuple[float, float],
 ) -> _ScaleInfo:
     combined: dict[str, Any] = {}
     combined.update(prepared_context)
@@ -592,20 +541,19 @@ def _resolve_scale(
 
     scale = 1.0
     unit = "px"
-    if orientation == "horizontal":
-        if scale_y_val is not None:
-            scale = scale_y_val
-            unit = "mm"
-        elif mm_per_px_val is not None:
-            scale = mm_per_px_val
-            unit = "mm"
-    else:
-        if scale_x_val is not None:
-            scale = scale_x_val
-            unit = "mm"
-        elif mm_per_px_val is not None:
-            scale = mm_per_px_val
-            unit = "mm"
+    if scale_x_val is not None and scale_y_val is not None:
+        nx, ny = normal
+        scale = math.hypot(float(nx) * scale_x_val, float(ny) * scale_y_val)
+        unit = "mm"
+    elif mm_per_px_val is not None:
+        scale = mm_per_px_val
+        unit = "mm"
+    elif scale_x_val is not None:
+        scale = scale_x_val
+        unit = "mm"
+    elif scale_y_val is not None:
+        scale = scale_y_val
+        unit = "mm"
 
     return _ScaleInfo(
         unit=unit,

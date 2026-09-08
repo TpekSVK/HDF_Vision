@@ -1065,7 +1065,6 @@ class ToolEditDialog(QDialog):
                 (int(x), int(y), int(w), int(h)),
                 point_a,
                 point_b,
-                orientation=str(params.get("orientation", "auto")),
                 blur_sigma=float(params.get("blur_sigma", 1.0)),
                 scan_step=int(params.get("scan_step", 2)),
                 edge_polarity=str(params.get("edge_polarity", "any")),

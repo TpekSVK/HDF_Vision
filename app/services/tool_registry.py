@@ -1055,13 +1055,6 @@ def _register_default_tools() -> None:
                         "default": None,
                         "description": "Bod B na hrane (x, y) v ROI alebo v golden.",
                     },
-                    "orientation": {
-                        "type": "enum",
-                        "default": "auto",
-                        "label": "Smer hrany",
-                        "choices": (("auto", "Automaticky podľa A-B"), ("horizontal", "Vodorovná"), ("vertical", "Zvislá")),
-                        "description": "Smer sledovanej hrany. Automatický režim ho určí z čiary A-B.",
-                    },
                     "blur_sigma": {
                         "type": "float",
                         "default": 1.0,
