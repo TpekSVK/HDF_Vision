@@ -78,6 +78,7 @@ from app.services.tool_service import (
     run_locator_template_match,
     run_tool_test,
 )
+from app.services.tools.edge_profile_deviation import detect_guided_reference_edge
 from app.services.golden_wizard_logic import (
     _SUPPORTED_FORM_FIELD_TYPES,
     _validate_params_and_thresholds,
@@ -2025,6 +2026,12 @@ class GoldenWizard(QDialog):
         self._tool_panel.locatorFitSearchRequested.connect(self.roi_editor.fit_search_to_template)
         self._tool_panel.presenceLearningRequested.connect(self._on_presence_v2_learning)
         self.roi_editor.ignoreMaskChanged.connect(self._on_workspace_mask_changed)
+        self.roi_editor.edgeAnchorsChanged.connect(
+            self._on_workspace_edge_anchors_changed
+        )
+        self.roi_editor.edgeRefineRequested.connect(
+            self._on_workspace_edge_refine_requested
+        )
         self.failure_policy_combo.currentIndexChanged.connect(
             self._on_failure_policy_changed
         )
@@ -2446,6 +2453,7 @@ class GoldenWizard(QDialog):
                 self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
                 self.roi_editor.configure_ignore_mask(False)
+                self.roi_editor.configure_edge_anchors(False)
             finally:
                 self._syncing_workspace_roi = False
 
@@ -2495,6 +2503,24 @@ class GoldenWizard(QDialog):
             supports_mask = False
         mask_value = getattr(getattr(tool, "ignore_mask", None), "value", None)
         self.roi_editor.configure_ignore_mask(supports_mask, mask_value)
+        is_edge_profile = tool.type == "edge_profile_deviation"
+        self.roi_editor.configure_edge_anchors(
+            is_edge_profile,
+            self._parse_edge_point(params.get("point_a")),
+            self._parse_edge_point(params.get("point_b")),
+            int(params.get("search_half_window", 20) or 20),
+        )
+
+    @staticmethod
+    def _parse_edge_point(value: object) -> Optional[tuple[float, float]]:
+        try:
+            if isinstance(value, dict):
+                return float(value["x"]), float(value["y"])
+            if isinstance(value, (tuple, list)) and len(value) >= 2:
+                return float(value[0]), float(value[1])
+        except (KeyError, TypeError, ValueError):
+            return None
+        return None
 
     # ---------- Akcie ----------
     def _capture_golden(self):
@@ -3299,6 +3325,7 @@ class GoldenWizard(QDialog):
             btn_edit = QToolButton(actions_widget)
             btn_edit.setText("⋯")
             btn_edit.setToolTip("Rozšírené nastavenie")
+            btn_edit.setVisible(tool.type != "edge_profile_deviation")
             btn_edit.clicked.connect(lambda _, idx=row: self._edit_tool(idx))
             btn_del = QToolButton(actions_widget)
             btn_del.setText("×")
@@ -3432,11 +3459,9 @@ class GoldenWizard(QDialog):
             self._btn_delete_selected.setEnabled(True)
             tool = tools[row]
             if tool.type == "edge_profile_deviation":
-                self._btn_legacy_edit.setText("Nastaviť hranu A-B")
-                self._btn_legacy_edit.setToolTip(
-                    "Nakresliť približnú hranu a automaticky ju spresniť v jej okolí"
-                )
+                self._btn_legacy_edit.setVisible(False)
             else:
+                self._btn_legacy_edit.setVisible(True)
                 self._btn_legacy_edit.setText("Rozšírené nastavenie")
                 self._btn_legacy_edit.setToolTip("Otvoriť špecializované nastavenia nástroja")
             try:
@@ -3475,6 +3500,7 @@ class GoldenWizard(QDialog):
                 f"Nástroj: {tool.name}  |  ROI: {shape}  |  {state}  |  Pripravené"
             )
         else:
+            self._btn_legacy_edit.setVisible(True)
             self._btn_legacy_edit.setEnabled(False)
             self._btn_legacy_edit.setText("Rozšírené nastavenie")
             self._btn_legacy_edit.setToolTip("Otvoriť špecializované nastavenia nástroja")
@@ -3489,6 +3515,7 @@ class GoldenWizard(QDialog):
                 self.roi_editor.set_locator_mode(False)
                 self.roi_editor.set_roi_data({})
                 self.roi_editor.configure_ignore_mask(False)
+                self.roi_editor.configure_edge_anchors(False)
             finally:
                 self._syncing_workspace_roi = False
             self._status_bar.setText(
@@ -3567,6 +3594,112 @@ class GoldenWizard(QDialog):
             self._refresh_presence_v2_learning(tool, row)
         self._status_bar.setText(
             f"Nástroj: {tool.name}  |  Ignore mask aktualizovaná  |  Koncept aktualizovaný"
+        )
+
+    def _on_workspace_edge_anchors_changed(
+        self, point_a: object, point_b: object
+    ) -> None:
+        if self._syncing_workspace_roi:
+            return
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        if tool.type != "edge_profile_deviation":
+            return
+
+        parsed_a = self._parse_edge_point(point_a)
+        parsed_b = self._parse_edge_point(point_b)
+        params = dict(getattr(tool.params, "values", {}) or {})
+        params["point_a"] = (
+            {"x": parsed_a[0], "y": parsed_a[1]} if parsed_a is not None else None
+        )
+        params["point_b"] = (
+            {"x": parsed_b[0], "y": parsed_b[1]} if parsed_b is not None else None
+        )
+        tool.params = ToolParams(params)
+        try:
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+        except Exception as exc:
+            self._err(f"Uloženie bodov A-B zlyhalo: {exc}")
+            return
+        self._update_dirty_state(recipe, view_id)
+        self._status_bar.setText(
+            f"Nástroj: {tool.name}  |  Body A-B aktualizované  |  Koncept uložený"
+        )
+
+    def _on_workspace_edge_refine_requested(self) -> None:
+        row = getattr(self, "_selected_tool_row", -1)
+        view_id = self._active_view_id
+        if row < 0 or not view_id:
+            return
+        recipe = self._current_recipe_name()
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not (0 <= row < len(tools)):
+            return
+        tool = tools[row]
+        if tool.type != "edge_profile_deviation":
+            return
+        image = self._current_golden_image()
+        roi_rect = tool.roi.rect()
+        point_a, point_b = self.roi_editor.edge_points()
+        if image is None or roi_rect is None or point_a is None or point_b is None:
+            self.roi_editor.set_edge_status(
+                "Najprv nastav ROI a približné body A aj B.", error=True
+            )
+            return
+
+        params = dict(getattr(tool.params, "values", {}) or {})
+        thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
+        try:
+            detection = detect_guided_reference_edge(
+                image,
+                roi_rect,
+                point_a,
+                point_b,
+                orientation=str(params.get("orientation", "auto")),
+                blur_sigma=float(params.get("blur_sigma", 1.0)),
+                scan_step=int(params.get("scan_step", 2)),
+                edge_polarity=str(params.get("edge_polarity", "any")),
+                grad_threshold=float(params.get("grad_threshold", 15.0)),
+                search_half_window=int(params.get("search_half_window", 20)),
+                outlier_trim_pct=float(params.get("outlier_trim_pct", 0.1)),
+                use_subpixel=bool(params.get("use_subpixel", False)),
+            )
+        except (TypeError, ValueError) as exc:
+            self.roi_editor.set_edge_status(str(exc), error=True)
+            return
+
+        coverage = float(detection["coverage"])
+        required_coverage = min(
+            1.0, max(0.0, float(thresholds.get("coverage_min", 0.6)))
+        )
+        if coverage < required_coverage:
+            self.roi_editor.set_edge_status(
+                f"Hrana nie je dostatočne súvislá: {coverage * 100.0:.0f} %, "
+                f"požadovaných aspoň {required_coverage * 100.0:.0f} %.",
+                error=True,
+            )
+            return
+
+        refined_a = detection["point_a"]
+        refined_b = detection["point_b"]
+        self.roi_editor.set_edge_detection_result(
+            refined_a,
+            refined_b,
+            detection["edge_points"],
+        )
+        used_threshold = float(detection["grad_threshold"])
+        if used_threshold != float(params.get("grad_threshold", 15.0)):
+            self._on_tool_param_changed("grad_threshold", used_threshold)
+        self.roi_editor.set_edge_status(
+            f"Hrana spresnená: {coverage * 100.0:.0f} % bodov "
+            f"({detection['found_points']}/{detection['scan_lines']})."
         )
 
     def _invalidate_presence_v2_model(self, tool: Tool) -> None:
@@ -3951,6 +4084,8 @@ class GoldenWizard(QDialog):
             self._refresh_tools_table()
             return
         self._tool_panel.refresh_values(tool)
+        if tool.type == "edge_profile_deviation" and name == "search_half_window":
+            self.roi_editor.set_edge_search_half_window(int(value))
         if tool.type == "locator.template_match" and name in ("use_golden_crop", "angle_enabled"):
             self._syncing_workspace_roi = True
             try:
@@ -4217,6 +4352,10 @@ class GoldenWizard(QDialog):
         tools = self.recipes.get_draft_tools(recipe, view_id)
         if 0 <= index < len(tools):
             tool = tools[index]
+            if tool.type == "edge_profile_deviation":
+                self.tools_table.setCurrentCell(index, 1)
+                self.roi_editor.set_edit_context("edge")
+                return
             try:
                 meta = self.recipes.tool.get_tool_meta(tool.type)
             except KeyError:
