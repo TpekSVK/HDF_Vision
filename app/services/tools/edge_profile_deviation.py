@@ -200,6 +200,132 @@ def _parse_point(value: Any) -> Optional[tuple[float, float]]:
     return None
 
 
+def detect_guided_reference_edge(
+    frame: np.ndarray,
+    roi_rect: tuple[int, int, int, int],
+    point_a: tuple[float, float],
+    point_b: tuple[float, float],
+    *,
+    orientation: str = "auto",
+    blur_sigma: float = 1.0,
+    scan_step: int = 2,
+    edge_polarity: str = "any",
+    grad_threshold: float = 15.0,
+    search_half_window: int = 20,
+    outlier_trim_pct: float = 0.1,
+    use_subpixel: bool = False,
+) -> dict[str, Any]:
+    """Refine an approximate A-B line by scanning only its nearby band.
+
+    This setup helper deliberately uses the same gradient and scan primitives as
+    runtime inspection. Coordinates in the returned payload are image-global.
+    """
+    image = np.asarray(frame)
+    if image.ndim == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    if image.ndim != 2:
+        raise ValueError("Detekcia hrany očakáva sivý alebo BGR obraz.")
+
+    image = np.clip(image, 0, 255).astype(np.uint8, copy=False)
+    x, y, width, height = [int(value) for value in roi_rect]
+    x0 = max(0, min(image.shape[1] - 1, x))
+    y0 = max(0, min(image.shape[0] - 1, y))
+    x1 = max(x0 + 1, min(image.shape[1], x + width))
+    y1 = max(y0 + 1, min(image.shape[0], y + height))
+    roi = image[y0:y1, x0:x1]
+    if roi.shape[0] < 3 or roi.shape[1] < 3:
+        raise ValueError("ROI je príliš malá pre navádzanú detekciu hrany.")
+
+    ax, ay = float(point_a[0] - x0), float(point_a[1] - y0)
+    bx, by = float(point_b[0] - x0), float(point_b[1] - y0)
+    if math.hypot(bx - ax, by - ay) < 2.0:
+        raise ValueError("Body A a B sú príliš blízko pri sebe.")
+
+    resolved_orientation = str(orientation or "auto").lower()
+    if resolved_orientation == "auto":
+        resolved_orientation = "horizontal" if abs(bx - ax) >= abs(by - ay) else "vertical"
+    if resolved_orientation not in {"horizontal", "vertical"}:
+        resolved_orientation = "horizontal"
+
+    sigma = max(0.0, float(blur_sigma))
+    prepared = imaging.blur_gaussian_u8(roi, sigma) if sigma > 1e-6 else roi
+    grad = _compute_gradient(prepared, resolved_orientation)
+    line = _line_from_points(ax, ay, bx, by)
+    scan_positions = _scan_positions(
+        ax,
+        ay,
+        bx,
+        by,
+        resolved_orientation,
+        max(1, int(scan_step)),
+        roi.shape[1],
+        roi.shape[0],
+    )
+    if not scan_positions:
+        raise ValueError("Čiara A-B neprechádza zvolenou ROI.")
+
+    requested_threshold = max(0.0, float(grad_threshold))
+    threshold_candidates = [requested_threshold]
+    if requested_threshold > 2.0:
+        threshold_candidates.extend((requested_threshold * 0.5, max(2.0, requested_threshold * 0.25)))
+
+    best_points: list[tuple[float, float]] = []
+    used_threshold = requested_threshold
+    for candidate_threshold in threshold_candidates:
+        points = []
+        for position in scan_positions:
+            point = _find_edge_point(
+                grad,
+                None,
+                line,
+                resolved_orientation,
+                position,
+                max(1, int(search_half_window)),
+                str(edge_polarity or "any").lower(),
+                candidate_threshold,
+                bool(use_subpixel),
+            )
+            if point is not None:
+                points.append(point)
+        if len(points) > len(best_points):
+            best_points = points
+            used_threshold = candidate_threshold
+        if len(points) / len(scan_positions) >= 0.6:
+            break
+
+    distances = _compute_distances(best_points, line)
+    trimmed_points, _ = _trim_outliers(
+        best_points,
+        distances,
+        min(max(float(outlier_trim_pct), 0.0), 0.9),
+    )
+    if len(trimmed_points) < 2:
+        raise ValueError("V okolí čiary A-B sa nenašla súvislá hrana.")
+
+    fit_input = np.asarray(trimmed_points, dtype=np.float32).reshape(-1, 1, 2)
+    vx, vy, fit_x, fit_y = [
+        float(value) for value in cv2.fitLine(fit_input, cv2.DIST_HUBER, 0, 0.01, 0.01).reshape(-1)
+    ]
+
+    def project(px: float, py: float) -> tuple[float, float]:
+        distance = (px - fit_x) * vx + (py - fit_y) * vy
+        return fit_x + distance * vx, fit_y + distance * vy
+
+    refined_a = project(ax, ay)
+    refined_b = project(bx, by)
+    global_points = [(px + x0, py + y0) for px, py in trimmed_points]
+    return {
+        "point_a": (refined_a[0] + x0, refined_a[1] + y0),
+        "point_b": (refined_b[0] + x0, refined_b[1] + y0),
+        "edge_points": global_points,
+        "coverage": float(len(trimmed_points) / len(scan_positions)),
+        "found_points": len(trimmed_points),
+        "scan_lines": len(scan_positions),
+        "orientation": resolved_orientation,
+        "grad_threshold": float(used_threshold),
+    }
+
+
 def _format_roi(rect: tuple[int, int, int, int]) -> dict[str, int]:
     x, y, w, h = rect
     return {"x": int(x), "y": int(y), "w": int(w), "h": int(h)}

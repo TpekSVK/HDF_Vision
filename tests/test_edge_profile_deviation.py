@@ -12,7 +12,10 @@ pytest.importorskip("cv2")
 
 from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi, ToolThresholds
 from app.services.tool_service import ToolRunnerContext
-from app.services.tools.edge_profile_deviation import EdgeProfileDeviationTool
+from app.services.tools.edge_profile_deviation import (
+    EdgeProfileDeviationTool,
+    detect_guided_reference_edge,
+)
 
 
 def _make_edge_image(height: int, width: int, y_profile: np.ndarray) -> np.ndarray:
@@ -37,6 +40,27 @@ def _run_tool(image: np.ndarray, params: dict, thresholds: dict, tool_mask: Tool
     runner_context = ToolRunnerContext(frame=image, frame_aligned=None, T_total=None, frame_is_aligned=False)
     tool.prepare({"tool": tool_model, "tool_id": "edge_profile_deviation", "runner_context": runner_context})
     return tool.run(image, image, ToolParams(params), ToolThresholds(thresholds), {})
+
+
+def test_guided_reference_edge_refines_approximate_line() -> None:
+    image = _make_edge_image(120, 200, np.full(200, 62.0))
+
+    result = detect_guided_reference_edge(
+        image,
+        (10, 20, 180, 80),
+        (20.0, 54.0),
+        (180.0, 54.0),
+        blur_sigma=0.5,
+        scan_step=2,
+        edge_polarity="dark_to_light",
+        grad_threshold=15.0,
+        search_half_window=16,
+        outlier_trim_pct=0.1,
+    )
+
+    assert result["coverage"] >= 0.9
+    assert abs(result["point_a"][1] - 62.0) <= 1.0
+    assert abs(result["point_b"][1] - 62.0) <= 1.0
 
 
 def test_edge_profile_deviation_straight_edge() -> None:

@@ -16,22 +16,33 @@ def _format_spec_tooltip(spec: dict[str, Any]) -> str:
 
     min_val = spec.get("min")
     max_val = spec.get("max")
+    display_scale = float(spec.get("display_scale", 1.0) or 1.0)
+    suffix = str(spec.get("suffix", "") or "")
+    display_min = float(min_val) * display_scale if min_val is not None else None
+    display_max = float(max_val) * display_scale if max_val is not None else None
     if min_val is not None or max_val is not None:
         if min_val is not None and max_val is not None:
             parts.append(
-                f"Valid range: {_format_number(min_val)} – {_format_number(max_val)}"
+                f"Rozsah: {_format_number(display_min)} – {_format_number(display_max)}{suffix}"
             )
         elif min_val is not None:
-            parts.append(f"Minimum: {_format_number(min_val)}")
+            parts.append(f"Minimum: {_format_number(display_min)}{suffix}")
         elif max_val is not None:
-            parts.append(f"Maximum: {_format_number(max_val)}")
+            parts.append(f"Maximum: {_format_number(display_max)}{suffix}")
 
     step = spec.get("step")
     if step not in (None, 0):
-        parts.append(f"Step: {_format_number(step)}")
+        parts.append(f"Krok: {_format_number(float(step) * display_scale)}{suffix}")
 
     if "default" in spec and spec.get("default") is not None:
-        parts.append(f"Default: {_format_number(spec.get('default'))}")
+        default_value = spec.get("default")
+        try:
+            default_value = float(default_value) * display_scale
+        except (TypeError, ValueError):
+            pass
+        parts.append(
+            f"Predvolené: {_format_number(default_value)}{suffix}"
+        )
 
     return "\n".join(parts)
 
@@ -77,6 +88,9 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
                 spin.setValue(int(round(float(default))))
             except Exception:  # pragma: no cover - defensive fallback
                 spin.setValue(int(min_val))
+        suffix = str(spec.get("suffix", "") or "")
+        if suffix:
+            spin.setSuffix(suffix)
         return spin
     if field_type == "float":
         spin = QDoubleSpinBox(parent)
@@ -87,10 +101,12 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
             min_val = -1e9
         if max_val is None:
             max_val = 1e9
-        spin.setRange(float(min_val), float(max_val))
+        display_scale = float(spec.get("display_scale", 1.0) or 1.0)
+        spin.setRange(float(min_val) * display_scale, float(max_val) * display_scale)
         precision = spec.get("precision")
         if precision is None:
             precision = spec.get("decimals", 4)
+        precision = spec.get("display_decimals", precision)
         try:
             decimals = max(0, int(precision))
         except Exception:  # pragma: no cover - defensive fallback
@@ -99,15 +115,18 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
         step = spec.get("step")
         if step is not None:
             try:
-                spin.setSingleStep(float(step))
+                spin.setSingleStep(float(step) * display_scale)
             except Exception:  # pragma: no cover - defensive fallback
                 pass
         default = spec.get("default")
         if default is not None:
             try:
-                spin.setValue(float(default))
+                spin.setValue(float(default) * display_scale)
             except Exception:  # pragma: no cover - defensive fallback
-                spin.setValue(float(min_val))
+                spin.setValue(float(min_val) * display_scale)
+        suffix = str(spec.get("suffix", "") or "")
+        if suffix:
+            spin.setSuffix(suffix)
         return spin
     return None
 
@@ -143,9 +162,11 @@ def _set_form_widget_value(widget: QWidget, spec: dict[str, Any], value: Any) ->
         if fallback is None:
             fallback = widget.minimum()
         try:
-            widget.setValue(float(value))
+            scale = float(spec.get("display_scale", 1.0) or 1.0)
+            widget.setValue(float(value) * scale)
         except Exception:  # pragma: no cover - defensive fallback
-            widget.setValue(float(fallback))
+            scale = float(spec.get("display_scale", 1.0) or 1.0)
+            widget.setValue(float(fallback) * scale)
 
 
 def _get_form_widget_value(widget: QWidget, spec: dict[str, Any]) -> Any:
@@ -159,7 +180,8 @@ def _get_form_widget_value(widget: QWidget, spec: dict[str, Any]) -> Any:
     if field_type == "int" and isinstance(widget, QSpinBox):
         return int(widget.value())
     if field_type == "float" and isinstance(widget, QDoubleSpinBox):
-        return float(widget.value())
+        scale = float(spec.get("display_scale", 1.0) or 1.0)
+        return float(widget.value()) / scale
     return None
 
 
