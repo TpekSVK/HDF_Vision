@@ -30,10 +30,11 @@ outside the scope unless a stage explicitly says otherwise.
 
 ## Stage 4 — Results and diagnostics
 
-- [ ] Add a simple operator-facing results browser.
+- [x] Add a simple operator-facing results browser.
 - [x] Show the current inspected image with selectable ROI and NOK localization overlays.
-- [ ] Keep advanced metrics behind an optional detail area.
-- [ ] Support practical date/status filters and CSV export.
+- [x] Keep advanced metrics behind an optional detail area.
+- [x] Support practical date/status filters and CSV export.
+- [ ] Verify Results page on the operator display with production history.
 
 ## Stage 5 — SETUP navigation and properties
 

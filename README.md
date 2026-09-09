@@ -10,6 +10,21 @@ HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný 
 - Pico Wizard pre V1/V2 timing profily, mapovanie vstupov a HDF whitelist.
 - Manual light v RUN aj Golden Wizard, nezávislé od Live preview.
 
+## Výsledky kontrol
+
+Stránka **VÝSLEDKY** zobrazuje uložené kontroly po 50 záznamoch, od najnovších.
+Filtre dátumu (vrátane koncového dňa), receptu, pohľadu a OK/NOK sa použijú tlačidlom
+**Vyhľadať**. Výber kontroly načíta jej snímku, výsledky nástrojov a voliteľný detail
+metrík a prahov. **Export CSV** exportuje všetky záznamy zodpovedajúce aktuálnym
+filtrom do nového súboru. Čítanie SQLite, obrázkov a export bežia na pozadí.
+
+Nové záznamy obsahujú historickú geometriu a prahy; pri starších záznamoch sa
+chýbajúca geometria nedopĺňa z aktuálneho receptu. Presná lokalizácia chyby sa
+zobrazuje len ak ju nástroj uložil. Ak plná snímka chýba, použije sa uložený JPEG;
+po odstránení oboch obrázkov zostanú dostupné metriky. Pravidlá uchovávania a
+zapnutie/vypnutie ukladania kontrol zostávajú platné. Produkčné spúšťanie je
+dostupné v RUN; stránka Výsledky slúži na prehliadanie histórie.
+
 ## Produkčná architektúra kamery
 
 Preferovaný režim je **CU55 MASTER**. Kamera streamuje kontinuálne; hardvérový trigger CU55 nie je primárny produkčný spôsob snímania.
