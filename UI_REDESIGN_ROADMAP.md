@@ -46,9 +46,10 @@ outside the scope unless a stage explicitly says otherwise.
 ### Locator follow-up
 
 - [ ] Overiť režim zarovnania podľa referenčnej hrany A–B na reálnych snímkach.
-- [ ] Vyhodnotiť kvalitu šablóny a upozorniť na nejednoznačné zhody.
-- [ ] Pri template matchingu presne rešpektovať otočený tvar search/template oblasti,
+- [x] Vyhodnotiť kvalitu šablóny a upozorniť na nejednoznačné zhody.
+- [x] Pri template matchingu presne rešpektovať otočený tvar search/template oblasti,
       nie iba jej osovo zarovnaný bounding box.
+- [ ] Overiť nové maskované hľadanie, varovania a čas cyklu na produkčných snímkach.
 
 ## Stage 6 — Resolution and operator polish
 

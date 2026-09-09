@@ -1320,6 +1320,11 @@ class ToolConfigPanel(QWidget):
             self.locatorPolicyWarningChanged.emit("")
             return
 
+        quality_warnings = diagnostics.get("quality_warnings", [])
+        if quality_warnings:
+            self.locatorPolicyWarningChanged.emit("Pozor: " + " ".join(quality_warnings))
+            return
+
         if self._locator_failure_policy != "continue_without_alignment":
             self.locatorPolicyWarningChanged.emit("")
             return

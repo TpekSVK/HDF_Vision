@@ -1762,6 +1762,7 @@ def run_locator_template_match(
     angle_fallback: Optional[str] = None
     reference_diagnostics: Dict[str, Any] = {}
     alignment_failure: Optional[str] = None
+    match_quality: Dict[str, Any] = {}
 
     def _normalize_angle_deg(angle: float) -> float:
         normalized = ((angle + 90.0) % 180.0) - 90.0
@@ -1832,17 +1833,35 @@ def run_locator_template_match(
 
         if templ.size > 0 and tw > 0 and th > 0:
             sx, sy, sw, sh = search_rect
+            from app.services.locator_matching import match_shape
+
+            template_descriptor = roi if use_golden_crop else params_dict.get("template_roi")
+            template_mask = roi_shape_mask(template_descriptor, template_rect)
+            if template_mask is None:
+                template_mask = np.ones(templ.shape, dtype=np.uint8)
+            template_mask = template_mask.astype(np.uint8)
+            search_mask = roi_shape_mask(roi, search_rect)
+            if search_mask is None:
+                search_mask = np.ones((sh, sw), dtype=np.uint8)
+
+            def shape_match(variant: np.ndarray, angle: float = 0.0):
+                mask = template_mask
+                if abs(angle) > 1e-6:
+                    matrix = cv2.getRotationMatrix2D((tw / 2.0, th / 2.0), angle, 1.0)
+                    matrix[0, 2] += variant.shape[1] / 2.0 - tw / 2.0
+                    matrix[1, 2] += variant.shape[0] / 2.0 - th / 2.0
+                    mask = cv2.warpAffine(
+                        template_mask, matrix, (variant.shape[1], variant.shape[0]),
+                        flags=cv2.INTER_NEAREST, borderMode=cv2.BORDER_CONSTANT,
+                    )
+                return match_shape(
+                    frame_u8[sy:sy+sh, sx:sx+sw], variant, mask, search_mask,
+                    coarse_cap=max(1, coarse_cap),
+                )
 
             if angle_enabled:
                 with imaging.time_block("match_template", timings):
-                    dx_rel, dy_rel, corr_candidate, used_candidate = imaging.match_template_u8(
-                        frame_u8,
-                        templ,
-                        roi=(sx, sy, sw, sh),
-                        search_margin=0,
-                        coarse_cap=int(max(1, coarse_cap)),
-                        cache=cache,
-                    )
+                    dx_rel, dy_rel, corr_candidate, used_candidate, match_quality = shape_match(templ)
                 match_x = float(sx + dx_rel)
                 match_y = float(sy + dy_rel)
                 corr = float(corr_candidate)
@@ -1949,14 +1968,7 @@ def run_locator_template_match(
                     if available_w < w_rot or available_h < h_rot:
                         continue
                     with imaging.time_block("match_template", timings):
-                        dx_rel, dy_rel, corr_candidate, used_candidate = imaging.match_template_u8(
-                            frame_u8,
-                            templ_variant,
-                            roi=(sx, sy, sw, sh),
-                            search_margin=int(max(0, extra_margin)),
-                            coarse_cap=int(max(1, coarse_cap)),
-                            cache=cache,
-                        )
+                        dx_rel, dy_rel, corr_candidate, used_candidate, quality = shape_match(templ_variant, angle)
 
                     match_x = float(sx + dx_rel)
                     match_y = float(sy + dy_rel)
@@ -1966,11 +1978,14 @@ def run_locator_template_match(
                         best_match = (match_x, match_y)
                         best_size = (float(w_rot), float(h_rot))
                         best_used = int(used_candidate)
+                        match_quality = quality
 
                 if best_match is not None:
                     corr = float(best_corr)
                     used = int(best_used)
-                    theta_deg = float(best_angle)
+                    # warpAffine's positive angle uses the opposite sign to
+                    # the image-coordinate transform consumed by the pipeline.
+                    theta_deg = -float(best_angle)
                     match_x, match_y = best_match
                     best_w, best_h = best_size
                     cg_x = tx + (tw / 2.0)
@@ -2031,6 +2046,7 @@ def run_locator_template_match(
                         )),
                         outlier_trim_pct=0.1,
                         use_subpixel=bool(params_dict.get("reference_use_subpixel", False)),
+                        valid_mask=roi_shape_mask(roi, search_rect),
                     )
                 found_a = detection["point_a"]
                 found_b = detection["point_b"]
@@ -2096,6 +2112,15 @@ def run_locator_template_match(
     }
     if guided_edge:
         metrics["reference_coverage"] = float(reference_diagnostics.get("coverage", 0.0))
+    metrics["template_contrast"] = float(match_quality.get("template_contrast", 0.0))
+    second_corr = match_quality.get("second_corr")
+    quality_warnings = []
+    if metrics["template_contrast"] < 5.0:
+        quality_warnings.append("Šablóna má nízky kontrast. Vyber výraznejší detail objektu.")
+    if second_corr is not None:
+        metrics["match_gap"] = float(corr - second_corr)
+        if second_corr >= _safe_float(thresholds_dict.get("threshold_corr", 0.55), 0.55) and corr - second_corr < 0.05:
+            quality_warnings.append("Podobná zhoda je aj na inom mieste. Zmenši oblasť hľadania alebo vyber jedinečnejšiu šablónu.")
     status = status_from_metrics("locator.template_match", metrics, thresholds_dict)
 
     diagnostics = {
@@ -2106,6 +2131,8 @@ def run_locator_template_match(
         "max_shift_x": max_shift_x,
         "max_shift_y": max_shift_y,
         "alignment_mode": alignment_mode,
+        "template_quality": match_quality,
+        "quality_warnings": quality_warnings,
     }
     if guided_edge:
         diagnostics["reference_edge"] = reference_diagnostics
