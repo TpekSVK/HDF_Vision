@@ -354,12 +354,19 @@ class ToolConfigPanel(QWidget):
         learning_layout.addWidget(self._presence_warning)
         capture_row = QHBoxLayout()
         self._presence_capture_buttons: dict[str, QPushButton] = {}
+        self._presence_capture_labels: dict[str, QLabel] = {}
         for label, action in (("Zbierať OK", "capture_ok"), ("Zbierať NOK", "capture_nok")):
+            column = QVBoxLayout()
+            caption = QLabel("", learning_content)
+            caption.setWordWrap(True)
+            column.addWidget(caption)
             button = QPushButton(label, learning_content)
             button.clicked.connect(
                 lambda _checked=False, value=action: self.presenceLearningRequested.emit(value)
             )
-            capture_row.addWidget(button)
+            column.addWidget(button)
+            capture_row.addLayout(column, 1)
+            self._presence_capture_labels[action] = caption
             self._presence_capture_buttons[action] = button
         learning_layout.addLayout(capture_row)
         self._presence_rebuild = QPushButton("Prepočítať model", learning_content)
@@ -615,11 +622,11 @@ class ToolConfigPanel(QWidget):
         is_locator = tool.type == "locator.template_match"
         is_presence_v2 = tool.type in _STATISTICAL_PRESENCE_TYPES
         self._presence_is_mold = tool.type == "mold.protection_v1"
-        self._presence_capture_buttons["capture_ok"].setText(
-            "Zbierať prázdnu formu" if self._presence_is_mold else "Zbierať OK"
+        self._presence_capture_labels["capture_ok"].setText(
+            "Prázdna forma (OK)" if self._presence_is_mold else "Vzorky OK"
         )
-        self._presence_capture_buttons["capture_nok"].setText(
-            "Zbierať zvyšky (NOK)" if self._presence_is_mold else "Zbierať NOK"
+        self._presence_capture_labels["capture_nok"].setText(
+            "Zvyšky vo forme (NOK)" if self._presence_is_mold else "Vzorky NOK"
         )
         self._geometry_section.set_title(
             "Oblasť hľadania" if is_locator else
