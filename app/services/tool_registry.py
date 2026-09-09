@@ -410,6 +410,8 @@ def _register_default_tools() -> None:
                 {"key": "dy", "priority": 8, "description": "Posun na osi Y", "unit": "px"},
                 {"key": "theta_deg", "priority": 6, "description": "Otočenie", "unit": "°"},
                 {"key": "reference_coverage", "priority": 5, "description": "Pokrytie referenčnej hrany"},
+                {"key": "template_contrast", "priority": 4, "description": "Kontrast šablóny (σ jasu 0–255)"},
+                {"key": "match_gap", "priority": 4, "description": "Rozdiel od druhej zhody (0–2)"},
                 {"key": "latency_ms", "priority": 1, "description": "Čas behu", "unit": "ms"},
             ],
         },
