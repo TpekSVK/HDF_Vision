@@ -57,6 +57,44 @@ class PicoService:
         self._trigger_callbacks: list[Callable[[str], None]] = []
         self._manual_light: bool | None = None
         self.last_error: str = ""
+        self._capture_request_lock = threading.Lock()
+        self._capture_receiver = None
+
+    def capture_master(self, source: str, camera):
+        """Capture at the asynchronous event while the command awaits LIGHT OFF."""
+        if not re.fullmatch(r"(?:V[12]|IN[1-8])", source):
+            raise ValueError("Neplatný Pico capture profil/vstup.")
+        if not self._capture_request_lock.acquire(blocking=False):
+            raise RuntimeError("Pico ešte dokončuje predchádzajúci cyklus.")
+        ready = threading.Event()
+        result = {}
+        command = f"TRIGGER {source}" if source.startswith("IN") else f"FIRE {source}"
+
+        def receive():
+            self._logger.info("[MASTER_CAPTURE] CAPTURE %s received; reserving frame", source)
+            result["request"] = camera.arm_master_frame()
+            ready.set()
+
+        def send():
+            try:
+                ok, response = self._send_command(command, capture_receiver=(source, receive), timeout_s=125.0)
+                if not ok:
+                    result["error"] = response or self.last_error or "Pico request zlyhal."
+            except Exception as exc:
+                result["error"] = str(exc)
+            finally:
+                if "request" in result:
+                    camera.finish_master_frame(result["request"])
+                ready.set()
+                self._capture_request_lock.release()
+
+        threading.Thread(target=send, daemon=True).start()
+        if not ready.wait(125.0):
+            raise RuntimeError("Pico CAPTURE timeout.")
+        request = result.get("request")
+        if request is None:
+            raise RuntimeError(result.get("error") or "Pico neodoslalo CAPTURE. Skontrolujte MASTER režim.")
+        return camera.wait_master_frame(request)
 
     def connect(self) -> bool:
         if serial is None:
@@ -340,6 +378,15 @@ class PicoService:
                 self._logger.debug("[PICO] RX %s", line)
                 capture_source = self._parse_capture(line)
                 if capture_source is not None:
+                    with self._state_lock:
+                        receiver = self._capture_receiver
+                        if receiver is not None and receiver[0] == capture_source:
+                            self._capture_receiver = None
+                        else:
+                            receiver = None
+                    if receiver is not None:
+                        receiver[1]()
+                        continue
                     self._dispatch_trigger(capture_source)
                     continue
                 with self._state_lock:
@@ -361,6 +408,7 @@ class PicoService:
                     self._rx_thread = None
                     self._pending_response = None
                     self._pending_command = None
+                    self._capture_receiver = None
                     if disconnect_error:
                         self.last_error = disconnect_error
             if pending is not None:
@@ -415,7 +463,7 @@ class PicoService:
         match = re.search(r"([12])", normalized.replace("_", ""))
         return f"V{match.group(1)}" if match else None
 
-    def _send_command(self, command: str) -> tuple[bool, str]:
+    def _send_command(self, command: str, *, capture_receiver=None, timeout_s=None) -> tuple[bool, str]:
         command = command.strip()
         multiline = command.split(maxsplit=1)[0].upper() in {"STATUS", "INPUTS"}
         with self._command_lock:
@@ -429,6 +477,7 @@ class PicoService:
                     return False, ""
                 self._pending_response = responses
                 self._pending_command = command
+                self._capture_receiver = capture_receiver
             try:
                 dev.write(f"{command}\n".encode("utf-8"))
                 dev.flush()
@@ -442,7 +491,7 @@ class PicoService:
             try:
                 while True:
                     try:
-                        item = responses.get(timeout=self._timeout_s)
+                        item = responses.get(timeout=self._timeout_s if timeout_s is None else timeout_s)
                     except queue.Empty:
                         self.last_error = f"No response for command: {command}"
                         self._logger.warning("[PICO] response timeout cmd=%s", command)
@@ -457,6 +506,7 @@ class PicoService:
             finally:
                 with self._state_lock:
                     if self._pending_response is responses:
+                        self._capture_receiver = None
                         self._pending_response = None
                         self._pending_command = None
 
