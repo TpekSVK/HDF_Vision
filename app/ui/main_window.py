@@ -15,6 +15,7 @@ import time
 import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import replace
 from numbers import Integral, Real
 from typing import Any
 
@@ -56,6 +57,7 @@ from app.ui.password_dialog import authorize_recipe_write
 from app.ui.theme import refresh_style
 from app.ui.results_page import ResultsPage
 from app.utils import overlay as overlay_utils
+from app.utils.nok_label import nok_label
 
 
 class MainWindow(QMainWindow):
@@ -2259,9 +2261,10 @@ class MainWindow(QMainWindow):
             if str(getattr(report, "status", "") or "").lower() != "nok":
                 continue
             tool_error_added = False
+            failure_label = nok_label(report)
             for display_item in getattr(report, "overlay_items", []) or []:
                 if getattr(display_item, "z_index", 0) >= 30:
-                    error_items.append(display_item)
+                    error_items.append(replace(display_item, label=failure_label))
                     tool_error_added = True
             metrics = getattr(report, "metrics", {})
             metric_values = metrics if isinstance(metrics, Mapping) else {}
@@ -2288,7 +2291,7 @@ class MainWindow(QMainWindow):
                             thickness=4,
                             alpha=255,
                             z_index=50,
-                            label=f"{tool_name} · chyba {blob_index}",
+                            label=failure_label,
                         )
                     )
                     tool_error_added = True
@@ -2297,7 +2300,7 @@ class MainWindow(QMainWindow):
                 failed_roi_items = overlay_utils.tool_overlay_items(
                     tool,
                     color=(68, 68, 239),
-                    label=f"NOK · {tool_name}",
+                    label=failure_label,
                     include_ignore_mask=False,
                 )
                 for item in failed_roi_items:
