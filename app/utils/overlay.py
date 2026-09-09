@@ -629,6 +629,7 @@ def draw_overlay_items(
     """Draw lightweight runtime outlines without allocating alpha frame buffers."""
 
     import cv2
+    from app.utils.nok_label import ascii_label
 
     frame = np.asarray(base_image)
     if frame.ndim == 2:
@@ -680,7 +681,7 @@ def draw_overlay_items(
         else:
             continue
 
-        label_text = str(item.label or "").strip()
+        label_text = ascii_label(item.label or "").strip()
         if not label_text or label_anchor is None:
             continue
         font = cv2.FONT_HERSHEY_SIMPLEX
