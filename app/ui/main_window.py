@@ -54,6 +54,7 @@ from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
 from app.services.security_service import SecurityService
 from app.ui.password_dialog import authorize_recipe_write
 from app.ui.theme import refresh_style
+from app.ui.results_page import ResultsPage
 from app.utils import overlay as overlay_utils
 
 
@@ -159,6 +160,11 @@ class MainWindow(QMainWindow):
         self.mode_btn.setProperty("role", "mode")
         self.mode_btn.clicked.connect(lambda: self._request_mode("SETUP"))
         top.addWidget(self.mode_btn)
+        self.btn_results = QPushButton("VÝSLEDKY")
+        self.btn_results.setCheckable(True)
+        self.btn_results.setProperty("role", "mode")
+        self.btn_results.clicked.connect(lambda: self._request_mode("RESULTS"))
+        top.addWidget(self.btn_results)
         top.addStretch(1)
 
         recipe_label = QLabel("Recept:")
@@ -192,6 +198,7 @@ class MainWindow(QMainWindow):
 
         # ========== Stacked RUN/SETUP ==========
         self.stack = QStackedWidget()
+        self.panel_results = None
         root_layout.addWidget(self.stack, 1)
 
         # ---------- RUN panel ----------
@@ -634,6 +641,22 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def _request_mode(self, target: str) -> None:
         target_mode = str(target or "").upper()
+        if target_mode == "RESULTS":
+            if self.stack.currentWidget() is self.panel_run:
+                self.toggle_mode()
+            if self.panel_results is None:
+                self.panel_results = ResultsPage(self.db.db_path, self)
+                self.stack.addWidget(self.panel_results)
+            self.stack.setCurrentWidget(self.panel_results)
+            self.mode = "RESULTS"
+            self.panel_results.activate()
+            self._sync_mode_chrome()
+            return
+        if self.mode == "RESULTS" and target_mode == "SETUP":
+            self.stack.setCurrentWidget(self.panel_setup)
+            self.mode = "SETUP"
+            self._sync_mode_chrome()
+            return
         current_mode = "RUN" if self.stack.currentWidget() is self.panel_run else "SETUP"
         if target_mode in {"RUN", "SETUP"} and target_mode != current_mode:
             self.toggle_mode()
@@ -643,7 +666,8 @@ class MainWindow(QMainWindow):
     def _sync_mode_chrome(self) -> None:
         is_run = self.stack.currentWidget() is self.panel_run
         self.btn_mode_run.setChecked(is_run)
-        self.mode_btn.setChecked(not is_run)
+        self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
+        self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
 
     def toggle_mode(self):
         if self.stack.currentWidget() is self.panel_run:
@@ -2894,6 +2918,30 @@ class MainWindow(QMainWindow):
         tool_order = getattr(tool, "order", None) if tool is not None else None
         tool_id = getattr(report, "tool_id", None) or tool_name or (f"tool_{tool_order}" if tool_order is not None else None)
 
+        # Persist geometry and thresholds from the executed tool, never rebuild
+        # historical overlays from a subsequently edited recipe.
+        history_overlays = []
+        if tool is not None:
+            geometry = overlay_utils.tool_overlay_items(
+                tool, color=(255, 170, 73), include_ignore_mask=False,
+            )
+            for item in [item for item in geometry if item.z_index == 20] + list(getattr(report, "overlay_items", []) or []):
+                if item.kind not in {"rect", "polygon", "polyline"}:
+                    continue
+                history_overlays.append({
+                    "rect": self._simplify_value(item.rect),
+                    "points": item.points.tolist() if item.points is not None else None,
+                    "closed": item.closed,
+                    "error": item.z_index >= 30 and str(getattr(report, "status", "")).lower() == "nok",
+                })
+            if str(getattr(report, "status", "")).lower() == "nok":
+                for blob in (raw_metrics or {}).get("blobs", []):
+                    if isinstance(blob, Mapping) and "image_x" in blob and "image_y" in blob:
+                        history_overlays.append({
+                            "rect": self._simplify_value([blob["image_x"], blob["image_y"], blob.get("width", 0), blob.get("height", 0)]),
+                            "error": True,
+                        })
+
         return {
             "id": tool_id,
             "name": tool_name or tool_id or "Tool",
@@ -2903,6 +2951,9 @@ class MainWindow(QMainWindow):
             "latency_ms": latency_value,
             "metrics": metrics,
             "diagnostics": diagnostics,
+            "thresholds": self._simplify_value(getattr(getattr(tool, "thresholds", None), "values", {})),
+            "roi": tool.roi.to_dict() if tool is not None else None,
+            "history_overlays": history_overlays,
         }
 
     def _merge_pipeline_metrics(self, reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
