@@ -105,6 +105,60 @@ class CameraService:
         self._trigger_capture_depth = 0
         self._trigger_state_lock = threading.Lock()
         self._cap_read_lock = threading.Lock()
+        self._frame_condition = threading.Condition()
+        self._frame_requests = []
+        self._latest_delivery = 0.0
+
+    def arm_master_frame(self):
+        """Reserve the first newly acquired frame, independently of preview reads."""
+        request = {"after": time.monotonic(), "frame": None, "cancelled": False}
+        with self._frame_condition:
+            self._frame_requests.append(request)
+        return request
+
+    def finish_master_frame(self, request):
+        with self._frame_condition:
+            if request["frame"] is None:
+                request["cancelled"] = True
+            self._frame_condition.notify_all()
+
+    def wait_master_frame(self, request, timeout_s=1.0):
+        deadline = time.monotonic() + timeout_s
+        with self._frame_condition:
+            try:
+                while request["frame"] is None and not request["cancelled"]:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise RuntimeError("Čerstvá snímka po Pico CAPTURE nie je dostupná.")
+                    self._frame_condition.wait(remaining)
+                if request["cancelled"]:
+                    raise RuntimeError("Capture skončil alebo sa kamera reštartovala bez čerstvej snímky.")
+                self._logger.info("[MASTER_CAPTURE] fresh frame ready elapsed_ms=%.1f",
+                                  (time.monotonic() - request["after"]) * 1000.0)
+                return request["frame"]
+            finally:
+                self._frame_requests = [item for item in self._frame_requests if item is not request]
+
+    def _publish_master_frame(self, frame, acquired_at):
+        with self._frame_condition:
+            self._latest_delivery = time.monotonic()
+            self._frame_requests = [request for request in self._frame_requests
+                                    if self._latest_delivery - request["after"] < 2.0]
+            for request in self._frame_requests:
+                if request["frame"] is None and acquired_at >= request["after"]:
+                    request["frame"] = frame
+            self._frame_condition.notify_all()
+
+    def prepare_master_capture(self):
+        """Wait for actual streaming readiness before requesting any light pulse."""
+        if self._paused_external:
+            self.resume_after_external()
+        self.start(caller="prepare_master_capture")
+        with self._frame_condition:
+            if time.monotonic() - self._latest_delivery < 2.0 / max(1, self.fps):
+                return
+        request = self.arm_master_frame()
+        self.wait_master_frame(request)
 
     def _log_trigger_cycle_state(self, event: str, **fields: object) -> None:
         payload = {
@@ -294,6 +348,11 @@ class CameraService:
 
     def _reset_buffers(self):
         self._logger.debug("reset buffers")
+        with self._frame_condition:
+            for request in self._frame_requests:
+                request["cancelled"] = True
+            self._latest_delivery = 0.0
+            self._frame_condition.notify_all()
         self._clear_queue()
         self._clear_ring()
         self._q = queue.Queue(maxsize=5)
@@ -318,6 +377,16 @@ class CameraService:
             arr = self._normalize_frame_u8(arr)
             if arr is None:
                 return Gst.FlowReturn.OK
+            # Translate buffer running-time to the host monotonic clock. Reject
+            # pre-event exposure/queued buffers instead of counting queue pops.
+            acquired_at = time.monotonic()
+            if buf.pts != Gst.CLOCK_TIME_NONE and self._pipeline is not None:
+                clock = self._pipeline.get_clock()
+                if clock is not None:
+                    running = clock.get_time() - self._pipeline.get_base_time()
+                    acquired_at -= max(0, running - buf.pts) / Gst.SECOND
+            acquired_at -= max(1.0 / max(1, self.fps), self.exposure_us / 1_000_000.0)
+            self._publish_master_frame(arr, acquired_at)
             # Preview-only path: queue/appsink slúži pre UI/live stream.
             if self._q.full():
                 try:
@@ -454,6 +523,7 @@ class CameraService:
                 if self._cap is None:
                     time.sleep(0.005)
                     continue
+                acquired_at = time.monotonic()
                 ok, frame = self._cap.read()
             if not ok:
                 time.sleep(0.005)
@@ -462,6 +532,10 @@ class CameraService:
             frame = self._normalize_frame_u8(frame)
             if frame is None:
                 continue
+
+            self._publish_master_frame(frame, acquired_at - max(
+                1.0 / max(1, self.fps), self.exposure_us / 1_000_000.0
+            ))
 
             try:
                 if self._q.full():

@@ -760,50 +760,31 @@ class MainWindow(QMainWindow):
         return False, self.pico.last_error or "Synchronizácia Pico zlyhala"
 
     def _handle_master_flash_capture_flow(
-        self,
-        *,
-        view: Any | None,
-        capture_request_source: str,
-    ) -> None:
-        flash_delay_ms = max(0, int(getattr(view, "flash_delay_ms", 0) or 0))
-        settle_ms = max(0, int(getattr(view, "settle_ms", 0) or 0))
-        source = str(capture_request_source or "manual").strip().lower()
-        # A Pico CAPTURE event is emitted after Pico has already driven the light.
-        # Never add a second app-side delay after the production Pico sequence.
-        is_pico_request = source in {"pico", "picosoftware"}
+        self, *, view: Any | None, capture_request_source: str,
+    ):
+        source = str(capture_request_source or "manual").lower()
+        if source in {"pico", "picosoftware"}:
+            raise RuntimeError("Pico snímka nemá rezervovaný frame.")
         view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
-        if is_pico_request:
-            return
-
-        if not is_pico_request:
-            is_sequential = (
-                str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
-                and str(getattr(view, "external_trigger_mode", "") or "").lower() == "sequential"
-            )
-            is_explicit_pico = (
-                str(getattr(view, "trigger_mode", "timed") or "timed").lower() == "external"
-                and str(getattr(view, "external_trigger_mode", "") or "").lower() == "explicit"
-                and str(getattr(view, "external_source", "") or "").lower() == "pico"
-            )
-            input_index = getattr(view, "external_request_input", None)
-            if is_explicit_pico and isinstance(input_index, Integral) and 1 <= int(input_index) <= 8:
-                fired = self.pico.trigger_input(int(input_index))
-                pico_target = "IN{}".format(int(input_index))
-            else:
-                pico_target = getattr(view, "pico_profile", None) if is_sequential else view_id
-                fired = self.pico.fire(str(pico_target or view_id))
-            if not fired:
-                self._logger.warning(
-                    "[PICO] fire failed view=%s profile=%s error=%s",
-                    view_id,
-                    pico_target,
-                    self.pico.last_error,
-                )
-            else:
-                return
-        wait_ms = flash_delay_ms + settle_ms
-        if wait_ms > 0:
-            time.sleep(wait_ms / 1000.0)
+        explicit = (
+            str(getattr(view, "external_trigger_mode", "")).lower() == "explicit"
+            and str(getattr(view, "external_source", "")).lower() == "pico"
+        )
+        if explicit:
+            index = getattr(view, "external_request_input", None)
+            if isinstance(index, bool) or not isinstance(index, Integral) or not 1 <= index <= 8:
+                raise RuntimeError("Pohľad nemá platný Pico vstup.")
+            target = f"IN{index}"
+            if not self.pico_config.is_input_enabled(int(index)):
+                raise RuntimeError("Pico vstup je zakázaný.")
+        else:
+            target = str(getattr(view, "pico_profile", None) or "").upper()
+            if target not in {"V1", "V2"}:
+                target = self.pico._normalize_target(view_id)
+            if target not in {"V1", "V2"}:
+                raise RuntimeError("Pohľad nemá platný Pico profil V1/V2.")
+        self.cam.prepare_master_capture()
+        return self.pico.capture_master(target, self.cam)
 
     def _run_trigger_context(self, *, requested_stream_mode: int | None = None) -> dict[str, Any]:
         current_stream_mode: int | None = None
@@ -1090,8 +1071,6 @@ class MainWindow(QMainWindow):
             None,
         )
         if explicit_spec is not None:
-            source = "IN{}".format(int(explicit_spec["external_request_input"]))
-            send_request = lambda: self.pico.trigger_input(int(explicit_spec["external_request_input"]))
             selected = dict(explicit_spec)
         else:
             selected = self._resolve_manual_sequence_view(
@@ -1104,13 +1083,10 @@ class MainWindow(QMainWindow):
             if selected is None or profile not in {"V1", "V2"}:
                 self.manual_trigger("manual", None)
                 return
-            source = profile
-            send_request = lambda: self.pico.fire(profile)
 
-        self._pending_pico_software_request = {"source": source, "spec": selected}
-        if not send_request():
-            self._pending_pico_software_request = None
-            self.lbl_status.setText(self.pico.last_error or "Pico trigger sa nepodarilo odoslať.")
+        # Prepare the view/camera first; its shared capture path requests Pico
+        # and receives a reserved frame during the pulse.
+        self.manual_trigger("manual", {"spec": selected})
 
     def _consume_software_pico_request(self, capture_source: str) -> dict[str, Any] | None:
         pending = getattr(self, "_pending_pico_software_request", None)
@@ -1157,6 +1133,7 @@ class MainWindow(QMainWindow):
         transform_stage: str = "inspection",
         image_rotation_override: int | None = None,
         capture_request_source: str = "manual",
+        frame_request=None,
     ):
         active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
         active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
@@ -1189,7 +1166,7 @@ class MainWindow(QMainWindow):
 
         mode = self.get_capture_mode()
         if mode == "master":
-            self._handle_master_flash_capture_flow(
+            frame = self.cam.wait_master_frame(frame_request) if frame_request is not None else self._handle_master_flash_capture_flow(
                 view=active_view,
                 capture_request_source=capture_request_source,
             )
@@ -1212,9 +1189,6 @@ class MainWindow(QMainWindow):
                 pulse_ms=10.0,
                 trigger_mode_label=trigger_mode_label,
             )
-        else:
-            self.cam.discard_frames(3, caller=master_caller)
-            frame = self.cam.last_frame(caller=master_caller)
         if image_rotation_override is not None:
             frame = apply_view_rotation(
                 frame,
@@ -1344,7 +1318,7 @@ class MainWindow(QMainWindow):
         mode = self.get_capture_mode()
         active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
         if mode == "master":
-            self._handle_master_flash_capture_flow(
+            return self._handle_master_flash_capture_flow(
                 view=active_view,
                 capture_request_source=capture_request_source,
             )
@@ -1391,6 +1365,7 @@ class MainWindow(QMainWindow):
         if trigger_state is None:
             self._resume_live_preview_after_trigger(False)
             return
+        trigger_state["frame_request"] = context.get("frame_request")
         try:
             self._logger.info("trigger_click(caller=run_manual_trigger)")
             self._log_trigger_cycle("cycle_start", preview_state="paused")
@@ -1425,8 +1400,9 @@ class MainWindow(QMainWindow):
 
             self._finalize_run_trigger(trigger_state)
 
-        except Exception:
+        except Exception as exc:
             self._update_manual_trigger_feedback(force_fail=True)
+            self.lbl_status.setText(f"CHYBA SNÍMANIA / KONTROLY: {exc}")
             self._signal_outputs("nok")
             import traceback; traceback.print_exc()
         finally:
@@ -1650,6 +1626,7 @@ class MainWindow(QMainWindow):
                 settle_ms=settle_ms,
                 transform_stage="inspection",
                 capture_request_source=trigger_state.get("trigger_source", "manual"),
+                frame_request=trigger_state.pop("frame_request", None),
             )
             self._update_manual_trigger_feedback()
             if view_frame is None:
@@ -2072,6 +2049,8 @@ class MainWindow(QMainWindow):
         self._handle_external_trigger("Modbus", input_index=input_index)
 
     def _handle_pico_trigger(self, capture_source: str) -> None:
+        if self.mode != "RUN" or self.get_capture_mode() != "master":
+            return
         source = str(capture_source or "").upper().strip()
         if source in {"V1", "V2"}:
             requested_spec = self._consume_software_pico_request(source)
@@ -2117,7 +2096,8 @@ class MainWindow(QMainWindow):
             parsed_input = None
         self.external_triggered.emit(
             resolved_source,
-            {"input_index": parsed_input, "spec": requested_spec},
+            {"input_index": parsed_input, "spec": requested_spec,
+             "frame_request": self.cam.arm_master_frame() if resolved_source == "pico" else None},
         )
 
     def _update_live_view(self):
@@ -2974,6 +2954,8 @@ class MainWindow(QMainWindow):
         profile = getattr(view_obj, "camera_profile", None)
         try:
             apply_view_camera_profile(self.cam, {}, profile)
+            if self.get_capture_mode() == "master":
+                self.cam.prepare_master_capture()
         except Exception as exc:
             self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
             return
