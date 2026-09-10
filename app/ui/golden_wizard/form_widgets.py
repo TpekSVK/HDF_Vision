@@ -17,7 +17,7 @@ def _format_spec_tooltip(spec: dict[str, Any]) -> str:
     min_val = spec.get("min")
     max_val = spec.get("max")
     display_scale = float(spec.get("display_scale", 1.0) or 1.0)
-    suffix = str(spec.get("suffix", "") or "")
+    suffix = str(spec.get("suffix") or (" " + str(spec["unit"]) if spec.get("unit") else ""))
     display_min = float(min_val) * display_scale if min_val is not None else None
     display_max = float(max_val) * display_scale if max_val is not None else None
     if min_val is not None or max_val is not None:
@@ -88,7 +88,7 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
                 spin.setValue(int(round(float(default))))
             except Exception:  # pragma: no cover - defensive fallback
                 spin.setValue(int(min_val))
-        suffix = str(spec.get("suffix", "") or "")
+        suffix = str(spec.get("suffix") or (" " + str(spec["unit"]) if spec.get("unit") else ""))
         if suffix:
             spin.setSuffix(suffix)
         return spin
@@ -102,7 +102,6 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
         if max_val is None:
             max_val = 1e9
         display_scale = float(spec.get("display_scale", 1.0) or 1.0)
-        spin.setRange(float(min_val) * display_scale, float(max_val) * display_scale)
         precision = spec.get("precision")
         if precision is None:
             precision = spec.get("decimals", 4)
@@ -112,6 +111,7 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
         except Exception:  # pragma: no cover - defensive fallback
             decimals = 4
         spin.setDecimals(decimals)
+        spin.setRange(float(min_val) * display_scale, float(max_val) * display_scale)
         step = spec.get("step")
         if step is not None:
             try:
@@ -124,7 +124,7 @@ def _create_form_widget(spec: dict[str, Any], parent: QWidget) -> QWidget | None
                 spin.setValue(float(default) * display_scale)
             except Exception:  # pragma: no cover - defensive fallback
                 spin.setValue(float(min_val) * display_scale)
-        suffix = str(spec.get("suffix", "") or "")
+        suffix = str(spec.get("suffix") or (" " + str(spec["unit"]) if spec.get("unit") else ""))
         if suffix:
             spin.setSuffix(suffix)
         return spin

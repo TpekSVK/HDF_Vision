@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSpinBox,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -57,7 +58,13 @@ class PicoWizard(QDialog):
         self.refresh_device()
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        content = QWidget(scroll)
+        layout = QVBoxLayout(content)
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
         device = QGroupBox("Stav zariadenia", self)
         device_grid = QGridLayout(device)
         self.lbl_connection = QLabel("Odpojené", device)
@@ -154,7 +161,15 @@ class PicoWizard(QDialog):
         buttons.accepted.connect(self._save)
         buttons.rejected.connect(self.reject)
         actions.addWidget(buttons)
-        layout.addLayout(actions)
+        outer.addLayout(actions)
+        self.setSizeGripEnabled(True)
+
+    def showEvent(self, event) -> None:
+        super().showEvent(event)
+        if not getattr(self, "_initial_size_applied", False):
+            self._initial_size_applied = True
+            available = self.screen().availableGeometry()
+            self.resize(min(760, available.width()-40), min(900, available.height()-80))
 
     @staticmethod
     def parse_firmware(response: str) -> str | None:

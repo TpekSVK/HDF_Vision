@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 import os
+from app.ui.responsive import WrapLayout
 import time
 import math
 import logging
@@ -420,6 +421,11 @@ class ToolConfigPanel(QWidget):
         layout.addWidget(self._presence_validation_section)
         self._advanced_container = QWidget(self)
         self._advanced_layout = QFormLayout(self._advanced_container)
+        for form in (self._form_layout, self._threshold_layout, self._advanced_layout):
+            form.setRowWrapPolicy(QFormLayout.WrapLongRows)
+            form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
+            form.setVerticalSpacing(10)
+            form.setHorizontalSpacing(12)
         self._advanced_layout.setContentsMargins(0, 0, 0, 0)
         self._advanced_layout.setSpacing(6)
         self._advanced_section = CollapsibleSection(
@@ -902,6 +908,7 @@ class ToolConfigPanel(QWidget):
                     widget.setToolTip(tooltip)
                 label_text = field_label(name, spec.get("label"))
                 label = QLabel(label_text, self)
+                label.setWordWrap(True)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, params.get(name))
@@ -938,6 +945,7 @@ class ToolConfigPanel(QWidget):
                     widget.setToolTip(tooltip)
                 label_text = field_label(name, spec.get("label"))
                 label = QLabel(label_text, self)
+                label.setWordWrap(True)
                 if tooltip:
                     label.setToolTip(tooltip)
                 self._set_widget_value(widget, spec, thresholds.get(name))
@@ -1868,26 +1876,24 @@ class GoldenWizard(QDialog):
         self._session_settings_button.setAutoRaise(True)
         self._session_settings_button.clicked.connect(self._open_session_settings)
 
-        top_primary = QHBoxLayout()
+        top_primary = WrapLayout()
         top_primary.setContentsMargins(0, 0, 0, 0)
         top_primary.setSpacing(8)
         top_primary.addWidget(QLabel("Recept:"))
-        top_primary.addWidget(self.recipe_name, 1)
+        top_primary.addWidget(self.recipe_name)
         top_primary.addWidget(QLabel("Pohľad:", self))
         top_primary.addWidget(self._view_selector)
         top_primary.addWidget(self.btn_add_view)
         top_primary.addWidget(self.btn_edit_view)
         top_primary.addWidget(self.btn_remove_view)
-        top_primary.addStretch(1)
         top_primary.addWidget(self.btn_live)
         top_primary.addWidget(self.btn_manual_light)
 
-        top_secondary = QHBoxLayout()
+        top_secondary = WrapLayout()
         top_secondary.setContentsMargins(0, 0, 0, 0)
         top_secondary.setSpacing(8)
         top_secondary.addWidget(self.chk_pose)
         top_secondary.addWidget(self.chk_logging)
-        top_secondary.addStretch(1)
         top_secondary.addWidget(QLabel("Zlyhanie locatora:", self))
         top_secondary.addWidget(self.failure_policy_combo)
         top_secondary.addWidget(self._session_settings_button)
@@ -1896,7 +1902,7 @@ class GoldenWizard(QDialog):
         # 1) Live LABEL (video) – používa sa len pri Live zapnuté
         self.live_lbl = QLabel("—")
         self.live_lbl.setAlignment(Qt.AlignCenter)
-        self.live_lbl.setMinimumHeight(360)
+        self.live_lbl.setMinimumHeight(180)
         self.live_lbl.hide()  # default skryté
 
         # 2) DrawView (kreslenie) – používa sa pri Live vypnuté
@@ -1919,12 +1925,11 @@ class GoldenWizard(QDialog):
         self.btn_close_wizard = QPushButton("Zavrieť Golden Wizard")
         self.btn_close_wizard.setProperty("role", "destructive")
 
-        buttons = QHBoxLayout()
+        buttons = WrapLayout()
         buttons.setContentsMargins(0, 0, 0, 0)
         buttons.setSpacing(8)
         buttons.addWidget(btn_cap_golden)
         buttons.addWidget(btn_load_golden)
-        buttons.addStretch(1)
         buttons.addWidget(self.btn_save_tool)
         buttons.addWidget(self.btn_test_tool)
         self._publish_state_label = QLabel("", self)
@@ -2036,7 +2041,6 @@ class GoldenWizard(QDialog):
         center_layout.addWidget(self._canvas_empty)
         center_layout.addWidget(self.live_lbl, 1)
         center_layout.addWidget(self.roi_editor, 1)
-        center_layout.addLayout(buttons)
 
         properties_scroll = QScrollArea(self)
         properties_scroll.setObjectName("propertiesScroll")
@@ -2070,9 +2074,20 @@ class GoldenWizard(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
-        layout.addWidget(top_bar)
-        layout.addWidget(self._workspace_splitter, 1)
+        # Keep all controls reachable even when the editor's own toolbar has
+        # a larger minimum width than the available logical screen width.
+        workspace = QWidget(self)
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.addWidget(top_bar)
+        workspace_layout.addWidget(self._workspace_splitter, 1)
+        workspace_scroll = QScrollArea(self)
+        workspace_scroll.setWidgetResizable(True)
+        workspace_scroll.setWidget(workspace)
+        layout.addWidget(workspace_scroll, 1)
+        layout.addLayout(buttons)
         self._status_bar = QLabel("Pripravené", self)
+        self._status_bar.setWordWrap(True)
         self._status_bar.setStyleSheet(
             "color: #aab2bc; background: #20242a; border-top: 1px solid #3b4149; padding: 5px 8px;"
         )
@@ -2138,8 +2153,9 @@ class GoldenWizard(QDialog):
         self._refresh_publish_state()
 
         self.setSizeGripEnabled(True)
-        self.resize(1400, 900)
-        self.setWindowState(self.windowState() | Qt.WindowFullScreen)
+        available = self.screen().availableGeometry()
+        self.resize(min(1400, available.width()-40), min(900, available.height()-80))
+        self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
     # ---------- Live ----------
     def _set_manual_light_ui(self, enabled: bool | None) -> None:
@@ -3369,10 +3385,14 @@ class GoldenWizard(QDialog):
             order_item.setTextAlignment(Qt.AlignCenter)
             is_locator = tool.type.startswith("locator.")
             if is_locator:
-                highlight = QColor("#fff2cc")
+                highlight = QColor("#20262d")
+                foreground = QColor("#e6e8eb")
                 type_item.setBackground(highlight)
+                type_item.setForeground(foreground)
                 order_item.setBackground(highlight)
+                order_item.setForeground(foreground)
                 name_item.setBackground(highlight)
+                name_item.setForeground(foreground)
                 type_item.setText(f"{secondary} · Locator")
                 type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
             else:

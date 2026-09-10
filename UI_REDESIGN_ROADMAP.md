@@ -42,6 +42,9 @@ outside the scope unless a stage explicitly says otherwise.
 - [x] Reorganize recipe, communication and camera entry points.
 - [x] Keep the Golden Wizard as the primary tool/pipeline editor.
 - [ ] Standardize property sections and validation feedback.
+  - [x] Shared parameter/threshold/advanced form spacing and wrapping.
+  - [x] Display declared units consistently in controls and range tooltips.
+  - [ ] Review missing units and cross-field validation for each tool.
 
 ### Locator follow-up
 
@@ -53,7 +56,16 @@ outside the scope unless a stage explicitly says otherwise.
 
 ## Stage 6 — Resolution and operator polish
 
+- [x] Pico: scrollable content with persistent Save/Cancel footer.
+- [x] Golden: wrap top/footer actions, maximize instead of forced fullscreen,
+      and provide workspace scrolling when its controls exceed the window.
+- [x] Results: wrap filters onto additional rows.
+- [ ] Verify Golden's complete layout with recipes and physical display scaling.
+
 - [ ] Verify layouts at the target Jetson display resolutions.
 - [ ] Check long Slovak labels, scaling and touch-friendly hit targets.
 - [ ] Reduce visual noise and confirm status readability at distance.
 - [ ] Profile thumbnail/image handling and remove avoidable UI allocations.
+  - [x] Coalesce pending Results image requests to the newest selection.
+  - [ ] Measure memory and latency on the operator display; verify Results filters,
+        paging, missing images, overlays and CSV export interactively.

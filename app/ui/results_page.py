@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from app.services.results_browser import query_results, metadata, filter_options, export_results
 from app.ui.image_canvas import ImageView, ImageNavigationToolbar, InteractionMode
+from app.ui.responsive import WrapLayout
 
 
 class _Signals(QObject):
@@ -52,11 +53,12 @@ class ResultsPage(QWidget):
         self.pool = QThreadPool(self)
         self.pool.setMaxThreadCount(2)
         self.jobs, self.tokens = {}, {}
+        self._pending_image = None
         self.rows, self.cursors = [], [None]
         self.meta, self.overlays = {}, []
         self._has_image = False
         layout = QVBoxLayout(self)
-        filters = QHBoxLayout()
+        filters = WrapLayout()
         self.start = QDateEdit(QDate.currentDate().addDays(-7))
         self.end = QDateEdit(QDate.currentDate())
         for label, control in [('Od', self.start), ('Do', self.end)]:
@@ -154,6 +156,11 @@ class ResultsPage(QWidget):
         self.next.setEnabled(False)
 
     def _submit(self, kind, function):
+        if kind == 'image' and any(key[0] == 'image' for key in self.jobs):
+            # Keep only the newest selection instead of queuing full image
+            # decodes while the operator scrolls through the history.
+            self._pending_image = function
+            return
         token = self.tokens.get(kind, 0) + 1
         self.tokens[kind] = token
         job = _Job(kind, token, function)
@@ -200,6 +207,7 @@ class ResultsPage(QWidget):
             self._load()
 
     def _select(self):
+        self._pending_image = None
         self.tokens['image'] = self.tokens.get('image', 0) + 1
         self.overlays = []
         self.canvas.set_pixmap(None)
@@ -297,6 +305,10 @@ class ResultsPage(QWidget):
 
     def _done(self, kind, token, data, error):
         self.jobs.pop((kind, token), None)
+        if kind == 'image' and self._pending_image is not None:
+            pending, self._pending_image = self._pending_image, None
+            self._submit('image', pending)
+            return
         if token != self.tokens.get(kind):
             return
         if kind == 'export':
