@@ -177,6 +177,15 @@ class ViewConfigDialog(QDialog):
         self._brightness_edit.setPlaceholderText("Leave blank to inherit")
         self._sharpness_edit = QLineEdit(camera_group)
         self._sharpness_edit.setPlaceholderText("Leave blank to inherit")
+        # Unsupported controls are not inserted into the form. Explicitly hide
+        # them so Qt does not show unlaid-out children over the group heading.
+        for field, supported in (
+            (self._gain_edit, self._supports_gain),
+            (self._gamma_edit, self._supports_gamma),
+            (self._brightness_edit, self._supports_brightness),
+            (self._sharpness_edit, self._supports_sharpness),
+        ):
+            field.setVisible(supported)
         self._flash_mode_combo = QComboBox(camera_group)
         self._flash_mode_combo.addItem("Inherit", None)
         self._flash_mode_combo.addItem("Vypnuté (0)", 0)
