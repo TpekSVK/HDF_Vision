@@ -22,8 +22,9 @@ Nové záznamy obsahujú historickú geometriu a prahy; pri starších záznamoc
 chýbajúca geometria nedopĺňa z aktuálneho receptu. Presná lokalizácia chyby sa
 zobrazuje len ak ju nástroj uložil. Ak plná snímka chýba, použije sa uložený JPEG;
 po odstránení oboch obrázkov zostanú dostupné metriky. Pravidlá uchovávania a
-zapnutie/vypnutie ukladania kontrol zostávajú platné. Produkčné spúšťanie je
-dostupné v RUN; stránka Výsledky slúži na prehliadanie histórie.
+zapnutie/vypnutie ukladania kontrol zostávajú platné. Otvorenie stránky Výsledky z RUN ponechá kontroly a externé vstupy aktívne;
+návrat do RUN nepripravuje kameru znovu. SETUP po potvrdení operátorom kontroly
+pozastaví. Výsledky otvorené zo SETUP ich samy neobnovia.
 
 ## Produkčná architektúra kamery
 

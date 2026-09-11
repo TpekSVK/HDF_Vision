@@ -79,3 +79,37 @@ hoci jeho vstupná maska má na tomto pixeli hodnotu 1; renderer ani tento test
 neboli pri oprave rotácie menené. Logy /tmp/hdf_roi_before.log,
 /tmp/hdf_roi_after.log, /tmp/hdf_roi_targeted.log.
 Oprava ROI je zatiaľ lokálna; nebola súčasťou predchádzajúceho PR #352.
+
+## Výsledky bez prerušenia kontrol – 2026-09-11
+
+Oprava rotácie ROI bola následne na žiadosť používateľa mergnutá cez PR #353,
+merge commit a928fd3ef42dda64d059851a9d44890b50f0f635.
+
+Nová lokálna vetva codex/results-keep-production-active oddeľuje zobrazenú stránku
+Výsledky od runtime režimu RUN/SETUP. RUN → Výsledky → RUN nemení Pico SESSION,
+stream, prípravu triggera, profil ani index externej sekvencie. Externé udalosti
+sa na stránke Výsledky naďalej prijímajú. Výsledky otvorené zo SETUP ostanú pozastavené.
+Stránka viditeľne uvádza, či sú kontroly aktívne alebo pozastavené.
+Prechod aktívnej kontroly do SETUP vyžaduje potvrdenie (predvolene Nie), ktoré
+upozorňuje na nespracované/neodložené vstupy. Po potvrdení sa TRIGGER session
+ukončí; v MASTER sa Pico uvedie do IDLE. Návrat zo SETUP normálne obnoví prípravu.
+
+Validácia: 28 testov navigácie, externých triggerov a ROI prešlo v Dockeri.
+Nové testy pokrývajú MASTER aj TRIGGER, opakovaný návrat z histórie bez prípravných
+volaní, pokračujúce Modbus vstupy, potvrdenie/zrušenie SETUP a históriu z pozastavenia.
+Skutočný ResultsPage bol vytvorený v offscreen Qt a oba stavové texty overené.
+Logy: /tmp/hdf_navigation_tests.log, /tmp/hdf_results_notice_smoke.log.
+Hardvérový záťažový test pri súčasnom prehliadaní histórie sa v tejto fáze nerobil.
+Táto zmena navigácie zatiaľ nebola pushnutá ani mergnutá.
+
+## Zjednodušenie pohľadu – 2026-09-11
+
+Na žiadosť používateľa odstránené položky Formát pixelov, Režim blesku a Ustálenie
+z Pridať/Upraviť pohľad. Formát sa preberá z rozlíšenia; PIO naďalej validuje Y8.
+Uloženie pohľadu čistí legacy settle_ms a flash_mode. Staré settle_ms sa ignoruje
+aj bez opätovného uloženia receptu; odstránené príslušné sleep pred PIO capture.
+Aplikovanie/obnovovanie kamerového profilu predvolene neposiela flash_mode kamere:
+svetlo vlastní Pico. Časovač medzi kontrolami a interná stabilizácia PIO ostávajú.
+Používateľ schválil push a merge tejto úpravy spolu s navigáciou Výsledky/RUN.
+Záverečná spoločná sada: 65 testov prešlo v Dockeri (vrátane overenia ignorovania
+legacy flash_mode). Log /tmp/hdf_simplified_view_final.log.

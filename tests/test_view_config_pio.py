@@ -60,8 +60,8 @@ def test_vga_long_exposure_uses_automatic_period(dialog):
 
 @pytest.mark.parametrize("mode", ["master", "trigger"])
 def test_pixel_format_mode_validation(dialog, mode):
-    d, errors = dialog(capture_mode=mode, camera_profile={"pixel_format": "Y12", "exposure_us": 1000})
-    assert d._pixel_format_combo.model().item(2).isEnabled() == (mode == "master")
+    d, errors = dialog(capture_mode=mode, camera_profile={"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y12", "exposure_us": 1000})
+    assert not hasattr(d, "_pixel_format_combo")
     d.accept()
     assert bool(errors) == (mode == "trigger")
     assert (d._result is None) == (mode == "trigger")
@@ -89,3 +89,13 @@ def test_resolutions_and_trigger_controls(dialog):
     assert not hasattr(d, "_trigger_exposure_edit")
     assert not d._pico_profile_combo.isEnabled()
     assert "Impulzy a blesk riadi aplikácia" in d._pico_timing_info.text()
+
+
+def test_removed_controls_and_legacy_timing(dialog):
+    d, errors = dialog(settle_ms=500, camera_profile={"exposure_us": 1000, "flash_mode": 2})
+    for field in ("_settle_edit", "_flash_mode_combo", "_pixel_format_combo"):
+        assert not hasattr(d, field)
+    d.accept()
+    assert not errors
+    assert d.values()["settle_ms"] is None
+    assert d.values()["camera_profile"].flash_mode is None
