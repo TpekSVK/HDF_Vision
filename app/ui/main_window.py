@@ -642,25 +642,22 @@ class MainWindow(QMainWindow):
     def _request_mode(self, target: str) -> None:
         target_mode = str(target or "").upper()
         if target_mode == "RESULTS":
-            if self.stack.currentWidget() is self.panel_run:
-                self.toggle_mode()
+            # History is a page, not a production mode. Keep capture and sequence
+            # state intact, whether opened from RUN or from paused SETUP.
             if self.panel_results is None:
                 self.panel_results = ResultsPage(self.db.db_path, self)
                 self.stack.addWidget(self.panel_results)
+            self.panel_results.set_production_active(self.mode == "RUN")
             self.stack.setCurrentWidget(self.panel_results)
-            self.mode = "RESULTS"
             self.panel_results.activate()
             self._sync_mode_chrome()
             return
-        if self.mode == "RESULTS" and target_mode == "SETUP":
-            self.stack.setCurrentWidget(self.panel_setup)
-            self.mode = "SETUP"
-            self._sync_mode_chrome()
+        if target_mode not in {"RUN", "SETUP"}:
             return
-        current_mode = "RUN" if self.stack.currentWidget() is self.panel_run else "SETUP"
-        if target_mode in {"RUN", "SETUP"} and target_mode != current_mode:
+        if target_mode != self.mode:
             self.toggle_mode()
         else:
+            self.stack.setCurrentWidget(self.panel_run if self.mode == "RUN" else self.panel_setup)
             self._sync_mode_chrome()
 
     def _sync_mode_chrome(self) -> None:
@@ -670,11 +667,23 @@ class MainWindow(QMainWindow):
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
 
     def toggle_mode(self):
-        if self.stack.currentWidget() is self.panel_run:
+        if self.mode == "RUN":
+            answer = QMessageBox.question(
+                self, "Pozastaviť kontroly?",
+                "Prechod do SETUP pozastaví kontroly. Externé vstupy sa počas "
+                "nastavovania nespracujú ani neodložia na neskôr.\n\n"
+                "Kontroly obnovíte návratom do RUN. Pokračovať do SETUP?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                self._sync_mode_chrome()
+                return
             self._logger.info("[PAGE_SWITCH] from=run to=setup capture_mode=%s", self.capture_mode)
             if self.capture_mode == "trigger":
                 self._logger.info("[PAGE_SWITCH] cleanup run trigger state without restore_master")
                 self._exit_run_trigger_session(restore_master=False)
+            else:
+                self.pico.quiesce()
             self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
             self.stack.setCurrentWidget(self.panel_setup)
             self.mode = "SETUP"
@@ -1197,8 +1206,7 @@ class MainWindow(QMainWindow):
             active_view_id,
             settle_ms,
         )
-        if mode == "trigger" and settle_ms is not None and int(settle_ms) > 0:
-            time.sleep(float(settle_ms) / 1000.0)
+        # Legacy per-view settle_ms is ignored; Pico owns capture timing.
 
         if mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)

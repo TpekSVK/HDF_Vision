@@ -173,3 +173,11 @@ def test_apply_camera_state_skips_unsupported_controls_without_warning():
     assert ("exposure_us", 9000) in cam.calls
     assert ("brightness", 11.0) in cam.calls
     assert all(name not in {"gain", "gamma", "sharpness"} for name, _ in cam.calls)
+
+
+def test_legacy_view_flash_does_not_override_pico_lighting():
+    calls = []
+    camera = types.SimpleNamespace(set_flash_mode=lambda mode: calls.append(mode))
+    apply_view_camera_profile(camera, {}, {"flash_mode": 2})
+    apply_camera_state(camera, {"flash_mode": 1})
+    assert calls == []

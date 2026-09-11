@@ -157,12 +157,6 @@ class ViewConfigDialog(QDialog):
         self._exposure_notice.setStyleSheet("color: #a05a00;")
         self._gain_edit = QLineEdit(camera_group)
         self._gain_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
-        self._pixel_format_combo = QComboBox(camera_group)
-        self._pixel_format_combo.addItem("Podľa rozlíšenia", None)
-        self._pixel_format_combo.addItem("Y8", "Y8")
-        self._pixel_format_combo.addItem("Y12 (iba MASTER)", "Y12")
-        if self._capture_mode == "trigger":
-            self._pixel_format_combo.model().item(2).setEnabled(False)
         self._device_edit = QLineEdit(camera_group)
         self._device_edit.setPlaceholderText("/dev/video0 (voliteľné)")
         self._gamma_edit = QLineEdit(camera_group)
@@ -180,11 +174,6 @@ class ViewConfigDialog(QDialog):
             (self._sharpness_edit, self._supports_sharpness),
         ):
             field.setVisible(supported)
-        self._flash_mode_combo = QComboBox(camera_group)
-        self._flash_mode_combo.addItem("Použiť nastavenie kamery", None)
-        self._flash_mode_combo.addItem("Vypnuté (0)", 0)
-        self._flash_mode_combo.addItem("Stroboskop (1)", 1)
-        self._flash_mode_combo.addItem("Svetlo natrvalo (2)", 2)
         self._add_form_row(camera_form, "Zariadenie kamery:", self._device_edit)
         exposure_hint = (
             "Skutočná expozícia snímača, spoločná pre MASTER aj TRIGGER. "
@@ -206,17 +195,12 @@ class ViewConfigDialog(QDialog):
             )
             self._add_form_row(camera_form, "Zisk [dB]:", self._gain_edit, tooltip=gain_hint)
 
-        pixel_hint = (
-            "Formát podľa zvoleného rozlíšenia. PIO TRIGGER podporuje Y8; Y12 je dostupné iba v MASTER."
-        )
-        self._add_form_row(camera_form, "Formát pixelov:", self._pixel_format_combo, tooltip=pixel_hint)
         if self._supports_gamma:
             self._add_form_row(camera_form, "Gamma:", self._gamma_edit)
         if self._supports_brightness:
             self._add_form_row(camera_form, "Jas:", self._brightness_edit)
         if self._supports_sharpness:
             self._add_form_row(camera_form, "Sharpness:", self._sharpness_edit)
-        self._add_form_row(camera_form, "Režim blesku:", self._flash_mode_combo)
         self._rotation_combo = QComboBox(camera_group)
         self._rotation_combo.addItem("0°", 0)
         self._rotation_combo.addItem("90°", 90)
@@ -231,15 +215,6 @@ class ViewConfigDialog(QDialog):
         timing_group = QGroupBox("Časovanie snímania", content_widget)
         timing_form = QFormLayout(timing_group)
         self._setup_compact_form(timing_form)
-
-        self._settle_edit = QLineEdit(timing_group)
-        self._settle_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
-        settle_hint = (
-            "Čas na ustálenie kamery po prepnutí do view pred zachytením"
-            " snímky. Prázdne = zdedená hodnota; v multi-view sa dodrží pri"
-            " každom cykle, keď sa view aktivuje."
-        )
-        self._add_form_row(timing_form, "Ustálenie [ms]:", self._settle_edit, tooltip=settle_hint)
 
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Časovač", "timed")
@@ -358,7 +333,6 @@ class ViewConfigDialog(QDialog):
         layout.addWidget(button_box)
 
         self._resolution_combo.currentIndexChanged.connect(self._update_pio_settings)
-        self._pixel_format_combo.currentIndexChanged.connect(self._update_pio_settings)
         self._exposure_combo.currentIndexChanged.connect(self._update_pio_settings)
         self._apply_initial_profile(camera_profile)
         self._apply_initial_rotation(image_rotation)
@@ -411,15 +385,6 @@ class ViewConfigDialog(QDialog):
             QMessageBox.critical(self, "Invalid input", "Name is required.")
             return
 
-        try:
-            settle_ms = self._parse_optional_int(self._settle_edit.text())
-        except ValueError:
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "Settle Time must be an integer value.",
-            )
-            return
         exposure_us = self._exposure_combo.currentData()
         if exposure_us not in CU55_EXPOSURES_US:
             QMessageBox.critical(self, "Expozícia", "Vyberte expozíciu z ponuky overených hodnôt.")
@@ -489,7 +454,7 @@ class ViewConfigDialog(QDialog):
         self._result = {
             "name": name,
             "camera_profile": profile,
-            "settle_ms": settle_ms,
+            "settle_ms": None,
             "pico_profile": str(self._pico_profile_combo.currentData() or "V1"),
             "trigger_mode": trigger_mode,
             "external_trigger_mode": external_mode,
@@ -611,21 +576,12 @@ class ViewConfigDialog(QDialog):
                 self._gain_edit.setText(str(profile_obj.gain_db))
             if profile_obj.device_id:
                 self._device_edit.setText(str(profile_obj.device_id))
-            if profile_obj.pixel_format:
-                index = self._pixel_format_combo.findData(profile_obj.pixel_format)
-                if index >= 0:
-                    self._pixel_format_combo.setCurrentIndex(index)
             if self._supports_gamma and profile_obj.gamma is not None:
                 self._gamma_edit.setText(str(profile_obj.gamma))
             if self._supports_brightness and profile_obj.brightness is not None:
                 self._brightness_edit.setText(str(profile_obj.brightness))
             if self._supports_sharpness and profile_obj.sharpness is not None:
                 self._sharpness_edit.setText(str(profile_obj.sharpness))
-            if profile_obj.flash_mode is not None:
-                index = self._flash_mode_combo.findData(profile_obj.flash_mode)
-                if index >= 0:
-                    self._flash_mode_combo.setCurrentIndex(index)
-
     def _apply_initial_timing(
         self,
         settle_ms: Optional[int],
@@ -639,8 +595,6 @@ class ViewConfigDialog(QDialog):
         trigger_interval_ms: Optional[int],
         trigger_gap_ms: Optional[float],
     ) -> None:
-        if settle_ms is not None:
-            self._settle_edit.setText(str(int(settle_ms)))
         normalized_mode = str(trigger_mode or "timed").strip().lower()
         if normalized_mode in {"manual", "manual trigger", "external trigger"}:
             normalized_mode = "external"
@@ -845,7 +799,7 @@ class ViewConfigDialog(QDialog):
 
     def _selected_pio_profile(self):
         resolution = self._selected_resolution_data()
-        pixel_format = self._pixel_format_combo.currentData() or resolution.get("pixel_format", "Y8")
+        pixel_format = resolution.get("pixel_format", "Y8")
         return cu55_pio_profile(resolution.get("width", 0), resolution.get("height", 0),
                                resolution.get("fps", 0), pixel_format, self._exposure_combo.currentData())
 
@@ -877,10 +831,6 @@ class ViewConfigDialog(QDialog):
                 if value is not None and value != "":
                     data[key] = value
 
-        pixel_format = self._pixel_format_combo.currentData()
-        if pixel_format:
-            data["pixel_format"] = pixel_format
-
         device_id = self._device_edit.text().strip()
         if device_id:
             data["device_id"] = device_id
@@ -894,10 +844,6 @@ class ViewConfigDialog(QDialog):
             data["brightness"] = brightness
         if self._supports_sharpness and sharpness is not None:
             data["sharpness"] = sharpness
-        flash_mode = self._flash_mode_combo.currentData()
-        if flash_mode is not None:
-            data["flash_mode"] = int(flash_mode)
-
         profile = ViewCameraProfile.from_obj(data)
         if isinstance(profile, ViewCameraProfile) and not profile.is_empty():
             return profile

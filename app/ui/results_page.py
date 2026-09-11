@@ -47,6 +47,13 @@ def _image(row):
 class ResultsPage(QWidget):
     PAGE_SIZE = 50
 
+    def set_production_active(self, active: bool) -> None:
+        self.production_notice.setText(
+            "Kontroly sú aktívne – externé vstupy sa spracúvajú aj počas prehliadania výsledkov."
+            if active else "Kontroly sú pozastavené – obnovíte ich prechodom do RUN."
+        )
+        self.production_notice.setWordWrap(True)
+
     def __init__(self, db_path, parent=None):
         super().__init__(parent)
         self.db_path = db_path
@@ -84,7 +91,9 @@ class ResultsPage(QWidget):
         self.message = QLabel('Vyberte kontrolu zo zoznamu.')
         self.message.setWordWrap(True)
         layout.addWidget(self.message)
-        notice = QLabel('História kontrol · Produkčné spúšťanie je dostupné v RUN.')
+        self.production_notice = QLabel()
+        notice = self.production_notice
+        self.set_production_active(False)
         notice.setProperty('role', 'secondary')
         layout.addWidget(notice)
         splitter = QSplitter(Qt.Horizontal)

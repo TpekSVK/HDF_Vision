@@ -122,7 +122,7 @@ def apply_camera_state(
     state: Mapping[str, Any] | None,
     *,
     warn: Callable[[str], None] | None = None,
-    apply_flash_mode: bool = True,
+    apply_flash_mode: bool = False,
 ) -> None:
     """Apply fully resolved camera state to ``camera`` consistently."""
 
@@ -218,7 +218,7 @@ def apply_view_camera_profile(
     profile: ViewCameraProfile | Mapping[str, Any] | str | None,
     *,
     warn: Callable[[str], None] | None = None,
-    apply_flash_mode: bool = True,
+    apply_flash_mode: bool = False,
 ) -> dict[str, Any]:
     """Resolve and apply per-view camera profile."""
 
