@@ -176,3 +176,17 @@ def test_save_failure_does_not_accept_or_write_whitelist(tmp_path, monkeypatch):
     assert not path.exists()
     assert errors and "failed SAVE" in errors[0]
     wizard.reject()
+
+
+def test_v4_mode_is_owned_by_application_but_profile_can_be_saved(tmp_path):
+    app = _app()
+    pico = FakePico()
+    original_status = pico.status
+    pico.status = lambda: {**original_status(), 'device_status': original_status()['device_status'].replace('END', 'CAPABILITIES PIO_PAIR_V1 SESSION_V1\nSESSION_MODE IDLE\nEND')}
+    wizard = PicoWizard(pico, PicoConfigService(tmp_path / 'pico.json'))
+    assert not wizard.cmb_v1_mode.isEnabled()
+    assert wizard._profile_widgets['V1']['pulse_ms'].isEnabled()
+    wizard._save()
+    assert ('SAVE',) in pico.commands
+    assert not any(len(command)==2 and command[0] in {'V1','V2'} for command in pico.commands)
+    wizard.close()

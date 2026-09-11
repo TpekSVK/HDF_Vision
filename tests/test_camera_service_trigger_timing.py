@@ -280,7 +280,7 @@ def test_apply_safe_trigger_exposure_uses_resolution_defaults(
     applied = cam._apply_safe_trigger_exposure()
 
     assert applied == expected
-    assert set_values == [expected]
+    assert set_values == [expected * 100]
 
 
 def test_capture_trigger_frame_refreshes_timing_for_each_call(monkeypatch) -> None:

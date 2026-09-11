@@ -27,7 +27,7 @@ dostupné v RUN; stránka Výsledky slúži na prehliadanie histórie.
 
 ## Produkčná architektúra kamery
 
-Preferovaný režim je **CU55 MASTER**. Kamera streamuje kontinuálne; hardvérový trigger CU55 nie je primárny produkčný spôsob snímania.
+Aplikácia podporuje **MASTER** s kontinuálnym streamom aj nový **Pico PIO TRIGGER** s dvojicou PRIME + produkcia. Stav integračného overenia uvádza [checkpoint](docs/PIO_IMPLEMENTATION_CHECKPOINT.md); nový firmvér a protokol sú v [firmware/pico](firmware/pico/README.md).
 
 ```text
 physical external input INx
@@ -40,11 +40,11 @@ physical external input INx
   → OK/NOK
 ```
 
-Pico režim `TRIGGER`, v ktorom GP16 generuje hardvérové trigger pulzy kamery, zostáva legacy/test režim.
+Nový TRIGGER používa GP16/GP17 a hardvérové PIO časovanie. Vstup vyšle `REQUEST INx`; aplikácia rezervuje dvojicu a odošle PIO príkaz. Nepoužíva Jetson GPIO. Neúplná dvojica sa odmietne.
 
-## Raspberry Pi Pico firmware 3.3
+## Starší Raspberry Pi Pico firmware 3.3
 
-Zdrojom pravdy pre túto sekciu je `firmware/pico/main_v3.3.py` (`pico_hdf_controller 3.3-master-production-capture`).
+Nasledujúca sekcia opisuje staršiu kompatibilitu 3.3, nie nové SESSION/PIO riadenie 4.0. Zdrojom pre túto sekciu je `firmware/pico/main_v3.3.py` (`pico_hdf_controller 3.3-master-production-capture`).
 
 ### Hardware
 

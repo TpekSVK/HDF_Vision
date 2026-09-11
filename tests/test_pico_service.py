@@ -63,8 +63,8 @@ def wait_for(predicate, timeout=0.5):
 @pytest.mark.parametrize(
     ("line", "expected"),
     [
-        ("CAPTURE IN1", [1]),
-        ("capture in8", [8]),
+        ("CAPTURE IN1", ["IN1"]),
+        ("capture in8", ["IN8"]),
         ("CAPTURE IN9", []),
         ("CAPTURE IN0", []),
         ("CAPTURE", []),
@@ -96,7 +96,7 @@ def test_callback_failure_does_not_stop_reader(connected_service):
     service.register_trigger_callback(received.append)
     device.emit("CAPTURE IN2", "CAPTURE IN3")
 
-    assert wait_for(lambda: received == [2, 3])
+    assert wait_for(lambda: received == ["IN2", "IN3"])
 
 
 @pytest.mark.parametrize(
@@ -274,7 +274,7 @@ def test_capture_is_separated_from_status_response(connected_service):
     ok, response = service._send_command("STATUS")
 
     assert ok
-    assert received == [3]
+    assert received == ["IN3"]
     assert response == "FIRMWARE pico_hdf_controller\nV1_MODE MASTER\nEND"
     assert "CAPTURE" not in response
 

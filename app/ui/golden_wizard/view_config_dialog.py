@@ -23,27 +23,13 @@ from PySide6.QtWidgets import (
 
 from app.models.schema import ViewCameraProfile
 from app.services.pico_config_service import PicoConfigService
-from app.utils.trigger_timing import get_default_trigger_gap_ms, get_trigger_min_period_ms
+from app.utils.cu55_pio import CU55_EXPOSURES_US, cu55_pio_profile
 
-_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = (
-    (
-        "1920x1080@60 Y8 [BUG: trigger mode momentálne nefunkčné]",
-        {"width": 1920, "height": 1080, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "1280x720@60 Y8",
-        {"width": 1280, "height": 720, "fps": 60, "pixel_format": "Y8"},
-    ),
-    (
-        "2592x1944@30 Y8 (len setup/pomalé)",
-        {"width": 2592, "height": 1944, "fps": 30, "pixel_format": "Y8"},
-    ),
+_DEFAULT_CAMERA_RESOLUTIONS: Sequence[tuple[str, dict[str, Any]]] = tuple(
+    (f"{width} × {height} · {fps} fps · Y8", {"width": width, "height": height, "fps": fps, "pixel_format": "Y8"})
+    for width, height, fps in ((1920, 1080, 60), (1280, 720, 60), (640, 480, 112), (2592, 1944, 30))
 )
 
-
-_TRIGGER_RESOLUTION_WARNINGS: dict[tuple[int, int, int, str], str] = {
-    (1920, 1080, 60, "Y8"): "BUG: 1920x1080@60 Y8 je momentálne nefunkčné v trigger režime.",
-}
 
 class ViewConfigDialog(QDialog):
     """Dialog that gathers configuration for a recipe view."""
@@ -57,6 +43,7 @@ class ViewConfigDialog(QDialog):
         name: str,
         available_resolutions: Sequence[tuple[str, dict[str, Any]]],
         current_camera: Optional[dict[str, Any]] = None,
+        capture_mode: str = "master",
         camera_profile: ViewCameraProfile | dict | str | None = None,
         camera_model: Optional[str] = None,
         supported_v4l2_controls: Optional[set[str]] = None,
@@ -83,6 +70,9 @@ class ViewConfigDialog(QDialog):
         self._mode = mode
         self._view_id = view_id
         self._available_resolutions = list(available_resolutions)
+        self._current_camera = dict(current_camera or {})
+        self._capture_mode = "trigger" if capture_mode == "trigger" else "master"
+        self._legacy_trigger_gap_ms = trigger_gap_ms
         self._available_frame_sources = list(available_frame_sources or [])
         self._available_branch_targets = list(available_branch_targets or [])
         self._result: Optional[dict[str, Any]] = None
@@ -97,7 +87,6 @@ class ViewConfigDialog(QDialog):
         self._supports_gamma = "gamma" in controls
         self._supports_brightness = "brightness" in controls
         self._supports_sharpness = "sharpness" in controls
-        self._trigger_pulse_ms = 10.0
         self._image_rotation = 0
         self._pico_config_snapshot = pico_config_snapshot
 
@@ -136,7 +125,7 @@ class ViewConfigDialog(QDialog):
             " Uľahčuje prepínanie medzi náhľadmi, preto by mal byť v rámci receptu"
             " jedinečný."
         )
-        self._add_form_row(basic_form, "Name:", self._name_edit, tooltip=name_hint)
+        self._add_form_row(basic_form, "Názov:", self._name_edit, tooltip=name_hint)
 
         id_hint = (
             "Nemenné systémové ID view-u. Používa sa pri ukladaní golden dát a"
@@ -145,38 +134,43 @@ class ViewConfigDialog(QDialog):
         self._add_form_row(basic_form, "ID:", self._id_label, tooltip=id_hint)
         content_layout.addWidget(basic_group)
 
-        camera_group = QGroupBox("Nastavenia kamery pre tento view", content_widget)
+        camera_group = QGroupBox("Nastavenia kamery pre tento pohľad", content_widget)
         camera_form = QFormLayout(camera_group)
         self._setup_compact_form(camera_form)
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
         resolution_hint = (
-            "Rozlíšenie, snímková frekvencia a pixel formát pre tento view."
-            " Voľba „Inherit“ ponechá parametre z globálnej kamery alebo z"
-            " multi-view profilu; konkrétna voľba ovplyvní iba aktuálny view."
+            "Rozlíšenie, frekvencia streamu a formát pre tento pohľad. "
+            "Použiť nastavenie kamery prevezme aktuálny profil. "
+            "V TRIGGER sa snímka vytvorí na požiadavku; fps nie je počet kontrol za sekundu."
         )
-        self._add_form_row(camera_form, "Resolution:", self._resolution_combo, tooltip=resolution_hint)
-
-        self._exposure_edit = QLineEdit(camera_group)
-        self._exposure_edit.setPlaceholderText("Leave blank to inherit")
-        self._trigger_exposure_edit = QLineEdit(camera_group)
-        self._trigger_exposure_edit.setPlaceholderText("Auto default for trigger mode")
-        self._trigger_exposure_edit.textChanged.connect(lambda _text: self._update_trigger_gap_warning())
+        self._add_form_row(camera_form, "Rozlíšenie:", self._resolution_combo, tooltip=resolution_hint)
+        self._exposure_combo = QComboBox(camera_group)
+        self._exposure_combo.setEditable(False)
+        self._exposure_combo.setPlaceholderText("Vyberte expozíciu")
+        for value in CU55_EXPOSURES_US:
+            self._exposure_combo.addItem(f"{value / 1000:g} ms".replace(".", ","), value)
+        self._exposure_combo.setCurrentIndex(-1)
+        self._exposure_notice = QLabel("", camera_group)
+        self._exposure_notice.setWordWrap(True)
+        self._exposure_notice.setStyleSheet("color: #a05a00;")
         self._gain_edit = QLineEdit(camera_group)
-        self._gain_edit.setPlaceholderText("Leave blank to inherit")
+        self._gain_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         self._pixel_format_combo = QComboBox(camera_group)
-        self._pixel_format_combo.addItem("Inherit", None)
+        self._pixel_format_combo.addItem("Podľa rozlíšenia", None)
         self._pixel_format_combo.addItem("Y8", "Y8")
-        self._pixel_format_combo.addItem("Y12", "Y12")
+        self._pixel_format_combo.addItem("Y12 (iba MASTER)", "Y12")
+        if self._capture_mode == "trigger":
+            self._pixel_format_combo.model().item(2).setEnabled(False)
         self._device_edit = QLineEdit(camera_group)
-        self._device_edit.setPlaceholderText("/dev/video0 (optional)")
+        self._device_edit.setPlaceholderText("/dev/video0 (voliteľné)")
         self._gamma_edit = QLineEdit(camera_group)
-        self._gamma_edit.setPlaceholderText("Leave blank to inherit")
+        self._gamma_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         self._brightness_edit = QLineEdit(camera_group)
-        self._brightness_edit.setPlaceholderText("Leave blank to inherit")
+        self._brightness_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         self._sharpness_edit = QLineEdit(camera_group)
-        self._sharpness_edit.setPlaceholderText("Leave blank to inherit")
+        self._sharpness_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         # Unsupported controls are not inserted into the form. Explicitly hide
         # them so Qt does not show unlaid-out children over the group heading.
         for field, supported in (
@@ -187,22 +181,23 @@ class ViewConfigDialog(QDialog):
         ):
             field.setVisible(supported)
         self._flash_mode_combo = QComboBox(camera_group)
-        self._flash_mode_combo.addItem("Inherit", None)
+        self._flash_mode_combo.addItem("Použiť nastavenie kamery", None)
         self._flash_mode_combo.addItem("Vypnuté (0)", 0)
         self._flash_mode_combo.addItem("Stroboskop (1)", 1)
         self._flash_mode_combo.addItem("Svetlo natrvalo (2)", 2)
-        self._add_form_row(camera_form, "Camera device:", self._device_edit)
+        self._add_form_row(camera_form, "Zariadenie kamery:", self._device_edit)
         exposure_hint = (
-            "Platí len pre master mode. V trigger mode sa táto hodnota"
-            " nepoužíva na riadenie jasu."
+            "Skutočná expozícia snímača, spoločná pre MASTER aj TRIGGER. "
+            "Vyberte jednu z overených hodnôt. Časovanie impulzov a blesku v TRIGGER nastaví aplikácia."
         )
-        self._add_form_row(camera_form, "Expozícia - master mode [us]:", self._exposure_edit, tooltip=exposure_hint)
-        trigger_exposure_hint = (
-            "Platí len pre trigger mode. V trigger mode riadi čas medzi"
-            " trigger pulzmi (gap), a tým výsledný jas."
+        self._add_form_row(camera_form, "Expozícia:", self._exposure_combo, tooltip=exposure_hint)
+        camera_form.addRow(self._exposure_notice)
+        capture_info = QLabel(
+            f"Režim kamery: {self._capture_mode.upper()}. Prepína sa v hlavnom okne. "
+            "TRIGGER používa automatické časovanie Pico a formát Y8.", camera_group
         )
-        self._add_form_row(camera_form, "Expozícia - trigger mode [ms]:", self._trigger_exposure_edit, tooltip=trigger_exposure_hint)
-
+        capture_info.setWordWrap(True)
+        camera_form.addRow(capture_info)
         if self._supports_gain:
             gain_hint = (
                 "Prepíše zosilnenie (gain) pre aktuálny view. Nechané prázdne zdedí"
@@ -212,15 +207,13 @@ class ViewConfigDialog(QDialog):
             self._add_form_row(camera_form, "Zisk [dB]:", self._gain_edit, tooltip=gain_hint)
 
         pixel_hint = (
-            "Vyberá pixelový formát streamu. „Inherit“ znamená, že sa použije"
-            " formát zdieľaný s ostatnými view v multi-view; konkrétna voľba"
-            " ovplyvní iba aktuálny view."
+            "Formát podľa zvoleného rozlíšenia. PIO TRIGGER podporuje Y8; Y12 je dostupné iba v MASTER."
         )
         self._add_form_row(camera_form, "Formát pixelov:", self._pixel_format_combo, tooltip=pixel_hint)
         if self._supports_gamma:
             self._add_form_row(camera_form, "Gamma:", self._gamma_edit)
         if self._supports_brightness:
-            self._add_form_row(camera_form, "Brightness:", self._brightness_edit)
+            self._add_form_row(camera_form, "Jas:", self._brightness_edit)
         if self._supports_sharpness:
             self._add_form_row(camera_form, "Sharpness:", self._sharpness_edit)
         self._add_form_row(camera_form, "Režim blesku:", self._flash_mode_combo)
@@ -240,13 +233,13 @@ class ViewConfigDialog(QDialog):
         self._setup_compact_form(timing_form)
 
         self._settle_edit = QLineEdit(timing_group)
-        self._settle_edit.setPlaceholderText("Leave blank to inherit")
+        self._settle_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         settle_hint = (
             "Čas na ustálenie kamery po prepnutí do view pred zachytením"
             " snímky. Prázdne = zdedená hodnota; v multi-view sa dodrží pri"
             " každom cykle, keď sa view aktivuje."
         )
-        self._add_form_row(timing_form, "Settle Time:", self._settle_edit, tooltip=settle_hint)
+        self._add_form_row(timing_form, "Ustálenie [ms]:", self._settle_edit, tooltip=settle_hint)
 
         self._trigger_mode_combo = QComboBox(timing_group)
         self._trigger_mode_combo.addItem("Časovač", "timed")
@@ -305,10 +298,10 @@ class ViewConfigDialog(QDialog):
             " o koľko neskôr sa spustí ďalší view; ostatné view pokračujú podľa svojich"
             " nastavení."
         )
-        self._add_form_row(timing_form, "Interval:", self._interval_edit, tooltip=interval_hint)
+        self._add_form_row(timing_form, "Interval [ms]:", self._interval_edit, tooltip=interval_hint)
 
         self._frame_source_combo = QComboBox(timing_group)
-        self._frame_source_combo.addItem("Samostatný záber (default)", None)
+        self._frame_source_combo.addItem("Samostatný záber", None)
         for view_id, label in self._available_frame_sources:
             display = label if label else view_id
             self._frame_source_combo.addItem(display, view_id)
@@ -330,7 +323,7 @@ class ViewConfigDialog(QDialog):
         self._setup_compact_form(branching_form)
 
         self._branch_enabled_checkbox = QCheckBox(
-            "Povoliť presmerovanie na iný view podľa výsledku", branching_group
+            "Povoliť presmerovanie na iný pohľad podľa výsledku", branching_group
         )
         self._branch_enabled_checkbox.setChecked(bool(branch_enabled))
         self._branch_enabled_checkbox.setToolTip(
@@ -355,7 +348,8 @@ class ViewConfigDialog(QDialog):
         content_layout.addStretch(1)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
-        action_text = "Pridať pohľad" if mode == "add" else "Save"
+        button_box.button(QDialogButtonBox.Cancel).setText("Zrušiť")
+        action_text = "Pridať pohľad" if mode == "add" else "Uložiť"
         self._accept_button = button_box.addButton(
             action_text, QDialogButtonBox.AcceptRole
         )
@@ -363,6 +357,9 @@ class ViewConfigDialog(QDialog):
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
 
+        self._resolution_combo.currentIndexChanged.connect(self._update_pio_settings)
+        self._pixel_format_combo.currentIndexChanged.connect(self._update_pio_settings)
+        self._exposure_combo.currentIndexChanged.connect(self._update_pio_settings)
         self._apply_initial_profile(camera_profile)
         self._apply_initial_rotation(image_rotation)
         self._apply_initial_timing(
@@ -423,32 +420,16 @@ class ViewConfigDialog(QDialog):
                 "Settle Time must be an integer value.",
             )
             return
-        try:
-            exposure_us = self._parse_optional_int(self._exposure_edit.text())
-        except ValueError:
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "Exposure must be an integer value.",
-            )
+        exposure_us = self._exposure_combo.currentData()
+        if exposure_us not in CU55_EXPOSURES_US:
+            QMessageBox.critical(self, "Expozícia", "Vyberte expozíciu z ponuky overených hodnôt.")
             return
-
-        try:
-            trigger_gap_ms = self._parse_optional_float(self._trigger_exposure_edit.text())
-        except ValueError:
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "Expozícia v trigger mode musí byť číselná hodnota.",
-            )
-            return
-        if trigger_gap_ms is not None and trigger_gap_ms <= 0:
-            QMessageBox.critical(
-                self,
-                "Invalid input",
-                "Expozícia v trigger mode musí byť väčšia ako 0 ms.",
-            )
-            return
+        if self._capture_mode == "trigger":
+            try:
+                self._selected_pio_profile()
+            except (ValueError, TypeError) as exc:
+                QMessageBox.critical(self, "Nastavenie TRIGGER", str(exc))
+                return
 
         try:
             gain_db = self._parse_optional_float(self._gain_edit.text()) if self._supports_gain else None
@@ -505,14 +486,6 @@ class ViewConfigDialog(QDialog):
                     return
 
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
-        if trigger_gap_ms is None:
-            resolution = self._selected_resolution_data()
-            trigger_gap_ms = get_default_trigger_gap_ms(
-                resolution.get("width"),
-                resolution.get("height"),
-                resolution.get("fps"),
-            )
-
         self._result = {
             "name": name,
             "camera_profile": profile,
@@ -523,7 +496,7 @@ class ViewConfigDialog(QDialog):
             "external_source": external_source,
             "external_request_input": external_input,
             "trigger_interval_ms": interval_ms,
-            "trigger_gap_ms": trigger_gap_ms,
+            "trigger_gap_ms": self._legacy_trigger_gap_ms,
             "frame_source_view_id": self._frame_source_combo.currentData(),
             "image_rotation": int(self._rotation_combo.currentData() or 0),
             "branch_enabled": self._branch_enabled_checkbox.isChecked(),
@@ -547,16 +520,16 @@ class ViewConfigDialog(QDialog):
         camera_profile: ViewCameraProfile | dict | str | None,
     ) -> None:
         self._resolution_combo.clear()
-        self._resolution_combo.addItem("Inherit", None)
+        self._resolution_combo.addItem("Použiť nastavenie kamery", None)
 
         if current_camera:
-            label = self._format_resolution_label(current_camera, prefix="Current: ")
+            label = self._format_resolution_label(current_camera, prefix="Aktuálne: ")
             self._resolution_combo.addItem(label, dict(current_camera))
             idx = self._resolution_combo.count() - 1
             self._apply_resolution_warning_style(idx, current_camera)
 
         for label, data in self._available_resolutions:
-            self._resolution_combo.addItem(label, dict(data))
+            self._resolution_combo.addItem(self._format_resolution_label(data), dict(data))
             idx = self._resolution_combo.count() - 1
             self._apply_resolution_warning_style(idx, data)
 
@@ -570,34 +543,28 @@ class ViewConfigDialog(QDialog):
                     "width": profile_obj.width,
                     "height": profile_obj.height,
                     "fps": profile_obj.fps,
-                    "pixel_format": profile_obj.pixel_format,
+                    "pixel_format": profile_obj.pixel_format or self._current_camera.get("pixel_format") or "Y8",
                 }
                 index = self._match_resolution_index(target)
                 if index is not None:
                     self._resolution_combo.setCurrentIndex(index)
                 else:
-                    label = self._format_resolution_label(target, prefix="Custom: ")
+                    label = self._format_resolution_label(target, prefix="Uložené: ")
                     self._resolution_combo.addItem(label, target)
                     idx = self._resolution_combo.count() - 1
                     self._apply_resolution_warning_style(idx, target)
                     self._resolution_combo.setCurrentIndex(idx)
 
-    @staticmethod
-    def _resolution_warning_note(data: dict[str, Any]) -> Optional[str]:
-        key = (
-            int(data.get("width", 0) or 0),
-            int(data.get("height", 0) or 0),
-            int(data.get("fps", 0) or 0),
-            str(data.get("pixel_format", "") or "").upper(),
-        )
-        return _TRIGGER_RESOLUTION_WARNINGS.get(key)
-
     def _apply_resolution_warning_style(self, index: int, data: dict[str, Any]) -> None:
-        note = self._resolution_warning_note(data)
-        if not note:
+        if self._capture_mode != "trigger":
             return
-        self._resolution_combo.setItemData(index, QBrush(QColor("#d12b2b")), Qt.ForegroundRole)
-        self._resolution_combo.setItemData(index, note, Qt.ToolTipRole)
+        try:
+            cu55_pio_profile(data.get("width", 0), data.get("height", 0),
+                            data.get("fps", 0), data.get("pixel_format", "Y8"), 1000)
+        except (ValueError, TypeError):
+            self._resolution_combo.setItemData(index, "Tento profil nie je podporovaný v PIO TRIGGER.", Qt.ToolTipRole)
+            self._resolution_combo.setItemData(index, QBrush(QColor("#a05a00")), Qt.ForegroundRole)
+            self._resolution_combo.model().item(index).setEnabled(False)
 
     def _match_resolution_index(self, target: dict[str, Any]) -> Optional[int]:
         width = int(target.get("width", 0))
@@ -623,7 +590,7 @@ class ViewConfigDialog(QDialog):
         height = data.get("height") or "?"
         fps = data.get("fps") or "?"
         pix = (data.get("pixel_format") or "").upper() or "?"
-        return f"{prefix}{width}x{height}@{fps} {pix}"
+        return f"{prefix}{width} × {height} · {fps} fps · {pix}"
 
     def _apply_initial_profile(
         self, camera_profile: ViewCameraProfile | dict | str | None
@@ -632,9 +599,14 @@ class ViewConfigDialog(QDialog):
         if isinstance(profile_obj, dict):
             profile_obj = ViewCameraProfile.from_obj(profile_obj)
 
+        exposure = self._current_camera.get("exposure_us")
+        if isinstance(profile_obj, ViewCameraProfile) and profile_obj.exposure_us is not None:
+            exposure = profile_obj.exposure_us
+        if exposure in CU55_EXPOSURES_US:
+            self._exposure_combo.setCurrentIndex(self._exposure_combo.findData(exposure))
+        elif exposure is not None:
+            self._exposure_combo.setPlaceholderText(f"Vyberte expozíciu (pôvodná: {float(exposure)/1000:g} ms)")
         if isinstance(profile_obj, ViewCameraProfile):
-            if profile_obj.exposure_us is not None:
-                self._exposure_edit.setText(str(int(profile_obj.exposure_us)))
             if self._supports_gain and profile_obj.gain_db is not None:
                 self._gain_edit.setText(str(profile_obj.gain_db))
             if profile_obj.device_id:
@@ -712,12 +684,10 @@ class ViewConfigDialog(QDialog):
 
         if trigger_interval_ms is not None:
             self._interval_edit.setText(str(int(trigger_interval_ms)))
-        if trigger_gap_ms is not None:
-            self._trigger_exposure_edit.setText(str(float(trigger_gap_ms)).rstrip("0").rstrip("."))
         self._on_trigger_mode_changed()
         self._on_external_mode_changed()
         self._update_pico_timing_info()
-        self._update_trigger_gap_warning()
+        self._update_pio_settings()
 
     def _apply_initial_rotation(self, image_rotation: int) -> None:
         try:
@@ -804,7 +774,7 @@ class ViewConfigDialog(QDialog):
         trigger_mode = str(self._trigger_mode_combo.currentData() or "timed")
         external_mode = str(self._external_mode_combo.currentData() or "sequential")
         explicit_active = trigger_mode == "external" and external_mode == "explicit"
-        sequential_active = trigger_mode == "external" and external_mode == "sequential"
+        sequential_active = trigger_mode == "external" and external_mode == "sequential" and self._capture_mode == "master"
         self._pico_profile_label.setVisible(sequential_active)
         self._pico_profile_combo.setVisible(sequential_active)
         self._pico_profile_combo.setEnabled(sequential_active)
@@ -835,6 +805,9 @@ class ViewConfigDialog(QDialog):
         is_pico = self._external_source_combo.currentData() == "pico"
         self._pico_timing_info.setVisible(is_pico)
         if not is_pico:
+            return
+        if self._capture_mode == "trigger":
+            self._pico_timing_info.setText("Impulzy a blesk riadi aplikácia podľa rozlíšenia a expozície. Vstup Pico musí byť povolený a namapovaný v Pico sprievodcovi.")
             return
         snapshot = self._pico_config_snapshot
         input_index = self._external_input_combo.currentData()
@@ -868,31 +841,25 @@ class ViewConfigDialog(QDialog):
         for label, data in self._available_resolutions:
             if label == current_text:
                 return dict(data)
-        return {}
+        return dict(self._current_camera)
 
-    def _update_trigger_gap_warning(self) -> None:
+    def _selected_pio_profile(self):
         resolution = self._selected_resolution_data()
-        min_period_ms = get_trigger_min_period_ms(
-            resolution.get("width"),
-            resolution.get("height"),
-            resolution.get("fps"),
-        )
-        try:
-            gap_ms = self._parse_optional_float(self._trigger_exposure_edit.text())
-        except ValueError:
-            self._trigger_warning_label.setVisible(False)
-            return
-        if gap_ms is None:
-            self._trigger_warning_label.setVisible(False)
-            return
-        effective_period_ms = float(self._trigger_pulse_ms) + float(gap_ms)
-        if effective_period_ms < float(min_period_ms):
-            self._trigger_warning_label.setText(
-                "Nízka expozícia v trigger mode môže spôsobiť banding alebo nerovnomernú expozíciu."
-            )
-            self._trigger_warning_label.setVisible(True)
-            return
+        pixel_format = self._pixel_format_combo.currentData() or resolution.get("pixel_format", "Y8")
+        return cu55_pio_profile(resolution.get("width", 0), resolution.get("height", 0),
+                               resolution.get("fps", 0), pixel_format, self._exposure_combo.currentData())
+
+    def _update_pio_settings(self) -> None:
+        selected = self._exposure_combo.currentData()
+        self._exposure_notice.setText("Vyberte jednu z overených expozícií; pôvodná hodnota sa automaticky nezaokrúhľuje." if selected is None else "")
+        self._exposure_notice.setVisible(selected is None)
         self._trigger_warning_label.setVisible(False)
+        if self._capture_mode == "trigger" and selected is not None:
+            try:
+                self._selected_pio_profile()
+            except (ValueError, TypeError) as exc:
+                self._trigger_warning_label.setText(str(exc))
+                self._trigger_warning_label.setVisible(True)
 
     def _build_camera_profile(
         self,

@@ -1,5 +1,6 @@
 import ast
 import logging
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from numbers import Integral
@@ -15,7 +16,7 @@ def _load_trigger_harness():
         node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow"
     )
     method_names = {
-        "_handle_gpio_trigger",
+        "_request_software_trigger",
         "_handle_modbus_trigger",
         "_handle_pico_trigger",
         "_handle_external_trigger",
@@ -33,7 +34,7 @@ def _load_trigger_harness():
         decorator_list=[],
     )
     module = ast.fix_missing_locations(ast.Module(body=[harness], type_ignores=[]))
-    namespace = {"Integral": Integral, "time": time, "Any": object}
+    namespace = {"Integral": Integral, "time": time, "Any": object, "re": re}
     exec(compile(module, "app/ui/main_window.py", "exec"), namespace)
     return namespace["TriggerHarness"]
 
@@ -44,9 +45,11 @@ MainWindow = _load_trigger_harness()
 class _SignalSpy:
     def __init__(self) -> None:
         self.count = 0
+        self.events = []
 
-    def emit(self) -> None:
+    def emit(self, *args) -> None:
         self.count += 1
+        self.events.append(args)
 
 
 def _handler_window(*, mode: str = "RUN"):
@@ -56,23 +59,25 @@ def _handler_window(*, mode: str = "RUN"):
     window._pending_trigger_source = None
     window._pending_trigger_input_index = None
     window.external_triggered = _SignalSpy()
+    window.get_capture_mode = lambda: "master"
+    window._consume_software_pico_request = lambda source: None
+    window.cam = SimpleNamespace(arm_master_frame=lambda: "reserved")
     return window
 
 
 def test_pico_callback_starts_run_trigger_and_preserves_metadata() -> None:
     window = _handler_window()
 
-    window._handle_pico_trigger(3)
+    window._handle_pico_trigger("IN3")
 
-    assert window._pending_trigger_source == "pico"
-    assert window._pending_trigger_input_index == 3
+    assert window.external_triggered.events == [("pico", {"input_index": 3, "spec": None, "frame_request": "reserved"})]
     assert window.external_triggered.count == 1
 
 
 def test_pico_callback_is_ignored_outside_run() -> None:
     window = _handler_window(mode="SETUP")
 
-    window._handle_pico_trigger(3)
+    window._handle_pico_trigger("IN3")
 
     assert window._pending_trigger_source is None
     assert window._pending_trigger_input_index is None
@@ -101,10 +106,10 @@ def test_pico_master_capture_does_not_fire_light_again() -> None:
     )
     view = SimpleNamespace(id="view_1", flash_delay_ms=0, settle_ms=0)
 
-    window._handle_master_flash_capture_flow(
-        view=view,
-        capture_request_source="pico",
-    )
+    with pytest.raises(RuntimeError, match="rezervovaný"):
+        window._handle_master_flash_capture_flow(
+            view=view, capture_request_source="pico",
+        )
 
     assert fired == []
 
@@ -115,17 +120,18 @@ def test_modbus_master_capture_still_fires_pico_light() -> None:
     window._logger = logging.getLogger("test.main_window.modbus")
     fired: list[str] = []
     window.pico = SimpleNamespace(
-        fire=lambda view_id: fired.append(view_id) or True,
+        capture_master=lambda target, camera: fired.append(target) or "fresh frame",
         last_error="",
     )
-    view = SimpleNamespace(id="view_2", flash_delay_ms=0, settle_ms=0)
+    view = SimpleNamespace(id="view_2", pico_profile="V2", flash_delay_ms=0, settle_ms=0)
+    window.cam = SimpleNamespace(prepare_master_capture=lambda: None)
 
     window._handle_master_flash_capture_flow(
         view=view,
         capture_request_source="modbus",
     )
 
-    assert fired == ["view_2"]
+    assert fired == ["V2"]
 
 
 def test_modbus_trigger_still_preserves_its_input_index() -> None:
@@ -133,16 +139,20 @@ def test_modbus_trigger_still_preserves_its_input_index() -> None:
 
     window._handle_modbus_trigger(5)
 
-    assert window._pending_trigger_source == "modbus"
-    assert window._pending_trigger_input_index == 5
+    assert window.external_triggered.events == [("modbus", {"input_index": 5, "spec": None, "frame_request": None})]
     assert window.external_triggered.count == 1
 
 
 def test_manual_run_trigger_remains_independent_of_external_sources() -> None:
     source = Path("app/ui/main_window.py").read_text(encoding="utf-8")
 
-    assert "self.btn_trigger.clicked.connect(self.manual_trigger)" in source
-    assert 'self._pending_trigger_source or "manual"' in source
+    assert "self.btn_trigger.clicked.connect(self._request_software_trigger)" in source
+    window = _handler_window()
+    window.get_capture_mode = lambda: "trigger"
+    calls = []
+    window.manual_trigger = lambda *args: calls.append(args)
+    window._request_software_trigger()
+    assert calls == [("manual", None)]
 
 
 def test_pico_callback_is_registered_and_service_is_closed() -> None:

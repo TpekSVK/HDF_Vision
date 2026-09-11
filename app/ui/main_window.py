@@ -35,7 +35,6 @@ from app.services.stats_service import StatsService
 from app.ui.view_strip import ViewStrip
 from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
-from app.services.gpio_service import GPIOService
 from app.services.modbus_service import ModbusService
 from app.services.pico_service import PicoService
 from app.services.pico_config_service import PicoConfigService
@@ -93,7 +92,6 @@ class MainWindow(QMainWindow):
         self.security = SecurityService()
         self.stats = StatsService(db=self.db)
 
-        self.gpio = GPIOService()
         self.modbus = ModbusService()
         self.pico = PicoService()
         self.pico_config = PicoConfigService()
@@ -695,8 +693,7 @@ class MainWindow(QMainWindow):
                 self.btn_live.setText("Live vypnuté")
             else:
                 self.btn_live.setEnabled(True)
-                if not self.cam.is_pipeline_open():
-                    self.cam.start(caller="page_switch_run_master")
+                self.pico.prepare_master(self.cam)
             if not self.live_enabled:
                 self._apply_run_camera_profile()
         self._sync_mode_chrome()
@@ -888,11 +885,8 @@ class MainWindow(QMainWindow):
         )
 
     def _send_run_trigger_gpio_pulse(self) -> None:
-        sent = bool(getattr(self.gpio, "pulse_physical_pin", lambda *_args, **_kwargs: False)(7, pulse_seconds=0.01))
-        if sent:
-            self._logger.info("production trigger sent via GPIO pin=7 pulse_ms=10")
-        else:
-            self._logger.warning("production trigger GPIO pulse failed pin=7")
+        # Kept only to fail closed for stale integrations; never pulse Jetson GPIO.
+        raise RuntimeError("Použite spoločnú Pico PIO capture transakciu.")
 
     def _build_runtime_view_spec(self, view: Any, index: int) -> dict[str, Any]:
         settle_ms = getattr(view, "settle_ms", None)
@@ -1208,13 +1202,8 @@ class MainWindow(QMainWindow):
 
         if mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
-            frame = self.cam.capture_trigger_frame(
-                timeout_s=0.8,
-                trigger_fn=self._send_run_trigger_gpio_pulse,
-                trigger_gap_ms=trigger_gap_ms,
-                pulse_ms=10.0,
-                trigger_mode_label=trigger_mode_label,
-            )
+            frame = self.pico.capture_trigger(self.cam, timeout_s=1.0)
+
         if image_rotation_override is not None:
             frame = apply_view_rotation(
                 frame,
@@ -1228,30 +1217,20 @@ class MainWindow(QMainWindow):
         return frame
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
-        gap_ms = float(trigger_gap_ms) if trigger_gap_ms is not None else float(
-            get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)
-        )
-        self._logger.info("[TRIGGER_SESSION] enter trigger_gap_ms=%.2f", gap_ms)
-        self.cam.enter_trigger_session(
-            trigger_fn=self._send_run_trigger_gpio_pulse,
-            trigger_gap_ms=gap_ms,
-            pulse_ms=10.0,
-        )
+        # Legacy GAP is not a rising-edge period. Validated PIO profile owns timing.
+        self.pico.prepare_trigger(self.cam)
         self._run_trigger_session_active = True
 
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
-        if not self._run_trigger_session_active and not getattr(self.cam, "is_trigger_session_active", lambda: False)():
-            if restore_master:
-                self._logger.info("[TRIGGER_SESSION] exit requested restore_master=True")
-                self._logger.info("[TRIGGER_SESSION] restore to master delegated to CameraService")
-                self.cam.exit_trigger_session(restore_master=True)
-            return
-        self._logger.info("[TRIGGER_SESSION] exit requested restore_master=%s", bool(restore_master))
-        self._logger.info("[TRIGGER_SESSION] restore to master delegated to CameraService")
-        self.cam.exit_trigger_session(restore_master=bool(restore_master))
+        if restore_master:
+            self.pico.prepare_master(self.cam)
+        else:
+            if self.pico.supports_pio():
+                self.pico.set_session_mode("IDLE")
+            self.cam.exit_trigger_session(restore_master=False)
         self._run_trigger_session_active = False
 
-    def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> None:
+    def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> bool:
         # Architecture rule: global runtime owns capture mode transitions.
         # Low-level camera helpers must never switch capture mode implicitly.
         if self.capture_mode not in {"master", "trigger"}:
@@ -1271,9 +1250,13 @@ class MainWindow(QMainWindow):
                 self.btn_live.setEnabled(True)
                 if ensure_runtime_ready and not self.cam.is_pipeline_open():
                     self.cam.start(caller="capture_mode_master")
+            self._capture_mode_ready = True
+            return True
         except Exception as exc:
+            self._capture_mode_ready = False
             self._logger.error("apply capture mode failed: %s", exc)
             self.lbl_status.setText(f"Prepnutie capture mode zlyhalo: {exc}")
+            return False
 
     def _sync_capture_mode_ui(self) -> None:
         cmb = getattr(self, "cmb_capture_mode", None)
@@ -1296,11 +1279,15 @@ class MainWindow(QMainWindow):
         if requested not in {"master", "trigger"}:
             requested = "master"
         self._logger.info("[CAPTURE_MODE_UI] requested=%s", requested)
-        if requested == self.capture_mode:
+        if requested == self.capture_mode and getattr(self, "_capture_mode_ready", False):
             self._logger.info("[CAPTURE_MODE_UI] applied=%s", self.capture_mode)
             return
+        previous = self.capture_mode
         self.capture_mode = requested
-        self._apply_capture_mode(ensure_runtime_ready=True)
+        if self._apply_capture_mode(ensure_runtime_ready=True) is False:
+            self.capture_mode = previous
+            self._apply_capture_mode(ensure_runtime_ready=True)
+            self._sync_capture_mode_ui()
         self._logger.info("[CAPTURE_MODE_UI] applied=%s", self.capture_mode)
 
     def get_capture_mode(self) -> str:
@@ -1350,13 +1337,7 @@ class MainWindow(QMainWindow):
             )
         if self.capture_mode == "trigger":
             self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
-            return self.cam.capture_trigger_frame(
-                timeout_s=0.8,
-                trigger_fn=self._send_run_trigger_gpio_pulse,
-                trigger_gap_ms=float(trigger_gap_ms) if trigger_gap_ms is not None else float(get_default_trigger_gap_ms(self.cam.width, self.cam.height, self.cam.fps)),
-                pulse_ms=10.0,
-                trigger_mode_label=trigger_mode_label,
-            )
+            return self.pico.capture_trigger(self.cam, timeout_s=1.0)
         return self.cam.last_frame(caller="run_manual_trigger_master")
 
     def manual_trigger(
@@ -1959,15 +1940,14 @@ class MainWindow(QMainWindow):
             self,
             modbus=self.modbus,
             pico=self.pico,
-            trigger_fn=self._send_run_trigger_gpio_pulse,
+            trigger_fn=None,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
             authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
         self._refresh_manual_light()
-        if self.mode == "RUN":
-            self._apply_capture_mode(ensure_runtime_ready=True)
+        self._apply_capture_mode(ensure_runtime_ready=True)
         self._reset_manual_trigger_progress(self.current_recipe_name())
         self._reset_external_sequence_state()
         self._refresh_views()
@@ -1980,16 +1960,14 @@ class MainWindow(QMainWindow):
         dlg = ModbusWizard(self.modbus, self)
         dlg.resize(760, 640)
         dlg.exec()
-        if self.mode == "RUN":
-            self._apply_capture_mode(ensure_runtime_ready=True)
+        self._apply_capture_mode(ensure_runtime_ready=True)
 
     def open_pico_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
         dlg = PicoWizard(self.pico, self.pico_config, self)
         dlg.resize(680, 700)
         dlg.exec()
-        if self.mode == "RUN":
-            self._apply_capture_mode(ensure_runtime_ready=True)
+        self._apply_capture_mode(ensure_runtime_ready=True)
 
     def open_change_log(self):
         dialog = RecipeChangeLogDialog(self.recipes.audit, self)
@@ -2075,7 +2053,7 @@ class MainWindow(QMainWindow):
         self._handle_external_trigger("Modbus", input_index=input_index)
 
     def _handle_pico_trigger(self, capture_source: str) -> None:
-        if self.mode != "RUN" or self.get_capture_mode() != "master":
+        if self.mode != "RUN":
             return
         source = str(capture_source or "").upper().strip()
         if source in {"V1", "V2"}:
@@ -2123,7 +2101,8 @@ class MainWindow(QMainWindow):
         self.external_triggered.emit(
             resolved_source,
             {"input_index": parsed_input, "spec": requested_spec,
-             "frame_request": self.cam.arm_master_frame() if resolved_source == "pico" else None},
+             "frame_request": self.cam.arm_master_frame()
+             if resolved_source == "pico" and self.get_capture_mode() == "master" else None},
         )
 
     def _update_live_view(self):
@@ -3239,11 +3218,11 @@ class MainWindow(QMainWindow):
 
     def _request_host_power_action(self, action: str) -> None:
         try:
-            self.cam.stop(caller="main_window_power_action")
+            self.pico.quiesce()
         except Exception:
-            pass
+            self._logger.exception("Pico sa nepodarilo zastaviť pred vypnutím")
         try:
-            self.gpio.close()
+            self.cam.stop(caller="main_window_power_action")
         except Exception:
             pass
         try:
@@ -3292,9 +3271,12 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, e):
         try:
+            self.pico.quiesce()
+        except Exception:
+            self._logger.exception("Pico sa nepodarilo zastaviť pri zatvorení")
+        try:
             self._jetson_stats_service.stop()
             self.cam.stop(caller="main_window_close")
-            self.gpio.close()
             self.modbus.close()
             self.pico.close()
         finally:
