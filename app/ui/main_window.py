@@ -1702,11 +1702,7 @@ class MainWindow(QMainWindow):
                     view,
                     result,
                 )
-                context_frame = apply_view_image_transform(
-                    context_frame,
-                    view,
-                    stage="preview",
-                )
+                # Pipeline frames already use the rotated inspection coordinates.
             last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
 
         per_view_statuses[view_id] = status
@@ -2120,8 +2116,12 @@ class MainWindow(QMainWindow):
                 self.live_view.clear()
                 self.live_view.setText("— aktuálny záber —")
                 return
-            active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
-            img = apply_view_image_transform(src, active_view, stage="preview")
+            if self.live_enabled:
+                active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
+                img = apply_view_image_transform(src, active_view, stage="preview")
+            else:
+                # Stored inspection previews (including ROI) are already oriented.
+                img = src.copy()
             if self.chk_heatmap.isChecked():
                 try:
                     img = self._make_heatmap_overlay(img)
@@ -2318,11 +2318,9 @@ class MainWindow(QMainWindow):
             overlay_utils.draw_overlay_items(frame, items)
             if items else frame.copy()
         )
-        return apply_view_image_transform(
-            rendered,
-            entry.get("view"),
-            stage="preview",
-        )
+        # Frame and ROI geometry share inspection coordinates; rotating here
+        # would rotate an already transformed capture a second time.
+        return rendered
 
     def _on_run_overlay_controls_changed(self, *_args) -> None:
         self.cmb_roi_tool.setEnabled(
