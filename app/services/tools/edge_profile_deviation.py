@@ -82,6 +82,7 @@ class EdgeProfileDeviationTool(PairTool):
 
         tangent, normal = _line_vectors(ax, ay, bx, by)
         grad = _compute_normal_gradient(frame_roi, normal)
+        self._publish_filtered_roi(prepared, grad, "Normálový gradient · absolútna hodnota 0–255")
 
         line = _line_from_points(ax, ay, bx, by)
         h, w = frame_roi.shape[:2]

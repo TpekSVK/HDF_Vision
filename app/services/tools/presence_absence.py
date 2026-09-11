@@ -175,6 +175,8 @@ class PresenceAbsenceCheckTool(PairTool):
 
         light_result = self._run_lightweight(roi_frame, roi_mask, ToolContext(params=params_obj))
 
+        self._publish_filtered_roi(prepared, light_result.debug_images["binary"], "Binarizácia po vyhladení/prahovaní")
+
         latency_ms = (time.perf_counter() - start) * 1000.0
         status = "ok" if light_result.ok else "nok"
         tool_id = self._prepared_context.get("tool_id", "presence_absence")

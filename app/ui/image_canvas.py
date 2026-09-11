@@ -74,6 +74,11 @@ class ImageView(QGraphicsView):
         self._fit_schedule_queued = False
         self._fit_on_resize = True
 
+    def update_display_pixmap(self, pixmap: QPixmap) -> None:
+        """Replace display pixels only, preserving ROI items, undo and zoom."""
+        if self._pixmap_item is not None and pixmap.size() == self._pixmap_item.pixmap().size():
+            self._pixmap_item.setPixmap(pixmap)
+
     def set_pixmap(self, pixmap: Optional[QPixmap]) -> None:
         self.cancel_drawing()
         self._end_pan()

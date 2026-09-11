@@ -114,6 +114,7 @@ class BaseTool:
     def prepare(self, context: dict[str, Any]) -> None:  # type: ignore[override]
         self._prepared_context = dict(context or {})
         self.last_diagnostics = {}
+        self.filtered_roi = None
 
     def teardown(self) -> None:  # type: ignore[override]
         self._prepared_context.clear()
@@ -256,6 +257,8 @@ class SSIMTool(BaseTool):
             frame_is_aligned=frame_is_aligned,
             tool_id=str(tool_id),
             ignore_mask=ignore_mask,
+            preview_sink=(lambda value: setattr(self, "filtered_roi", value))
+            if self._prepared_context.get("capture_filtered_roi") else None,
         )
         self.last_diagnostics = diagnostics
         return result
@@ -588,6 +591,7 @@ class PipelineToolReport:
     latency_ms: float
     diagnostics: Dict[str, Any]
     overlay_items: list[overlay_utils.OverlayItem] = field(default_factory=list)
+    filtered_roi: Any = None
 
 
 @dataclass(slots=True)
@@ -739,6 +743,7 @@ class PipelineOrchestrator:
         recipe: RecipeV2,
         recipe_name: str | None = None,
         notes: str | None = None,
+        capture_filtered_roi: bool = False,
     ) -> PipelineResult:
         """Execute the configured pipeline and return aggregated results."""
 
@@ -817,7 +822,7 @@ class PipelineOrchestrator:
                 continue
 
             runner = ToolRegistry.create_tool(tool.type)
-            runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context})
+            runner.prepare({"tool": tool, "tool_id": tool_id, "runner_context": context, "capture_filtered_roi": capture_filtered_roi})
 
             frame_for_tool = (
                 context.frame_aligned if context.frame_aligned is not None else context.frame
@@ -899,6 +904,7 @@ class PipelineOrchestrator:
                     latency_ms=float(result.latency_ms),
                     diagnostics=dict(diag_entry),
                     overlay_items=tool_overlay_items,
+                    filtered_roi=getattr(runner, "filtered_roi", None),
                 )
             )
             if logger.isEnabledFor(logging.DEBUG):
@@ -1281,6 +1287,7 @@ def run_pipeline(
     *,
     recipe_name: str | None = None,
     notes: str | None = None,
+    capture_filtered_roi: bool = False,
 ) -> PipelineResult:
     """Execute the configured pipeline using the shared orchestrator."""
 
@@ -1291,6 +1298,7 @@ def run_pipeline(
         recipe,
         recipe_name=recipe_name,
         notes=notes,
+        capture_filtered_roi=capture_filtered_roi,
     )
 
 
@@ -2180,6 +2188,7 @@ def run_ssim_tool(
     frame_is_aligned: bool,
     tool_id: str = "ssim",
     ignore_mask: np.ndarray | None = None,
+    preview_sink=None,
 ) -> Tuple[ToolRunResult, Dict[str, Any]]:
     """Compute SSIM within ROI, honoring optional locator alignment."""
 
@@ -2280,6 +2289,14 @@ def run_ssim_tool(
     if include_mask_crop is not None and effective_mask_pixels > 0:
         frame_crop = frame_crop.copy()
         frame_crop[include_mask_crop == 0] = golden_crop[include_mask_crop == 0]
+
+    if preview_sink is not None:
+        preview_sink({
+            "image": frame_crop.copy(), "rect": roi_rect,
+            "mask": include_mask_crop != 0 if include_mask_crop is not None else np.ones((h, w), bool),
+            "label": "Bez predbežného filtrovania · vstup SSIM",
+            "to_display": np.array([[1, 0, dx_total], [0, 1, dy_total]], np.float32) if virtual_alignment else None,
+        })
 
     with imaging.time_block("ssim", timings):
         ssim_val = (

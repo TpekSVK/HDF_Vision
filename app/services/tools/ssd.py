@@ -43,6 +43,8 @@ class SSDTool(PairTool):
                 golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
                 frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
+        self._publish_filtered_roi(prepared, frame_roi, "Gaussian blur" if sigma > 1e-6 else "Bez filtrovania")
+
         with time_block("absdiff", timings):
             diff_abs = imaging.absdiff_u8(golden_roi, frame_roi).astype(np.float32)
         if prepared.valid_mask is not None:

@@ -43,6 +43,8 @@ class NCCTool(PairTool):
                 golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
                 frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
+        self._publish_filtered_roi(prepared, frame_roi, "Gaussian blur" if sigma > 1e-6 else "Bez filtrovania")
+
         with time_block("astype", timings):
             gold_f = golden_roi.astype(np.float32)
             frame_f = frame_roi.astype(np.float32)

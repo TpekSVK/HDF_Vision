@@ -2934,6 +2934,9 @@ class ROIEditor(QWidget):
     def _on_lock_changed(self, _locked: bool) -> None:
         self._sync_geometry_controls()
 
+    def update_display_pixmap(self, pixmap: QPixmap) -> None:
+        self._view.update_display_pixmap(pixmap)
+
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._view.set_pixmap(pixmap)
         self._update_history_buttons()
