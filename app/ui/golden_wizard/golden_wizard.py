@@ -3032,6 +3032,7 @@ class GoldenWizard(QDialog):
         pixel_format = getattr(self.cam, "pixel_format", None)
         if width and height and fps:
             return {
+                "exposure_us": getattr(self.cam, "exposure_us", None),
                 "width": int(width),
                 "height": int(height),
                 "fps": int(fps),
@@ -3137,6 +3138,7 @@ class GoldenWizard(QDialog):
             name=proposed_name,
             available_resolutions=self._available_camera_resolutions(),
             current_camera=self._current_camera_config(),
+            capture_mode=self._runtime_capture_mode(),
             camera_profile=source_view.camera_profile if source_view else None,
             camera_model=self._camera_model(),
             supported_v4l2_controls=self._camera_v4l2_controls(),
@@ -3242,6 +3244,7 @@ class GoldenWizard(QDialog):
             name=view.name or view.id,
             available_resolutions=self._available_camera_resolutions(),
             current_camera=self._current_camera_config(),
+            capture_mode=self._runtime_capture_mode(),
             camera_profile=view.camera_profile,
             camera_model=self._camera_model(),
             supported_v4l2_controls=self._camera_v4l2_controls(),

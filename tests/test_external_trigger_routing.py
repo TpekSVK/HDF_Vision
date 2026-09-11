@@ -30,6 +30,7 @@ def _window(*, enabled=(1, 3, 4, 5), mode="RUN"):
     window.mode = mode
     window._logger = logging.getLogger("test.external.routing")
     window.pico_config = SimpleNamespace(is_input_enabled=lambda value: value in enabled)
+    window._external_sequence_statuses = {}
     window._reset_external_sequence_state()
     return window
 

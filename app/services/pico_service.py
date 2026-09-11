@@ -7,6 +7,8 @@ import logging
 import queue
 import re
 import threading
+import json
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -59,6 +61,82 @@ class PicoService:
         self.last_error: str = ""
         self._capture_request_lock = threading.Lock()
         self._capture_receiver = None
+        self._pio_capable = None
+        self._session_mode = None
+        self._pio_id = time.time_ns()
+
+    def supports_pio(self):
+        if self._pio_capable is None:
+            ok, response = self._send_command("STATUS")
+            if not ok:
+                raise RuntimeError(self.last_error or "Pico STATUS zlyhal.")
+            self._pio_capable = "CAPABILITIES PIO_PAIR_V1 SESSION_V1" in response
+        return self._pio_capable
+
+    def require_pio(self):
+        if not self.supports_pio():
+            raise RuntimeError("TRIGGER vyžaduje Pico firmware 4.0 s PIO_PAIR_V1.")
+
+    def set_session_mode(self, mode):
+        if mode not in {"IDLE", "MASTER", "TRIGGER"}:
+            raise ValueError("Neplatný Pico režim.")
+        if mode == "MASTER" and not self.supports_pio():
+            return  # existing MASTER protocol remains compatible with3.3
+        self.require_pio()
+        if self._session_mode == mode:
+            return
+        ok, response = self._send_command(f"SESSION {mode}", timeout_s=2.0)
+        if not ok or response != f"OK SESSION {mode}":
+            self._session_mode = None
+            raise RuntimeError(response or self.last_error)
+        self._session_mode = mode
+
+    def fire_pio(self, profile, *, count=2):
+        self.require_pio()
+        self._pio_id += 1
+        request_id = self._pio_id
+        command = (f"PIO FIRE {request_id} {count} {profile.period_us} {profile.pulse_us} "
+                   f"{profile.pre_us} {profile.light_duration_us} 1 50000")
+        ok, response = self._send_command(command, timeout_s=2.0)
+        result = None
+        for line in response.splitlines():
+            if line.startswith("PIO RESULT "):
+                result = json.loads(line[11:])
+        if (not ok or result is None or result.get("id") != request_id
+                or result.get("count") != count or f"OK PIO {request_id}" not in response.splitlines()):
+            raise RuntimeError(response or self.last_error or "Neúplná PIO odpoveď.")
+        return result
+
+    def prepare_trigger(self, camera):
+        with self._capture_request_lock:
+            return camera.prepare_pio_trigger(self)
+
+    def prepare_master(self, camera):
+        with self._capture_request_lock:
+            if self.supports_pio():
+                camera.prepare_pio_master(self)
+            else:
+                camera.exit_trigger_session(restore_master=True)
+                camera.prepare_master_capture()
+
+    def capture_trigger(self, camera, *, timeout_s=1.0):
+        if not self._capture_request_lock.acquire(blocking=False):
+            raise RuntimeError("Pico ešte dokončuje predchádzajúci cyklus.")
+        try:
+            return camera.capture_pio_frame(self, timeout_s=timeout_s)
+        finally:
+            self._capture_request_lock.release()
+
+    def quiesce(self):
+        """Disable v4 input requests before the application releases the camera."""
+        if not self.is_available() or self._pio_capable is not True:
+            return
+        if not self._capture_request_lock.acquire(timeout=2.0):
+            raise RuntimeError("Pico ešte dokončuje cyklus pri ukončení aplikácie.")
+        try:
+            self.set_session_mode("IDLE")
+        finally:
+            self._capture_request_lock.release()
 
     def capture_master(self, source: str, camera):
         """Capture at the asynchronous event while the command awaits LIGHT OFF."""
@@ -66,6 +144,11 @@ class PicoService:
             raise ValueError("Neplatný Pico capture profil/vstup.")
         if not self._capture_request_lock.acquire(blocking=False):
             raise RuntimeError("Pico ešte dokončuje predchádzajúci cyklus.")
+        try:
+            self.set_session_mode("MASTER")
+        except Exception:
+            self._capture_request_lock.release()
+            raise
         ready = threading.Event()
         result = {}
         command = f"TRIGGER {source}" if source.startswith("IN") else f"FIRE {source}"
@@ -115,6 +198,7 @@ class PicoService:
                         self._baudrate,
                         timeout=self._timeout_s,
                         write_timeout=self._write_timeout_s,
+                        exclusive=True,
                     )
                 except Exception as exc:
                     self.last_error = str(exc)
@@ -128,6 +212,8 @@ class PicoService:
                     daemon=True,
                 )
                 self._serial = dev
+                self._pio_capable = None
+                self._session_mode = None
                 self._active_port = candidate
                 self._rx_stop = stop
                 self._rx_thread = reader
@@ -330,6 +416,8 @@ class PicoService:
             reader = self._rx_thread
             pending = self._pending_response
             self._serial = None
+            self._pio_capable = None
+            self._session_mode = None
             self._active_port = None
             self._available = False
             self._rx_stop = None
@@ -376,8 +464,24 @@ class PicoService:
                 if not line:
                     continue
                 self._logger.debug("[PICO] RX %s", line)
+                if line.startswith("READY pico_hdf_controller "):
+                    with self._state_lock:
+                        self._pio_capable = None
+                        self._session_mode = None
+                        pending = self._pending_response
+                    if pending is not None:
+                        self.last_error = "Pico sa počas príkazu reštartovalo."
+                        pending.put(_DISCONNECTED)
+                    continue
+                request_match = re.fullmatch(r"REQUEST\s+(IN[1-8]|V[12])", line, re.I)
+                if request_match:
+                    if self._session_mode == "TRIGGER":
+                        self._dispatch_trigger(request_match[1].upper())
+                    continue
                 capture_source = self._parse_capture(line)
                 if capture_source is not None:
+                    if self._session_mode in {"TRIGGER", "IDLE"}:
+                        continue  # delayed MASTER event must not become a PIO request
                     with self._state_lock:
                         receiver = self._capture_receiver
                         if receiver is not None and receiver[0] == capture_source:
@@ -401,6 +505,8 @@ class PicoService:
                 owns_connection = self._serial is dev
                 pending = self._pending_response if owns_connection else None
                 if owns_connection:
+                    self._pio_capable = None
+                    self._session_mode = None
                     self._serial = None
                     self._active_port = None
                     self._available = False
@@ -443,12 +549,22 @@ class PicoService:
             return not upper.startswith(("OK FIRED", "BUSY ", "OK SAVED", "OK SET", "OK MAP"))
         if verb == "INPUTS":
             return upper.startswith("INPUTS ") or upper == "END"
+        if verb == "PIO":
+            ident = command.split()[2]
+            if line == f"OK PIO {ident}":
+                return True
+            if line.startswith("PIO RESULT "):
+                try:
+                    return str(json.loads(line[11:]).get("id")) == ident
+                except (ValueError, TypeError):
+                    return False
+            return upper.startswith("BUSY")
         prefixes = {
             "SAVE": ("OK SAVED",),
             "SET": ("OK SET",),
             "MAP": ("OK MAP",),
-            "FIRE": ("OK FIRED", "BUSY "),
-            "TRIGGER": ("OK FIRED", "BUSY "),
+            "FIRE": ("OK FIRED", "OK REQUESTED", "BUSY "),
+            "TRIGGER": ("OK FIRED", "OK REQUESTED", "BUSY "),
             "LIGHT": ("OK",),
         }
         return upper.startswith(prefixes.get(verb, ("OK",)))
@@ -465,7 +581,8 @@ class PicoService:
 
     def _send_command(self, command: str, *, capture_receiver=None, timeout_s=None) -> tuple[bool, str]:
         command = command.strip()
-        multiline = command.split(maxsplit=1)[0].upper() in {"STATUS", "INPUTS"}
+        verb = command.split(maxsplit=1)[0].upper()
+        multiline = verb in {"STATUS", "INPUTS", "PIO"}
         with self._command_lock:
             if not self.connect():
                 return False, ""
@@ -488,10 +605,11 @@ class PicoService:
                 return False, ""
 
             lines: list[str] = []
+            deadline = time.monotonic() + (self._timeout_s if timeout_s is None else timeout_s)
             try:
                 while True:
                     try:
-                        item = responses.get(timeout=self._timeout_s if timeout_s is None else timeout_s)
+                        item = responses.get(timeout=max(0, deadline - time.monotonic()))
                     except queue.Empty:
                         self.last_error = f"No response for command: {command}"
                         self._logger.warning("[PICO] response timeout cmd=%s", command)
@@ -501,7 +619,8 @@ class PicoService:
                         return False, "\n".join(lines)
                     line = str(item)
                     lines.append(line)
-                    if not multiline or line.upper() == "END":
+                    if (not multiline or line.upper() == "END" or line.upper().startswith(("ERR", "BUSY"))
+                            or (verb == "PIO" and line.startswith("OK PIO "))):
                         break
             finally:
                 with self._state_lock:

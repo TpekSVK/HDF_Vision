@@ -44,7 +44,10 @@ class TriggerTiming:
     safety_margin_ms: float
 
 
-class CameraService:
+from app.services.camera_pio import CameraPioMixin
+
+
+class CameraService(CameraPioMixin):
 
     """
     Unified capture služba:
@@ -108,6 +111,7 @@ class CameraService:
         self._frame_condition = threading.Condition()
         self._frame_requests = []
         self._latest_delivery = 0.0
+        self._init_pio_capture()
 
     def arm_master_frame(self):
         """Reserve the first newly acquired frame, independently of preview reads."""
@@ -386,6 +390,7 @@ class CameraService:
                     running = clock.get_time() - self._pipeline.get_base_time()
                     acquired_at -= max(0, running - buf.pts) / Gst.SECOND
             acquired_at -= max(1.0 / max(1, self.fps), self.exposure_us / 1_000_000.0)
+            self._publish_pio_frame(arr, int(buf.offset))
             self._publish_master_frame(arr, acquired_at)
             # Preview-only path: queue/appsink slúži pre UI/live stream.
             if self._q.full():
@@ -402,6 +407,9 @@ class CameraService:
         t = msg.type
         if t == Gst.MessageType.ERROR:
             err, dbg = msg.parse_error()
+            self._pio_pipeline_error = str(err)
+            with self._pio_condition:
+                self._pio_condition.notify_all()
             print(f"[GST][ERROR] {err} debug:{dbg}")
         elif t == Gst.MessageType.WARNING:
             err, dbg = msg.parse_warning()
@@ -424,6 +432,8 @@ class CameraService:
             f"v4l2src device={dev} io-mode=2 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2",
         ]
 
+        if self._pio_configuring or self._pio_ready is not None:
+            variants = variants[:1]
         tried = []
         for pipe in variants:
             try:
@@ -563,6 +573,8 @@ class CameraService:
             if d and d not in seen:
                 devs.append(d); seen.add(d)
 
+        if self._pio_configuring or self._pio_ready is not None:
+            devs = [self.device]
         # 1) GStreamer
         if _GST_OK:
             for dev in devs:
@@ -582,6 +594,8 @@ class CameraService:
                     self.get_supported_v4l2_controls(refresh=True)
                     return True
 
+        if self._pio_configuring:
+            raise RuntimeError("PIO GStreamer stream sa nepodarilo otvoriť.")
         # 2) Fallback: OpenCV V4L2
         for dev in devs:
             if self._start_v4l2(dev):
@@ -622,6 +636,7 @@ class CameraService:
         return last
 
     def stop(self, *, caller: str = "unspecified"):
+        self._invalidate_pio()
         self._log_stop_pipeline(caller)
         self._stop.set()
         self._logger.debug("pipeline close requested mode=%s", self._mode)
@@ -1145,7 +1160,7 @@ class CameraService:
 
     def _apply_safe_trigger_exposure(self) -> int:
         safe_abs = int(get_safe_trigger_exposure_abs(self.width, self.height, self.fps))
-        self.set_manual_exposure_us(int(safe_abs))
+        self.set_manual_exposure_us(int(safe_abs) * 100)
         self._logger.info(
             "[CAMERA] safe_trigger_exposure_abs=%s (resolution=%sx%s@%s)",
             int(safe_abs),
@@ -1463,6 +1478,8 @@ class CameraService:
             current = int(self._ensure_hid().get_stream_mode())
         except Exception as exc:
             self._logger.debug("Get stream mode before set failed on %s (%s): %s", self.device, hid_dev, exc)
+            if requested == 1:
+                raise RuntimeError("TRIGGER zablokovaný: aktuálny režim kamery nie je známy.") from exc
 
         self._logger.debug(
             "stream mode request=%s current=%s pipeline_open=%s video_device=%s hid_device=%s",
@@ -1531,14 +1548,35 @@ class CameraService:
 
     def set_manual_exposure_us(self, exposure_us: int):
         val = int(exposure_us)
+        if self._camera_model is None:
+            self.get_supported_v4l2_controls()
         if val <= 0:
             raise RuntimeError("Set exposure failed: exposure must be positive")
-        self._run_v4l2_ctl("exposure_auto=1")
-        if not self._run_v4l2_ctl(f"exposure_time_absolute={val}"):
+        control_value = val // 100 if self._is_cu55_model() else val
+        if self._is_cu55_model() and (val < 100 or val % 100):
+            raise ValueError("CU55 expozícia musí byť násobkom 100 µs.")
+        if self._is_cu55_model() and self.exposure_us == val and self._read_cu55_exposure() == control_value:
+            return
+        self._invalidate_pio()
+        if not self._is_cu55_model():
+            self._run_v4l2_ctl("exposure_auto=1")
+        if not self._run_v4l2_ctl(f"exposure_time_absolute={control_value}"):
             hundred_us = max(1, val // 100)
             if not self._run_v4l2_ctl(f"exposure_absolute={hundred_us}"):
                 raise RuntimeError("Set exposure failed: v4l2-ctl command failed")
+        if self._is_cu55_model():
+            if self._read_cu55_exposure() != control_value:
+                raise RuntimeError("CU55 exposure readback nesúhlasí.")
+        if self.exposure_us != val:
+            self._invalidate_pio()
         self.exposure_us = val
+
+    def _read_cu55_exposure(self):
+        result = subprocess.run(["v4l2-ctl", "-d", self.device, "-C", "exposure_time_absolute"], capture_output=True, text=True, check=True)
+        match = re.search(r"exposure_time_absolute\s*:\s*(\d+)", result.stdout)
+        if not match:
+            raise RuntimeError("CU55 exposure readback chýba.")
+        return int(match[1])
 
     def set_gamma(self, value: float):
         val = int(round(float(value)))
@@ -1547,8 +1585,12 @@ class CameraService:
 
     def set_brightness(self, value: float):
         val = int(round(float(value)))
+        if getattr(self, "_brightness", None) == val:
+            return
+        self._invalidate_pio()
         if not self._run_v4l2_ctl(f"brightness={val}"):
             raise RuntimeError("Set brightness failed: v4l2-ctl command failed")
+        self._brightness = val
 
     def set_sharpness(self, value: float):
         val = int(round(float(value)))

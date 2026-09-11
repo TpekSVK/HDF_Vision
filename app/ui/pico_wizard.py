@@ -114,6 +114,7 @@ class PicoWizard(QDialog):
             modes,
         )
         explanation.setWordWrap(True)
+        self.lbl_profile_explanation = explanation
         explanation.setToolTip(mode_tooltip)
         modes_grid.addWidget(explanation, 5, 0, 1, 4)
         layout.addWidget(modes)
@@ -211,6 +212,13 @@ class PicoWizard(QDialog):
             connected, status = False, {}
         connected = bool(connected and status.get("connected", False))
         response = str(status.get("device_status", "") or "")
+        self._mode_managed = "CAPABILITIES PIO_PAIR_V1 SESSION_V1" in response
+        self.lbl_profile_explanation.setText(
+            "Režim MASTER/TRIGGER vyberáte v hlavnom okne. Tieto časovania platia pre MASTER; "
+            "v TRIGGER aplikácia nastavuje impulzy a svetlo podľa rozlíšenia a expozície."
+            if self._mode_managed else
+            "Starší firmvér: pre snímanie cez aplikáciu používajte MASTER. PIO TRIGGER vyžaduje firmvér 4.0."
+        )
         self.lbl_connection.setText("Pripojené" if connected else "Odpojené")
         self.lbl_port.setText(str(status.get("port") or "—") if connected else "—")
         self.lbl_firmware.setText(self.parse_firmware(response) or "—")
@@ -223,7 +231,9 @@ class PicoWizard(QDialog):
                 for key, widget in widgets.items():
                     if key in values:
                         widget.setCurrentText(values[key]) if key == "mode" else widget.setValue(values[key])
-                    widget.setEnabled(complete)
+                    widget.setEnabled(complete and not (self._mode_managed and key == "mode"))
+                    if self._mode_managed and key == "mode":
+                        widget.setToolTip("Uložený starší profil; aktuálny režim riadi hlavné okno aplikácie.")
         mappings = config.get("input_map", {})
         for index, combo in self._mapping_combos.items():
             target = mappings.get(index) if isinstance(mappings, dict) else None
@@ -242,6 +252,8 @@ class PicoWizard(QDialog):
             label.setText(states.get(index, "—"))
 
     def _on_capture(self, input_index: int) -> None:
+        if isinstance(input_index, str) and re.fullmatch(r"IN[1-8]", input_index.upper()):
+            input_index = int(input_index[2:])
         if isinstance(input_index, int) and not isinstance(input_index, bool) and 1 <= input_index <= 8:
             self.capture_received.emit(input_index)
 
@@ -250,7 +262,8 @@ class PicoWizard(QDialog):
 
     def _save(self) -> None:
         enabled = {index for index, checkbox in self._enabled_checks.items() if checkbox.isChecked()}
-        if not all(widget.isEnabled() for widgets in self._profile_widgets.values() for widget in widgets.values()) or not all(combo.isEnabled() for combo in self._mapping_combos.values()):
+        if not all(widget.isEnabled() for widgets in self._profile_widgets.values()
+                   for key, widget in widgets.items() if not (self._mode_managed and key == "mode")) or not all(combo.isEnabled() for combo in self._mapping_combos.values()):
             QMessageBox.critical(
                 self,
                 "Pico konfigurácia",
@@ -259,8 +272,9 @@ class PicoWizard(QDialog):
             return
         try:
             for view, widgets in self._profile_widgets.items():
-                commands = (
+                commands = (() if self._mode_managed else (
                     (self._pico.set_view_mode, widgets["mode"].currentText(), "MODE"),
+                )) + (
                     (self._pico.set_profile_delay, widgets["delay_ms"].value(), "DELAY"),
                     (self._pico.set_profile_pulse, widgets["pulse_ms"].value(), "PULSE"),
                     (self._pico.set_profile_capture, widgets["capture_ms"].value(), "CAPTURE"),
