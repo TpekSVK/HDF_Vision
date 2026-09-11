@@ -1,3 +1,4 @@
+from app.utils.tool_labels import tool_display_name
 from app.ui.filtered_roi import compose_filtered_roi, golden_filtered_roi
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer, Signal
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QTabWidget,
     QFormLayout,
+    QLayout,
     QSpinBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -285,6 +287,7 @@ class ToolConfigPanel(QWidget):
         self._locator_failure_policy: str = "continue_without_alignment"
 
         layout = QVBoxLayout(self)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
@@ -293,6 +296,7 @@ class ToolConfigPanel(QWidget):
         layout.addWidget(title)
 
         self._tool_label = QLabel("", self)
+        self._tool_label.setWordWrap(True)
         self._tool_label.setStyleSheet("font-weight: 600;")
         layout.addWidget(self._tool_label)
 
@@ -621,7 +625,7 @@ class ToolConfigPanel(QWidget):
         self._current_metrics_spec = list(getattr(meta, "metrics_spec", []) or [])
 
         tool_kind = getattr(meta, "name", "") or getattr(meta, "category", "") or "Nástroj"
-        self._tool_label.setText(f"{tool.name} — {tool_kind}")
+        self._tool_label.setText(tool_kind if tool_display_name(tool) == tool_kind else f"{tool_display_name(tool)} — {tool_kind}")
         description = getattr(meta, "description", "") or ""
         self._description_label.setText(description)
         self._description_label.setVisible(bool(description))
@@ -855,7 +859,7 @@ class ToolConfigPanel(QWidget):
         if tool is None:
             return
         self._current_tool = tool
-        self._tool_label.setText(tool.name)
+        self._tool_label.setText(tool_display_name(tool))
         self._updating = True
         try:
             params = getattr(tool.params, "values", {}) or {}
@@ -926,7 +930,7 @@ class ToolConfigPanel(QWidget):
                      and name in {"coarse_cap", "apply_alignment"})
                     or self._current_tool.type in _STATISTICAL_PRESENCE_TYPES
                 ) else self._form_layout
-                target_layout.addRow(label, container)
+                self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
 
         if any(self._is_supported_spec(spec) for spec in self._threshold_specs.values()):
@@ -961,7 +965,7 @@ class ToolConfigPanel(QWidget):
                     self._current_tool.type in _STATISTICAL_PRESENCE_TYPES
                     and name in {"score_threshold", "total_area_threshold", "min_blob_area"}
                 ) else self._threshold_layout
-                target_layout.addRow(label, container)
+                self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
 
         if self._current_tool.type in _STATISTICAL_PRESENCE_TYPES:
@@ -1548,6 +1552,22 @@ class ToolConfigPanel(QWidget):
         if not self._btn_test.isEnabled():
             return
         self._on_test_clicked()
+
+    @staticmethod
+    def _add_stacked_field(form, label, container, widget):
+        # A single spanning row avoids QFormLayout splitting long labels and
+        # controls inconsistently, especially at the inspector's 280px width.
+        label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+        container.layout().insertWidget(0, label)
+        container.layout().setSpacing(5)
+        container.layout().setSizeConstraint(QLayout.SetMinimumSize)
+        widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        widget.setMinimumHeight(max(30, widget.sizeHint().height()))
+        if isinstance(widget, QComboBox):
+            widget.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+            widget.setMinimumContentsLength(10)
+            widget.setToolTip(widget.currentText())
+        form.addRow(container)
 
     def _create_field_container(self, widget: QWidget) -> tuple[QWidget, QLabel]:
         container = QWidget(self)
@@ -3423,7 +3443,7 @@ class GoldenWizard(QDialog):
             order_flags = order_item.flags()
             order_flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
             order_item.setFlags(order_flags)
-            name_item = QTableWidgetItem(tool.name)
+            name_item = QTableWidgetItem(tool_display_name(tool))
             try:
                 tool_meta = self.recipes.tool.get_tool_meta(tool.type)
                 secondary = getattr(tool_meta, "category", "") or getattr(tool_meta, "name", "")
@@ -3756,7 +3776,7 @@ class GoldenWizard(QDialog):
         if tool.type in _STATISTICAL_PRESENCE_TYPES:
             self._refresh_presence_v2_learning(tool, row)
         self._status_bar.setText(
-            f"Nástroj: {tool.name}  |  Ignore mask aktualizovaná  |  Koncept aktualizovaný"
+            f"Nástroj: {tool.name}  |  Ignorovaná oblasť aktualizovaná  |  Koncept aktualizovaný"
         )
 
     def _on_workspace_edge_anchors_changed(

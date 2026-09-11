@@ -218,7 +218,7 @@ def _register_default_tools() -> None:
         "ssim",
         factory=lambda: tool_service.SSIMTool(),
         meta={
-            "name": "SSIM",
+            "name": "Štrukturálna podobnosť (SSIM)",
             "description": "Porovnanie štrukturálnej podobnosti v ROI.",
             "category": "Similarity",
             "supports_roi": True,
@@ -238,7 +238,7 @@ def _register_default_tools() -> None:
                 },
             },
             "metrics_spec": [
-                {"key": "ssim", "unit": None, "priority": 10, "description": "SSIM hodnota"},
+                {"key": "ssim", "unit": None, "priority": 10, "description": "Štrukturálna podobnosť (SSIM)"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
@@ -248,8 +248,8 @@ def _register_default_tools() -> None:
         "locator.template_match",
         factory=lambda: tool_service.LocatorTemplateMatchTool(),
         meta={
-            "name": "Locator (Template Match)",
-            "description": "Vyhľadávanie šablóny s podporou search a template ROI.",
+            "name": "Vyhľadanie a zarovnanie vzoru",
+            "description": "Vyhľadá vzor v oblasti hľadania a zarovná snímku podľa referencie.",
             "category": "Locator",
             "supports_roi": True,
             "supports_ignore_mask": False,
@@ -258,7 +258,7 @@ def _register_default_tools() -> None:
                     "use_golden_crop": {
                         "type": "bool",
                         "default": False,
-                        "description": "Použiť golden snapshot ako šablónu bez manuálneho výrezu.",
+                        "description": "Použiť referenčnú snímku ako šablónu bez manuálneho výrezu.",
                     },
                     "coarse_cap": {
                         "type": "int",
@@ -266,7 +266,7 @@ def _register_default_tools() -> None:
                         "min": 64,
                         "max": 4096,
                         "step": 16,
-                        "description": "Maximálna veľkosť hrubého search okna (px).",
+                        "description": "Maximálna veľkosť oblasti rýchleho hľadania (px).",
                     },
                     "alignment_mode": {
                         "type": "enum",
@@ -308,7 +308,7 @@ def _register_default_tools() -> None:
                         "precision": 1,
                         "suffix": " px",
                         "label": "Vyhladenie referenčnej hrany (σ)",
-                        "description": "Gaussian blur pred hľadaním referenčnej hrany.",
+                        "description": "Gaussovo vyhladenie pred hľadaním referenčnej hrany.",
                     },
                     "reference_scan_step": {
                         "type": "int",
@@ -372,7 +372,7 @@ def _register_default_tools() -> None:
                     "template_roi": {
                         "type": "roi",
                         "default": None,
-                        "description": "Manuálne definovaný template výrez na golden obrázku.",
+                        "description": "Manuálne definovaný výrez šablóny na referenčnej snímke.",
                     },
                 },
                 "thresholds": {
@@ -421,7 +421,7 @@ def _register_default_tools() -> None:
         "ssd",
         factory=lambda: ssd.SSDTool(),
         meta={
-            "name": "SSD",
+            "name": "Súčet štvorcov rozdielov (SSD)",
             "description": "Súčet štvorcov rozdielov v ROI s voliteľným rozmazaním.",
             "category": "Similarity",
             "supports_roi": True,
@@ -434,7 +434,7 @@ def _register_default_tools() -> None:
                         "min": 0.0,
                         "max": 10.0,
                         "step": 0.1,
-                        "description": "Sigma pre Gaussian blur pred porovnaním.",
+                        "description": "Sigma pre Gaussovo vyhladenie pred porovnaním.",
                     }
                 },
                 "thresholds": {
@@ -447,7 +447,7 @@ def _register_default_tools() -> None:
                 },
             },
             "metrics_spec": [
-                {"key": "ssd", "unit": None, "priority": 10, "description": "SSD hodnota"},
+                {"key": "ssd", "unit": None, "priority": 10, "description": "Súčet štvorcov rozdielov (SSD)"},
                 {"key": "mean_abs", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
@@ -458,8 +458,8 @@ def _register_default_tools() -> None:
         "mse",
         factory=lambda: mse.MSETool(),
         meta={
-            "name": "MSE",
-            "description": "Mean Squared Error medzi golden a snímkou v ROI.",
+            "name": "Stredná štvorcová chyba (MSE)",
+            "description": "Stredná štvorcová chyba medzi referenčnou a kontrolovanou snímkou v ROI.",
             "category": "Similarity",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -471,7 +471,7 @@ def _register_default_tools() -> None:
                         "min": 0.0,
                         "max": 10.0,
                         "step": 0.1,
-                        "description": "Sigma pre Gaussian blur pred meraním.",
+                        "description": "Sigma pre Gaussovo vyhladenie pred meraním.",
                     }
                 },
                 "thresholds": {
@@ -479,13 +479,13 @@ def _register_default_tools() -> None:
                         "type": "float",
                         "default": 25.0,
                         "min": 0.0,
-                        "description": "Maximálna povolená MSE hodnota.",
+                        "description": "Maximálna povolená Stredná štvorcová chyba (MSE).",
                     }
                 },
             },
             "metrics_spec": [
-                {"key": "mse", "unit": None, "priority": 10, "description": "MSE hodnota"},
-                {"key": "rmse", "unit": None, "priority": 5, "description": "Koreň strednej chyby"},
+                {"key": "mse", "unit": None, "priority": 10, "description": "Stredná štvorcová chyba (MSE)"},
+                {"key": "rmse", "unit": None, "priority": 5, "description": "Odmocnina strednej štvorcovej chyby (RMSE)"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
@@ -495,7 +495,7 @@ def _register_default_tools() -> None:
         "ncc",
         factory=lambda: ncc.NCCTool(),
         meta={
-            "name": "NCC",
+            "name": "Podobnosť vzoru (NCC)",
             "description": "Normalizovaná krížová korelácia v rámci ROI.",
             "category": "Similarity",
             "supports_roi": True,
@@ -508,7 +508,7 @@ def _register_default_tools() -> None:
                         "min": 0.0,
                         "max": 10.0,
                         "step": 0.1,
-                        "description": "Sigma pre Gaussian blur pred koreláciou.",
+                        "description": "Sigma pre Gaussovo vyhladenie pred koreláciou.",
                     }
                 },
                 "thresholds": {
@@ -518,12 +518,12 @@ def _register_default_tools() -> None:
                         "min": -1.0,
                         "max": 1.0,
                         "step": 0.01,
-                        "description": "Minimálna povolená NCC hodnota.",
+                        "description": "Minimálna povolená Podobnosť vzoru (NCC).",
                     }
                 },
             },
             "metrics_spec": [
-                {"key": "ncc", "unit": None, "priority": 10, "description": "NCC hodnota"},
+                {"key": "ncc", "unit": None, "priority": 10, "description": "Podobnosť vzoru (NCC)"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
         },
@@ -534,13 +534,13 @@ def _register_default_tools() -> None:
         factory=lambda: LightPresenceCheckTool(),
         meta={
             "name": "Kontrola svetlej plochy (otvor)",
-            "description": "Backlight kontrola prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
+            "description": "Kontrola s presvietením prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
             "category": "Presence / Backlight",
             "supports_roi": True,
             "supports_ignore_mask": True,
             "catalog_label": "Kontrola svetlej plochy (otvor)",
             "catalog_short": "Binarizácia ROI a meranie plochy bielych pixelov.",
-            "catalog_tooltip": "Backlight kontrola prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
+            "catalog_tooltip": "Kontrola s presvietením prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
             "schema": {
                 "params": {
                     "binary_threshold": {
@@ -549,28 +549,28 @@ def _register_default_tools() -> None:
                         "min": 0,
                         "max": 255,
                         "step": 1,
-                        "label": "Binary threshold",
+                        "label": "Prah jasu",
                         "description": "Prahová hodnota pre binarizáciu (0 – 255).",
                     },
                     "min_area_px": {
                         "type": "int",
                         "default": 100,
                         "min": 0,
-                        "label": "Min. area [px]",
+                        "label": "Minimálna plocha [px]",
                         "description": "Minimálny počet svetlých pixelov potrebný pre OK.",
                     },
                     "max_area_px": {
                         "type": "int",
                         "default": 10_000,
                         "min": 0,
-                        "label": "Max. area [px]",
+                        "label": "Maximálna plocha [px]",
                         "description": "Maximálny počet svetlých pixelov povolený pre OK.",
                     },
                     "gaussian_blur_kernel": {
                         "type": "enum",
                         "default": 0,
-                        "label": "Gaussian blur",
-                        "description": "Voliteľný Gaussian blur pred binarizáciou.",
+                        "label": "Gaussovo vyhladenie",
+                        "description": "Voliteľný Gaussovo vyhladenie pred binarizáciou.",
                         "choices": [
                             (0, "Vypnuté"),
                             (3, "3×3"),
@@ -633,14 +633,14 @@ def _register_default_tools() -> None:
                         "max": 255,
                         "step": 1,
                         "required": True,
-                        "label": "Binary threshold",
+                        "label": "Prah jasu",
                         "description": "Prahová hodnota pre binarizáciu (0 – 255).",
                     },
                     "gaussian_blur_kernel": {
                         "type": "enum",
                         "default": 0,
-                        "label": "Gaussian blur",
-                        "description": "Voliteľný Gaussian blur pred binarizáciou.",
+                        "label": "Gaussovo vyhladenie",
+                        "description": "Voliteľný Gaussovo vyhladenie pred binarizáciou.",
                         "choices": [
                             (0, "Vypnuté"),
                             (3, "3×3"),
@@ -663,7 +663,7 @@ def _register_default_tools() -> None:
                         "default": 100,
                         "min": 0,
                         "required": True,
-                        "label": "Min. area [px]",
+                        "label": "Minimálna plocha [px]",
                         "description": "Minimálny počet foreground pixelov potrebný pre OK.",
                     },
                     "max_area_px": {
@@ -671,7 +671,7 @@ def _register_default_tools() -> None:
                         "default": 100_000,
                         "min": 0,
                         "required": True,
-                        "label": "Max. area [px]",
+                        "label": "Maximálna plocha [px]",
                         "description": "Maximálny počet foreground pixelov povolený pre OK.",
                     },
                     "min_fill_ratio": {
@@ -738,17 +738,17 @@ def _register_default_tools() -> None:
                 "params": {
                     "reference_mode": {"type": "enum", "default": "statistical_golden", "choices": [("statistical_golden", "Štatistický golden")], "label": "Referenčný režim"},
                     "capture_mode_default": {"type": "enum", "default": "manual", "choices": [("manual", "Manuálne"), ("auto", "Automaticky")], "label": "Predvolený zber"},
-                    "model_method": {"type": "enum", "default": "median_mad", "choices": [("median_mad", "Median + MAD")], "label": "Metóda modelu"},
+                    "model_method": {"type": "enum", "default": "median_mad", "choices": [("median_mad", "Medián a MAD")], "label": "Metóda modelu"},
                     "polarity": {"type": "enum", "default": "any", "choices": [("any", "Akákoľvek"), ("darker_only", "Iba stmavnutie"), ("brighter_only", "Iba zosvetlenie")], "label": "Polarita"},
                     "min_ok_samples": {"type": "int", "default": 15, "min": 5, "max": 500, "label": "Minimum OK vzoriek"},
                     "recommended_ok_samples": {"type": "int", "default": 30, "min": 5, "max": 500, "label": "Odporúčané OK vzorky"},
                     "use_nok_for_validation": {"type": "bool", "default": True, "label": "Použiť NOK pre validáciu"},
-                    "auto_apply_recommended_thresholds": {"type": "bool", "default": False, "label": "Auto aplikovať odporúčané"},
+                    "auto_apply_recommended_thresholds": {"type": "bool", "default": False, "label": "Automaticky použiť odporúčané nastavenia"},
                     "reference_model_ready": {"type": "bool", "default": False, "label": "Model pripravený"},
                     "reference_model_invalidated": {"type": "bool", "default": False, "label": "Model neplatný"},
                     "sample_count_ok": {"type": "int", "default": 0, "min": 0, "max": 9999, "label": "Počet OK vzoriek"},
                     "sample_count_nok": {"type": "int", "default": 0, "min": 0, "max": 9999, "label": "Počet NOK vzoriek"},
-                    "reference_assets_dir": {"type": "text", "default": "", "label": "Assets dir"},
+                    "reference_assets_dir": {"type": "text", "default": "", "label": "Priečinok modelu"},
                     "roi_hash": {"type": "text", "default": "", "label": "ROI hash"},
                 },
                 "thresholds": {
@@ -756,7 +756,7 @@ def _register_default_tools() -> None:
                     "max_anomaly_area_percent": {"type": "float", "default": 2.0, "min": 0.0, "max": 100.0, "unit": "%", "label": "Max. chybná plocha (%)"},
                     "max_largest_blob_area": {"type": "float", "default": 0.0, "min": 0.0, "unit": "px", "label": "Najväčší povolený objekt (px)"},
                     "max_blob_count": {"type": "int", "default": 0, "min": 0, "label": "Max. počet objektov"},
-                    "score_threshold": {"type": "float", "default": 4.0, "min": 0.1, "label": "Raw prah odchýlky"},
+                    "score_threshold": {"type": "float", "default": 4.0, "min": 0.1, "label": "Základný prah odchýlky"},
                     "total_area_threshold": {"type": "float", "default": 50.0, "min": 0.0, "unit": "px", "label": "Max. anomálna plocha v px"},
                     "min_blob_area": {"type": "float", "default": 10.0, "min": 0.0, "unit": "px", "label": "Min. veľkosť objektu"},
                 },
@@ -815,7 +815,7 @@ def _register_default_tools() -> None:
                     "model_method": {
                         "type": "enum",
                         "default": "median_mad",
-                        "choices": [("median_mad", "Median + MAD")],
+                        "choices": [("median_mad", "Medián a MAD")],
                         "label": "Metóda modelu",
                     },
                     "polarity": {
@@ -855,7 +855,7 @@ def _register_default_tools() -> None:
                         "label": "Počet vzoriek so zvyškom",
                     },
                     "reference_assets_dir": {
-                        "type": "text", "default": "", "label": "Assets dir",
+                        "type": "text", "default": "", "label": "Priečinok modelu",
                     },
                     "roi_hash": {"type": "text", "default": "", "label": "ROI hash"},
                 },
@@ -878,7 +878,7 @@ def _register_default_tools() -> None:
                     },
                     "score_threshold": {
                         "type": "float", "default": 4.0, "min": 0.1,
-                        "label": "Raw prah odchýlky",
+                        "label": "Základný prah odchýlky",
                     },
                     "total_area_threshold": {
                         "type": "float", "default": 50.0, "min": 0.0,
@@ -914,7 +914,7 @@ def _register_default_tools() -> None:
         "light_transmission",
         factory=lambda: LightTransmissionCheckTool(),
         meta={
-            "name": "Light Transmission Check",
+            "name": "Kontrola priepustnosti svetla",
             "description": "Zmeria štatistiky intenzity (odtiene šedej) a percento pixelov nad prahom.",
             "category": "Presence / Backlight",
             "supports_roi": True,
@@ -935,7 +935,7 @@ def _register_default_tools() -> None:
                         "default": 0.0,
                         "min": 0.0,
                         "max": 255.0,
-                        "label": "Dark level [0-255]",
+                        "label": "Úroveň tmy [0–255]",
                         "description": "Hodnota zodpovedajúca 0 % priepustnosti.",
                     },
                     "calibration_bright_gray": {
@@ -943,7 +943,7 @@ def _register_default_tools() -> None:
                         "default": 255.0,
                         "min": 0.0,
                         "max": 255.0,
-                        "label": "Bright level [0-255]",
+                        "label": "Úroveň svetla [0–255]",
                         "description": "Hodnota zodpovedajúca 100 % priepustnosti.",
                     },
                     "threshold_value": {
@@ -961,7 +961,7 @@ def _register_default_tools() -> None:
                         "default": 0.0,
                         "min": 0.0,
                         "max": 255.0,
-                        "label": "Min. mean",
+                        "label": "Minimálny priemer",
                         "description": "Minimálna mean hodnota (alebo % pri kalibrácii).",
                     },
                     "max_mean_gray": {
@@ -969,7 +969,7 @@ def _register_default_tools() -> None:
                         "default": 255.0,
                         "min": 0.0,
                         "max": 255.0,
-                        "label": "Max. mean",
+                        "label": "Maximálny priemer",
                         "description": "Maximálna mean hodnota (alebo % pri kalibrácii).",
                     },
                     "min_pct_above_T": {
@@ -1010,7 +1010,7 @@ def _register_default_tools() -> None:
         "edge_change",
         factory=lambda: edge.EdgeChangeTool(),
         meta={
-            "name": "Edge Change",
+            "name": "Zmena hrán",
             "description": "Vyhodnotenie hrán a rozdielov cez thresholdovaný absdiff.",
             "category": "Change Detection",
             "supports_roi": True,
@@ -1023,7 +1023,7 @@ def _register_default_tools() -> None:
                         "min": 0.0,
                         "max": 10.0,
                         "step": 0.1,
-                        "description": "Sigma pre Gaussian blur pred prahovaním.",
+                        "description": "Sigma pre Gaussovo vyhladenie pred prahovaním.",
                     },
                     "diff_threshold": {
                         "type": "int",
@@ -1075,7 +1075,7 @@ def _register_default_tools() -> None:
         "edge_profile_deviation",
         factory=lambda: edge_profile_deviation.EdgeProfileDeviationTool(),
         meta={
-            "name": "Edge Profile Deviation",
+            "name": "Odchýlka profilu hrany",
             "description": "Meranie priamkovosti hrany medzi bodmi A a B.",
             "category": "Edge",
             "supports_roi": True,
@@ -1197,7 +1197,7 @@ def _register_default_tools() -> None:
         "absdiff",
         factory=lambda: tool_service.AbsDiffTool(),
         meta={
-            "name": "Abs Diff",
+            "name": "Absolútny rozdiel",
             "description": "Porovnanie absolútnych rozdielov s blob analýzou.",
             "category": "Inspection",
             "supports_roi": True,
