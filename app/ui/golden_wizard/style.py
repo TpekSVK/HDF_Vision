@@ -100,6 +100,15 @@ FIELD_LABELS_SK = {
 }
 
 METRIC_LABELS_SK = {
+    "mse": "Stredná štvorcová chyba (MSE)",
+    "ssd": "Súčet štvorcov rozdielov (SSD)",
+    "ncc": "Podobnosť vzoru (NCC)",
+    "rmse": "Odmocnina strednej štvorcovej chyby (RMSE)",
+    "latency_ms": "Čas vyhodnotenia", "area_px": "Plocha",
+    "fill_ratio": "Podiel vyplnenej plochy", "effective_pixels": "Počet hodnotených pixelov",
+    "mean_abs": "Priemerný absolútny rozdiel", "coverage": "Pokrytie hrany",
+    "edge_ratio": "Podiel zmenených hrán", "max_deviation": "Najväčšia odchýlka",
+
     "corr": "Skóre zhody",
     "score": "Skóre",
     "dx": "Posun X",
@@ -108,7 +117,7 @@ METRIC_LABELS_SK = {
     "y": "Y",
     "theta_deg": "Rotácia",
     "rotation": "Rotácia",
-    "ssim": "SSIM",
+    "ssim": "Štrukturálna podobnosť (SSIM)",
     "similarity": "Podobnosť",
     "diff": "Rozdiel",
     "count": "Počet",

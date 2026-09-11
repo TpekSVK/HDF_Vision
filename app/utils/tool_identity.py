@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Optional, Set, Tuple
 
 from app.models.schema import Tool
+from app.utils.tool_labels import tool_display_name
 
 
 def compute_tool_identity(
@@ -47,7 +48,7 @@ def compute_tool_identity(
     if used_ids is not None:
         used_ids.add(unique_id)
 
-    return unique_id, base_label, order_value
+    return unique_id, tool_display_name(tool) if getattr(tool, "name", "") or getattr(tool, "type", "") else base_label, order_value
 
 
 __all__ = ["compute_tool_identity"]

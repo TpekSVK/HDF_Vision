@@ -56,6 +56,8 @@ from app.ui.password_dialog import authorize_recipe_write
 from app.ui.theme import refresh_style
 from app.ui.results_page import ResultsPage
 from app.ui.filtered_roi import compose_filtered_roi
+from app.ui.golden_wizard.style import metric_label
+from app.utils.tool_labels import tool_display_name
 from app.utils import overlay as overlay_utils
 from app.utils.nok_label import nok_label
 
@@ -2247,7 +2249,7 @@ class MainWindow(QMainWindow):
             if tool is None or not tool_id:
                 continue
             color = palette[index % len(palette)]
-            tool_name = str(getattr(tool, "name", "") or getattr(tool, "type", "Nástroj"))
+            tool_name = tool_display_name(tool)
             tool_roi_items = overlay_utils.tool_overlay_items(
                 tool,
                 color=color,
@@ -2827,7 +2829,7 @@ class MainWindow(QMainWindow):
                 value = metrics.get(key)
                 if key not in metrics:
                     continue
-                label = (getattr(spec, "description", "") or key or "Metric").strip()
+                label = metric_label(key, getattr(spec, "description", ""))
                 unit = getattr(spec, "unit", None)
                 if unit:
                     label = f"{label} [{unit}]"
@@ -2836,7 +2838,7 @@ class MainWindow(QMainWindow):
 
         for key in sorted(metrics.keys()):
             value = metrics.get(key)
-            rows.append((str(key), "-" if value is None else self._format_metric_value(value)))
+            rows.append((metric_label(str(key)), "-" if value is None else self._format_metric_value(value)))
 
         return rows or [("Informácia", "Žiadne dáta")]
 

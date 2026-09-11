@@ -120,3 +120,14 @@ Vetva codex/filtered-roi-preview obsahuje lokálnu implementáciu checkboxu v RU
 aj Golden Wizard. Podrobnosti, podporované fázy, limity a testy sú v
 FILTERED_ROI_PREVIEW_SK.md. 63 relevantných testov prešlo; štyri staršie chyby
 locator testov potvrdené aj na pôvodnom HEAD. Bez hardvérového zásahu, bez push/merge.
+
+## Pravý panel nástrojov – 2026-09-12
+
+Lokálna oprava spoločného formulára: popis nad poľom v jednom bloku, jednotná
+šírka a minimálna výška ovládacích prvkov. Odstránené nepredvídateľné zalamovanie
+dvojstĺpcových riadkov. Zalamuje sa aj názov nástroja; duplicitný predvolený názov
+sa neopakuje. Označenie metódy skrátené na Medián a MAD.
+Geometrická a vizuálna kontrola v Docker/offscreen Qt pri šírke panela 300 px:
+presence.absence_v2 aj presence_absence úspešné, popisy sa neprekrývajú s poľami.
+Log /tmp/hdf_panel_layout.log, kontrolné snímky /tmp/presence_absence_v2_panel.png
+ a /tmp/presence_absence_panel.png. Spolu so slovenskými textami zatiaľ lokálne.
