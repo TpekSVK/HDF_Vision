@@ -56,3 +56,26 @@ Logy: /tmp/hdf_view_pio_tests.log a /tmp/hdf_view_pio_core_regression.log.
 Rozloženie dialógu bolo vizuálne skontrolované pomocou offscreen Qt snímky.
 Táto UI fáza nespúšťala hardvérové testy ani nemenila firmware na Pico.
 Zmeny zostávajú lokálne, bez commitu/pushu.
+
+## Publikovanie a následná oprava RUN ROI – 2026-09-11
+
+Implementácia PIO/FW4/Golden UI bola na výslovnú žiadosť používateľa publikovaná
+cez https://github.com/TpekSVK/HDF_Vision/pull/352 a mergnutá do dev.
+Merge commit: 10d2fa17c7fa785e599eb932dce7e6f817f80229.
+
+Následná samostatná vetva codex/fix-run-roi-rotation opravuje opakované otáčanie
+snímky pri zapnutí Zobraziť ROI v RUN. Capture aplikuje rotáciu pred inspection;
+pipeline frame a ROI už majú tieto súradnice. Odstránená druhá rotácia pipeline
+preview/ROI a ďalšia rotácia uloženého preview v pravidelnom obnovovaní.
+Živý surový obraz kamery sa naďalej otáča raz.
+
+Regresia tests/test_run_roi_rotation.py používa asymetrické snímky a skutočné
+vykresľovanie ROI pri 0/90/180/270 stupňoch, opakované zapínanie/vypínanie ROI
+aj obnovovanie náhľadu. Pred opravou zlyhali 3 prípady (90/180/270), po oprave
+prešlo všetkých 8. Dotknutá sada RUN/view: 38 testov prešlo.
+Širší beh vrátane tests/test_overlay_utils.py: 41 prešlo, 1 zlyhal v existujúcom
+teste test_render_overlay_mask_preserves_holes. Ten očakáva priehľadný pixel [9,9],
+hoci jeho vstupná maska má na tomto pixeli hodnotu 1; renderer ani tento test
+neboli pri oprave rotácie menené. Logy /tmp/hdf_roi_before.log,
+/tmp/hdf_roi_after.log, /tmp/hdf_roi_targeted.log.
+Oprava ROI je zatiaľ lokálna; nebola súčasťou predchádzajúceho PR #352.
