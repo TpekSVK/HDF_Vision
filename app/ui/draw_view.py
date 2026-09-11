@@ -200,6 +200,10 @@ class DrawView(QGraphicsView):
         self._update_interaction_mode()
 
     # API z Golden WIZARD
+    def update_display_pixmap(self, pixmap):
+        if self._bg is not None and pixmap.size() == self._bg.pixmap().size():
+            self._bg.setPixmap(pixmap)
+
     def set_background(self, qpixmap):
         self._scene.clear()
         self._bg = None

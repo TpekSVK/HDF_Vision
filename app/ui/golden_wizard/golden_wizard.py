@@ -1,3 +1,4 @@
+from app.ui.filtered_roi import compose_filtered_roi, golden_filtered_roi
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QPixmap, QImage, QColor, QKeySequence, QShortcut
@@ -1898,6 +1899,17 @@ class GoldenWizard(QDialog):
         top_secondary.addWidget(self.failure_policy_combo)
         top_secondary.addWidget(self._session_settings_button)
 
+        self.chk_filtered_roi = QCheckBox("Zobraziť filtrované ROI", self)
+        self.lbl_filtered_roi = QLabel("", self)
+        self.lbl_filtered_roi.setWordWrap(True)
+        top_secondary.addWidget(self.chk_filtered_roi)
+        top_secondary.addWidget(self.lbl_filtered_roi)
+        self._filtered_roi_timer = QTimer(self)
+        self._filtered_roi_timer.setSingleShot(True)
+        self._filtered_roi_timer.setInterval(180)
+        self._filtered_roi_timer.timeout.connect(self._refresh_filtered_roi)
+        self.chk_filtered_roi.toggled.connect(lambda: self._filtered_roi_timer.start())
+
         # ---- Dva režimy zobrazenia ----
         # 1) Live LABEL (video) – používa sa len pri Live zapnuté
         self.live_lbl = QLabel("—")
@@ -2198,6 +2210,7 @@ class GoldenWizard(QDialog):
         self._logger.info("wizard_camera_resume done")
 
     def _toggle_live(self, checked: bool):
+        self.chk_filtered_roi.setEnabled(not checked)
         if checked and not self._is_live_allowed_by_capture_mode():
             self._logger.info("[GOLDEN_CAPTURE] live disabled in trigger mode")
             self.btn_live.blockSignals(True)
@@ -2524,6 +2537,7 @@ class GoldenWizard(QDialog):
         self._set_selected_tool_overlay()
 
     def _set_selected_tool_overlay(self, tools: Optional[Sequence[Tool]] = None) -> None:
+        self._filtered_roi_timer.start()
         if tools is None:
             recipe = self._current_recipe_name()
             view_id = self._active_view_id
@@ -2551,6 +2565,36 @@ class GoldenWizard(QDialog):
                 self.roi_editor.configure_edge_anchors(False)
             finally:
                 self._syncing_workspace_roi = False
+
+    def _refresh_filtered_roi(self):
+        image = self._current_golden_image()
+        if image is None:
+            self.lbl_filtered_roi.setText("Najprv načítajte golden snímku.")
+            return
+        displayed = image
+        label = ""
+        if self.chk_filtered_roi.isChecked():
+            tools = self.recipes.get_draft_tools(self._current_recipe_name(), self._active_view_id) if self._active_view_id else []
+            row = getattr(self, "_selected_tool_row", -1)
+            label = "Vyberte nástroj."
+            if 0 <= row < len(tools):
+                try:
+                    preview = golden_filtered_roi(image, tools[row])
+                    if preview is not None:
+                        displayed = compose_filtered_roi(image, preview)
+                        label = preview["label"] + " · GOLDEN"
+                    else:
+                        label = "Tento nástroj zatiaľ neposkytuje filtrovaný náhľad."
+                except Exception as exc:
+                    label = "Náhľad nie je dostupný: " + str(exc)
+        self.lbl_filtered_roi.setText(label)
+        # Update only display pixels; current_img and saved golden stay original.
+        displayed = np.ascontiguousarray(displayed)
+        h, w = displayed.shape[:2]
+        qimg = QImage(displayed.data, w, h, displayed.strides[0], QImage.Format_Grayscale8)
+        pm = QPixmap.fromImage(qimg.copy())
+        self.view.update_display_pixmap(pm)
+        self.roi_editor.update_display_pixmap(pm)
 
     def _current_golden_image(self) -> Optional[np.ndarray]:
         if self.current_img is not None:
@@ -2857,6 +2901,8 @@ class GoldenWizard(QDialog):
         self._dirty_views.setdefault(recipe, {})[view_id] = False
 
     def _update_dirty_state(self, recipe: Optional[str] = None, view_id: Optional[str] = None) -> None:
+        if getattr(self, "_filtered_roi_timer", None) is not None and self.chk_filtered_roi.isChecked():
+            self._filtered_roi_timer.start()
         if not hasattr(self, "_saved_snapshots"):
             return
         recipe = recipe or self._current_recipe_name()
@@ -3636,6 +3682,7 @@ class GoldenWizard(QDialog):
             )
 
     def _on_workspace_roi_changed(self, _rect: object) -> None:
+        self._filtered_roi_timer.start()
         if self._syncing_workspace_roi:
             return
         row = getattr(self, "_selected_tool_row", -1)
@@ -4218,6 +4265,7 @@ class GoldenWizard(QDialog):
         self.btn_edit_view.setEnabled(bool(self._views))
 
     def _on_tool_param_changed(self, name: str, value: Any) -> None:
+        self._filtered_roi_timer.start()
         row = getattr(self, "_selected_tool_row", -1)
         if row < 0:
             return
@@ -4252,6 +4300,7 @@ class GoldenWizard(QDialog):
         self._update_dirty_state(recipe, view_id)
 
     def _on_tool_threshold_changed(self, name: str, value: Any) -> None:
+        self._filtered_roi_timer.start()
         row = getattr(self, "_selected_tool_row", -1)
         if row < 0:
             return

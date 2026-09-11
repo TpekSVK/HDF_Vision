@@ -55,6 +55,7 @@ from app.services.security_service import SecurityService
 from app.ui.password_dialog import authorize_recipe_write
 from app.ui.theme import refresh_style
 from app.ui.results_page import ResultsPage
+from app.ui.filtered_roi import compose_filtered_roi
 from app.utils import overlay as overlay_utils
 from app.utils.nok_label import nok_label
 
@@ -256,6 +257,12 @@ class MainWindow(QMainWindow):
         self.chk_show_roi.toggled.connect(self._on_run_overlay_controls_changed)
         actions.addWidget(self.chk_show_roi)
 
+        self.chk_filtered_roi = QCheckBox("Zobraziť filtrované ROI", actions_container)
+        self.chk_filtered_roi.setToolTip("Skutočný medzivýsledok vybraného nástroja z nasledujúcej kontroly")
+        self.chk_filtered_roi.toggled.connect(self._on_run_overlay_controls_changed)
+        self.lbl_filtered_roi = QLabel("", actions_container)
+        self.lbl_filtered_roi.setWordWrap(True)
+
         self.cmb_roi_tool = QComboBox(actions_container)
         self.cmb_roi_tool.setMinimumWidth(190)
         self.cmb_roi_tool.setToolTip("Vybrať nástroj, ktorého ROI sa zobrazí")
@@ -291,6 +298,10 @@ class MainWindow(QMainWindow):
 
         actions_container.setMaximumHeight(actions_container.sizeHint().height())
         run.addWidget(actions_container)
+        filtered_controls = QHBoxLayout()
+        filtered_controls.addWidget(self.chk_filtered_roi)
+        filtered_controls.addWidget(self.lbl_filtered_roi, 1)
+        run.addLayout(filtered_controls)
 
         view_strip_container = QFrame()
         view_strip_container.setProperty("role", "panel")
@@ -1692,6 +1703,7 @@ class MainWindow(QMainWindow):
                 view_recipe,
                 recipe_name=recipe_name,
                 notes=f"manual_trigger::{view_id}",
+                capture_filtered_roi=self.chk_filtered_roi.isChecked(),
             )
             inspection_finished_ts = time.monotonic()
             status = (result.status or "ok").lower()
@@ -2022,6 +2034,9 @@ class MainWindow(QMainWindow):
             self.btn_live.setText("Live vypnuté")
             return
         self.live_enabled = self.btn_live.isChecked()
+        self.chk_filtered_roi.setEnabled(not self.live_enabled)
+        if self.live_enabled:
+            self.lbl_filtered_roi.setText("Filtrované ROI patrí poslednej kontrole; vypnite Live pre jeho zobrazenie.")
         self.btn_live.setText("Live zapnuté" if self.live_enabled else "Live vypnuté")
         if self.live_enabled:
             self._apply_run_camera_profile()
@@ -2300,6 +2315,7 @@ class MainWindow(QMainWindow):
             "frame": frame.copy(),
             "view": view,
             "roi_items": roi_items_by_tool,
+            "filtered": {r.tool_id: getattr(r, "filtered_roi", None) for r in result.per_tool},
             "error_items": error_items,
         }
 
@@ -2311,6 +2327,14 @@ class MainWindow(QMainWindow):
         if not isinstance(frame, np.ndarray):
             return None
 
+        if getattr(self, "chk_filtered_roi", None) is not None and self.chk_filtered_roi.isChecked():
+            selected = self.cmb_roi_tool.currentData()
+            preview = entry.get("filtered", {}).get(str(selected)) if selected else None
+            if preview is not None:
+                frame = compose_filtered_roi(frame, preview)
+                self.lbl_filtered_roi.setText(preview["label"])
+            else:
+                self.lbl_filtered_roi.setText("Vyberte nástroj a spustite kontrolu; náhľad nemusí byť nástrojom podporovaný.")
         items = list(entry.get("error_items", []) or [])
         if self.chk_show_roi.isChecked():
             roi_items = entry.get("roi_items", {})
@@ -2331,8 +2355,13 @@ class MainWindow(QMainWindow):
         return rendered
 
     def _on_run_overlay_controls_changed(self, *_args) -> None:
+        filtered = getattr(self, "chk_filtered_roi", None)
+        filtering = filtered is not None and filtered.isChecked()
+        if filtered is not None:
+            self.lbl_filtered_roi.setVisible(filtering)
+            self.lbl_filtered_roi.setText("Náhľad bude dostupný po nasledujúcej kontrole vybraného nástroja.")
         self.cmb_roi_tool.setEnabled(
-            self.chk_show_roi.isChecked() and self.cmb_roi_tool.count() > 0
+            (self.chk_show_roi.isChecked() or filtering) and self.cmb_roi_tool.count() > 0
         )
         view_id = self._active_view_id
         rendered = self._render_run_overlay_frame(view_id)

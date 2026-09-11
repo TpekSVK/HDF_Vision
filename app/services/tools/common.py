@@ -257,6 +257,23 @@ class PairTool(BaseTool):
             virtual_alignment=virtual_alignment,
         )
 
+    def _publish_filtered_roi(self, prepared, pixels, label):
+        if not self._prepared_context.get("capture_filtered_roi", False):
+            return
+        import cv2
+        image = np.asarray(pixels)
+        if image.dtype != np.uint8:
+            image = cv2.convertScaleAbs(image)
+        mask = prepared.valid_mask
+        transform = None
+        if prepared.virtual_alignment:
+            transform = np.asarray(self._resolve_runner_context().T_total, dtype=np.float32).copy()
+        self.filtered_roi = {
+            "image": image.copy(), "rect": tuple(prepared.roi_rect),
+            "mask": mask.copy() if mask is not None else np.ones(image.shape[:2], dtype=bool),
+            "label": label, "to_display": transform,
+        }
+
     def _finalize_result(
         self,
         status: str,

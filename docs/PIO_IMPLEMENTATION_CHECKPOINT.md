@@ -113,3 +113,10 @@ svetlo vlastní Pico. Časovač medzi kontrolami a interná stabilizácia PIO os
 Používateľ schválil push a merge tejto úpravy spolu s navigáciou Výsledky/RUN.
 Záverečná spoločná sada: 65 testov prešlo v Dockeri (vrátane overenia ignorovania
 legacy flash_mode). Log /tmp/hdf_simplified_view_final.log.
+
+## Náhľad filtrovaného ROI – 2026-09-11
+
+Vetva codex/filtered-roi-preview obsahuje lokálnu implementáciu checkboxu v RUN
+aj Golden Wizard. Podrobnosti, podporované fázy, limity a testy sú v
+FILTERED_ROI_PREVIEW_SK.md. 63 relevantných testov prešlo; štyri staršie chyby
+locator testov potvrdené aj na pôvodnom HEAD. Bez hardvérového zásahu, bez push/merge.

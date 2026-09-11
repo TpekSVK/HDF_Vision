@@ -9,6 +9,7 @@ import pytest
 
 from app.ui.view_utils import apply_view_image_transform
 from app.utils import overlay as overlay_utils
+from app.ui.filtered_roi import compose_filtered_roi
 
 
 def window_for(view, frame):
@@ -20,7 +21,7 @@ def window_for(view, frame):
     cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
     cls.bases = []; cls.decorator_list = []
     ns = dict(np=np, Any=Any, Mapping=Mapping, overlay_utils=overlay_utils,
-              apply_view_image_transform=apply_view_image_transform)
+              apply_view_image_transform=apply_view_image_transform, compose_filtered_roi=compose_filtered_roi)
     exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), 'main_window.py', 'exec'), ns)
     w = ns['MainWindow']()
     w._active_view_id = view.id
@@ -67,3 +68,21 @@ def test_raw_live_preview_still_rotates_once(angle):
     w.cam.last_frame = lambda **kwargs: raw
     w._update_live_view()
     np.testing.assert_array_equal(w.shown[-1], apply_view_image_transform(raw, view))
+
+
+@pytest.mark.parametrize('angle', [0,90,180,270])
+def test_filtered_roi_toggle_preserves_orientation_and_restores_original(angle):
+    view = SimpleNamespace(id='view_1', image_rotation=angle)
+    raw = np.arange(24*32*3,dtype=np.uint8).reshape(24,32,3)
+    inspected = apply_view_image_transform(raw,view)
+    w, _ = window_for(view,inspected)
+    preview = dict(rect=(2,3,7,5),image=np.full((5,7),200,np.uint8),mask=np.ones((5,7),bool),label='Gaussian blur')
+    w._run_overlay_cache[view.id]['filtered'] = {'tool':preview}
+    w.chk_filtered_roi = SimpleNamespace(checked=True)
+    w.chk_filtered_roi.isChecked = lambda: w.chk_filtered_roi.checked
+    w.lbl_filtered_roi = SimpleNamespace(setVisible=lambda v:None,setText=lambda v:None)
+    w._on_run_overlay_controls_changed()
+    np.testing.assert_array_equal(w.shown[-1],compose_filtered_roi(inspected,preview))
+    w.chk_filtered_roi.checked = False
+    w._on_run_overlay_controls_changed()
+    np.testing.assert_array_equal(w.shown[-1],inspected)
