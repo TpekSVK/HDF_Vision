@@ -7,7 +7,7 @@ def test_display_translation_preserves_saved_identity():
     t = Tool(type='edge_change', name='Edge Change', order=2)
     identifier, label, order = compute_tool_identity(t)
     assert identifier == '2:Edge Change'
-    assert label == 'Zmena hrán'
+    assert label == 'Plocha rozdielov oproti referencii'
     assert t.name == 'Edge Change'
 
 

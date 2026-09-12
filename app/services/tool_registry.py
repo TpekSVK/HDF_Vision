@@ -59,6 +59,9 @@ def _coerce_schema_fields(fields: Dict[str, Dict[str, Any]] | None) -> tuple[Too
                 step=spec.get("step"),
                 required=bool(spec.get("required", False)),
                 choices=_normalize_choices(spec.get("choices")),
+                unit=spec.get("unit"),
+                display_scale=float(spec.get("display_scale", 1.0)),
+                display_decimals=int(spec.get("display_decimals", spec.get("decimals", 4))),
             )
         )
     return tuple(normalized)
@@ -218,8 +221,8 @@ def _register_default_tools() -> None:
         "ssim",
         factory=lambda: tool_service.SSIMTool(),
         meta={
-            "name": "Štrukturálna podobnosť (SSIM)",
-            "description": "Porovnanie štrukturálnej podobnosti v ROI.",
+            "name": "Podobnosť vzhľadu (SSIM)",
+            "description": "Porovná vzhľad a štruktúru zarovnanej ROI s referenčnou snímkou. Vhodné na tvar a usporiadanie detailov; drobná chyba sa môže vo veľkej ROI stratiť.",
             "category": "Similarity",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -249,7 +252,7 @@ def _register_default_tools() -> None:
         factory=lambda: tool_service.LocatorTemplateMatchTool(),
         meta={
             "name": "Vyhľadanie a zarovnanie vzoru",
-            "description": "Vyhľadá vzor v oblasti hľadania a zarovná snímku podľa referencie.",
+            "description": "Nájde vzor a zarovná kontrolovanú snímku. Použite pred porovnávaním, ak sa diel medzi zábermi posúva alebo otáča.",
             "category": "Locator",
             "supports_roi": True,
             "supports_ignore_mask": False,
@@ -458,8 +461,8 @@ def _register_default_tools() -> None:
         "mse",
         factory=lambda: mse.MSETool(),
         meta={
-            "name": "Stredná štvorcová chyba (MSE)",
-            "description": "Stredná štvorcová chyba medzi referenčnou a kontrolovanou snímkou v ROI.",
+            "name": "Rozdiel jasu (MSE)",
+            "description": "Zmeria priemernú štvorcovú zmenu jasu oproti referencii. Vyžaduje stabilné osvetlenie a polohu; aj pohyb alebo zmena svetla zvýšia výsledok.",
             "category": "Similarity",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -496,7 +499,7 @@ def _register_default_tools() -> None:
         factory=lambda: ncc.NCCTool(),
         meta={
             "name": "Podobnosť vzoru (NCC)",
-            "description": "Normalizovaná krížová korelácia v rámci ROI.",
+            "description": "Porovná usporiadanie svetlých a tmavých miest s normalizáciou jasu a kontrastu. Vhodné na vzor či potlač; nehľadá polohu a nie je určené na meranie zmeny jasu.",
             "category": "Similarity",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -606,8 +609,8 @@ def _register_default_tools() -> None:
         "presence_absence",
         factory=lambda: PresenceAbsenceCheckTool(),
         meta={
-            "name": "Prítomnosť / neprítomnosť",
-            "description": "Detekcia prítomnosti objektu podľa plochy svetlých alebo tmavých pixelov v ROI.",
+            "name": "Prítomnosť podľa svetlej/tmavej plochy",
+            "description": "Spočíta svetlú alebo tmavú plochu v ROI. Vhodné na otvor, vložku či skrutku, ktoré sa jasom odlišujú od pozadia.",
             "category": "Presence",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -729,8 +732,8 @@ def _register_default_tools() -> None:
         "presence.absence_v2",
         factory=lambda: PresenceAbsenceV2Tool(),
         meta={
-            "name": "Prítomnosť/neprítomnosť V2",
-            "description": "Experimentálny štatistický model prítomnosti/neprítomnosti z viacerých OK vzoriek.",
+            "name": "Naučená kontrola odchýlok (V2)",
+            "description": "Naučí bežnú variabilitu z viacerých dobrých vzoriek a hľadá odchýlky. Vhodné na zložitejší povrch; pred nasadením overte reprezentatívne dobré aj chybné diely.",
             "category": "Presence",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -784,7 +787,7 @@ def _register_default_tools() -> None:
         "mold.protection_v1",
         factory=lambda: MoldProtectionV1Tool(),
         meta={
-            "name": "Ochrana formy V1",
+            "name": "Kontrola prázdnej formy",
             "description": (
                 "Fail-closed kontrola prázdnej formy po vyhodení dielov. "
                 "Lokalizuje zvyšky a pri náleze alebo chybe vráti NOK."
@@ -891,7 +894,7 @@ def _register_default_tools() -> None:
                 },
             },
             "metrics_spec": [
-                {"key": "mold_empty", "priority": 12, "description": "Forma je prázdna"},
+                {"key": "mold_empty", "priority": 12, "description": "Porovná formu s naučeným prázdnym stavom a hľadá zvyšky materiálu. Nepripravený model alebo neplatná oblasť znamená NOK."},
                 {"key": "residual_detected", "priority": 12, "description": "Nájdený zvyšok"},
                 {"key": "inspection_fault", "priority": 12, "description": "Blokujúca chyba kontroly"},
                 {"key": "inspection_state", "priority": 11, "description": "Stav ochrany formy"},
@@ -1010,8 +1013,8 @@ def _register_default_tools() -> None:
         "edge_change",
         factory=lambda: edge.EdgeChangeTool(),
         meta={
-            "name": "Zmena hrán",
-            "description": "Vyhodnotenie hrán a rozdielov cez thresholdovaný absdiff.",
+            "name": "Plocha rozdielov oproti referencii",
+            "description": "Porovná snímku s referenciou, označí rozdiely jasu nad prahom a zmeria zmenenú plochu aj najväčšiu súvislú chybu. Vyžaduje stabilné osvetlenie a zarovnanie.",
             "category": "Change Detection",
             "supports_roi": True,
             "supports_ignore_mask": True,
@@ -1030,12 +1033,12 @@ def _register_default_tools() -> None:
                         "default": 25,
                         "min": 0,
                         "max": 255,
-                        "description": "Prah absolútneho rozdielu pre detekciu hrán.",
+                        "description": "Minimálny rozdiel jasu oproti referencii, aby sa pixel označil ako zmenený.",
                     },
                     "use_morphology": {
                         "type": "bool",
                         "default": False,
-                        "description": "Povoliť open+dilate na očistenie masky hrán.",
+                        "description": "Odstrániť drobné izolované zmeny a rozšíriť zostávajúce oblasti. Môže zmeniť nameranú plochu.",
                     },
                     "morph_open": {
                         "type": "int",
@@ -1053,18 +1056,26 @@ def _register_default_tools() -> None:
                     },
                 },
                 "thresholds": {
+                    "largest_change_max_px": {
+                        "type": "int", "default": 0, "min": 0, "max": 100000000,
+                        "label": "Najväčšia povolená súvislá chyba", "unit": "px",
+                        "description": "Maximálna plocha jednej spojenej oblasti. Hodnota 0 vypína tento limit.",
+                    },
                     "edge_ratio_max": {
                         "type": "float",
                         "default": 0.05,
                         "min": 0.0,
                         "max": 1.0,
                         "step": 0.005,
-                        "description": "Maximálny podiel hrán označených ako zmena.",
+                        "label": "Maximálna zmenená plocha",
+                        "unit": "%", "display_scale": 100.0, "display_decimals": 2,
+                        "description": "Najväčší povolený podiel zmenených pixelov v platnej ROI.",
                     }
                 },
             },
             "metrics_spec": [
-                {"key": "edge_ratio", "unit": None, "priority": 10, "description": "Podiel zmenených hrán"},
+                {"key": "changed_area_pct", "unit": "%", "priority": 10, "description": "Zmenená plocha"},
+                {"key": "largest_change_px", "unit": "px", "priority": 9, "description": "Najväčšia súvislá chyba"},
                 {"key": "mean_diff", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
                 {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
             ],
@@ -1198,7 +1209,7 @@ def _register_default_tools() -> None:
         factory=lambda: tool_service.AbsDiffTool(),
         meta={
             "name": "Absolútny rozdiel",
-            "description": "Porovnanie absolútnych rozdielov s blob analýzou.",
+            "description": "Nedokončený starší nástroj – vždy vracia WARN. Nahraďte ho nástrojom Plocha rozdielov oproti referencii.",
             "category": "Inspection",
             "supports_roi": True,
             "supports_ignore_mask": True,

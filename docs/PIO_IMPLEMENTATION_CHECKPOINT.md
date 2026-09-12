@@ -131,3 +131,10 @@ Geometrická a vizuálna kontrola v Docker/offscreen Qt pri šírke panela 300 p
 presence.absence_v2 aj presence_absence úspešné, popisy sa neprekrývajú s poľami.
 Log /tmp/hdf_panel_layout.log, kontrolné snímky /tmp/presence_absence_v2_panel.png
  a /tmp/presence_absence_panel.png. Spolu so slovenskými textami zatiaľ lokálne.
+
+## Katalóg a učenie ROI – 2026-09-12
+
+Lokálna vetva codex/catalog-and-learning-roi: zjednodušený katalóg, prednastavenie
+otvoru, nové limity/percentá/maska rozdielov a oprava vynútenej 0° rotácie zberu
+učenia ochrany formy/V2. 65 testov prešlo. Podrobnosti a nutnosť opätovného zberu
+nesprávnych starých vzoriek: CATALOG_AND_LEARNING_ROI_SK.md. Bez push/merge.
