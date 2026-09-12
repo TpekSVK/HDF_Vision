@@ -16,3 +16,6 @@ def tool_display_name(tool):
     if not name or name == kind or name in OLD_NAMES:
         return TOOL_NAMES.get(kind, name or kind or 'Nástroj')
     return name
+
+TOOL_NAMES.update({'locator.template_match': 'Vyhľadanie a zarovnanie vzoru', 'mold.protection_v1': 'Kontrola prázdnej formy', 'presence_absence': 'Prítomnosť podľa svetlej/tmavej plochy', 'presence.absence_v2': 'Naučená kontrola odchýlok (V2)', 'ssim': 'Podobnosť vzhľadu (SSIM)', 'edge_change': 'Plocha rozdielov oproti referencii', 'mse': 'Rozdiel jasu (MSE)'})
+OLD_NAMES.update({'Štrukturálna podobnosť (SSIM)', 'Prítomnosť / neprítomnosť', 'Stredná štvorcová chyba (MSE)', 'Zmena hrán', 'Ochrana formy V1', 'Prítomnosť/neprítomnosť V2'})

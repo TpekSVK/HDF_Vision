@@ -120,7 +120,7 @@ from app.ui.golden_wizard.form_widgets import (
 )
 from app.ui.golden_wizard.session_settings_dialog import SessionSettingsDialog
 from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE, field_label, metric_label
-from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog
+from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog, make_catalog_tool
 from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
 from app.ui.golden_wizard.presence_v2_sample_capture_dialog import PresenceV2SampleCaptureDialog
 
@@ -3407,7 +3407,7 @@ class GoldenWizard(QDialog):
         if not tool_type:
             return
         try:
-            tool = self.recipes.tool.make_default_tool(tool_type)
+            tool = make_catalog_tool(self.recipes.tool, tool_type)
             recipe = self._current_recipe_name()
             view_id = self._active_view_id
             if not view_id:
@@ -4070,12 +4070,7 @@ class GoldenWizard(QDialog):
                 ) if tool.type == "mold.protection_v1" else (
                     "Zber OK snímok" if mode == "ok" else "Zber NOK snímok"
                 ),
-                capture_fn=lambda: self._capture_frame_for_golden(
-                    view_id=view_id,
-                    trigger_mode_label="presence_v2_learning",
-                    image_rotation_override=0,
-                    capture_request_source="presence_v2_learning",
-                ) if callable(self._capture_frame_for_golden) else None,
+                capture_fn=lambda: self._capture_presence_learning_frame(view_id),
                 crop_fn=lambda frame: self._presence_v2_crop(frame, tool.roi.rect()),
                 default_mode=str((tool.params.values or {}).get("capture_mode_default", "manual")),
                 parent=self,
@@ -4180,12 +4175,29 @@ class GoldenWizard(QDialog):
         self._refresh_presence_v2_learning(tool, row)
         self._update_dirty_state(recipe, view_id)
 
+    def _capture_presence_learning_frame(self, view_id):
+        if not callable(self._capture_frame_for_golden):
+            return None
+        view = self._view_by_id(view_id)
+        frame = self._capture_frame_for_golden(
+            view_id=view_id, trigger_mode_label="presence_v2_learning",
+            image_rotation_override=int(getattr(view, "image_rotation", 0) or 0),
+            capture_request_source="presence_v2_learning",
+        )
+        golden = self._current_golden_image()
+        if frame is not None and golden is not None and frame.shape[:2] != golden.shape[:2]:
+            self._warn("Rozmery snímky nezodpovedajú golden. Skontrolujte rozlíšenie pohľadu pred zberom vzoriek.")
+            return None
+        return frame
+
     @staticmethod
     def _presence_v2_crop(frame: np.ndarray, rect) -> Optional[np.ndarray]:
         if rect is None:
             return None
-        x, y, width, height = rect
+        x, y, width, height = map(int, rect)
         image = np.asarray(frame)
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > image.shape[1] or y + height > image.shape[0]:
+            return None
         if image.ndim == 3:
             image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         return image[max(0, y):max(0, y + height), max(0, x):max(0, x + width)].copy()

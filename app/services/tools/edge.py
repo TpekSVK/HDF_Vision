@@ -49,7 +49,6 @@ class EdgeChangeTool(PairTool):
                 golden_roi = imaging.blur_gaussian_u8(golden_roi, sigma)
                 frame_roi = imaging.blur_gaussian_u8(frame_roi, sigma)
 
-        self._publish_filtered_roi(prepared, frame_roi, "Gaussian blur" if sigma > 1e-6 else "Bez filtrovania")
 
         with time_block("absdiff", timings):
             diff = imaging.absdiff_u8(golden_roi, frame_roi)
@@ -79,8 +78,18 @@ class EdgeChangeTool(PairTool):
         edge_ratio = float(changed_pixels / effective_pixels) if effective_pixels > 0 else 0.0
         mean_diff = float(np.mean(diff_values, dtype=np.float32)) if effective_pixels > 0 else 0.0
 
+        changed_mask = (binary != 0)
+        if prepared.valid_mask is not None:
+            changed_mask &= prepared.valid_mask
+        self._publish_filtered_roi(prepared, changed_mask.astype(np.uint8) * 255, "Maska rozdielov po prahovaní a čistení")
+        largest_limit = max(0, int(thresholds_dict.get("largest_change_max_px", 0)))
+        _, _, components, _ = cv2.connectedComponentsWithStats(changed_mask.astype(np.uint8), connectivity=8)
+        largest_change = int(components[1:, cv2.CC_STAT_AREA].max()) if len(components) > 1 else 0
         edge_ratio_max = float(thresholds_dict.get("edge_ratio_max", 0.05))
         status = "ok" if effective_pixels > 0 and edge_ratio <= edge_ratio_max else ("warn" if effective_pixels == 0 else "nok")
+
+        if effective_pixels > 0 and largest_limit > 0 and largest_change > largest_limit:
+            status = "nok"
 
         latency_ms = (time.perf_counter() - start) * 1000.0
 
@@ -99,6 +108,7 @@ class EdgeChangeTool(PairTool):
             "sigma": sigma,
             "diff_threshold": diff_threshold,
             "edge_ratio_max": edge_ratio_max,
+            "largest_change_max_px": largest_limit,
             "use_morphology": use_morph,
             "morph_open": morph_open,
             "morph_dilate": morph_dilate,
@@ -106,6 +116,8 @@ class EdgeChangeTool(PairTool):
 
         metrics = {
             "edge_ratio": float(round(edge_ratio, 5)),
+            "changed_area_pct": float(round(edge_ratio * 100, 3)),
+            "largest_change_px": largest_change,
             "mean_diff": float(round(mean_diff, 5)),
         }
 

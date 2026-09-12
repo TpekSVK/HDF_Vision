@@ -100,6 +100,8 @@ FIELD_LABELS_SK = {
 }
 
 METRIC_LABELS_SK = {
+    "changed_area_pct": "Zmenená plocha",
+    "largest_change_px": "Najväčšia súvislá chyba",
     "mse": "Stredná štvorcová chyba (MSE)",
     "ssd": "Súčet štvorcov rozdielov (SSD)",
     "ncc": "Podobnosť vzoru (NCC)",
@@ -107,7 +109,7 @@ METRIC_LABELS_SK = {
     "latency_ms": "Čas vyhodnotenia", "area_px": "Plocha",
     "fill_ratio": "Podiel vyplnenej plochy", "effective_pixels": "Počet hodnotených pixelov",
     "mean_abs": "Priemerný absolútny rozdiel", "coverage": "Pokrytie hrany",
-    "edge_ratio": "Podiel zmenených hrán", "max_deviation": "Najväčšia odchýlka",
+    "edge_ratio": "Podiel zmenenej plochy (0–1)", "max_deviation": "Najväčšia odchýlka",
 
     "corr": "Skóre zhody",
     "score": "Skóre",

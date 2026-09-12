@@ -15,33 +15,41 @@ from app.ui.golden_wizard.style import TOOL_CATALOG_STYLE
 _ALL = "__all__"
 _RECOMMENDED = "__recommended__"
 _RECOMMENDED_TYPES = {
-    "locator.template_match", "mold.protection_v1", "presence_absence",
-    "presence.absence_v2", "ssim", "edge_change",
+    "locator.template_match", "presence_absence", "presence.absence_v2",
+    "ssim", "edge_change", "edge_profile_deviation",
 }
 _NAME_SK = {
-    "locator.template_match": "Locator – Template Match",
-    "mold.protection_v1": "Ochrana formy V1",
-    "presence_absence": "Kontrola prítomnosti",
-    "presence.absence_v2": "Kontrola prítomnosti V2",
-    "ssim": "SSIM porovnanie",
-    "edge_change": "Detekcia zmien hrán",
+    "locator.template_match": "Vyhľadanie a zarovnanie vzoru",
+    "mold.protection_v1": "Kontrola prázdnej formy",
+    "presence_absence": "Prítomnosť podľa svetlej/tmavej plochy",
+    "presence.absence_v2": "Naučená kontrola odchýlok (V2)",
+    "ssim": "Podobnosť vzhľadu (SSIM)",
+    "edge_change": "Plocha rozdielov oproti referencii",
     "edge_profile_deviation": "Odchýlka profilu hrany",
-    "light_presence": "Kontrola prítomnosti svetlom",
+    "light_presence": "Otvor – prednastavenie prítomnosti",
     "light_transmission": "Kontrola priepustnosti svetla",
-    "absdiff": "Porovnanie absolútnym rozdielom",
+    "mse": "Rozdiel jasu (MSE)", "ncc": "Podobnosť vzoru (NCC)",
 }
 _CATEGORY_SK = {
-    "locator": "Locator", "presence": "Prítomnosť", "presence / backlight": "Prítomnosť",
-    "similarity": "Porovnanie", "change detection": "Porovnanie",
-    "edge": "Hrany a tvary", "measurement": "Meranie", "inspection": "Meranie",
-    "light": "Svetlo a farba", "color": "Svetlo a farba",
-    "ocr": "OCR a kódy", "code": "OCR a kódy",
-    "ai": "AI / Detekcia", "detection": "AI / Detekcia", "general": "Ostatné",
+    "locator": "Základné", "presence": "Základné", "similarity": "Základné",
+    "change detection": "Základné", "edge": "Základné", "measurement": "Základné",
 }
-_CATEGORY_ORDER = [
-    "Locator", "Prítomnosť", "Porovnanie", "Hrany a tvary", "Meranie",
-    "Svetlo a farba", "OCR a kódy", "AI / Detekcia", "Ostatné",
-]
+_CATEGORY_ORDER = ["Základné", "Prednastavenia", "Špecializované", "Pokročilé", "Ostatné"]
+_CATEGORY_BY_TYPE = {
+    "mse": "Pokročilé", "ncc": "Pokročilé", "light_presence": "Prednastavenia",
+    "mold.protection_v1": "Špecializované", "light_transmission": "Špecializované",
+}
+_HIDDEN_NEW_TYPES = {"absdiff", "ssd", "template_match"}
+
+
+def make_catalog_tool(service, type_id):
+    """New-tool presets only; never rewrite a saved legacy tool."""
+    tool = service.make_default_tool("presence_absence" if type_id == "light_presence" else type_id)
+    if type_id == "light_presence":
+        tool.name = "Kontrola otvoru"
+        tool.params.values.update(polarity="bright", binary_threshold=200, gaussian_blur_kernel=0)
+        tool.thresholds.values.update(min_area_px=100, max_area_px=10000, min_fill_ratio=0.0, max_fill_ratio=1.0)
+    return tool
 
 
 @dataclass(frozen=True)
@@ -73,6 +81,7 @@ class ToolCard(QFrame):
         layout.setSpacing(5)
         title_row = QHBoxLayout()
         title = QLabel(entry.name, self)
+        title.setWordWrap(True)
         title.setProperty("role", "cardTitle")
         title_row.addWidget(title, 1)
         if entry.deprecated:
@@ -82,6 +91,7 @@ class ToolCard(QFrame):
         layout.addLayout(title_row)
         description = QLabel(entry.description or "Popis nástroja nie je dostupný.", self)
         description.setWordWrap(True)
+        description.setToolTip(entry.description)
         description.setMaximumHeight(48)
         description.setProperty("role", "secondary")
         layout.addWidget(description)
@@ -210,6 +220,8 @@ class ToolCatalogDialog(QDialog):
     def _load_entries(self) -> list[_CatalogEntry]:
         entries: list[_CatalogEntry] = []
         for type_id in self._tool_service.list_tool_types():
+            if type_id in _HIDDEN_NEW_TYPES:
+                continue
             try:
                 definition = self._tool_service.get_tool_meta(type_id)
             except KeyError:
@@ -223,8 +235,8 @@ class ToolCatalogDialog(QDialog):
             entries.append(_CatalogEntry(
                 type_id=type_id,
                 name=_NAME_SK.get(type_id, str(getattr(definition, "name", type_id))),
-                description=str(getattr(definition, "description", "") or ""),
-                category_label=self._category_label(raw_category),
+                description=("Prednastaví jednoduchú kontrolu svetlej plochy pre presvietený otvor. Používa nástroj Prítomnosť podľa plochy." if type_id == "light_presence" else str(getattr(definition, "description", "") or "")),
+                category_label=_CATEGORY_BY_TYPE.get(type_id, "Základné" if type_id in _RECOMMENDED_TYPES else self._category_label(raw_category)),
                 supports_roi=bool(getattr(capabilities, "supports_roi", False)),
                 supports_mask=bool(getattr(capabilities, "supports_ignore_mask", False)),
                 deprecated=bool(getattr(definition, "deprecated", False)),

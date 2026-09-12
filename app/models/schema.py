@@ -21,6 +21,9 @@ class ToolSchemaField:
     step: float | None = None
     required: bool = False
     choices: Tuple[Tuple[Any, Any], ...] = ()
+    unit: Optional[str] = None
+    display_scale: float = 1.0
+    display_decimals: int = 4
 
 
 @dataclass(slots=True)

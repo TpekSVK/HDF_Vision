@@ -1,6 +1,7 @@
 """Short explanations from measured values; never changes inspection decisions."""
 import math
 import unicodedata
+from app.utils.tool_labels import tool_display_name
 
 
 def ascii_label(text):
@@ -17,7 +18,7 @@ def nok_label(report):
     kind = str(getattr(tool, 'type', '')).lower()
     if kind == 'template_match':
         kind = 'locator.template_match'
-    name = ascii_label(getattr(tool, 'name', None) or kind)
+    name = ascii_label(tool_display_name(tool))
     # metric, threshold, failure operator, default used by evaluator, unit
     rules = {
         'ssim': [('ssim', 'ssim_min', '<', .92, '%')],
@@ -35,6 +36,8 @@ def nok_label(report):
     }
     checks = []
     active_rules = list(rules.get(kind, []))
+    if kind == "edge_change" and float(limits.get("largest_change_max_px", 0) or 0) > 0:
+        active_rules.append(("largest_change_px", "largest_change_max_px", ">", 0, "px"))
     for flag, metric, threshold, unit in [
         ('fail_area_px', 'anomaly_area', 'total_area_threshold', 'px'),
         ('fail_area_percent', 'anomaly_area_percent', 'max_anomaly_area_percent', 'percent'),
