@@ -76,4 +76,5 @@ Celá regresná sada v Docker hdf_vision:dev: **472 passed**, jediný ImageIO
 deprecation warning. Bez USB prístupu a bez produkčných dát. Zahŕňa kontroléry,
 PIO protokol a firmware simuláciu, tri runtime, vlastníctvo dát, Qt rozhranie,
 Golden Wizard a dva skutočné syntetické GStreamer zdroje.
-Zmeny neboli buildnuté, nasadené, pushnuté ani mergnuté.
+Zmeny sú publikované v PR #358 do dev na výslovný pokyn používateľa.
+Neboli buildnuté ani nasadené; hardvérové overenie zostáva odložené.

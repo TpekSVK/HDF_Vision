@@ -15,7 +15,8 @@ preto umožňuje pridávať ďalšie stanice. Fyzické párovanie urobí použí
 3. A7 nezačať bez nového pokynu. Fyzické kamery/Pico neboli v tomto posedení testované.
 4. Používateľ pri spustení vyberie a overí dvojice v okne Kamery a Pico. Existujúce
    dáta prvej stanice zostávajú /data, ďalšie stanice majú /data/stations/camera_N.
-5. Push/merge ani reštart neboli v tomto posedení vyžiadané alebo vykonané.
+5. Používateľ následne schválil push a merge. Publikácia: PR #358 do dev;
+   stav merge overiť na GitHube. Aplikáciu ani hardvér nereštartovať.
 
 ## Východiskový stav
 
@@ -614,3 +615,13 @@ Ak beží dlhý test, zapísať jeho proces/session a priečinok výsledkov ešt
   spustenie aktualizovaným launcherom a párovanie. Výkon troch fyzických kamier
   nie je testovaný ani garantovaný softvérovou regresiou.
 - Žiadne testové procesy nezostali spustené.
+
+## Publikovanie – PR #358
+
+- Používateľ výslovne schválil push a merge všetkých pripravených zmien.
+- Implementačný commit: f681983 (A1–A6 a nezávislé kamerové stanice).
+- PR: https://github.com/TpekSVK/HDF_Vision/pull/358, cieľ dev.
+- Záverečné overenie kódu: 472 passed; od tohto behu sa menila iba dokumentácia
+  a komentár. Merge nadväzuje po kontrolách GitHubu. Staršie lokálne stavy vyššie
+  sú historické checkpointy, nie pokyn opätovne publikovať implementáciu.
+- A7, fyzické párovanie, build, nasadenie a reštart zostávajú nevykonané.
