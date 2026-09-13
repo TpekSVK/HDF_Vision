@@ -157,8 +157,6 @@ class ViewConfigDialog(QDialog):
         self._exposure_notice.setStyleSheet("color: #a05a00;")
         self._gain_edit = QLineEdit(camera_group)
         self._gain_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
-        self._device_edit = QLineEdit(camera_group)
-        self._device_edit.setPlaceholderText("/dev/video0 (voliteľné)")
         self._gamma_edit = QLineEdit(camera_group)
         self._gamma_edit.setPlaceholderText("Prázdne prevezme nastavenie kamery")
         self._brightness_edit = QLineEdit(camera_group)
@@ -174,7 +172,6 @@ class ViewConfigDialog(QDialog):
             (self._sharpness_edit, self._supports_sharpness),
         ):
             field.setVisible(supported)
-        self._add_form_row(camera_form, "Zariadenie kamery:", self._device_edit)
         exposure_hint = (
             "Skutočná expozícia snímača, spoločná pre MASTER aj TRIGGER. "
             "Vyberte jednu z overených hodnôt. Časovanie impulzov a blesku v TRIGGER nastaví aplikácia."
@@ -574,8 +571,6 @@ class ViewConfigDialog(QDialog):
         if isinstance(profile_obj, ViewCameraProfile):
             if self._supports_gain and profile_obj.gain_db is not None:
                 self._gain_edit.setText(str(profile_obj.gain_db))
-            if profile_obj.device_id:
-                self._device_edit.setText(str(profile_obj.device_id))
             if self._supports_gamma and profile_obj.gamma is not None:
                 self._gamma_edit.setText(str(profile_obj.gamma))
             if self._supports_brightness and profile_obj.brightness is not None:
@@ -831,9 +826,6 @@ class ViewConfigDialog(QDialog):
                 if value is not None and value != "":
                     data[key] = value
 
-        device_id = self._device_edit.text().strip()
-        if device_id:
-            data["device_id"] = device_id
         if exposure_us is not None:
             data["exposure_us"] = exposure_us
         if self._supports_gain and gain_db is not None:

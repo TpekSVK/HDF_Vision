@@ -208,7 +208,7 @@ class MainWindow(QMainWindow):
         # Recipe management actions are placed in the SETUP dashboard below.
         self.btn_new = QPushButton("Nový")
         self.btn_ren = QPushButton("Premenovať")
-        self.btn_del = QPushButton("Zmazať")
+        self.btn_del = QPushButton("Zmazať recept…")
         self.btn_new.clicked.connect(self.on_recipe_new)
         self.btn_ren.clicked.connect(self.on_recipe_rename)
         self.btn_del.clicked.connect(self.on_recipe_delete)
@@ -2537,20 +2537,44 @@ class MainWindow(QMainWindow):
         self._update_sidebar(view_id=self._active_view_id)
 
     def on_recipe_delete(self):
-        from PySide6.QtWidgets import QMessageBox
-        name = self.current_recipe_name()
-        if name == "default":
-            QMessageBox.warning(self, "Upozornenie", "Recept 'default' nie je možné zmazať.")
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        current = self.current_recipe_name()
+        names = [name for name in self.recipes.list() if name != "default"]
+        if not names:
+            QMessageBox.information(self, "Zmazať recept", "Nie sú dostupné žiadne recepty na zmazanie. Recept 'default' je chránený.")
             return
-        r = QMessageBox.question(self, "Zmazať recept", f"Naozaj zmazať '{name}'?")
-        if r != QMessageBox.Yes:
+        name, accepted = QInputDialog.getItem(
+            self, "Zmazať recept", "Recept na zmazanie (aj nepodporovaný):",
+            names, names.index(current) if current in names else 0, False,
+        )
+        if not accepted or name not in names:
             return
-        if not authorize_recipe_write(self, self.security):
+        answer = QMessageBox.question(
+            self, "Zmazať recept",
+            f"Naozaj zmazať recept '{name}'?\n\n"
+            "Odstránia sa jeho Golden snímky, učenie a záznamy výsledkov v databáze. "
+            "Túto akciu nemožno vrátiť.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes or not authorize_recipe_write(self, self.security):
             return
-        self.recipes.delete(name)
-        self._refresh_recipe_list()
+        try:
+            if name == current:
+                # Validate the fallback before removing the active recipe.
+                from app.services.tool_service import ToolService
+                ToolService(base_dir=self.recipes.base).load_recipe("default")
+            self.recipes.delete(name)
+        except Exception as exc:
+            QMessageBox.critical(self, "Zmazanie receptu zlyhalo", str(exc))
+            return
+        if name != current:
+            # Unsupported recipes can be deleted without ever loading them.
+            self._refresh_recipe_list()
+            return
         self.recipes.load("default")
         self.tool = self.recipes.tool
+        self._refresh_recipe_list()
         self.setup_recipe_name.setText("default")
         self._persist_last_recipe("default")
         self._refresh_views()
