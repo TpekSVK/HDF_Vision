@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -23,15 +24,24 @@ from app.services.modbus_service import ModbusConfig, ModbusService
 class ModbusWizard(QDialog):
     """Modal dialog used to configure Modbus TCP mapping for the relay module."""
 
-    def __init__(self, modbus: ModbusService, parent: QWidget | None = None) -> None:
+    def __init__(self, modbus: ModbusService, parent: QWidget | None = None, *, peer_configs=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Sprievodca Modbus")
+        self._peer_configs = peer_configs or (lambda: [])
         self._modbus = modbus
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(200)
         self._poll_timer.timeout.connect(self._refresh_inputs_status)
         self._init_ui()
-        self._load_from_config(modbus.get_config())
+        initial = modbus.get_config()
+        self._invalid_saved_outputs = any(
+            not -1 <= int(getattr(initial, field)) <= 7
+            for field in ("ok_coil", "nok_coil", "heartbeat_coil"))
+        self._load_from_config(initial)
+        for spin in (self.spin_ok, self.spin_nok, self.spin_heartbeat, self.spin_port, self.spin_unit):
+            spin.valueChanged.connect(self._refresh_output_warning)
+        self.txt_host.textChanged.connect(self._refresh_output_warning)
+        self._refresh_output_warning()
 
     # ------------------------------------------------------------------
     def _init_ui(self) -> None:
@@ -118,6 +128,8 @@ class ModbusWizard(QDialog):
         self.spin_ok = self._coil_spin(box, default=0)
         self.spin_nok = self._coil_spin(box, default=1)
         self.spin_heartbeat = self._coil_spin(box, default=2)
+        for spin in (self.spin_ok, self.spin_nok, self.spin_heartbeat):
+            spin.setMaximum(7)
         self.spin_pulse_len = QSpinBox(box)
         self.spin_pulse_len.setRange(10, 10000)
         self.spin_pulse_len.setValue(200)
@@ -126,9 +138,9 @@ class ModbusWizard(QDialog):
         self.spin_heartbeat_period.setValue(1000)
 
         rows = [
-            ("OK coil address:", self.spin_ok),
-            ("NOK coil address:", self.spin_nok),
-            ("Heartbeat coil address:", self.spin_heartbeat),
+            ("Adresa výstupu OK:", self.spin_ok),
+            ("Adresa výstupu NOK:", self.spin_nok),
+            ("Adresa výstupu heartbeat:", self.spin_heartbeat),
             ("Pulse length OK/NOK (ms):", self.spin_pulse_len),
             ("Heartbeat period (ms):", self.spin_heartbeat_period),
         ]
@@ -147,6 +159,13 @@ class ModbusWizard(QDialog):
         for btn in (btn_ok, btn_nok, btn_hb):
             btn_row.addWidget(btn)
         grid.addLayout(btn_row, len(rows), 0, 1, 2)
+        hint = QLabel("8 výstupov: adresy 0–7 zodpovedajú relé 1–8. −1 = vypnuté.", box)
+        hint.setWordWrap(True)
+        grid.addWidget(hint, len(rows) + 1, 0, 1, 2)
+        self.lbl_output_warning = QLabel(box)
+        self.lbl_output_warning.setWordWrap(True)
+        self.lbl_output_warning.setStyleSheet("color: #e6a23c;")
+        grid.addWidget(self.lbl_output_warning, len(rows) + 2, 0, 1, 2)
         return box
 
     def _build_inputs_group(self) -> QGroupBox:
@@ -184,7 +203,7 @@ class ModbusWizard(QDialog):
         spin = QSpinBox(parent)
         spin.setRange(-1, 65535)
         spin.setValue(default)
-        spin.setSpecialValueText("Disabled (-1)")
+        spin.setSpecialValueText("Vypnuté (-1)")
         return spin
 
     # ------------------------------------------------------------------
@@ -196,9 +215,9 @@ class ModbusWizard(QDialog):
         self.spin_retry.setValue(int(config.retry_count))
         self.chk_enable.setChecked(bool(config.enabled))
 
-        self.spin_ok.setValue(int(config.ok_coil))
-        self.spin_nok.setValue(int(config.nok_coil))
-        self.spin_heartbeat.setValue(int(config.heartbeat_coil))
+        self.spin_ok.setValue(int(config.ok_coil) if -1 <= int(config.ok_coil) <= 7 else -1)
+        self.spin_nok.setValue(int(config.nok_coil) if -1 <= int(config.nok_coil) <= 7 else -1)
+        self.spin_heartbeat.setValue(int(config.heartbeat_coil) if -1 <= int(config.heartbeat_coil) <= 7 else -1)
         self.spin_pulse_len.setValue(int(config.pulse_length_ms))
         self.spin_heartbeat_period.setValue(int(config.heartbeat_period_ms))
         addresses = list(config.request_di_addresses or [])
@@ -270,8 +289,44 @@ class ModbusWizard(QDialog):
             else:
                 self._set_status(lbl_status, "OFF", ok=True)
 
+    def _output_conflicts(self):
+        cfg = self._collect_config()
+        key = lambda c: (c.host.strip().lower(), c.port, c.unit_id)
+        fields = (("ok_coil", "OK"), ("nok_coil", "NOK"), ("heartbeat_coil", "heartbeat"))
+        used = {}
+        for field, label in fields:
+            address = getattr(cfg, field)
+            if address >= 0:
+                used.setdefault(address, []).append(f"táto kamera: {label}")
+        for name, peer in self._peer_configs():
+            if key(peer) != key(cfg):
+                continue
+            for field, label in fields:
+                address = getattr(peer, field)
+                if address in used:
+                    suffix = " (Modbus vypnutý)" if not peer.enabled else ""
+                    used[address].append(f"{name}: {label}{suffix}")
+        return [f"Relé {address + 1} (adresa {address}): {', '.join(labels)}"
+                for address, labels in sorted(used.items()) if len(labels) > 1]
+
+    def _refresh_output_warning(self, *_args):
+        conflicts = self._output_conflicts()
+        self.lbl_output_warning.setText(
+            "Výstup je už priradený:\n" + "\n".join(conflicts) +
+            "\nSpoločné použitie môže ovplyvniť impulzy. Uloženie je povolené."
+            if conflicts else "")
+        if self._invalid_saved_outputs:
+            self.lbl_output_warning.setText(
+                "Pôvodná adresa mimo rozsahu 0–7 bola v tomto formulári vypnutá. "
+                "Pred uložením skontrolujte výstupy.\n" + self.lbl_output_warning.text())
+
     def _on_accept(self) -> None:
         cfg = self._collect_config()
+        conflicts = self._output_conflicts()
+        if conflicts:
+            QMessageBox.warning(self, "Spoločné použitie výstupu",
+                "Výstup je už priradený:\n" + "\n".join(conflicts) +
+                "\n\nSpoločné použitie môže ovplyvniť impulzy. Nastavenie sa uloží.")
         self._modbus.set_config(cfg, persist=True)
         self.accept()
 
