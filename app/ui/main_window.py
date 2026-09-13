@@ -1241,7 +1241,8 @@ class MainWindow(QMainWindow):
 
     def open_modbus_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
-        dlg = ModbusWizard(self.modbus, self)
+        dlg = ModbusWizard(self.modbus, self,
+            peer_configs=getattr(self, "modbus_peer_configs", None))
         dlg.resize(760, 640)
         dlg.exec()
         self._apply_capture_mode(ensure_runtime_ready=True)

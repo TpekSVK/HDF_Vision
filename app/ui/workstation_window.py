@@ -57,6 +57,9 @@ class WorkstationWindow(QMainWindow):
             workspace = self.workspace_factory(camera=camera, pico=pico,
                 data_root=binding.data_root(self.data_root), camera_id=binding.id,
                 pico_id=binding.pico_serial, station_name=binding.name, host_power_action=self.request_power_action)
+            workspace.modbus_peer_configs = lambda current=workspace: [
+                (peer.station_name, peer.modbus.get_config())
+                for peer in self.workspaces if peer is not current]
             workspace.setWindowFlags(Qt.Widget)
             workspace.station_closed.connect(self._station_closed)
             self.workspaces.append(workspace)
