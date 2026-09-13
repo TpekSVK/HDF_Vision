@@ -757,9 +757,6 @@ class LocatorROIEditor(ROIEditor):
         self._locator_syncing = True
         try:
             self.set_roi_data(self._areas.get(target) or {})
-            self._view._shape_history.clear()
-            self._view._shape_redo.clear()
-            self._view.historyChanged.emit()
             self._view.set_interaction_mode(InteractionMode.SELECT)
         finally:
             self._locator_syncing = False
