@@ -38,11 +38,13 @@ class PicoService:
         self,
         *,
         port: str | None = None,
+        port_resolver=None,
         baudrate: int = 115200,
         timeout_s: float = 0.35,
         write_timeout_s: float = 0.35,
     ) -> None:
         self._logger = logging.getLogger(__name__)
+        self._port_resolver = port_resolver
         self._configured_port = (port or "").strip() or None
         self._baudrate = int(baudrate)
         self._timeout_s = max(0.05, float(timeout_s))
@@ -191,7 +193,13 @@ class PicoService:
                 self._available = True
                 return True
 
-            for candidate in self._candidate_ports():
+            try:
+                candidates = self._candidate_ports()
+            except (RuntimeError, OSError) as exc:
+                self.last_error = str(exc)
+                self._available = False
+                return False
+            for candidate in candidates:
                 try:
                     dev = serial.Serial(
                         candidate,
@@ -437,6 +445,8 @@ class PicoService:
             reader.join(timeout=max(1.0, self._timeout_s * 2))
 
     def _candidate_ports(self) -> list[str]:
+        if self._port_resolver is not None:
+            return [self._port_resolver()]
         if self._configured_port:
             return [self._configured_port]
         return sorted(glob.glob("/dev/ttyACM*"))

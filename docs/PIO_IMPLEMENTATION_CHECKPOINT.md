@@ -138,3 +138,12 @@ Lokálna vetva codex/catalog-and-learning-roi: zjednodušený katalóg, prednast
 otvoru, nové limity/percentá/maska rozdielov a oprava vynútenej 0° rotácie zberu
 učenia ochrany formy/V2. 65 testov prešlo. Podrobnosti a nutnosť opätovného zberu
 nesprávnych starých vzoriek: CATALOG_AND_LEARNING_ROI_SK.md. Bez push/merge.
+
+## Nový pracovný smer: architektúra – 2026-09-12
+
+Autoritatívny plán ďalších posedení je teraz docs/architecture/CHECKLIST_SK.md
+ a aktuálny bod pokračovania docs/architecture/CHECKPOINT_SK.md.
+Používateľ schválil odstránenie rozšíreného editora, úplné zrušenie Jetson GPIO
+ a odmietanie starých receptov namiesto spätnej kompatibility. Všetky funkčné PR
+#352–357 sú už mergnuté; staršie záznamy „bez merge“ sú historické.
+Prípravné posedenie upravilo iba dokumentáciu, runtime refaktoring ešte nezačal.

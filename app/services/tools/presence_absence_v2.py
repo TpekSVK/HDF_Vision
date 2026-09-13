@@ -9,13 +9,14 @@ from typing import Any, Dict
 import numpy as np
 
 from app.models.schema import ToolParams, ToolThresholds
+from app.models.learning_contract import SAMPLE_PREPARATION_VERSION
 from app.services.presence_absence_v2_service import (
     compute_roi_hash,
     evaluate_sample,
     load_model,
     sensitivity_to_score_threshold,
 )
-from app.services.tool_service import ToolRunResult
+from app.services.tool_contracts import ToolRunResult
 from app.services.tools.common import PairTool
 
 
@@ -47,9 +48,19 @@ class PresenceAbsenceV2Tool(PairTool):
         self._ensure_pair_cache(frame, params_dict, thresholds_dict)
         prepared = self._prepare_pair(golden, frame, context)
 
-        model_ready = bool(params_dict.get("reference_model_ready", False))
-        assets_dir = Path(str(params_dict.get("reference_assets_dir", "") or ""))
-        model = load_model(assets_dir / "model") if assets_dir else None
+        model_ready = bool(params_dict.get("reference_model_ready", False)) and not bool(
+            params_dict.get("reference_model_invalidated", False) or params_dict.get("reference_model_needs_rebuild", False)
+        )
+        alignment_valid = self._prepared_context.get("learning_alignment_valid", True)
+        if not alignment_valid:
+            model_ready = False
+        assets_path = str(params_dict.get("reference_assets_dir", "") or "")
+        model = load_model(Path(assets_path) / "model") if assets_path else None
+        signature = self._prepared_context.get("learning_signature")
+        if model is not None and (not signature or model.stats.get("learning_signature") != signature):
+            model_ready = False
+        if model is not None and model.stats.get("sample_preparation_version") != SAMPLE_PREPARATION_VERSION:
+            model_ready = False
         tool = self._resolve_tool()
         if model_ready and model is not None and tool is not None:
             current_hash = compute_roi_hash(tool.roi, tool.ignore_mask.value)
@@ -91,7 +102,9 @@ class PresenceAbsenceV2Tool(PairTool):
                 debug_artifacts={
                     "type": "presence_absence_v2",
                     "diagnostics": {
-                        "message": "Model nie je pripravený. Najprv vykonajte učenie.",
+                        "message": ("Zarovnanie zlyhalo. Model sa na tejto snímke nevyhodnotil."
+                                    if not alignment_valid else
+                                    "Model chýba alebo nezodpovedá aktuálnemu nastaveniu. Vykonajte nové učenie."),
                         "model_ready": False,
                     },
                     "preview": {"current_sample": prepared.frame_roi},

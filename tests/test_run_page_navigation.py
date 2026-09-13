@@ -7,24 +7,41 @@ from numbers import Integral
 from typing import Any
 
 import pytest
+from app.services.inspection_controller import InspectionController
+
+
+_patches = []
+
+@pytest.fixture(autouse=True)
+def restore_pages():
+    yield
+    while _patches:
+        _patches.pop().undo()
 
 
 def window(mode='RUN', capture_mode='trigger'):
-    tree = ast.parse(Path('app/ui/main_window.py').read_text())
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'MainWindow')
-    names = {'_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger'}
-    cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
-    cls.bases = []; cls.decorator_list = []
+    from app.ui.main_window import MainWindow
+    import app.ui.main_window as module
+    from types import MethodType
     calls = []
     box = SimpleNamespace(Yes=1, No=2, question=lambda *args: 2)
     class History:
         def __init__(self, *args): pass
         def set_production_active(self, value): self.active = value
         def activate(self): calls.append('history')
-    ns = dict(QMessageBox=box, ResultsPage=History, Integral=Integral, Any=Any)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), 'main_window.py', 'exec'), ns)
-    w = ns['MainWindow']()
-    w.mode = mode; w.capture_mode = capture_mode
+    # Replace only dialog/page constructors; exercised methods are normal imports.
+    patches = pytest.MonkeyPatch()
+    patches.setattr(module, 'QMessageBox', box)
+    patches.setattr(module, 'ResultsPage', History)
+    _patches.append(patches)
+    w = SimpleNamespace(mode=mode, capture_mode=capture_mode)
+    for name in ('_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
+                 '_start_production', '_request_runtime_stop', '_dispatch_runtime_stop', '_runtime_completed'):
+        setattr(w, name, MethodType(getattr(MainWindow, name), w))
+    w.inspection = InspectionController()
+    if mode == 'RUN': w.inspection.prepare(lambda: None, lambda: None)
+    w.lbl_status = SimpleNamespace(setText=lambda text: calls.append(('status', text)))
+    w.trigger_rejected = SimpleNamespace(emit=lambda text: calls.append(('rejected', text)))
     w.panel_run = object(); w.panel_setup = object(); w.panel_results = None
     w.stack = SimpleNamespace(page=w.panel_run if mode == 'RUN' else w.panel_setup)
     w.stack.currentWidget = lambda: w.stack.page
@@ -36,18 +53,33 @@ def window(mode='RUN', capture_mode='trigger'):
         b.setEnabled = lambda v: None
         b.setText = lambda v: None
         return b
+    w.chk_filtered_roi = button()
     w.btn_mode_run = button(); w.mode_btn = button(); w.btn_results = button(); w.btn_live = button()
     w.db = SimpleNamespace(db_path='unused'); w._logger = logging.getLogger(__name__)
-    w._exit_run_trigger_session = lambda **kwargs: calls.append('stop')
-    w._enter_run_trigger_session = lambda: calls.append('prepare')
-    w._reset_external_sequence_state = lambda: calls.append('reset_sequence')
-    w._refresh_manual_light = lambda: calls.append('light')
-    w._apply_run_camera_profile = lambda: calls.append('profile')
+    def prepare(*args):
+        calls.extend(['reset_sequence', 'prepare' if capture_mode == 'trigger' else 'master'])
+    w.runtime = SimpleNamespace(capture_mode=capture_mode, prepare=prepare, quiesce=lambda: calls.append('stop' if capture_mode == 'trigger' else 'idle'))
+    w.runtime_worker = SimpleNamespace(busy=False)
+    def submit(kind, work):
+        w.runtime_worker.busy = True
+        try: result, error = work(), None
+        except Exception as exc: result, error = None, exc
+        w.runtime_worker.busy = False
+        w._runtime_completed(kind, result, error)
+        return True
+    w.runtime_worker.submit = submit
+    w._pending_runtime_action = None
+    w._active_inspection_request = None
+    w._runtime_was_live = False
+    w._active_view_id = 'one'
+    w.current_recipe_name = lambda: 'test'
+    w._set_runtime_controls = lambda busy: None
+    w._sync_capture_mode_ui = lambda: None
     w.cam = SimpleNamespace(arm_master_frame=lambda: 'reserved')
-    w.pico = SimpleNamespace(quiesce=lambda: calls.append('idle'), prepare_master=lambda cam: calls.append('master'))
     w.get_capture_mode = lambda: capture_mode
     w.external_triggered = SimpleNamespace(emit=lambda *args: calls.append(('event', args)))
     w.live_enabled = False
+    w._run_timer = SimpleNamespace(stop=lambda: None)
     return w, calls, box
 
 
@@ -59,6 +91,7 @@ def test_history_preserves_external_capture_and_return(capture_mode):
         assert w.mode == 'RUN' and w.panel_results.active
         w._handle_external_trigger('modbus', input_index=2)
         assert calls[-1][0] == 'event'
+        w.inspection.finish(calls[-1][1][1]['inspection_request'])
         w._request_mode('RUN')
         assert w.stack.page is w.panel_run
     assert not any(c in calls for c in ['stop', 'prepare', 'idle', 'master', 'reset_sequence', 'light', 'profile'])
@@ -102,3 +135,61 @@ def test_history_from_setup_does_not_start_production():
     w._request_mode('SETUP')
     assert w.stack.page is w.panel_setup
     assert calls == ['history']
+
+
+def test_setup_waits_for_accepted_cycle_before_idle():
+    w, calls, box = window()
+    request, _ = w.inspection.admit('pico')
+    w.runtime_worker.busy = True
+    w._active_inspection_request = request
+    w._display_inspection_result = lambda result: calls.append('display')
+    box.question = lambda *args: box.Yes
+    w._request_mode('SETUP')
+    assert w.mode == 'SETUP'
+    assert 'stop' not in calls
+    assert w._pending_runtime_action == 'pause'
+    w.runtime_worker.busy = False
+    w._runtime_completed('cycle', {}, None)
+    assert calls.index('display') < calls.index('stop')
+    assert w.inspection.snapshot()['state'] == 'paused'
+    assert w._pending_runtime_action is None
+
+
+def test_pause_covers_admitted_event_still_waiting_for_qt_delivery():
+    w, calls, box = window()
+    request, _ = w.inspection.admit('pico')
+    box.question = lambda *args: box.Yes
+    w._request_mode('SETUP')
+    assert not w.runtime_worker.busy
+    assert 'stop' not in calls
+    assert w._pending_runtime_action == 'pause'
+    assert w.inspection.owns(request)
+
+
+def test_close_waits_for_capture_then_quiesces_and_closes():
+    w, calls, box = window()
+    request, _ = w.inspection.admit('pico')
+    w.runtime_worker.busy = True
+    w._active_inspection_request = request
+    w._display_inspection_result = lambda result: calls.append('display')
+    w.runtime.shutdown = lambda: calls.extend(['idle', 'hardware_closed'])
+    w.close = lambda: calls.append('window_closed')
+    w._request_runtime_stop(close=True)
+    assert 'hardware_closed' not in calls
+    w.runtime_worker.busy = False
+    w._runtime_completed('cycle', {}, None)
+    assert calls.index('display') < calls.index('idle') < calls.index('hardware_closed') < calls.index('window_closed')
+    assert w.inspection.snapshot()['state'] == 'closed'
+
+
+def test_display_error_does_not_strand_controller_or_pending_stop():
+    w, calls, box = window()
+    request, _ = w.inspection.admit('manual')
+    w._active_inspection_request = request
+    def fail(_):
+        raise RuntimeError('display failed')
+    w._display_inspection_result = fail
+    w._pending_runtime_action = 'pause'
+    w._runtime_completed('cycle', {}, None)
+    assert 'stop' in calls
+    assert w.inspection.snapshot()['state'] == 'paused'

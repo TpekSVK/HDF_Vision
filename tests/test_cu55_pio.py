@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from app.services.camera_pio import CameraPioMixin
+from app.services.camera_pio import PioCapture
 from app.utils.cu55_pio import cu55_pio_profile
 
 
@@ -27,11 +27,11 @@ def test_unsupported_profile_rejected(args):
         cu55_pio_profile(*args)
 
 
-class Camera(CameraPioMixin):
+class Camera(PioCapture):
     def __init__(self):
         self.width, self.height = 4, 3
         self._logger = logging.getLogger(__name__)
-        self._init_pio_capture()
+        super().__init__(SimpleNamespace(width=self.width, height=self.height, _logger=self._logger, stream=SimpleNamespace()))
 
 
 def burst(cam, frames):
@@ -78,7 +78,7 @@ def test_confirmed_mode_is_not_written_again():
     writes = []
     hid = SimpleNamespace(timeout_s=.25, get_stream_mode=lambda: 1,
                           set_stream_mode=writes.append)
-    cam._ensure_hid = lambda: hid
+    cam.camera._ensure_hid = lambda: hid
     cam._pio_set_mode(1)
     assert writes == []
 
@@ -88,30 +88,10 @@ def test_unknown_mode_never_causes_blind_trigger_set():
     writes = []
     def fail():
         raise TimeoutError('HID')
-    cam._ensure_hid = lambda: SimpleNamespace(get_stream_mode=fail, set_stream_mode=writes.append)
+    cam.camera._ensure_hid = lambda: SimpleNamespace(get_stream_mode=fail, set_stream_mode=writes.append)
     with pytest.raises(TimeoutError):
         cam._pio_set_mode(1)
     assert writes == []
-
-
-def test_cu55_exposure_units_and_readback(monkeypatch):
-    from app.services.camera_service import CameraService
-    cam = CameraService()
-    cam._camera_model = 'See3CAM_CU55_MH'
-    calls = []
-    monkeypatch.setattr(cam, '_run_v4l2_ctl', lambda arg: calls.append(arg) or True)
-    monkeypatch.setattr(cam, '_read_cu55_exposure', lambda: 10)
-    cam.set_manual_exposure_us(1000)
-    assert calls == ['exposure_time_absolute=10']
-    assert cam.exposure_us == 1000
-    cam._pio_ready = cam._pio_signature()
-    cam.set_manual_exposure_us(1000)
-    assert calls == ['exposure_time_absolute=10']
-    assert cam._pio_ready is not None
-    monkeypatch.setattr(cam, '_read_cu55_exposure', lambda: 9)
-    with pytest.raises(RuntimeError, match='readback'):
-        cam.set_manual_exposure_us(2000)
-    assert cam._pio_ready is None
 
 
 def test_profiles_match_recorded_lab_handoff():
@@ -146,19 +126,19 @@ def test_settling_can_discard_startup_gap_but_never_returns_image():
 @pytest.mark.parametrize('size,fps,reopens', [((1920,1080),60,0),((1280,720),60,1),((640,480),112,1),((2592,1944),30,1)])
 def test_preparation_uses_resolution_specific_stream_lifecycle(size,fps,reopens):
     cam=Camera()
-    cam.width,cam.height=size;cam.fps=fps;cam.pixel_format='Y8'
-    cam.exposure_us=1000;cam.gain_db=0;cam.device='/dev/video0'
-    cam._paused_external=False;cam._pipeline=object();cam._mode='gst'
+    cam.camera.width,cam.camera.height=size;cam.camera.fps=fps;cam.camera.pixel_format='Y8'
+    cam.camera.exposure_us=1000;cam.camera.gain_db=0;cam.camera.device='/dev/video0'
+    cam.camera._paused_external=False;cam.camera.stream._pipeline=object();cam.camera.stream._mode='gst'
     events=[];mode=[0]
     def set_mode(value):mode[0]=value;events.append(('mode',value))
     hid=SimpleNamespace(get_stream_mode=lambda:mode[0],set_stream_mode=set_mode)
-    cam._ensure_hid=lambda:hid
-    cam.is_pipeline_open=lambda:True
-    cam.start=lambda **kwargs:events.append(('start',kwargs['caller']))
+    cam.camera._ensure_hid=lambda:hid
+    cam.camera.is_pipeline_open=lambda:True
+    cam.camera.start=lambda **kwargs:events.append(('start',kwargs['caller']))
     def stop(**kwargs):
-        cam._invalidate_pio();cam._pipeline=object();events.append(('stop',kwargs['caller']))
-    cam.stop=stop
-    cam.set_manual_exposure_us=lambda value:None
+        cam._invalidate_pio();cam.camera.stream._pipeline=object();events.append(('stop',kwargs['caller']))
+    cam.camera.stop=stop
+    cam.camera.set_manual_exposure_us=lambda value:None
     cam._pio_quiet=lambda:None
     cam._pio_wait_master_frames=lambda:events.append(('master_frames',20))
     cam._pio_burst=lambda *args,**kwargs:events.append(('burst',kwargs.get('count',2),kwargs.get('settling',False)))
@@ -182,3 +162,22 @@ def test_pipeline_error_after_two_frames_still_rejects_capture():
         return {'id':1}
     with pytest.raises(RuntimeError,match='GStreamer'):
         cam._pio_burst(SimpleNamespace(fire_pio=fire),cu55_pio_profile(1280,720,60,'Y8',1000))
+
+def test_cu55_exposure_units_and_readback(monkeypatch):
+    from app.services.camera_service import CameraService
+    cam = CameraService()
+    cam._camera_model = 'See3CAM_CU55_MH'
+    calls = []
+    monkeypatch.setattr(cam, '_run_v4l2_ctl', lambda arg: calls.append(arg) or True)
+    monkeypatch.setattr(cam, '_read_cu55_exposure', lambda: 10)
+    cam.set_manual_exposure_us(1000)
+    assert calls == ['exposure_time_absolute=10']
+    assert cam.exposure_us == 1000
+    cam.pio._pio_ready = cam.pio._pio_signature()
+    cam.set_manual_exposure_us(1000)
+    assert calls == ['exposure_time_absolute=10']
+    assert cam.pio._pio_ready is not None
+    monkeypatch.setattr(cam, '_read_cu55_exposure', lambda: 9)
+    with pytest.raises(RuntimeError, match='readback'):
+        cam.set_manual_exposure_us(2000)
+    assert cam.pio._pio_ready is None

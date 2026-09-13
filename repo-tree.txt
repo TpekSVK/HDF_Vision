@@ -1,98 +1,200 @@
-Folder PATH listing
+HDF_Vision — source map (application, tests, Docker, architecture docs)
+Investigation artifacts and runtime data are omitted.
 .
-|   README.md
-|   pyproject.toml
-|   repo-tree.txt
-|   requirements.txt
-|
-+---app
-|   |   __init__.py
-|   |   main.py
-|   |
-|   +---models
-|   |   |   __init__.py
-|   |   |   regions.py
-|   |   |   schema.py
-|   |
-|   +---services
-|   |   |   __init__.py
-|   |   |   camera_service.py
-|   |   |   compare_service.py
-|   |   |   db_service.py
-|   |   |   golden_wizard_logic.py
-|   |   |   gpio_service.py
-|   |   |   live_preview_service.py
-|   |   |   logging_service.py
-|   |   |   mask_utils.py
-|   |   |   recipe_service.py
-|   |   |   retention_service.py
-|   |   |   settings_service.py
-|   |   |   stats_service.py
-|   |   |   storage_service.py
-|   |   |   tool_registry.py
-|   |   |   tool_service.py
-|   |   |   xu_stub.py
-|   |   |
-|   |   \---tools
-|   |       |   __init__.py
-|   |       |   common.py
-|   |       |   edge.py
-|   |       |   light_presence.py
-|   |       |   light_transmission.py
-|   |       |   mse.py
-|   |       |   ncc.py
-|   |       |   ssd.py
-|   |
-|   +---tools
-|   |   |   __init__.py
-|   |   |   light_presence.py
-|   |   |   light_transmission.py
-|   |
-|   +---ui
-|   |   |   __init__.py
-|   |   |   camera_profile_utils.py
-|   |   |   draw_view.py
-|   |   |   gpio_wizard.py
-|   |   |   main_window.py
-|   |   |   results_strip.py
-|   |   |   roi_mask_editor.py
-|   |   |   theme.py
-|   |   |   thresholds_panel.py
-|   |   |   view_strip.py
-|   |   |   view_utils.py
-|   |   |   xu_panel.py
-|   |   |
-|   |   \---golden_wizard
-|   |       |   __init__.py
-|   |       |   form_widgets.py
-|   |       |   golden_wizard.py
-|   |       |   session_settings_dialog.py
-|   |       |   tool_catalog_dialog.py
-|   |       |   tool_edit_dialog.py
-|   |       |   view_config_dialog.py
-|   |
-|   \---utils
-|       |   __init__.py
-|       |   imaging.py
-|       |   overlay.py
-|       |   tool_identity.py
-|
-+---data
-|   |   config.json
-|
-+---docker
-|   |   99-hdf-uvc.rules
-|   |   Dockerfile
-|   |   build.sh
-|   |   run.sh
-|
-\---tests
-    |   test_camera_profile_utils.py
-    |   test_db_service_today_filters.py
-    |   test_light_presence.py
-    |   test_locator_template_match.py
-    |   test_overlay_utils.py
-    |   test_pair_tool_cache.py
-    |   test_recipe_aggregation.py
-    |   test_tool_pipeline.py
-    |   test_view_configuration.py
+├── app
+│   ├── models
+│   │   ├── __init__.py
+│   │   ├── learning_contract.py
+│   │   ├── recipe_contract.py
+│   │   ├── recipe_document.py
+│   │   ├── regions.py
+│   │   └── schema.py
+│   ├── services
+│   │   ├── tools
+│   │   │   ├── __init__.py
+│   │   │   ├── common.py
+│   │   │   ├── edge.py
+│   │   │   ├── edge_profile_deviation.py
+│   │   │   ├── light_transmission.py
+│   │   │   ├── locator_template.py
+│   │   │   ├── mold_protection.py
+│   │   │   ├── mse.py
+│   │   │   ├── ncc.py
+│   │   │   ├── presence_absence.py
+│   │   │   ├── presence_absence_v2.py
+│   │   │   └── ssim.py
+│   │   ├── __init__.py
+│   │   ├── camera_hid_cu55.py
+│   │   ├── camera_pio.py
+│   │   ├── camera_profiles.py
+│   │   ├── camera_service.py
+│   │   ├── camera_stream.py
+│   │   ├── compare_service.py
+│   │   ├── db_service.py
+│   │   ├── frame_coordinates.py
+│   │   ├── golden_wizard_logic.py
+│   │   ├── inspection_controller.py
+│   │   ├── inspection_runtime.py
+│   │   ├── jetson_stats_service.py
+│   │   ├── learning_context.py
+│   │   ├── learning_dataset.py
+│   │   ├── locator_matching.py
+│   │   ├── logging_service.py
+│   │   ├── mask_painting.py
+│   │   ├── mask_utils.py
+│   │   ├── modbus_service.py
+│   │   ├── pairing_verification.py
+│   │   ├── pico_config_service.py
+│   │   ├── pico_service.py
+│   │   ├── presence_absence_v2_service.py
+│   │   ├── recipe_audit_service.py
+│   │   ├── recipe_format.py
+│   │   ├── recipe_service.py
+│   │   ├── results_browser.py
+│   │   ├── retention_service.py
+│   │   ├── roi_geometry.py
+│   │   ├── security_service.py
+│   │   ├── settings_service.py
+│   │   ├── statistical_learning.py
+│   │   ├── stats_service.py
+│   │   ├── storage_service.py
+│   │   ├── tool_contracts.py
+│   │   ├── tool_image_helpers.py
+│   │   ├── tool_pipeline.py
+│   │   ├── tool_registry.py
+│   │   ├── tool_service.py
+│   │   ├── tool_status.py
+│   │   ├── view_aggregation.py
+│   │   ├── view_capture.py
+│   │   ├── view_images.py
+│   │   └── workstation_devices.py
+│   ├── tools
+│   │   ├── __init__.py
+│   │   ├── light_transmission.py
+│   │   ├── mold_protection.py
+│   │   ├── presence_absence.py
+│   │   ├── presence_absence_v2.py
+│   │   └── security_cli.py
+│   ├── ui
+│   │   ├── golden_wizard
+│   │   │   ├── __init__.py
+│   │   │   ├── form_widgets.py
+│   │   │   ├── golden_wizard.py
+│   │   │   ├── presence_v2_sample_capture_dialog.py
+│   │   │   ├── preview_presenter.py
+│   │   │   ├── session_settings_dialog.py
+│   │   │   ├── style.py
+│   │   │   ├── tool_catalog_dialog.py
+│   │   │   ├── tool_config_panel.py
+│   │   │   ├── tools_table.py
+│   │   │   ├── view_config_dialog.py
+│   │   │   └── view_controller.py
+│   │   ├── roi
+│   │   │   ├── __init__.py
+│   │   │   ├── geometry.py
+│   │   │   ├── history.py
+│   │   │   ├── mask_view.py
+│   │   │   ├── rectangle_view.py
+│   │   │   ├── shape_view.py
+│   │   │   └── shared_canvas.py
+│   │   ├── __init__.py
+│   │   ├── debug_overlay_widget.py
+│   │   ├── draw_view.py
+│   │   ├── filtered_roi.py
+│   │   ├── image_canvas.py
+│   │   ├── inspection_worker.py
+│   │   ├── main_window.py
+│   │   ├── modbus_wizard.py
+│   │   ├── pairing_verification_dialog.py
+│   │   ├── password_dialog.py
+│   │   ├── pico_wizard.py
+│   │   ├── recipe_change_log_dialog.py
+│   │   ├── responsive.py
+│   │   ├── results_page.py
+│   │   ├── results_strip.py
+│   │   ├── roi_mask_editor.py
+│   │   ├── theme.py
+│   │   ├── thresholds_panel.py
+│   │   ├── view_strip.py
+│   │   ├── workstation_devices_dialog.py
+│   │   ├── workstation_window.py
+│   │   └── xu_panel.py
+│   ├── utils
+│   │   ├── __init__.py
+│   │   ├── cu55_pio.py
+│   │   ├── imaging.py
+│   │   ├── nok_label.py
+│   │   ├── overlay.py
+│   │   ├── tool_identity.py
+│   │   ├── tool_labels.py
+│   │   └── trigger_timing.py
+│   ├── __init__.py
+│   └── main.py
+├── docker
+│   ├── 99-hdf-uvc.rules
+│   ├── Dockerfile
+│   ├── build.sh
+│   ├── run.sh
+│   └── security.sh
+├── docs
+│   └── architecture
+│       ├── A6_MODULES_SK.md
+│       ├── CHECKLIST_SK.md
+│       ├── CHECKPOINT_SK.md
+│       ├── FRAME_COORDINATES_SK.md
+│       ├── INSPECTION_CONTROLLER_SK.md
+│       ├── LEARNING_CONTEXT_SK.md
+│       ├── MULTI_CAMERA_SK.md
+│       └── RECIPE_FORMAT_SK.md
+├── tests
+│   ├── test_branching_utils.py
+│   ├── test_camera_components.py
+│   ├── test_camera_hid_cu55.py
+│   ├── test_camera_profile_utils.py
+│   ├── test_catalog_learning_update.py
+│   ├── test_cu55_pio.py
+│   ├── test_db_service_today_filters.py
+│   ├── test_edge_profile_deviation.py
+│   ├── test_external_trigger_routing.py
+│   ├── test_filtered_roi.py
+│   ├── test_filtered_roi_canvas.py
+│   ├── test_frame_coordinates.py
+│   ├── test_golden_wizard_trigger_path.py
+│   ├── test_image_canvas.py
+│   ├── test_inspection_controller.py
+│   ├── test_inspection_runtime.py
+│   ├── test_inspection_window_lifecycle.py
+│   ├── test_jetson_stats_service.py
+│   ├── test_learning_context.py
+│   ├── test_locator_template_match.py
+│   ├── test_main_window_pico_trigger.py
+│   ├── test_main_window_pio.py
+│   ├── test_manual_light_ui.py
+│   ├── test_modbus_service_config_inputs.py
+│   ├── test_modbus_service_flash_modes.py
+│   ├── test_multi_camera_runtime.py
+│   ├── test_overlay_utils.py
+│   ├── test_pair_tool_cache.py
+│   ├── test_pico_config_service.py
+│   ├── test_pico_firmware_v4.py
+│   ├── test_pico_pio_protocol.py
+│   ├── test_pico_service.py
+│   ├── test_pico_wizard.py
+│   ├── test_presence_absence.py
+│   ├── test_recipe_aggregation.py
+│   ├── test_recipe_audit.py
+│   ├── test_recipe_format.py
+│   ├── test_run_page_navigation.py
+│   ├── test_run_roi_rotation.py
+│   ├── test_security_service.py
+│   ├── test_single_tool_editor.py
+│   ├── test_slovak_tool_labels.py
+│   ├── test_statistical_learning.py
+│   ├── test_tool_pipeline.py
+│   ├── test_view_config_pio.py
+│   ├── test_view_configuration.py
+│   ├── test_workstation_devices.py
+│   └── test_workstation_window.py
+├── README.md
+├── pyproject.toml
+└── requirements.txt

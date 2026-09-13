@@ -83,3 +83,22 @@ def update_session_settings(**updates: object) -> SessionSettings:
 
     _CURRENT_SETTINGS = replace(_CURRENT_SETTINGS, **normalized)
     return get_session_settings()
+
+
+class SessionSettingsStore:
+    """Station-owned settings; snapshots can safely be passed to its worker."""
+    def __init__(self, logging_path=DEFAULT_LOG_DIR):
+        self._settings = SessionSettings(logging_path=Path(logging_path))
+
+    def get_session_settings(self):
+        return replace(self._settings)
+
+    def update_session_settings(self, **updates):
+        allowed = set(SessionSettings.__dataclass_fields__)
+        unknown = set(updates) - allowed
+        if unknown:
+            raise KeyError(f'Unsupported session setting(s): {sorted(unknown)}')
+        values = {key: _normalize_path(value) if key == 'logging_path' else _to_bool(value)
+                  for key, value in updates.items()}
+        self._settings = replace(self._settings, **values)
+        return self.get_session_settings()

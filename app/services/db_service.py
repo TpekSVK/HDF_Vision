@@ -18,13 +18,6 @@ CREATE TABLE IF NOT EXISTS recipes (
   draft_updated_at TIMESTAMP,
   published_at TIMESTAMP
 );
-CREATE TABLE IF NOT EXISTS thresholds (
-  recipe_id INTEGER NOT NULL,
-  key TEXT NOT NULL,
-  value REAL NOT NULL,
-  PRIMARY KEY (recipe_id, key),
-  FOREIGN KEY (recipe_id) REFERENCES recipes(id) ON DELETE CASCADE
-);
 CREATE TABLE IF NOT EXISTS results (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts_ms INTEGER NOT NULL,
@@ -74,6 +67,10 @@ class DbService:
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._init_schema()
         self._table_columns_cache: dict[str, set[str]] = {}
+
+    def close(self):
+        """Close the connection on the thread which created this service."""
+        self._conn.close()
 
     def _init_schema(self):
         cur = self._conn.cursor()
@@ -146,57 +143,11 @@ class DbService:
         cur.execute("DELETE FROM recipes WHERE name=?", (name,))
         self._conn.commit()
 
-    # -------- recipe json (tools etc.) --------
-    def _recipe_json_path(self, name: str) -> Path:
-        return self.recipes_base / name / "recipe.json"
-
-    def load_recipe_json(self, name: str) -> Dict[str, Any]:
-        path = self._recipe_json_path(name)
-        if not path.exists():
-            return {}
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-
-    def save_recipe_json(self, name: str, data: Dict[str, Any]) -> Path:
-        path = self._recipe_json_path(name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        serialized = json.dumps(data, ensure_ascii=False, indent=2)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(serialized)
-        self._write_backup(name, serialized)
-        return path
-
-    def get_recipe_tools(self, name: str) -> List[Dict[str, Any]]:
-        data = self.load_recipe_json(name)
-        tools = data.get("tools", [])
-        return list(tools) if isinstance(tools, list) else []
-
-    def set_recipe_tools(self, name: str, tools: List[Dict[str, Any]]) -> Path:
-        data = self.load_recipe_json(name)
-        data["tools"] = list(tools)
-        return self.save_recipe_json(name, data)
-
     def recipe_id(self, name: str) -> Optional[int]:
         cur = self._conn.cursor()
         cur.execute("SELECT id FROM recipes WHERE name=?", (name,))
         r = cur.fetchone()
         return r[0] if r else None
-
-    # -------- thresholds --------
-    def set_thresholds(self, recipe_id: int, th: Dict[str, float]):
-        cur = self._conn.cursor()
-        for k, v in th.items():
-            cur.execute(
-                "INSERT INTO thresholds(recipe_id, key, value) VALUES (?,?,?) "
-                "ON CONFLICT(recipe_id, key) DO UPDATE SET value=excluded.value",
-                (recipe_id, k, float(v)),
-            )
-        self._conn.commit()
-
-    def get_thresholds(self, recipe_id: int) -> Dict[str, float]:
-        cur = self._conn.cursor()
-        cur.execute("SELECT key, value FROM thresholds WHERE recipe_id=?", (recipe_id,))
-        return {k: float(v) for (k, v) in cur.fetchall()}
 
     # -------- results --------
     def insert_result(
@@ -462,16 +413,6 @@ class DbService:
             for r in rows:
                 w.writerow(r)
         return out_path
-
-    def _write_backup(self, name: str, serialized: str) -> None:
-        try:
-            backup_dir = self.db_path.parent / "tmp" / "recipes"
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            backup_path = backup_dir / f"{name}_draft.json"
-            with open(backup_path, "w", encoding="utf-8") as backup_file:
-                backup_file.write(serialized)
-        except Exception as exc:
-            print(f"[DbService] Failed to write draft backup for {name}: {exc}")
 
     def _ensure_indices(self):
         cur = self._conn.cursor()

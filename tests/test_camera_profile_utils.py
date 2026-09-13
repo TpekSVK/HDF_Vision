@@ -8,14 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:  # pragma: no cover - test environment shim
     sys.path.insert(0, str(ROOT))
 
-if "app.utils.imaging" not in sys.modules:  # pragma: no cover - test shim
-    imaging_stub = types.ModuleType("app.utils.imaging")
-    imaging_stub.encode_mask_to_blob = lambda value: value
-    imaging_stub.decode_mask_from_blob = lambda value: value
-    sys.modules["app.utils.imaging"] = imaging_stub
 
 from app.models.schema import ViewCameraProfile
-from app.ui.camera_profile_utils import (
+from app.services.camera_profiles import (
     apply_camera_state,
     apply_view_camera_profile,
     snapshot_camera_state,

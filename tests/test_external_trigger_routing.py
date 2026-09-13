@@ -5,33 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 
-def _load_harness():
-    tree = ast.parse(Path("app/ui/main_window.py").read_text(encoding="utf-8"))
-    main_window = next(
-        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "MainWindow"
-    )
-    names = {"_resolve_external_trigger_view", "_reset_external_sequence_state"}
-    methods = [
-        node for node in main_window.body
-        if isinstance(node, ast.FunctionDef) and node.name in names
-    ]
-    harness = ast.ClassDef("RoutingHarness", [], [], methods, [])
-    module = ast.fix_missing_locations(ast.Module(body=[harness], type_ignores=[]))
-    namespace = {"Any": object, "Integral": Integral}
-    exec(compile(module, "app/ui/main_window.py", "exec"), namespace)
-    return namespace["RoutingHarness"]
-
-
-RoutingHarness = _load_harness()
+from app.services.inspection_runtime import InspectionRuntime as RoutingHarness
 
 
 def _window(*, enabled=(1, 3, 4, 5), mode="RUN"):
-    window = RoutingHarness()
+    window = RoutingHarness.__new__(RoutingHarness)
     window.mode = mode
     window._logger = logging.getLogger("test.external.routing")
     window.pico_config = SimpleNamespace(is_input_enabled=lambda value: value in enabled)
     window._external_sequence_statuses = {}
-    window._reset_external_sequence_state()
+    window._external_sequence_index = {"pico": 0, "modbus": 0}
+    window._external_sequence_statuses = {}
     return window
 
 
@@ -128,6 +112,7 @@ def test_setup_events_do_not_select_or_advance_and_recipe_reset_starts_first():
 
     window.mode = "RUN"
     assert _name(window._resolve_external_trigger_view(view_specs=specs, source="pico", input_index=1)) == "First"
-    window._reset_external_sequence_state()  # recipe activation
+    window._external_sequence_index = {"pico": 0, "modbus": 0}
+    window._external_sequence_statuses = {}  # recipe activation
     replacement = [_spec("RecipeB1", "pico"), _spec("RecipeB2", "pico")]
     assert _name(window._resolve_external_trigger_view(view_specs=replacement, source="pico", input_index=1)) == "RecipeB1"

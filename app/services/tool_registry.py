@@ -19,7 +19,6 @@ from app.models.schema import (
     ToolSchemaField,
     ToolThresholds,
 )
-from app.tools.light_presence import LightPresenceCheckTool
 from app.tools.light_transmission import LightTransmissionCheckTool
 from app.tools.mold_protection import MoldProtectionV1Tool
 from app.tools.presence_absence import PresenceAbsenceCheckTool
@@ -88,7 +87,6 @@ class ToolRegistry:
 
     _definitions: Dict[str, ToolDefinition] = {}
     _factories: Dict[str, Callable[[], "ITool"]] = {}
-    _aliases: Dict[str, str] = {}
 
     _SUPPORTED_FIELD_TYPES = {"int", "float", "bool", "enum", "roi"}
 
@@ -117,30 +115,13 @@ class ToolRegistry:
         cls._factories[type_id] = factory
 
     @classmethod
-    def alias(cls, alias_id: str, target_id: str) -> None:
-        cls._aliases[alias_id] = target_id
-
-    @classmethod
-    def list_tool_types(cls, include_aliases: bool = False) -> List[str]:
-        """Return registered tool identifiers.
-
-        By default aliases are excluded so the UI presents each tool only
-        once. Callers that need legacy alias identifiers can opt-in by
-        setting ``include_aliases`` to ``True``.
-        """
-
-        known = set(cls._definitions.keys())
-        if include_aliases:
-            known |= set(cls._aliases.keys())
-        return sorted(known)
-
-    @classmethod
-    def _resolve(cls, type_id: str) -> str:
-        return cls._aliases.get(type_id, type_id)
+    def list_tool_types(cls) -> List[str]:
+        """Return current registered tool identifiers."""
+        return sorted(cls._definitions)
 
     @classmethod
     def get_tool_definition(cls, type_id: str) -> Optional[ToolDefinition]:
-        return cls._definitions.get(cls._resolve(type_id))
+        return cls._definitions.get(type_id)
 
     @classmethod
     def get_tool_schema(cls, type_id: str) -> Dict[str, Dict[str, Any]]:
@@ -165,8 +146,7 @@ class ToolRegistry:
 
     @classmethod
     def create_tool(cls, type_id: str) -> "ITool":
-        resolved = cls._resolve(type_id)
-        factory = cls._factories.get(resolved)
+        factory = cls._factories.get(type_id)
         if factory is None:
             raise KeyError(f"Tool type '{type_id}' is not registered")
         return factory()
@@ -201,7 +181,7 @@ class ToolRegistry:
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
-    from app.services.tool_service import ITool
+    from app.services.tool_contracts import ITool
 
 
 def _log_registered_tools() -> None:
@@ -214,12 +194,13 @@ def _log_registered_tools() -> None:
 
 
 def _register_default_tools() -> None:
-    from app.services import tool_service
-    from app.services.tools import edge, edge_profile_deviation, mse, ncc, ssd
+    from app.services.tools.ssim import SSIMTool
+    from app.services.tools.locator_template import LocatorTemplateMatchTool
+    from app.services.tools import edge, edge_profile_deviation, mse, ncc
 
     ToolRegistry.register(
         "ssim",
-        factory=lambda: tool_service.SSIMTool(),
+        factory=lambda: SSIMTool(),
         meta={
             "name": "Podobnosť vzhľadu (SSIM)",
             "description": "Porovná vzhľad a štruktúru zarovnanej ROI s referenčnou snímkou. Vhodné na tvar a usporiadanie detailov; drobná chyba sa môže vo veľkej ROI stratiť.",
@@ -249,7 +230,7 @@ def _register_default_tools() -> None:
 
     ToolRegistry.register(
         "locator.template_match",
-        factory=lambda: tool_service.LocatorTemplateMatchTool(),
+        factory=lambda: LocatorTemplateMatchTool(),
         meta={
             "name": "Vyhľadanie a zarovnanie vzoru",
             "description": "Nájde vzor a zarovná kontrolovanú snímku. Použite pred porovnávaním, ak sa diel medzi zábermi posúva alebo otáča.",
@@ -420,42 +401,6 @@ def _register_default_tools() -> None:
         },
     )
 
-    ToolRegistry.register(
-        "ssd",
-        factory=lambda: ssd.SSDTool(),
-        meta={
-            "name": "Súčet štvorcov rozdielov (SSD)",
-            "description": "Súčet štvorcov rozdielov v ROI s voliteľným rozmazaním.",
-            "category": "Similarity",
-            "supports_roi": True,
-            "supports_ignore_mask": True,
-            "schema": {
-                "params": {
-                    "preblur_sigma": {
-                        "type": "float",
-                        "default": 0.0,
-                        "min": 0.0,
-                        "max": 10.0,
-                        "step": 0.1,
-                        "description": "Sigma pre Gaussovo vyhladenie pred porovnaním.",
-                    }
-                },
-                "thresholds": {
-                    "ssd_max": {
-                        "type": "float",
-                        "default": 1.0e7,
-                        "min": 0.0,
-                        "description": "Maximálna povolená hodnota súčtu štvorcov rozdielov.",
-                    }
-                },
-            },
-            "metrics_spec": [
-                {"key": "ssd", "unit": None, "priority": 10, "description": "Súčet štvorcov rozdielov (SSD)"},
-                {"key": "mean_abs", "unit": None, "priority": 5, "description": "Priemerný absolútny rozdiel"},
-                {"key": "latency_ms", "unit": "ms", "priority": 1, "description": "Čas behu"},
-            ],
-        },
-    )
 
     ToolRegistry.register(
         "mse",
@@ -532,78 +477,6 @@ def _register_default_tools() -> None:
         },
     )
 
-    ToolRegistry.register(
-        "light_presence",
-        factory=lambda: LightPresenceCheckTool(),
-        meta={
-            "name": "Kontrola svetlej plochy (otvor)",
-            "description": "Kontrola s presvietením prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
-            "category": "Presence / Backlight",
-            "supports_roi": True,
-            "supports_ignore_mask": True,
-            "catalog_label": "Kontrola svetlej plochy (otvor)",
-            "catalog_short": "Binarizácia ROI a meranie plochy bielych pixelov.",
-            "catalog_tooltip": "Kontrola s presvietením prítomnosti otvoru: spočíta percento/počet bielych pixelov v ROI. Nastav prah a min/max plochu.",
-            "schema": {
-                "params": {
-                    "binary_threshold": {
-                        "type": "int",
-                        "default": 200,
-                        "min": 0,
-                        "max": 255,
-                        "step": 1,
-                        "label": "Prah jasu",
-                        "description": "Prahová hodnota pre binarizáciu (0 – 255).",
-                    },
-                    "min_area_px": {
-                        "type": "int",
-                        "default": 100,
-                        "min": 0,
-                        "label": "Minimálna plocha [px]",
-                        "description": "Minimálny počet svetlých pixelov potrebný pre OK.",
-                    },
-                    "max_area_px": {
-                        "type": "int",
-                        "default": 10_000,
-                        "min": 0,
-                        "label": "Maximálna plocha [px]",
-                        "description": "Maximálny počet svetlých pixelov povolený pre OK.",
-                    },
-                    "gaussian_blur_kernel": {
-                        "type": "enum",
-                        "default": 0,
-                        "label": "Gaussovo vyhladenie",
-                        "description": "Voliteľný Gaussovo vyhladenie pred binarizáciou.",
-                        "choices": [
-                            (0, "Vypnuté"),
-                            (3, "3×3"),
-                            (5, "5×5"),
-                        ],
-                    },
-                },
-                "thresholds": {},
-            },
-            "metrics_spec": [
-                {
-                    "key": "area_px",
-                    "unit": "px",
-                    "priority": 10,
-                    "description": "Počet svetlých pixelov",
-                },
-                {
-                    "key": "threshold",
-                    "priority": 5,
-                    "description": "Použitý binárny prah",
-                },
-                {
-                    "key": "latency_ms",
-                    "unit": "ms",
-                    "priority": 1,
-                    "description": "Čas behu",
-                },
-            ],
-        },
-    )
 
     ToolRegistry.register(
         "presence_absence",
@@ -1204,52 +1077,6 @@ def _register_default_tools() -> None:
         },
     )
 
-    ToolRegistry.register(
-        "absdiff",
-        factory=lambda: tool_service.AbsDiffTool(),
-        meta={
-            "name": "Absolútny rozdiel",
-            "description": "Nedokončený starší nástroj – vždy vracia WARN. Nahraďte ho nástrojom Plocha rozdielov oproti referencii.",
-            "category": "Inspection",
-            "supports_roi": True,
-            "supports_ignore_mask": True,
-            "schema": {
-                "params": {},
-                "thresholds": {
-                    "diff_thresh": {"type": "int", "default": 15, "min": 0, "max": 255, "step": 1},
-                    "min_blob_area": {
-                        "type": "int",
-                        "default": 20,
-                        "min": 0,
-                        "max": 1_000_000,
-                        "step": 1,
-                    },
-                    "max_total_area": {
-                        "type": "int",
-                        "default": 2000,
-                        "min": 0,
-                        "max": 10_000_000,
-                        "step": 1,
-                    },
-                    "max_blob_count": {
-                        "type": "int",
-                        "default": 10,
-                        "min": 0,
-                        "max": 10_000,
-                        "step": 1,
-                    },
-                },
-            },
-            "metrics_spec": [
-                {"key": "blob_count", "priority": 9, "description": "Počet blobov"},
-                {"key": "latency_ms", "priority": 1, "description": "Čas behu", "unit": "ms"},
-            ],
-        },
-    )
-
-    ToolRegistry.alias("template_match", "locator.template_match")
-    logger.warning(
-        "Tool 'template_match' is deprecated. Use 'locator.template_match' instead.")
 
     _log_registered_tools()
 

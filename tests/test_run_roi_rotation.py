@@ -1,5 +1,4 @@
 """RUN overlay toggles and refreshes preserve inspection-space orientation."""
-import ast
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Mapping
@@ -7,23 +6,19 @@ from typing import Any, Mapping
 import numpy as np
 import pytest
 
-from app.ui.view_utils import apply_view_image_transform
+from app.services.view_images import apply_view_image_transform
 from app.utils import overlay as overlay_utils
 from app.ui.filtered_roi import compose_filtered_roi
 
 
 def window_for(view, frame):
-    tree = ast.parse(Path('app/ui/main_window.py').read_text())
-    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'MainWindow')
-    names = {'_render_run_overlay_frame', '_on_run_overlay_controls_changed',
-             '_update_live_view', '_set_last_view_frame', '_get_last_frame_for_view',
-             '_view_storage_key', '_clone_frame'}
-    cls.body = [n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name in names]
-    cls.bases = []; cls.decorator_list = []
-    ns = dict(np=np, Any=Any, Mapping=Mapping, overlay_utils=overlay_utils,
-              apply_view_image_transform=apply_view_image_transform, compose_filtered_roi=compose_filtered_roi)
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[cls], type_ignores=[])), 'main_window.py', 'exec'), ns)
-    w = ns['MainWindow']()
+    from types import MethodType
+    from app.ui.main_window import MainWindow
+    w = SimpleNamespace()
+    for name in ('_render_run_overlay_frame', '_on_run_overlay_controls_changed',
+                 '_update_live_view', '_set_last_view_frame', '_get_last_frame_for_view',
+                 '_view_storage_key', '_clone_frame'):
+        setattr(w, name, MethodType(getattr(MainWindow, name), w))
     w._active_view_id = view.id
     w._last_trigger_frames = {view.id: frame.copy()}
     w._last_trigger_frame = frame.copy()

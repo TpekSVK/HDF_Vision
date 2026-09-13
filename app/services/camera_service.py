@@ -1,53 +1,18 @@
 # app/services/camera_service.py
 import os
-import cv2
-import numpy as np
 import threading
 import time
-import queue
 import logging
 import subprocess
 import re
-from dataclasses import dataclass
-from collections import deque
-from collections.abc import Callable
 
 from app.services.camera_hid_cu55 import CU55HID, map_video_to_hidraw, MODE_TRIGGER
-from app.utils.trigger_timing import (
-    get_safe_priming_gap_ms,
-    get_safe_trigger_exposure_abs,
-    get_trigger_frame_time_ms,
-    get_trigger_runtime_fps,
-)
 
-# --- GStreamer (gst-python) je voliteľný, ale odporúčaný na Jetson-e
-_GST_OK = False
-try:
-    import gi
-    gi.require_version("Gst", "1.0")
-    from gi.repository import Gst, GLib
-    Gst.init(None)
-    _GST_OK = True
-except Exception:
-    _GST_OK = False
+from app.services.camera_pio import PioCapture
+from app.services.camera_stream import CameraStream
 
 
-@dataclass(frozen=True)
-class TriggerTiming:
-    master_exposure_ms: float
-    frame_time_ms: float
-    trigger_gap_ms: float
-    priming_gap_ms: float
-    pulse_ms: float
-    effective_period_ms: float
-    timeout_min_ms: float
-    safety_margin_ms: float
-
-
-from app.services.camera_pio import CameraPioMixin
-
-
-class CameraService(CameraPioMixin):
+class CameraService:
 
     """
     Unified capture služba:
@@ -60,8 +25,10 @@ class CameraService(CameraPioMixin):
                  device=None,
                  width=1920,
                  height=1080,
-                 fps=60):
-        # device môže prísť z env (run.sh nastavuje CAM_DEV=/dev/video0|1)
+                 fps=60,
+                 device_resolver=None):
+        # WorkstationWindow supplies an explicit USB serial resolver; standalone callers may supply a path.
+        self._device_resolver = device_resolver
         self.device = device or os.getenv("CAM_DEV", "/dev/video0")
         self.width = int(width)
         self.height = int(height)
@@ -71,24 +38,14 @@ class CameraService(CameraPioMixin):
         self.gain_db = 0
 
         # runtime
-        self._q = queue.Queue(maxsize=5)
-        self._stop = threading.Event()
-        self._t = None
 
         # backend info
-        self._mode = None  # "gst" alebo "v4l2"
-        self._cap = None
 
         # GStreamer objekty
-        self._pipeline = None
-        self._loop = None
 
         # zásobník kandidátov zariadení
-        self.devices = [self.device, "/dev/video0", "/dev/video1"]
+        self.devices = [self.device]
 
-        self._ring = deque(maxlen=5)
-        self._t_ring = None
-        self._stop_ring = threading.Event()
         self._paused_external = False
         self._last_open_args = {"device": self.devices[0] if self.devices else "/dev/video0",
                                 "width": 1920, "height": 1080, "fps": 60, "fourcc": "GREY",
@@ -97,8 +54,6 @@ class CameraService(CameraPioMixin):
         self._logger = logging.getLogger(__name__)
         self._supported_v4l2_controls: set[str] | None = None
         self._camera_model: str | None = None
-        self._active_pipeline_signature: dict[str, object] | None = None
-        self._gst_start_count = 0
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
         self._trigger_session_active = False
@@ -107,73 +62,43 @@ class CameraService(CameraPioMixin):
         self._trigger_capture_active = False
         self._trigger_capture_depth = 0
         self._trigger_state_lock = threading.Lock()
-        self._cap_read_lock = threading.Lock()
-        self._frame_condition = threading.Condition()
-        self._frame_requests = []
-        self._latest_delivery = 0.0
-        self._init_pio_capture()
+        self.stream = CameraStream(self)
+        self.pio = PioCapture(self)
 
-    def arm_master_frame(self):
-        """Reserve the first newly acquired frame, independently of preview reads."""
-        request = {"after": time.monotonic(), "frame": None, "cancelled": False}
-        with self._frame_condition:
-            self._frame_requests.append(request)
-        return request
 
-    def finish_master_frame(self, request):
-        with self._frame_condition:
-            if request["frame"] is None:
-                request["cancelled"] = True
-            self._frame_condition.notify_all()
-
-    def wait_master_frame(self, request, timeout_s=1.0):
-        deadline = time.monotonic() + timeout_s
-        with self._frame_condition:
-            try:
-                while request["frame"] is None and not request["cancelled"]:
-                    remaining = deadline - time.monotonic()
-                    if remaining <= 0:
-                        raise RuntimeError("Čerstvá snímka po Pico CAPTURE nie je dostupná.")
-                    self._frame_condition.wait(remaining)
-                if request["cancelled"]:
-                    raise RuntimeError("Capture skončil alebo sa kamera reštartovala bez čerstvej snímky.")
-                self._logger.info("[MASTER_CAPTURE] fresh frame ready elapsed_ms=%.1f",
-                                  (time.monotonic() - request["after"]) * 1000.0)
-                return request["frame"]
-            finally:
-                self._frame_requests = [item for item in self._frame_requests if item is not request]
-
-    def _publish_master_frame(self, frame, acquired_at):
-        with self._frame_condition:
-            self._latest_delivery = time.monotonic()
-            self._frame_requests = [request for request in self._frame_requests
-                                    if self._latest_delivery - request["after"] < 2.0]
-            for request in self._frame_requests:
-                if request["frame"] is None and acquired_at >= request["after"]:
-                    request["frame"] = frame
-            self._frame_condition.notify_all()
+    def resolve_device(self):
+        if self._device_resolver is None:
+            return self.device
+        resolved = self._device_resolver()
+        if resolved != self.device:
+            self.stream.stop(caller="usb_identity_changed")
+            self.device = resolved
+            self.devices = [resolved]
+            self._supported_v4l2_controls = None
+            self._camera_model = None
+        return resolved
 
     def prepare_master_capture(self):
         """Wait for actual streaming readiness before requesting any light pulse."""
         if self._paused_external:
             self.resume_after_external()
-        self.start(caller="prepare_master_capture")
-        with self._frame_condition:
-            if time.monotonic() - self._latest_delivery < 2.0 / max(1, self.fps):
+        self.stream.start(caller="prepare_master_capture")
+        with self.stream._frame_condition:
+            if time.monotonic() - self.stream._latest_delivery < 2.0 / max(1, self.fps):
                 return
-        request = self.arm_master_frame()
-        self.wait_master_frame(request)
+        request = self.stream.arm_master_frame()
+        self.stream.wait_master_frame(request)
 
     def _log_trigger_cycle_state(self, event: str, **fields: object) -> None:
         payload = {
             "event": event,
             "stream_mode": fields.get("stream_mode"),
-            "pipeline_open": bool(fields.get("pipeline_open", self.is_pipeline_open())),
+            "pipeline_open": bool(fields.get("pipeline_open", self.stream.is_pipeline_open())),
             "trigger_mode": bool(fields.get("trigger_mode", self._is_trigger_mode_active())),
             "preview_paused": bool(fields.get("preview_paused", False)),
             "trigger_primed": bool(fields.get("trigger_primed", self._trigger_primed)),
             "frame_received": bool(fields.get("frame_received", False)),
-            "camera_open": bool(fields.get("camera_open", self._cap is not None or self._pipeline is not None)),
+            "camera_open": bool(fields.get("camera_open", self.stream._cap is not None or self.stream._pipeline is not None)),
             "paused_external": bool(fields.get("paused_external", self._paused_external)),
             "fallback": fields.get("fallback"),
             "note": fields.get("note"),
@@ -191,11 +116,11 @@ class CameraService(CameraPioMixin):
         Preview path je queue/appsink + ring buffer pre UI live náhľad.
         TODO: mixed queue + ring capture ponechať iba do migrácie trigger path na blocking read model.
         """
-        return bool(self._pipeline is not None or self._cap is not None)
+        return bool(self.stream._pipeline is not None or self.stream._cap is not None)
 
     def _is_trigger_path_active(self) -> bool:
         """Trigger path je cap.read() flow pre trigger mode capture."""
-        return bool(self._is_trigger_mode_active() and self.is_pipeline_open())
+        return bool(self._is_trigger_mode_active() and self.stream.is_pipeline_open())
 
     def _set_trigger_capture_active(self, active: bool) -> None:
         with self._trigger_state_lock:
@@ -225,67 +150,6 @@ class CameraService(CameraPioMixin):
         self._logger.debug("trigger_capture_in_progress %s", in_progress)
         return in_progress
 
-    def _normalize_frame_u8(self, frame):
-        """Zjednotená normalizácia frame do uint8 grayscale."""
-        if frame is None:
-            return None
-        if frame.ndim == 3 and frame.shape[2] == 3:
-            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        elif frame.ndim == 3 and frame.shape[2] == 1:
-            frame = frame[:, :, 0]
-
-        if frame.dtype == np.uint16:
-            maxv = int(frame.max())
-            if maxv <= 0:
-                return np.zeros_like(frame, dtype=np.uint8)
-            if maxv <= 1023:
-                return (frame >> 2).astype(np.uint8)
-            if maxv <= 4095:
-                return (frame >> 4).astype(np.uint8)
-            return cv2.convertScaleAbs(frame, alpha=255.0 / 65535.0)
-
-        if frame.dtype != np.uint8:
-            return cv2.convertScaleAbs(frame)
-        return frame
-
-    def _pipeline_signature(self, *, device: str | None = None) -> dict[str, object]:
-        dev = device or self.device
-        return {
-            "device": str(dev or ""),
-            "width": int(self.width),
-            "height": int(self.height),
-            "fps": int(self.fps),
-            "pixel_format": str(self.pixel_format or "Y8").upper(),
-        }
-
-    def _pipeline_caps(self, signature: dict[str, object]) -> str:
-        return (
-            f"format={signature.get('pixel_format')},"
-            f"{signature.get('width')}x{signature.get('height')}@{signature.get('fps')}"
-        )
-
-    def gst_start_count(self) -> int:
-        return int(self._gst_start_count)
-
-    def _log_start_pipeline(self, signature: dict[str, object], caller: str) -> None:
-        self._logger.info(
-            "start_pipeline(requested_device=%s, requested_caps=%s, caller=%s)",
-            signature.get("device"),
-            self._pipeline_caps(signature),
-            caller,
-        )
-
-    def _log_reuse_existing_pipeline(self, caller: str) -> None:
-        self._logger.info("reuse_existing_pipeline(caller=%s)", caller)
-
-    def _log_stop_pipeline(self, caller: str) -> None:
-        self._logger.info("stop_pipeline(caller=%s)", caller)
-
-    def _log_latest_frame_used(self, caller: str) -> None:
-        self._logger.info("latest_frame_used(caller=%s)", caller)
-
-    def is_pipeline_open(self) -> bool:
-        return bool(self._cap is not None or self._pipeline is not None or self._mode)
 
     def get_hid_device(self) -> str | None:
         hid = self._hid
@@ -313,472 +177,17 @@ class CameraService(CameraPioMixin):
     # =========================
     # GStreamer časť (preferovaná)
     # =========================
-    def _gst_pipeline_str(self, dev, use_convert=False, with_fps=True):
-        """
-        GRAY8 caps podľa gst-device-monitor (u teba potvrdené).
-        Skúšame viac permutácií (s/bez videoconvert, s/bez framerate caps).
-        """
-        caps = f"video/x-raw,format={self._gst_caps_format()},width={self.width},height={self.height}"
-        if with_fps:
-            caps += f",framerate={self.fps}/1"
 
-        if use_convert:
-            return (
-                f"v4l2src device={dev} io-mode=2 ! "
-                f"videoconvert ! "
-                f"{caps} ! "
-                f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
-            )
-        else:
-            return (
-                f"v4l2src device={dev} io-mode=2 ! "
-                f"{caps} ! "
-                f"appsink name=sink emit-signals=true sync=false drop=true max-buffers=2"
-            )
-
-    def _gst_caps_format(self) -> str:
-        fmt = (self.pixel_format or "Y8").upper()
-        if fmt in {"Y8", "GRAY8", "GREY"}:
-            return "GRAY8"
-        if fmt in {"Y12", "Y16", "GRAY16", "GRAY16_LE"}:
-            return "GRAY16_LE"
-        return "GRAY8"
-
-    def _v4l2_fourcc(self) -> str:
-        fmt = (self.pixel_format or "Y8").upper()
-        if fmt in {"Y12", "Y16"}:
-            return "Y12 "
-        return "GREY"
-
-    def _reset_buffers(self):
-        self._logger.debug("reset buffers")
-        with self._frame_condition:
-            for request in self._frame_requests:
-                request["cancelled"] = True
-            self._latest_delivery = 0.0
-            self._frame_condition.notify_all()
-        self._clear_queue()
-        self._clear_ring()
-        self._q = queue.Queue(maxsize=5)
-        self._ring = deque(maxlen=5)
-
-    def _on_new_sample(self, sink):
-        sample = sink.emit("pull-sample")
-        if sample is None:
-            return Gst.FlowReturn.ERROR
-        buf = sample.get_buffer()
-        ok, map_info = buf.map(Gst.MapFlags.READ)
-        if not ok:
-            return Gst.FlowReturn.ERROR
-        try:
-            caps = sample.get_caps()
-            s = caps.get_structure(0)
-            w = int(s.get_value("width"))
-            h = int(s.get_value("height"))
-            # GRAY8 by mal byť width*height bajtov
-            arr = np.frombuffer(map_info.data, dtype=np.uint8)
-            arr = arr.reshape((h, -1))[:, :w].copy()
-            arr = self._normalize_frame_u8(arr)
-            if arr is None:
-                return Gst.FlowReturn.OK
-            # Translate buffer running-time to the host monotonic clock. Reject
-            # pre-event exposure/queued buffers instead of counting queue pops.
-            acquired_at = time.monotonic()
-            if buf.pts != Gst.CLOCK_TIME_NONE and self._pipeline is not None:
-                clock = self._pipeline.get_clock()
-                if clock is not None:
-                    running = clock.get_time() - self._pipeline.get_base_time()
-                    acquired_at -= max(0, running - buf.pts) / Gst.SECOND
-            acquired_at -= max(1.0 / max(1, self.fps), self.exposure_us / 1_000_000.0)
-            self._publish_pio_frame(arr, int(buf.offset))
-            self._publish_master_frame(arr, acquired_at)
-            # Preview-only path: queue/appsink slúži pre UI/live stream.
-            if self._q.full():
-                try:
-                    self._q.get_nowait()
-                except queue.Empty:
-                    pass
-            self._q.put_nowait(arr)
-        finally:
-            buf.unmap(map_info)
-        return Gst.FlowReturn.OK
-
-    def _gst_bus_cb(self, bus, msg):
-        t = msg.type
-        if t == Gst.MessageType.ERROR:
-            err, dbg = msg.parse_error()
-            self._pio_pipeline_error = str(err)
-            with self._pio_condition:
-                self._pio_condition.notify_all()
-            print(f"[GST][ERROR] {err} debug:{dbg}")
-        elif t == Gst.MessageType.WARNING:
-            err, dbg = msg.parse_warning()
-            print(f"[GST][WARN] {err} debug:{dbg}")
-        elif t == Gst.MessageType.EOS:
-            print("[GST] EOS")
-            self.stop()
-
-    def _start_gst(self, dev):
-        if not _GST_OK:
-            return False
-
-        # poradie variantov: najprv bez konverzie, potom s konverziou; s fps a bez fps
-        variants = [
-            self._gst_pipeline_str(dev, use_convert=False, with_fps=True),
-            self._gst_pipeline_str(dev, use_convert=True,  with_fps=True),
-            self._gst_pipeline_str(dev, use_convert=False, with_fps=False),
-            self._gst_pipeline_str(dev, use_convert=True,  with_fps=False),
-            # úplný fallback – bez caps (nech negociáciu spraví GSt, appsink dostane čo príde)
-            f"v4l2src device={dev} io-mode=2 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2",
-        ]
-
-        if self._pio_configuring or self._pio_ready is not None:
-            variants = variants[:1]
-        tried = []
-        for pipe in variants:
-            try:
-                pipeline = Gst.parse_launch(pipe)
-            except Exception as e:
-                tried.append(("parse_fail", str(e), pipe))
-                continue
-
-            sink = pipeline.get_by_name("sink")
-            if sink is None:
-                tried.append(("no_sink", "", pipe))
-                pipeline.set_state(Gst.State.NULL)
-                continue
-            sink.connect("new-sample", self._on_new_sample)
-
-            bus = pipeline.get_bus()
-            bus.add_signal_watch()
-            bus.connect("message", self._gst_bus_cb)
-
-            loop = GLib.MainLoop()
-
-            ret = pipeline.set_state(Gst.State.PLAYING)
-            if ret == Gst.StateChangeReturn.FAILURE:
-                tried.append(("PLAYING_fail", "", pipe))
-                pipeline.set_state(Gst.State.NULL)
-                continue
-
-            # uložiť runtime objekty a spustiť loop v thread-e
-            self._pipeline = pipeline
-            self._loop = loop
-            self._mode = "gst"
-            self._logger.debug("backend mode selected=%s device=%s", self._mode, dev)
-            self._logger.debug("pipeline open backend=%s device=%s", self._mode, dev)
-
-            def _loop_run():
-                try:
-                    loop.run()
-                except Exception as e:
-                    print("[GST] MainLoop exception:", e)
-
-            self._t = threading.Thread(target=_loop_run, daemon=True)
-            self._t.start()
-            self._gst_start_count += 1
-            print(f"[Camera] GST started: {pipe}")
-            return True
-
-        print("[GST] All variants failed:", tried)
-        return False
 
     # =========================
     # V4L2 fallback cez OpenCV
     # =========================
-    def _start_v4l2(self, dev):
-        cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
-        if not cap.isOpened():
-            return False
 
-        # zníž buffre, vypni RGB konverziu
-        try: cap.set(cv2.CAP_PROP_BUFFERSIZE, 2)
-        except Exception: pass
-        try: cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
-        except Exception: pass
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
-
-        # preferuj GREY/Y800
-        try:
-            fourcc_primary = cv2.VideoWriter_fourcc(*self._v4l2_fourcc())
-            if not cap.set(cv2.CAP_PROP_FOURCC, fourcc_primary):
-                fourcc_y800 = cv2.VideoWriter_fourcc(*"Y800")
-                cap.set(cv2.CAP_PROP_FOURCC, fourcc_y800)
-        except Exception:
-            pass
-
-        if not cap.isOpened():
-            cap.release()
-            return False
-
-        self._cap = cap
-        self._mode = "v4l2"
-        self._logger.debug("backend mode selected=%s device=%s", self._mode, dev)
-        self._logger.debug("pipeline open backend=%s device=%s", self._mode, dev)
-        self._stop.clear()
-        self._t = threading.Thread(target=self._grab_loop, daemon=True)
-        self._t.start()
-        print(f"[Camera] V4L2 started on {dev} {self.width}x{self.height}@{self.fps} {self.pixel_format}")
-        return True
-
-    def _grab_loop(self):
-        while not self._stop.is_set():
-            if self._is_trigger_capture_active():
-                time.sleep(0.002)
-                continue
-            with self._cap_read_lock:
-                if self._cap is None:
-                    time.sleep(0.005)
-                    continue
-                acquired_at = time.monotonic()
-                ok, frame = self._cap.read()
-            if not ok:
-                time.sleep(0.005)
-                continue
-
-            frame = self._normalize_frame_u8(frame)
-            if frame is None:
-                continue
-
-            self._publish_master_frame(frame, acquired_at - max(
-                1.0 / max(1, self.fps), self.exposure_us / 1_000_000.0
-            ))
-
-            try:
-                if self._q.full():
-                    _ = self._q.get_nowait()
-                self._q.put_nowait(frame)
-            except queue.Full:
-                pass
 
     # =========================
     # Public API
     # =========================
-    def start(self, *, caller: str = "unspecified"):
-        requested_signature = self._pipeline_signature()
-        if self.is_pipeline_open():
-            if self._active_pipeline_signature == requested_signature:
-                self._log_reuse_existing_pipeline(caller)
-                return False
-            self.stop(caller=f"{caller}:restart")
 
-        self._log_start_pipeline(requested_signature, caller)
-        # poskladaj kandidátov tak, aby bol self.device prvý a bez duplicít
-        seen = set()
-        devs = []
-        for d in [self.device] + list(self.devices):
-            if d and d not in seen:
-                devs.append(d); seen.add(d)
-
-        if self._pio_configuring or self._pio_ready is not None:
-            devs = [self.device]
-        # 1) GStreamer
-        if _GST_OK:
-            for dev in devs:
-                if self._start_gst(dev):
-                    self.device = dev
-                    self._active_pipeline_signature = self._pipeline_signature(device=dev)
-                    self._hid = None
-                    self._init_hid()
-                    self._last_open_args.update({
-                        "device": dev,
-                        "width": int(self.width),
-                        "height": int(self.height),
-                        "fps": int(self.fps),
-                        "fourcc": "GREY",
-                        "pixel_format": self.pixel_format,
-                    })
-                    self.get_supported_v4l2_controls(refresh=True)
-                    return True
-
-        if self._pio_configuring:
-            raise RuntimeError("PIO GStreamer stream sa nepodarilo otvoriť.")
-        # 2) Fallback: OpenCV V4L2
-        for dev in devs:
-            if self._start_v4l2(dev):
-                self.device = dev
-                self._active_pipeline_signature = self._pipeline_signature(device=dev)
-                self._hid = None
-                self._init_hid()
-                self._last_open_args.update({
-                    "device": dev,
-                    "width": int(self.width),
-                    "height": int(self.height),
-                    "fps": int(self.fps),
-                    "fourcc": "GREY",
-                    "pixel_format": self.pixel_format,
-                })
-                self.get_supported_v4l2_controls(refresh=True)
-                return True
-
-        # nič sa neotvorilo
-        raise RuntimeError("Camera open failed (V4L2 and GStreamer). Check /dev/video* and formats.")
-
-    def one_shot(self):
-        """Legacy/fallback snapshot z preview queue/appsink path."""
-        self._logger.debug("one_shot() is legacy preview fallback (queue/appsink)")
-        if not self._is_preview_path_active():
-            self._logger.debug("one_shot requested while preview path is inactive")
-        tries = 0
-        last = None
-        while tries < 3:
-            try:
-                last = self._q.get(timeout=0.5)
-            except queue.Empty:
-                tries += 1
-                continue
-            tries += 1
-        if last is None:
-            raise RuntimeError("No frame available for one-shot.")
-        return last
-
-    def stop(self, *, caller: str = "unspecified"):
-        self._invalidate_pio()
-        self._log_stop_pipeline(caller)
-        self._stop.set()
-        self._logger.debug("pipeline close requested mode=%s", self._mode)
-        # V4L2
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
-            self._cap = None
-        # GST
-        if self._pipeline is not None:
-            try:
-                self._pipeline.set_state(Gst.State.NULL)
-            except Exception:
-                pass
-            self._pipeline = None
-        if self._loop is not None:
-            try:
-                self._loop.quit()
-            except Exception:
-                pass
-            self._loop = None
-        if self._t is not None and self._t.is_alive():
-            self._t.join(timeout=1.0)
-        self._t = None
-        self._mode = None
-        self._logger.debug("pipeline closed")
-        self._active_pipeline_signature = None
-        self._trigger_primed = False
-        self._trigger_priming_in_progress = False
-        self.end_trigger_capture()
-        if self._hid is not None:
-            try:
-                self._hid.close()
-            except Exception:
-                pass
-            self._hid = None
-        self._reset_buffers()
-        self.stop_continuous()
-
-    def start_continuous(self):
-        """Spustí ľahký kontinuálny zber do ring bufferu (bez GStreamer UI)."""
-        if self._t_ring and self._t_ring.is_alive():
-            self._logger.debug("start_continuous skipped: ring loop already running")
-            return
-        self._logger.info("start_continuous activated (ring capture is preview-side helper, not trigger path)")
-        self._stop_ring.clear()
-        self._t_ring = threading.Thread(target=self._loop_ring, daemon=True)
-        self._t_ring.start()
-
-    def _loop_ring(self):
-        import time
-        while not self._stop_ring.is_set():
-            if self._cap is None:
-                time.sleep(0.01)
-                continue
-            if self._is_trigger_capture_active():
-                self._logger.debug("ring capture paused: trigger capture active")
-                time.sleep(0.002)
-                continue
-            with self._cap_read_lock:
-                if self._cap is None:
-                    time.sleep(0.01)
-                    continue
-                ok, frame = self._cap.read()
-            if not ok or frame is None:
-                time.sleep(0.002); continue
-            frame = self._normalize_frame_u8(frame)
-            if frame is None:
-                continue
-            self._ring.append(frame)
-
-    def last_frame(self, *, caller: str = "unspecified"):
-        """Vráti posledný frame z kontinuálneho zberu, inak spraví rýchly oneshot ako fallback."""
-        if self._is_trigger_path_active() and self._is_trigger_capture_active():
-            self._logger.debug(
-                "last_frame fallback blocked: trigger capture flow active (caller=%s)",
-                caller,
-            )
-            if self._ring:
-                self._log_latest_frame_used(caller)
-                return self._ring[-1]
-            raise RuntimeError("last_frame unavailable during active trigger capture flow")
-
-        if self._is_trigger_path_active():
-            self._logger.debug("last_frame in trigger mode: one_shot legacy fallback disabled (caller=%s)", caller)
-        if self._ring:
-            self._log_latest_frame_used(caller)
-            return self._ring[-1]
-        if self._is_trigger_path_active():
-            raise RuntimeError("No ring frame available in trigger mode")
-        self._log_latest_frame_used(caller)
-        return self.one_shot()
-
-    def discard_frames(self, count: int = 3, *, caller: str = "") -> int:
-        """Best-effort flush starších frame-ov pred finálnym odberom v master flow."""
-        discard_count = max(0, int(count))
-        if discard_count <= 0:
-            self._logger.debug("[FRAME_FLUSH] skipped reason=non_positive_count count=%s caller=%s", count, caller)
-            return 0
-        if self._cap is None:
-            self._logger.debug("[FRAME_FLUSH] skipped reason=capture_not_ready caller=%s", caller)
-            return 0
-        if self._is_trigger_path_active():
-            self._logger.debug("[FRAME_FLUSH] skipped because capture_mode=trigger caller=%s", caller)
-            return 0
-
-        discarded = 0
-        try:
-            with self._cap_read_lock:
-                cap = self._cap
-                if cap is None:
-                    self._logger.debug("[FRAME_FLUSH] skipped reason=capture_not_ready caller=%s", caller)
-                    return 0
-                for _ in range(discard_count):
-                    ok, frame = cap.read()
-                    if not ok or frame is None:
-                        break
-                    frame_u8 = self._normalize_frame_u8(frame)
-                    if frame_u8 is None:
-                        continue
-                    self._ring.append(frame_u8)
-                    discarded += 1
-        except Exception as exc:
-            self._logger.warning("[FRAME_FLUSH] failed reason=%s caller=%s", exc, caller)
-            return discarded
-
-        self._logger.debug(
-            "[FRAME_FLUSH] mode=master discard_count=%s discarded=%s caller=%s",
-            discard_count,
-            discarded,
-            caller,
-        )
-        return discarded
-
-    def stop_continuous(self):
-        self._logger.info("stop_continuous requested")
-        try:
-            self._stop_ring.set()
-        except Exception:
-            pass
 
     def pause_for_external(self):
         """Uvoľní zariadenie pre externý klient (Live vo WIZARDe)."""
@@ -797,7 +206,7 @@ class CameraService(CameraPioMixin):
             "pixel_format": self.pixel_format,
         })
         # zastav všetko (cap aj GStreamer pipeline)
-        self.stop(caller="pause_for_external")
+        self.stream.stop(caller="pause_for_external")
         self._paused_external = True
         print("[CameraService] paused for external access")
 
@@ -812,7 +221,7 @@ class CameraService(CameraPioMixin):
         self.fps    = int(args.get("fps", self.fps))
         self.pixel_format = args.get("pixel_format", self.pixel_format)
         self._hid = None
-        self.start(caller="resume_after_external")
+        self.stream.start(caller="resume_after_external")
         self._paused_external = False
         print("[CameraService] resumed after external access")
 
@@ -827,7 +236,7 @@ class CameraService(CameraPioMixin):
             "fps": self.fps,
             "pixel_format": self.pixel_format,
         }
-        was_running = any([self._cap is not None, self._pipeline is not None, self._mode])
+        was_running = any([self.stream._cap is not None, self.stream._pipeline is not None, self.stream._mode])
         unchanged = (
             int(self.width) == width
             and int(self.height) == height
@@ -835,15 +244,15 @@ class CameraService(CameraPioMixin):
             and str(self.pixel_format or "Y8").upper() == pix_fmt
         )
         if was_running and unchanged:
-            self._log_reuse_existing_pipeline("apply_resolution")
+            self.stream._log_reuse_existing_pipeline("apply_resolution")
             return
         if was_running:
-            self.stop(caller="apply_resolution")
+            self.stream.stop(caller="apply_resolution")
         self.width = width
         self.height = height
         self.fps = fps
         self.pixel_format = pix_fmt
-        self._reset_buffers()
+        self.stream._reset_buffers()
         self._last_open_args.update({
             "width": self.width,
             "height": self.height,
@@ -852,7 +261,7 @@ class CameraService(CameraPioMixin):
         })
         if was_running:
             try:
-                self.start(caller="apply_resolution")
+                self.stream.start(caller="apply_resolution")
             except Exception as exc:
                 self.width = current["width"]
                 self.height = current["height"]
@@ -865,12 +274,13 @@ class CameraService(CameraPioMixin):
                     "pixel_format": self.pixel_format,
                 })
                 try:
-                    self.start(caller="apply_resolution:rollback")
+                    self.stream.start(caller="apply_resolution:rollback")
                 except Exception:
                     pass
                 raise RuntimeError(f"Camera reopen failed: {exc}") from exc
 
     def _run_v4l2_ctl(self, arg: str) -> bool:
+        self.resolve_device()
         cmd = ["v4l2-ctl", "-d", self.device, "-c", arg]
         try:
             subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -881,6 +291,7 @@ class CameraService(CameraPioMixin):
             return False
 
     def _query_v4l2_controls(self) -> set[str]:
+        self.resolve_device()
         cmd = ["v4l2-ctl", "-d", self.device, "--list-ctrls"]
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -897,6 +308,7 @@ class CameraService(CameraPioMixin):
         return controls
 
     def _query_camera_model(self) -> str | None:
+        self.resolve_device()
         cmd = ["v4l2-ctl", "-d", self.device, "--all"]
         try:
             result = subprocess.run(cmd, check=True, capture_output=True, text=True)
@@ -952,26 +364,13 @@ class CameraService(CameraPioMixin):
         return self._camera_model
 
     def _ensure_hid(self) -> CU55HID:
+        self.resolve_device()
         if self._hid is None:
             self._init_hid()
         if self._hid is None:
             raise RuntimeError(f"HID control not available for {self.device}")
         return self._hid
 
-    def _clear_queue(self):
-        cleared = 0
-        while True:
-            try:
-                self._q.get_nowait()
-                cleared += 1
-            except queue.Empty:
-                break
-        self._logger.debug("queue clear done dropped=%s", cleared)
-
-    def _clear_ring(self):
-        cleared = len(self._ring)
-        self._ring.clear()
-        self._logger.debug("ring clear done dropped=%s", cleared)
 
     def _is_trigger_mode_active(self) -> bool:
         try:
@@ -982,260 +381,6 @@ class CameraService(CameraPioMixin):
     def is_trigger_session_active(self) -> bool:
         return bool(self._trigger_session_active)
 
-    def _trigger_runtime_fps(self) -> float:
-        fps = max(1.0, float(self.fps or 1))
-        width = int(self.width or 0)
-        height = int(self.height or 0)
-        pix_fmt = str(self.pixel_format or "Y8").upper()
-        runtime_fps = float(get_trigger_runtime_fps(width, height, fps, pix_fmt))
-        if runtime_fps < fps:
-            self._logger.warning(
-                "CU55 %s %sx%s trigger profile forcing runtime fps from %.2f to %.2f for timing",
-                pix_fmt,
-                width,
-                height,
-                fps,
-                runtime_fps,
-            )
-        return runtime_fps
-
-    def _compute_trigger_timing(
-        self,
-        *,
-        trigger_gap_ms: float | None = None,
-        pulse_ms: float = 10.0,
-        safety_margin_ms: float = 3.0,
-        configured_min_priming_gap_ms: float = 5.0,
-    ) -> TriggerTiming:
-        runtime_fps = self._trigger_runtime_fps()
-        frame_time_ms = float(get_trigger_frame_time_ms(self.width, self.height, runtime_fps, self.pixel_format))
-        master_exposure_ms = max(0.0, float(self.exposure_us or 0) / 1000.0)
-        if trigger_gap_ms is None:
-            trigger_gap_ms = frame_time_ms + float(safety_margin_ms)
-        trigger_gap_ms = max(0.0, float(trigger_gap_ms))
-        priming_gap_ms = float(
-            get_safe_priming_gap_ms(
-                self.width,
-                self.height,
-                runtime_fps,
-                self.pixel_format,
-                configured_min_priming_gap_ms=float(configured_min_priming_gap_ms),
-                safety_margin_ms=float(safety_margin_ms),
-            )
-        )
-        effective_period_ms = max(0.0, float(pulse_ms)) + trigger_gap_ms
-        timeout_min_ms = max(trigger_gap_ms, priming_gap_ms, frame_time_ms)
-
-        self._logger.info(
-            "trigger_timing master_exposure_ms=%.2f frame_time_ms=%.2f priming_gap_ms=%.2f production_gap_ms=%.2f pulse_ms=%.2f effective_period_ms=%.2f safety_margin_ms=%.2f "
-            "resolution=%sx%s pixel_format=%s fps=%s runtime_fps=%.2f",
-            master_exposure_ms,
-            frame_time_ms,
-            priming_gap_ms,
-            trigger_gap_ms,
-            float(pulse_ms),
-            effective_period_ms,
-            float(safety_margin_ms),
-            int(self.width or 0),
-            int(self.height or 0),
-            str(self.pixel_format or "Y8").upper(),
-            int(self.fps or 0),
-            runtime_fps,
-        )
-
-        if trigger_gap_ms < frame_time_ms:
-            self._logger.warning(
-                "trigger_timing warning: trigger_gap_ms(%.2f) < frame_time_ms(%.2f); banding/uneven exposure may occur",
-                trigger_gap_ms,
-                frame_time_ms,
-            )
-
-        return TriggerTiming(
-            master_exposure_ms=master_exposure_ms,
-            frame_time_ms=frame_time_ms,
-            trigger_gap_ms=trigger_gap_ms,
-            priming_gap_ms=priming_gap_ms,
-            pulse_ms=float(pulse_ms),
-            effective_period_ms=effective_period_ms,
-            timeout_min_ms=timeout_min_ms,
-            safety_margin_ms=float(safety_margin_ms),
-        )
-
-    def _resolve_trigger_timeout_s(self, configured_timeout_s: float, timing: TriggerTiming) -> float:
-        configured_ms = max(1.0, float(configured_timeout_s) * 1000.0)
-        min_ms = max(float(timing.timeout_min_ms), float(timing.frame_time_ms), float(timing.trigger_gap_ms))
-        if configured_ms < min_ms:
-            self._logger.warning(
-                "trigger timeout auto-adjusted configured_ms=%.2f minimum_ms=%.2f",
-                configured_ms,
-                min_ms,
-            )
-            configured_ms = min_ms
-        return configured_ms / 1000.0
-
-    def _wait_for_sample(self, timeout_s: float) -> np.ndarray | None:
-        deadline = time.monotonic() + float(timeout_s)
-        while time.monotonic() < deadline:
-            remaining = max(0.01, deadline - time.monotonic())
-            try:
-                frame = self._q.get(timeout=remaining)
-            except queue.Empty:
-                continue
-            normalized = self._normalize_frame_u8(frame)
-            if normalized is not None:
-                return normalized
-        return None
-
-    def _trigger_via_hw(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None,
-        note: str,
-        timing: TriggerTiming | None = None,
-        gap_ms: float | None = None,
-    ) -> None:
-        _ = timing, gap_ms
-        self._fire_trigger(note=note, trigger_fn=trigger_fn)
-
-    def _perform_trigger_sequence(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None,
-        timeout_s: float,
-        timing: TriggerTiming,
-    ) -> np.ndarray | None:
-        self._logger.info(
-            "[TRIGGER] request received trigger_mode_active=%s priming_gap_ms=%.2f production_gap_ms=%.2f",
-            bool(self._is_trigger_mode_active()),
-            float(timing.priming_gap_ms),
-            float(timing.trigger_gap_ms),
-        )
-        self._clear_trigger_sample_state()
-
-        self._logger.info("[TRIGGER] priming pulse 1/3")
-        self._trigger_via_hw(
-            trigger_fn=trigger_fn,
-            note="trigger pulse 1/3 sent",
-            timing=timing,
-            gap_ms=None,
-        )
-        frame_1 = self._wait_for_sample(float(timeout_s))
-        if frame_1 is None:
-            self._logger.warning("[TRIGGER] priming pulse 1/3 timeout")
-            return None
-        self._logger.info("[TRIGGER] discarded frame #1")
-        priming_gap_s = max(0.0, float(timing.priming_gap_ms) / 1000.0)
-        production_gap_s = max(0.0, float(timing.trigger_gap_ms) / 1000.0)
-        if priming_gap_s > 0:
-            time.sleep(priming_gap_s)
-
-        self._logger.info("[TRIGGER] priming pulse 2/3")
-        self._trigger_via_hw(
-            trigger_fn=trigger_fn,
-            note="trigger pulse 2/3 sent",
-            timing=timing,
-            gap_ms=None,
-        )
-        frame_2 = self._wait_for_sample(float(timeout_s))
-        if frame_2 is None:
-            self._logger.warning("[TRIGGER] priming pulse 2/3 timeout")
-            return None
-        self._logger.info("[TRIGGER] discarded frame #2")
-        if production_gap_s > 0:
-            time.sleep(production_gap_s)
-
-        self._logger.info("[TRIGGER] final pulse 3/3")
-        self._trigger_via_hw(
-            trigger_fn=trigger_fn,
-            note="trigger pulse 3/3 sent",
-            timing=timing,
-            gap_ms=None,
-        )
-        frame_3 = self._wait_for_sample(float(timeout_s))
-        if frame_3 is None:
-            self._logger.warning("[TRIGGER] final pulse 3/3 timeout")
-            return None
-        self._logger.info("[TRIGGER] accepted frame #3")
-        return frame_3
-
-    def _apply_safe_trigger_exposure(self) -> int:
-        safe_abs = int(get_safe_trigger_exposure_abs(self.width, self.height, self.fps))
-        self.set_manual_exposure_us(int(safe_abs) * 100)
-        self._logger.info(
-            "[CAMERA] safe_trigger_exposure_abs=%s (resolution=%sx%s@%s)",
-            int(safe_abs),
-            int(self.width),
-            int(self.height),
-            int(self.fps),
-        )
-        return int(safe_abs)
-
-    def enter_trigger_session(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None = None,
-        settle_delay_s: float = 0.08,
-        prime_timeout_s: float = 0.8,
-        trigger_gap_ms: float | None = None,
-        pulse_ms: float = 10.0,
-    ) -> bool:
-        self._logger.info("[TRIGGER_SESSION] enter")
-        if self._paused_external:
-            raise RuntimeError("Trigger session blocked: preview session currently owns camera")
-
-        current_mode: int | None = None
-        try:
-            current_mode = int(self.get_stream_mode())
-        except Exception:
-            current_mode = None
-        self._logger.info("current mode before session start=%s", current_mode)
-
-        if current_mode != int(MODE_TRIGGER):
-            self.set_stream_mode(MODE_TRIGGER)
-
-        if not self._is_trigger_mode_active():
-            self._trigger_session_ready = False
-            raise RuntimeError("Failed to enter trigger session: trigger mode verification failed")
-        self._logger.info("trigger mode verified")
-
-        if self._is_cu55_model():
-            self._apply_safe_trigger_exposure()
-
-        if not self.is_pipeline_open():
-            self.start(caller="enter_trigger_session")
-            self._logger.info("pipeline opened")
-
-        self._logger.info("trigger pipeline playing")
-        self._trigger_session_active = True
-
-        if self._trigger_session_ready:
-            return True
-
-        if settle_delay_s > 0:
-            time.sleep(float(settle_delay_s))
-        self._trigger_primed = False
-        self._trigger_session_ready = True
-        self._logger.info("trigger session ready")
-        return True
-
-    def ensure_trigger_session(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None = None,
-        settle_delay_s: float = 0.08,
-        prime_timeout_s: float = 0.8,
-        trigger_gap_ms: float | None = None,
-        pulse_ms: float = 10.0,
-    ) -> bool:
-        if self._trigger_session_active and self._trigger_session_ready and self.is_pipeline_open() and self._is_trigger_mode_active():
-            return True
-        return self.enter_trigger_session(
-            trigger_fn=trigger_fn,
-            settle_delay_s=settle_delay_s,
-            prime_timeout_s=prime_timeout_s,
-            trigger_gap_ms=trigger_gap_ms,
-            pulse_ms=pulse_ms,
-        )
 
     def exit_trigger_session(self, *, restore_master: bool = False) -> None:
         self._logger.info("[TRIGGER_SESSION] exit")
@@ -1251,226 +396,22 @@ class CameraService(CameraPioMixin):
         self._trigger_primed = False
         self._trigger_priming_in_progress = False
         self.end_trigger_capture()
-        if self.is_pipeline_open():
-            self.stop(caller="exit_trigger_session")
-        self._clear_queue()
+        if self.stream.is_pipeline_open():
+            self.stream.stop(caller="exit_trigger_session")
+        self.stream._clear_queue()
 
         if restore_master and self._is_cu55_model():
             self.set_stream_mode(0)
             self._logger.info("switched to master on exit")
 
-    def _send_software_trigger(self, *, note: str) -> None:
-        hid = self._ensure_hid()
-        hid.send_software_trigger()
-        self._logger.info("%s", note)
-
-    def _fire_trigger(self, *, note: str, trigger_fn: Callable[[], None] | None = None) -> None:
-        if trigger_fn is not None:
-            trigger_fn()
-            self._logger.info("%s", note)
-            return
-        self._send_software_trigger(note=note)
-
-    def ensure_trigger_pipeline_primed(
-        self,
-        *,
-        settle_delay_s: float = 0.05,
-        trigger_fn: Callable[[], None] | None = None,
-        trigger_gap_ms: float | None = None,
-        pulse_ms: float = 10.0,
-    ) -> bool:
-        return self.ensure_trigger_session(
-            trigger_fn=trigger_fn,
-            settle_delay_s=settle_delay_s,
-            prime_timeout_s=0.8,
-            trigger_gap_ms=trigger_gap_ms,
-            pulse_ms=pulse_ms,
-        )
 
     def get_last_trigger_capture_status(self) -> str:
         return str(getattr(self, "_trigger_last_capture_status", "normal") or "normal")
 
-    def _clear_trigger_sample_state(self) -> None:
-        self._clear_queue()
-        self._clear_ring()
-
-    def _attempt_trigger_recovery_pulses(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None,
-        timeout_s: float,
-        timing: TriggerTiming,
-        pulses: int = 3,
-    ) -> np.ndarray | None:
-        for idx in range(1, int(pulses) + 1):
-            self._logger.info("recovery attempt %s/%s", idx, int(pulses))
-            frame = self._perform_trigger_sequence(
-                trigger_fn=trigger_fn,
-                timeout_s=float(timeout_s),
-                timing=timing,
-            )
-            self._logger.info("recovery attempt %s result=%s", idx, bool(frame is not None))
-            if frame is not None:
-                self._logger.info("session resynchronized")
-                return frame
-        return None
-
-    def _attempt_trigger_reprime(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None,
-        timeout_s: float,
-        timing: TriggerTiming,
-    ) -> np.ndarray | None:
-        self._logger.info("re-prime started")
-        frame = self._perform_trigger_sequence(
-            trigger_fn=trigger_fn,
-            timeout_s=float(timeout_s),
-            timing=timing,
-        )
-        self._logger.info("re-prime %s", "success" if frame is not None else "fail")
-        if frame is not None:
-            self._logger.info("session resynchronized")
-        return frame
-
-    def _attempt_trigger_pipeline_reopen(
-        self,
-        *,
-        trigger_fn: Callable[[], None] | None,
-        timeout_s: float,
-        timing: TriggerTiming,
-    ) -> np.ndarray | None:
-        self._logger.info("pipeline reopen started")
-        try:
-            if self.is_pipeline_open():
-                self.stop(caller="trigger_reopen")
-            self.start(caller="trigger_reopen")
-            self._logger.info("trigger pipeline set PLAYING")
-        except Exception:
-            self._logger.exception("pipeline reopen fail")
-            return None
-
-        settle_s = 0.08
-        if settle_s > 0:
-            time.sleep(settle_s)
-
-        frame = self._perform_trigger_sequence(
-            trigger_fn=trigger_fn,
-            timeout_s=float(timeout_s),
-            timing=timing,
-        )
-        if frame is None:
-            self._logger.info("pipeline reopen fail")
-            return None
-        self._logger.info("pipeline reopen success")
-        self._logger.info("session resynchronized")
-        return frame
-
-    def capture_trigger_frame(
-        self,
-        *,
-        timeout_s: float = 0.6,
-        trigger_fn: Callable[[], None] | None = None,
-        trigger_gap_ms: float | None = None,
-        pulse_ms: float = 10.0,
-        trigger_mode_label: str = "manual_gpio",
-    ):
-        stream_mode: int | None = None
-        try:
-            stream_mode = int(self.get_stream_mode())
-        except Exception:
-            stream_mode = None
-
-        if self._paused_external:
-            self._log_trigger_cycle_state(
-                "capture_blocked",
-                stream_mode=stream_mode,
-                preview_paused=True,
-                note="preview session currently owns camera",
-            )
-            raise RuntimeError("Trigger capture blocked: preview session currently owns the camera device")
-
-        timing = self._compute_trigger_timing(trigger_gap_ms=trigger_gap_ms, pulse_ms=pulse_ms)
-        self._logger.info(
-            "[TRIGGER] mode=%s pulse_ms=%.2f gap_ms=%.2f effective_period_ms=%.2f",
-            str(trigger_mode_label),
-            float(timing.pulse_ms),
-            float(timing.trigger_gap_ms),
-            float(timing.effective_period_ms),
-        )
-        effective_timeout_s = self._resolve_trigger_timeout_s(float(timeout_s), timing)
-
-        if not self._is_trigger_mode_active() or not self._trigger_session_active or not self._trigger_session_ready:
-            raise RuntimeError(
-                "capture_trigger_frame called while trigger mode/session is inactive"
-            )
-
-        self._log_trigger_cycle_state(
-            "capture_start",
-            stream_mode=stream_mode,
-            preview_paused=self._is_trigger_capture_active(),
-            trigger_primed=self._trigger_primed,
-        )
-        self.begin_trigger_capture()
-        try:
-            started = time.monotonic()
-            self._trigger_last_capture_status = "normal"
-            frame = self._perform_trigger_sequence(
-                trigger_fn=trigger_fn,
-                timeout_s=float(effective_timeout_s),
-                timing=timing,
-            )
-            if frame is None:
-                self._logger.warning("production trigger timeout")
-                frame = self._attempt_trigger_recovery_pulses(
-                    trigger_fn=trigger_fn,
-                    timeout_s=float(effective_timeout_s),
-                    timing=timing,
-                    pulses=3,
-                )
-                if frame is not None:
-                    self._trigger_last_capture_status = "recovered"
-
-            if frame is None:
-                frame = self._attempt_trigger_reprime(
-                    trigger_fn=trigger_fn,
-                    timeout_s=float(effective_timeout_s),
-                    timing=timing,
-                )
-                if frame is not None:
-                    self._trigger_last_capture_status = "recovered"
-
-            if frame is None:
-                frame = self._attempt_trigger_pipeline_reopen(
-                    trigger_fn=trigger_fn,
-                    timeout_s=float(effective_timeout_s),
-                    timing=timing,
-                )
-                if frame is not None:
-                    self._trigger_last_capture_status = "recovered"
-        finally:
-            self.end_trigger_capture()
-
-        if frame is None:
-            self._trigger_last_capture_status = "fail"
-            raise RuntimeError("No frame received after production trigger")
-        self._trigger_primed = True
-        latency_ms = (time.monotonic() - started) * 1000.0
-        self._logger.info("production frame received")
-        self._logger.info("frame received latency=%.2f ms", latency_ms)
-        self._logger.info("frame reused for display+inspection")
-        self._log_trigger_cycle_state(
-            "capture_done",
-            stream_mode=stream_mode,
-            preview_paused=False,
-            trigger_primed=self._trigger_primed,
-            frame_received=True,
-        )
-        return frame
 
     def set_stream_mode(self, mode: int, *, stabilize_delay_s: float = 0.05):
         requested = int(mode)
-        pipeline_open = self.is_pipeline_open()
+        pipeline_open = self.stream.is_pipeline_open()
         hid_dev = self.get_hid_device()
 
         current: int | None = None
@@ -1499,7 +440,7 @@ class CameraService(CameraPioMixin):
 
         restarted = False
         if pipeline_open:
-            self.stop(caller="set_stream_mode")
+            self.stream.stop(caller="set_stream_mode")
             restarted = True
 
         try:
@@ -1512,7 +453,7 @@ class CameraService(CameraPioMixin):
             raise
         finally:
             if restarted:
-                self.start(caller="set_stream_mode")
+                self.stream.start(caller="set_stream_mode")
 
     def get_stream_mode(self) -> int:
         try:
@@ -1557,7 +498,7 @@ class CameraService(CameraPioMixin):
             raise ValueError("CU55 expozícia musí byť násobkom 100 µs.")
         if self._is_cu55_model() and self.exposure_us == val and self._read_cu55_exposure() == control_value:
             return
-        self._invalidate_pio()
+        self.pio._invalidate_pio()
         if not self._is_cu55_model():
             self._run_v4l2_ctl("exposure_auto=1")
         if not self._run_v4l2_ctl(f"exposure_time_absolute={control_value}"):
@@ -1568,7 +509,7 @@ class CameraService(CameraPioMixin):
             if self._read_cu55_exposure() != control_value:
                 raise RuntimeError("CU55 exposure readback nesúhlasí.")
         if self.exposure_us != val:
-            self._invalidate_pio()
+            self.pio._invalidate_pio()
         self.exposure_us = val
 
     def _read_cu55_exposure(self):
@@ -1587,7 +528,7 @@ class CameraService(CameraPioMixin):
         val = int(round(float(value)))
         if getattr(self, "_brightness", None) == val:
             return
-        self._invalidate_pio()
+        self.pio._invalidate_pio()
         if not self._run_v4l2_ctl(f"brightness={val}"):
             raise RuntimeError("Set brightness failed: v4l2-ctl command failed")
         self._brightness = val
@@ -1604,3 +545,51 @@ class CameraService(CameraPioMixin):
         if not self._run_v4l2_ctl(f"gain={val}"):
             raise RuntimeError("Set gain failed: v4l2-ctl command failed")
         self.gain_db = val
+
+    def prepare_pio_trigger(self, pico):
+        self.resolve_device()
+        return self.pio.prepare_pio_trigger(pico)
+
+    def prepare_pio_master(self, pico):
+        self.resolve_device()
+        return self.pio.prepare_pio_master(pico)
+
+    def capture_pio_frame(self, pico, timeout_s=1.0):
+        self.resolve_device()
+        return self.pio.capture_pio_frame(pico, timeout_s=timeout_s)
+
+    def arm_master_frame(self, *args, **kwargs):
+        return self.stream.arm_master_frame(*args, **kwargs)
+
+    def finish_master_frame(self, *args, **kwargs):
+        return self.stream.finish_master_frame(*args, **kwargs)
+
+    def wait_master_frame(self, *args, **kwargs):
+        return self.stream.wait_master_frame(*args, **kwargs)
+
+    def gst_start_count(self, *args, **kwargs):
+        return self.stream.gst_start_count(*args, **kwargs)
+
+    def is_pipeline_open(self, *args, **kwargs):
+        return self.stream.is_pipeline_open(*args, **kwargs)
+
+    def start(self, *args, **kwargs):
+        return self.stream.start(*args, **kwargs)
+
+    def one_shot(self, *args, **kwargs):
+        return self.stream.one_shot(*args, **kwargs)
+
+    def stop(self, *args, **kwargs):
+        return self.stream.stop(*args, **kwargs)
+
+    def start_continuous(self, *args, **kwargs):
+        return self.stream.start_continuous(*args, **kwargs)
+
+    def last_frame(self, *args, **kwargs):
+        return self.stream.last_frame(*args, **kwargs)
+
+    def discard_frames(self, *args, **kwargs):
+        return self.stream.discard_frames(*args, **kwargs)
+
+    def stop_continuous(self, *args, **kwargs):
+        return self.stream.stop_continuous(*args, **kwargs)

@@ -91,7 +91,6 @@ FIELD_LABELS_SK = {
     "reference_max_angle_deg": "Maximálne otočenie",
     "reference_use_subpixel": "Subpixelová presnosť referenčnej hrany",
     "apply_alignment": "Použiť zarovnanie",
-    "rotation_enabled": "Hľadať otočenie šablóny",
     "template_roi": "Oblasť šablóny",
     "threshold_corr": "Minimálna zhoda",
     "score_threshold": "Prah odchýlky",

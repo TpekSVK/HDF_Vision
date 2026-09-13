@@ -67,10 +67,11 @@ def test_select_default_does_not_replace_roi(editor):
 
 @pytest.mark.parametrize("mode", list(InteractionMode))
 def test_toolbar_mode_switch(editor, mode):
-    QTest.mouseClick(editor._navigation.mode_buttons[mode], Qt.LeftButton)
+    button = editor._shape_buttons[0] if mode == InteractionMode.DRAW else editor._navigation.mode_buttons[mode]
+    QTest.mouseClick(button, Qt.LeftButton)
     assert editor._view.interaction_mode() == mode
-    assert editor._navigation.mode_buttons[mode].isChecked()
-    assert sum(b.isChecked() for b in editor._navigation.mode_buttons.values()) == 1
+    assert button.isChecked()
+    assert sum(b.isChecked() for b in editor._navigation._modes.buttons()) == 1
 
 
 def test_draw_completes_in_image_coordinates_and_returns_to_select(editor):
@@ -94,11 +95,13 @@ def test_escape_discards_preview_preserves_saved_roi(editor, initial):
     view = editor._view
     editor.set_roi(initial)
     view.set_interaction_mode(InteractionMode.DRAW)
-    QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(100, 100))
-    move(view, QPoint(240, 230))
+    start = view.mapFromScene(QPointF(600, 400))
+    end = view.mapFromScene(QPointF(850, 650))
+    QTest.mousePress(view.viewport(), Qt.LeftButton, Qt.NoModifier, start)
+    move(view, end)
     assert view._drawing
     QTest.keyClick(view, Qt.Key_Escape)
-    QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, QPoint(240, 230))
+    QTest.mouseRelease(view.viewport(), Qt.LeftButton, Qt.NoModifier, end)
     assert editor.roi() == initial
     assert not view._drawing
     assert not view.can_undo()
@@ -106,7 +109,7 @@ def test_escape_discards_preview_preserves_saved_roi(editor, initial):
     if initial is None:
         assert view._roi_item is None
     else:
-        assert view._roi_item.rect() == QRectF(*initial)
+        assert view._roi_item.path().boundingRect() == QRectF(*initial)
 
 
 def test_escape_does_not_close_parent_dialog(qt_app):
@@ -304,38 +307,59 @@ def test_nested_roi_editor_keeps_navigation_when_history_hidden(qt_app):
     widget.deleteLater()
 
 
-def test_tool_dialog_roi_mask_json_roundtrip(qt_app, tmp_path):
+def test_workspace_roi_mask_json_roundtrip(qt_app, tmp_path):
     import json
-    from app.models.schema import Tool, ToolDefinition, ToolMetaDefinition, ToolRoi, ToolMask
-    from app.ui.golden_wizard.tool_edit_dialog import ToolEditDialog
+    from app.ui.roi_mask_editor import LocatorROIEditor
+    from app.models.schema import Tool, ToolRoi, ToolMask
 
     roi = ToolRoi({"x": 500, "y": 300, "w": 200, "h": 100})
     mask = np.zeros((900, 1200), dtype=np.uint8)
     mask[320:350, 540:570] = 255
-    tool = Tool(type="ui01_test", name="Existing tool", roi=roi, ignore_mask=ToolMask(mask))
-    meta = ToolDefinition("ui01_test", "Test", "", meta=ToolMetaDefinition(
-        supports_roi=True, supports_ignore_mask=True))
-    image = np.zeros((900, 1200), dtype=np.uint8)
-    dialog = ToolEditDialog(tool, image, meta, base_dir=str(tmp_path))
-    dialog._maximize_on_first_show = False
-    dialog.show()
+    tool = Tool(type="ssim", name="Existing tool", roi=roi, ignore_mask=ToolMask(mask))
+    pixmap = QPixmap(1200, 900)
+    pixmap.fill(Qt.black)
+    editor = LocatorROIEditor()
+    editor.set_background(pixmap)
+    editor.set_roi_data(tool.roi.to_dict())
+    editor.configure_ignore_mask(True, tool.ignore_mask.value)
+    editor.show()
     qt_app.processEvents()
-    view = dialog._roi_editor._view
-    assert dialog._roi_editor.roi() == roi.rect()
-    view.set_zoom(2)
-    view.set_interaction_mode(InteractionMode.PAN)
-    drag(view, QPoint(200, 200), QPoint(260, 250))
-    view.fit_image_to_view()
-    dialog.accept()
-    assert dialog.result() == QDialog.Accepted
-    saved = dialog.result_tool()
+    editor._view.set_zoom(2)
+    editor._view.set_interaction_mode(InteractionMode.PAN)
+    drag(editor._view, QPoint(200, 200), QPoint(260, 250))
+    editor._view.fit_image_to_view()
+    tool.roi = ToolRoi.from_obj(editor.roi_data())
+    tool.ignore_mask = ToolMask(editor.ignore_mask())
     path = tmp_path / "tool.json"
-    path.write_text(json.dumps(saved.to_dict()))
-    reopened = ToolEditDialog(Tool.from_dict(json.loads(path.read_text())), image, meta,
-                              base_dir=str(tmp_path))
-    assert reopened._roi_editor.roi() == (500, 300, 200, 100)
-    np.testing.assert_array_equal(reopened._mask_editor.mask(), mask)
-    assert reopened._roi_editor._view.interaction_mode() == InteractionMode.SELECT
-    dialog.deleteLater()
+    path.write_text(json.dumps(tool.to_dict()))
+    saved = Tool.from_dict(json.loads(path.read_text()))
+    reopened = LocatorROIEditor()
+    reopened.set_background(pixmap)
+    reopened.set_roi_data(saved.roi.to_dict())
+    reopened.configure_ignore_mask(True, saved.ignore_mask.value)
+    assert reopened.roi() == (500, 300, 200, 100)
+    np.testing.assert_array_equal(reopened.ignore_mask(), mask)
+    assert reopened._view.interaction_mode() == InteractionMode.SELECT
+    editor.close()
     reopened.close()
+    editor.deleteLater()
     reopened.deleteLater()
+
+
+def test_multiple_roi_edits_keep_entire_undo_redo_history(editor):
+    view = editor._view
+    before = editor.roi()
+    first, second = (510, 310, 200, 100), (530, 320, 180, 120)
+    view.edit_roi(first)
+    view.edit_roi(second)
+    for _ in range(2):
+        view.undo()
+        assert editor.roi() == first
+        view.undo()
+        assert editor.roi() == before
+        assert not view.can_undo()
+        view.redo()
+        assert editor.roi() == first
+        view.redo()
+        assert editor.roi() == second
+        assert not view.can_redo()

@@ -26,7 +26,7 @@ _NAME_SK = {
     "ssim": "Podobnosť vzhľadu (SSIM)",
     "edge_change": "Plocha rozdielov oproti referencii",
     "edge_profile_deviation": "Odchýlka profilu hrany",
-    "light_presence": "Otvor – prednastavenie prítomnosti",
+    "preset.bright_opening": "Otvor – prednastavenie prítomnosti",
     "light_transmission": "Kontrola priepustnosti svetla",
     "mse": "Rozdiel jasu (MSE)", "ncc": "Podobnosť vzoru (NCC)",
 }
@@ -36,16 +36,15 @@ _CATEGORY_SK = {
 }
 _CATEGORY_ORDER = ["Základné", "Prednastavenia", "Špecializované", "Pokročilé", "Ostatné"]
 _CATEGORY_BY_TYPE = {
-    "mse": "Pokročilé", "ncc": "Pokročilé", "light_presence": "Prednastavenia",
+    "mse": "Pokročilé", "ncc": "Pokročilé", "preset.bright_opening": "Prednastavenia",
     "mold.protection_v1": "Špecializované", "light_transmission": "Špecializované",
 }
-_HIDDEN_NEW_TYPES = {"absdiff", "ssd", "template_match"}
 
 
 def make_catalog_tool(service, type_id):
     """New-tool presets only; never rewrite a saved legacy tool."""
-    tool = service.make_default_tool("presence_absence" if type_id == "light_presence" else type_id)
-    if type_id == "light_presence":
+    tool = service.make_default_tool("presence_absence" if type_id == "preset.bright_opening" else type_id)
+    if type_id == "preset.bright_opening":
         tool.name = "Kontrola otvoru"
         tool.params.values.update(polarity="bright", binary_threshold=200, gaussian_blur_kernel=0)
         tool.thresholds.values.update(min_area_px=100, max_area_px=10000, min_fill_ratio=0.0, max_fill_ratio=1.0)
@@ -219,11 +218,9 @@ class ToolCatalogDialog(QDialog):
 
     def _load_entries(self) -> list[_CatalogEntry]:
         entries: list[_CatalogEntry] = []
-        for type_id in self._tool_service.list_tool_types():
-            if type_id in _HIDDEN_NEW_TYPES:
-                continue
+        for type_id in [*self._tool_service.list_tool_types(), "preset.bright_opening"]:
             try:
-                definition = self._tool_service.get_tool_meta(type_id)
+                definition = self._tool_service.get_tool_meta("presence_absence" if type_id == "preset.bright_opening" else type_id)
             except KeyError:
                 continue
             raw_category = str(getattr(definition, "category", "General") or "General")
@@ -235,7 +232,7 @@ class ToolCatalogDialog(QDialog):
             entries.append(_CatalogEntry(
                 type_id=type_id,
                 name=_NAME_SK.get(type_id, str(getattr(definition, "name", type_id))),
-                description=("Prednastaví jednoduchú kontrolu svetlej plochy pre presvietený otvor. Používa nástroj Prítomnosť podľa plochy." if type_id == "light_presence" else str(getattr(definition, "description", "") or "")),
+                description=("Prednastaví jednoduchú kontrolu svetlej plochy pre presvietený otvor. Používa nástroj Prítomnosť podľa plochy." if type_id == "preset.bright_opening" else str(getattr(definition, "description", "") or "")),
                 category_label=_CATEGORY_BY_TYPE.get(type_id, "Základné" if type_id in _RECOMMENDED_TYPES else self._category_label(raw_category)),
                 supports_roi=bool(getattr(capabilities, "supports_roi", False)),
                 supports_mask=bool(getattr(capabilities, "supports_ignore_mask", False)),

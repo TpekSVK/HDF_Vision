@@ -1,11 +1,5 @@
 """High-level tool helpers exposed for external integrations."""
 
-from .light_presence import (
-    LightPresenceCheckParams,
-    LightPresenceCheckTool,
-    ToolContext as LightPresenceContext,
-    ToolResult as LightPresenceResult,
-)
 from .light_transmission import (
     LightTransmissionCheckParams,
     LightTransmissionCheckTool,
@@ -21,14 +15,8 @@ from .presence_absence import (
 )
 from .presence_absence_v2 import PresenceAbsenceV2Tool
 
-ToolContext = LightPresenceContext
-ToolResult = LightPresenceResult
 
 __all__ = [
-    "LightPresenceCheckTool",
-    "LightPresenceCheckParams",
-    "LightPresenceContext",
-    "LightPresenceResult",
     "LightTransmissionCheckTool",
     "LightTransmissionCheckParams",
     "LightTransmissionContext",
@@ -39,6 +27,4 @@ __all__ = [
     "PresenceAbsenceContext",
     "PresenceAbsenceResult",
     "PresenceAbsenceV2Tool",
-    "ToolContext",
-    "ToolResult",
 ]

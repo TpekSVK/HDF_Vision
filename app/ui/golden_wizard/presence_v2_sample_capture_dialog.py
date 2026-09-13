@@ -107,13 +107,16 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._auto_timer.stop()
 
     def _capture_once(self) -> None:
-        frame = self._capture_fn()
-        if frame is None:
-            QMessageBox.warning(self, "Capture", "Capture zlyhal – frame nie je dostupný.")
-            return
-        cropped = self._crop_fn(frame)
-        if cropped is None:
-            QMessageBox.warning(self, "Capture", "ROI nie je definované alebo je neplatné.")
+        try:
+            frame = self._capture_fn()
+            if frame is None:
+                raise ValueError("Snímka nie je dostupná.")
+            cropped = self._crop_fn(frame)
+            if cropped is None:
+                raise ValueError("ROI nie je definované alebo je neplatné.")
+        except Exception as exc:
+            self._stop_auto()
+            QMessageBox.warning(self, "Zber vzoriek", str(exc))
             return
         if self._samples and np.asarray(cropped).shape != np.asarray(self._samples[0]).shape:
             QMessageBox.warning(self, "Capture", "Veľkosť vzorky sa nezhoduje s existujúcimi vzorkami.")

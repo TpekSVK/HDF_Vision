@@ -110,6 +110,8 @@ def reset_learning_assets(base_dir: Path) -> tuple[bool, str | None]:
                     shutil.rmtree(entry, ignore_errors=False)
                 else:
                     entry.unlink(missing_ok=True)
+        from app.services.learning_context import MANIFEST_NAME
+        (base_dir / MANIFEST_NAME).unlink(missing_ok=True)
         ensure_assets_dirs(base_dir)
         return True, None
     except Exception as exc:
@@ -119,7 +121,8 @@ def reset_learning_assets(base_dir: Path) -> tuple[bool, str | None]:
 def save_sample(sample: np.ndarray, target_dir: Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
     stamp = int(time.time() * 1000)
-    path = target_dir / f"sample_{stamp}.png"
+    from uuid import uuid4
+    path = target_dir / f"sample_{stamp}_{uuid4().hex}.png"
     iio.imwrite(path, _as_gray_u8(sample))
     return path
 

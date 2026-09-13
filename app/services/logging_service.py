@@ -19,7 +19,7 @@ from app.services.settings_service import DEFAULT_LOG_DIR, get_session_settings
 from app.utils import overlay as overlay_utils
 
 if TYPE_CHECKING:  # pragma: no cover - typing helpers
-    from app.services.tool_service import PipelineResult, PipelineToolReport
+    from app.services.tool_contracts import PipelineResult, PipelineToolReport
 
 
 _DEFAULT_LOG_PATH = DEFAULT_LOG_DIR / "pipeline_runs.jsonl"
@@ -113,9 +113,25 @@ class JsonlRunLogger:
             pass
 
 
-_RUN_LOGGER = JsonlRunLogger(flush_every=1)
+_LOGGERS = {}
+_LOGGERS_LOCK = threading.Lock()
 
-atexit.register(_RUN_LOGGER.flush)
+
+def _logger_for(path):
+    with _LOGGERS_LOCK:
+        key = Path(path).resolve()
+        if key not in _LOGGERS:
+            _LOGGERS[key] = JsonlRunLogger(key, flush_every=1)
+        return _LOGGERS[key]
+
+
+def _flush_loggers():
+    with _LOGGERS_LOCK:
+        for logger in _LOGGERS.values():
+            logger.flush()
+
+
+atexit.register(_flush_loggers)
 
 
 def _is_locator(tool: Tool) -> bool:
@@ -224,8 +240,9 @@ def record_pipeline_run(
     result: "PipelineResult",
     recipe_name: Optional[str] = None,
     notes: Optional[str] = None,
+    settings=None,
 ) -> None:
-    settings = get_session_settings()
+    settings = settings or get_session_settings()
     if not settings.logging_enabled or not bool(getattr(recipe, "logging_enabled", True)):
         return
 
@@ -242,9 +259,7 @@ def record_pipeline_run(
 
     artifact_root = base_dir / "artifacts"
 
-    if _RUN_LOGGER.path != log_file:
-        _RUN_LOGGER.flush()
-        _RUN_LOGGER.path = log_file
+    logger = _logger_for(log_file)
 
     timestamp = _utc_now_iso()
     run_entry: Dict[str, Any] = {
@@ -294,4 +309,4 @@ def record_pipeline_run(
     if artifacts:
         run_entry["artifacts"] = artifacts
 
-    _RUN_LOGGER.log(run_entry)
+    logger.log(run_entry)

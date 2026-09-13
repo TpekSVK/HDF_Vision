@@ -53,8 +53,8 @@ def get_next_run_index_for_day(date_dir: Path) -> str:
     return f"{max_idx + 1:06d}"
 
 
-def _ensure_dirs(recipe: str, *, run_id: str | None = None, view_id: str | None = None, create_run_dir: bool = True):
-    base = Path("/data")
+def _ensure_dirs(recipe: str, *, run_id: str | None = None, view_id: str | None = None, create_run_dir: bool = True, base_dir: str | Path = "/data"):
+    base = Path(base_dir)
     (base / "recipes" / recipe).mkdir(parents=True, exist_ok=True)
 
     run_dir = None
@@ -161,18 +161,15 @@ def _recipe_json_path(recipe: str, base_dir: str | Path = "/data") -> Path:
 def load_recipe_config(recipe: str, *, base_dir: str | Path = "/data") -> RecipeV2:
     """Load recipe configuration including tool pipeline."""
 
-    path = _recipe_json_path(recipe, base_dir)
-    if path.exists():
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return RecipeV2.from_dict(data)
-
-    return RecipeV2()
+    from app.services.recipe_format import read_recipe_document
+    return RecipeV2.from_dict(read_recipe_document(_recipe_json_path(recipe, base_dir)))
 
 
 def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/data") -> Path:
     """Persist recipe configuration with normalized structure."""
 
+    from app.services.recipe_format import validate_recipe_document
+    validate_recipe_document(data.to_dict())
     path = _recipe_json_path(recipe, base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
@@ -180,28 +177,29 @@ def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/
     return path
 
 # --- Public API (zachovávame signatúry) ---
-def save_golden(frame_u8, recipe_name: str, *, golden_path: str | None = None):
+def save_golden(frame_u8, recipe_name: str, *, golden_path: str | None = None, base_dir: str | Path = "/data"):
     recipe = recipe_name or "default"
     target_name = (golden_path or "golden.png").strip() or "golden.png"
     target_name = Path(target_name).name or "golden.png"
-    _ensure_dirs(recipe, create_run_dir=False)
+    _ensure_dirs(recipe, create_run_dir=False, base_dir=base_dir)
     payload = {
         "frame": _to_u8(frame_u8),
         "recipe": recipe,
         "golden_path": target_name,
+        "base_dir": base_dir,
     }
     # Golden is a SETUP transaction: finish the file write before callers
     # persist dependent recipe data or append its audit event.
     _do_save_golden(**payload)
-    path = Path("/data") / "recipes" / recipe / target_name
+    path = Path(base_dir) / "recipes" / recipe / target_name
     return str(path)
 
-def save_validation_image(frame_u8, ok: bool, recipe_name: str):
+def save_validation_image(frame_u8, ok: bool, recipe_name: str, *, base_dir: str | Path = "/data"):
     recipe = recipe_name or "default"
-    _ensure_dirs(recipe, create_run_dir=False)
+    _ensure_dirs(recipe, create_run_dir=False, base_dir=base_dir)
     # vrátime hneď cesty; zápis ide async
     ts = int(time.time() * 1000)
-    base = Path("/data")
+    base = Path(base_dir)
     if ok:
         ffull = base / "validation" / "ok" / f"{ts}.webp"
         fthumb = base / "validation" / "ok" / f"{ts}_thumb.jpg"
@@ -221,10 +219,11 @@ def save_production_result(
     *,
     run_id: str | None = None,
     view_id: str | None = None,
+    base_dir: str | Path = "/data",
 ):
     recipe = recipe_name or "default"
     view_key = str(view_id).strip() if view_id else None
-    run_dir = _ensure_dirs(recipe, run_id=run_id, view_id=view_key)
+    run_dir = _ensure_dirs(recipe, run_id=run_id, view_id=view_key, base_dir=base_dir)
     ts = int(time.time() * 1000)
     uid = uuid.uuid4().hex[:8]
     # očakávané cesty
@@ -270,11 +269,11 @@ def save_production_result(
     }
 
 # --- Skutočný zápis (worker) ---
-def _do_save_golden(frame, recipe, golden_path="golden.png"):
+def _do_save_golden(frame, recipe, golden_path="golden.png", base_dir="/data"):
     if frame is None:
         return
     target = Path(str(golden_path).strip() or "golden.png").name
-    out = Path("/data") / "recipes" / recipe / target
+    out = Path(base_dir) / "recipes" / recipe / target
     out.parent.mkdir(parents=True, exist_ok=True)
     iio.imwrite(out, frame, extension=".png")
 

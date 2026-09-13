@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 pytest.importorskip("cv2")
 
 from app.models.schema import Tool, ToolMask, ToolParams, ToolRoi, ToolThresholds
-from app.services.tool_service import ToolRunnerContext
+from app.services.tool_contracts import ToolRunnerContext
 from app.services.tools.mse import MSETool
 
 

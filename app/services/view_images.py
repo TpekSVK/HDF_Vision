@@ -39,7 +39,7 @@ def view_image_rotation(view: Optional[RecipeView]) -> int:
 
 
 def apply_view_rotation(frame: np.ndarray | None, image_rotation: int, *, context: str = "") -> np.ndarray | None:
-    """Apply explicit OpenCV rotation to a frame."""
+    """Rotate raw camera pixels using the shared orientation contract."""
 
     if frame is None:
         return None
@@ -49,23 +49,8 @@ def apply_view_rotation(frame: np.ndarray | None, image_rotation: int, *, contex
 
     if rotation == 0:
         return frame
-    try:
-        import cv2
-
-        if rotation == 90:
-            return cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-        if rotation == 180:
-            return cv2.rotate(frame, cv2.ROTATE_180)
-        if rotation == 270:
-            return cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
-    except Exception:
-        if rotation == 90:
-            return np.rot90(frame, k=3).copy()
-        if rotation == 180:
-            return np.rot90(frame, k=2).copy()
-        if rotation == 270:
-            return np.rot90(frame, k=1).copy()
-    return frame
+    from app.services.frame_coordinates import InspectionFrame
+    return InspectionFrame(frame, rotation=0).for_rotation(rotation)
 
 
 def apply_view_image_transform(frame: np.ndarray | None, view: Optional[RecipeView], *, stage: str = "") -> np.ndarray | None:

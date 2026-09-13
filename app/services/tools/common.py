@@ -8,15 +8,8 @@ import numpy as np
 
 from app.models.schema import Tool, ToolParams, ToolThresholds
 from app.services.roi_geometry import roi_shape_mask
-from app.services.tool_service import BaseTool, ToolRunResult
-from app.services.tool_service import (
-    _clamp_rect,
-    _extract_rotation_from_affine,
-    _extract_translation_from_affine,
-    _freeze_dict,
-    _rect_from_any,
-)
-from app.services.tool_service import ToolRunnerContext  # type: ignore  # circular typing
+from app.services.tool_contracts import BaseTool, ToolRunResult, ToolRunnerContext
+from app.services.tool_image_helpers import _clamp_rect, _extract_rotation_from_affine, _extract_translation_from_affine, _freeze_dict, _rect_from_any
 from app.utils import imaging
 from app.utils.imaging import TimeBlockResult
 
@@ -177,33 +170,18 @@ class PairTool(BaseTool):
                         else frame_in_u8
                     )
             else:
-                aligned_gray = runner_context.frame_aligned_gray
-                if aligned_gray is not None:
-                    frame_source = aligned_gray
+                # frame_aligned may still reference the original image when
+                # a locator uses virtual alignment. Only frame_is_aligned
+                # establishes that pixels have actually been transformed.
+                matrix = np.asarray(T_total, dtype=np.float32) if T_total is not None else None
+                identity = np.array([[1., 0., 0.], [0., 1., 0.]], dtype=np.float32)
+                if matrix is not None and not np.allclose(matrix, identity, atol=1e-3):
+                    frame_source = imaging.warp_by_affine_u8(
+                        frame_in_u8, imaging.invert_affine(matrix)
+                    )
+                    virtual_alignment = True
                 else:
-                    aligned = runner_context.frame_aligned
-                    if aligned is not None:
-                        frame_source = imaging.to_gray_u8(np.asarray(aligned))
-                    else:
-                        source_frame = runner_context.frame
-                        if source_frame is not None and T_total is not None:
-                            arr = np.asarray(T_total, dtype=np.float32)
-                            identity = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
-                            if not np.allclose(arr, identity, atol=1e-3):
-                                base = (
-                                    runner_context.frame_gray
-                                    if runner_context.frame_gray is not None
-                                    else imaging.to_gray_u8(np.asarray(source_frame))
-                                )
-                                frame_source = imaging.warp_by_affine_u8(
-                                    base,
-                                    imaging.invert_affine(T_total),
-                                )
-                                virtual_alignment = True
-                            else:
-                                frame_source = frame_in_u8
-                        else:
-                            frame_source = frame_in_u8
+                    frame_source = frame_in_u8
 
         gh, gw = golden_u8.shape[:2]
         roi_candidate: Any = None

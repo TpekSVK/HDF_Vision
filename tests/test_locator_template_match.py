@@ -14,7 +14,7 @@ pytest.importorskip("cv2")
 import cv2
 
 from app.models.schema import ToolParams, ToolThresholds
-from app.services.tool_service import LocatorTemplateMatchTool, run_locator_template_match
+from app.services.tools.locator_template import LocatorTemplateMatchTool, run_locator_template_match
 
 
 def test_run_locator_template_match_returns_expected_translation():
@@ -110,9 +110,9 @@ def test_locator_status_respects_threshold(threshold: float, expected_status: st
 
 
 def test_locator_template_match_detects_rotation() -> None:
-    golden = np.zeros((40, 40), dtype=np.uint8)
-    block = np.arange(64, dtype=np.uint8).reshape(8, 8)
-    golden[12:20, 16:24] = block
+    golden = np.zeros((96, 96), dtype=np.uint8)
+    block = np.random.default_rng(17).integers(40, 220, (24, 24), dtype=np.uint8)
+    golden[30:54, 32:56] = cv2.GaussianBlur(block, (5, 5), 1.0)
 
     center = (golden.shape[1] / 2.0, golden.shape[0] / 2.0)
     angle_deg = 12.0
@@ -120,30 +120,32 @@ def test_locator_template_match_detects_rotation() -> None:
     frame = cv2.warpAffine(golden, rot, golden.shape[::-1], flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT101)
 
     params = {
-        "use_golden_crop": True,
+        "use_golden_crop": False,
+        "template_roi": {"x": 28, "y": 26, "w": 32, "h": 32},
         "coarse_cap": 64,
-        "rotation_enabled": True,
+        "alignment_mode": "template_rotation",
         "angle_range_deg": 15.0,
         "angle_step_deg": 1.0,
     }
     thresholds = {"threshold_corr": 0.1}
-    search_roi = {"x": 0, "y": 0, "w": 40, "h": 40}
+    search_roi = {"x": 0, "y": 0, "w": 96, "h": 96}
 
     run_result, diagnostics = run_locator_template_match(
         golden, frame, params, thresholds, search_roi
     )
 
     assert run_result.status == "ok"
-    assert run_result.metrics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
-    assert diagnostics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
-    assert run_result.metrics["dx"] == pytest.approx(0.0, abs=2.0)
-    assert run_result.metrics["dy"] == pytest.approx(0.0, abs=2.0)
+    assert run_result.metrics["theta_deg"] == pytest.approx(-angle_deg, abs=1.0)
+    assert diagnostics["theta_deg"] == pytest.approx(-angle_deg, abs=1.0)
+    assert run_result.metrics["dx"] == pytest.approx(rot[0, 2], abs=1.0)
+    assert run_result.metrics["dy"] == pytest.approx(rot[1, 2], abs=1.0)
+    assert np.allclose(diagnostics["T"], rot, atol=1.0)
     cos_t = math.cos(math.radians(diagnostics["theta_deg"]))
     sin_t = math.sin(math.radians(diagnostics["theta_deg"]))
     expected_T = np.array([[cos_t, -sin_t, run_result.metrics["dx"]], [sin_t, cos_t, run_result.metrics["dy"]]])
     assert np.allclose(diagnostics["T"], expected_T, atol=1e-1)
 
-def test_locator_template_cache_reuses_downsample(monkeypatch) -> None:
+def test_locator_rejects_constant_template_before_downsampling(monkeypatch) -> None:
     tool = LocatorTemplateMatchTool()
     tool.prepare({"tool_id": "locator.cache"})
 
@@ -171,11 +173,9 @@ def test_locator_template_cache_reuses_downsample(monkeypatch) -> None:
 
     monkeypatch.setattr(cv2, "resize", counting_resize)
 
-    tool.run(golden, frame, params, thresholds, {"roi": roi})
-    first_pass = resize_calls["count"]
-    assert first_pass >= 2
-
-    tool.run(golden, frame, params, thresholds, {"roi": roi})
-    second_pass = resize_calls["count"] - first_pass
-    assert second_pass == 1
+    result = tool.run(golden, frame, params, thresholds, {"roi": roi})
+    assert resize_calls["count"] == 0
+    assert result.metrics["found"] is False
+    assert result.metrics["template_contrast"] == 0
+    assert result.status != "ok"
 

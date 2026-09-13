@@ -7,7 +7,7 @@ from typing import Any, Dict
 import numpy as np
 
 from app.models.schema import ToolParams, ToolThresholds
-from app.services.tool_service import ToolRunResult
+from app.services.tool_contracts import ToolRunResult
 from app.services.tools.presence_absence_v2 import PresenceAbsenceV2Tool
 
 
@@ -71,7 +71,8 @@ class MoldProtectionV1Tool(PresenceAbsenceV2Tool):
         })
         if inspection_fault:
             diagnostics["message"] = (
-                "Kontrola formy nie je pripravená. Zatvorenie formy musí zostať blokované."
+                "Kontrola formy nie je pripravená. Zatvorenie formy musí zostať blokované. "
+                + str(diagnostics.get("message", ""))
             )
         elif residual_detected:
             diagnostics["message"] = "Vo forme bol nájdený zvyšný diel alebo iná anomália."

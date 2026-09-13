@@ -1,9 +1,11 @@
+
+from app.services.view_capture import ViewCapture
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication,
     QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QSettings
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QImageReader
 
 import json
@@ -11,8 +13,6 @@ import logging
 import math
 import re
 from pathlib import Path
-import time
-import uuid
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
@@ -24,8 +24,11 @@ import numpy as np
 from threading import Thread
 from app.services.retention_service import RetentionService
 
+from app.services.inspection_controller import InspectionController, InspectionState
+from app.services.inspection_runtime import InspectionRuntime
+from app.ui.inspection_worker import InspectionWorker
 from app.services.camera_service import CameraService
-from app.services.storage_service import save_production_result, load_recipe_config
+from app.services.storage_service import load_recipe_config
 from app.ui.golden_wizard import GoldenWizard
 from app.ui.modbus_wizard import ModbusWizard
 from app.ui.pico_wizard import PicoWizard
@@ -33,22 +36,19 @@ from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
 from app.ui.view_strip import ViewStrip
-from app.services.tool_service import run_pipeline
 from app.services.tool_registry import ToolRegistry
 from app.services.modbus_service import ModbusService
 from app.services.pico_service import PicoService
 from app.services.pico_config_service import PicoConfigService
 from app.services.jetson_stats_service import JetsonStatsService
 from app.services import settings_service
-from app.models.schema import RecipeV2
-from app.ui.branching_utils import aggregate_branching_statuses
 from app.utils.tool_identity import compute_tool_identity
-from app.ui.camera_profile_utils import (
+from app.services.camera_profiles import (
     apply_view_camera_profile,
     snapshot_camera_state,
 )
 from app.utils.trigger_timing import get_default_trigger_gap_ms
-from app.ui.view_utils import apply_view_image_transform, apply_view_rotation
+from app.services.view_images import apply_view_image_transform, apply_view_rotation
 from app.ui.debug_overlay_widget import DebugOverlayWidget
 from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
 from app.services.security_service import SecurityService
@@ -63,15 +63,27 @@ from app.utils.nok_label import nok_label
 
 
 class MainWindow(QMainWindow):
+    station_closed = Signal(str)
     external_triggered = Signal(str, object)
+    trigger_rejected = Signal(str)
     _UI_STATE_PATH = Path("/data/config.json")
     _LAST_RECIPE_STATE_KEY = "last_recipe"
 
-    def __init__(self):
+    def __init__(self, *, camera=None, pico=None, data_root=Path("/data"),
+                 camera_id="camera_1", pico_id="pico_1", station_name="Kamera 1", host_power_action=None):
         super().__init__()
+        self.data_root = Path(data_root)
+        self.data_root.mkdir(parents=True, exist_ok=True)
+        self.camera_id, self.pico_id = camera_id, pico_id
+        self.station_name = station_name
+        self.host_power_action = host_power_action
+        self._power_exit_code = None
+        self.session_settings = settings_service.SessionSettingsStore(self.data_root / "logs")
+        self._UI_STATE_PATH = self.data_root / "config.json"
         self._logger = logging.getLogger(__name__)
         self.setWindowTitle("HDF Vision")
-        self.mode = "RUN"  # RUN alebo SETUP
+        self.mode = "SETUP"  # RUN is published only after hardware preparation.
+        self.inspection = InspectionController(camera_id)
 
         # Live režim (RUN):
         self.live_enabled = False
@@ -82,26 +94,31 @@ class MainWindow(QMainWindow):
         self._golden_cache: dict[tuple[str, str], tuple[int, np.ndarray]] = {}
 
         # Kamera
-        self.cam = CameraService()
-        self.cam.start(caller="main_window_init")
-        try:
-            self.capture_mode = "trigger" if int(self.cam.get_stream_mode()) == 1 else "master"
-        except Exception:
-            self.capture_mode = "master"
+        self.cam = camera if camera is not None else CameraService()
+        self.capture_mode = "master"
+        self._initial_capture_mode = True
 
         # DB + služby
-        self.db = DbService()
-        self.recipes = RecipeService(db=self.db)
+        self.db = DbService(self.data_root / "HDF_Vision.db")
+        self.recipes = RecipeService(base_dir=self.data_root, db=self.db)
         self.security = SecurityService()
         self.stats = StatsService(db=self.db)
 
-        self.modbus = ModbusService()
-        self.pico = PicoService()
-        self.pico_config = PicoConfigService()
-        self.pico.connect()
+        self.modbus = ModbusService(self.data_root / "modbus_config.json")
+        self.pico = pico if pico is not None else PicoService()
+        self.pico_config = PicoConfigService(self.data_root / "pico_config.json")
+        self.runtime = InspectionRuntime(self.cam, self.pico, self.pico_config, self.modbus, self.db.db_path,
+            data_root=self.data_root, camera_id=camera_id, pico_id=pico_id, session_settings=self.session_settings)
+        self.runtime_worker = InspectionWorker(self)
+        self.runtime_worker.completed.connect(self._runtime_completed)
+        self._pending_runtime_action = None
+        self._active_inspection_request = None
+        self._runtime_was_live = False
+        self._close_ready = False
         self.pico.register_trigger_callback(self._handle_pico_trigger)
         self.modbus.register_trigger_callback(self._handle_modbus_trigger)
         self.external_triggered.connect(self.manual_trigger)
+        self.trigger_rejected.connect(self._show_trigger_rejection)
 
         self._last_tool_reports: list[dict[str, Any]] = []
         self._last_cycle_time_ms: float | None = None
@@ -112,13 +129,10 @@ class MainWindow(QMainWindow):
         self._runtime_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._views_by_id: dict[str, Any] = {}
         self._active_view_id: str | None = None
-        self._manual_trigger_positions: dict[str, int] = {}
-        self._manual_trigger_statuses: dict[str, dict[str, str]] = {}
         self._pending_pico_software_request: dict[str, Any] | None = None
-        self._external_sequence_index: dict[str, int] = {"pico": 0, "modbus": 0}
-        self._external_sequence_statuses: dict[str, dict[str, str]] = {}
         self._run_trigger_session_active = False
         # Tool/Recipe
+        startup_recipe_error = None
         try:
             if "default" not in self.recipes.list():
                 self.recipes.create("default")
@@ -128,6 +142,7 @@ class MainWindow(QMainWindow):
             self._persist_last_recipe(startup_recipe)
             print(f"[Tool] Loaded recipe: {startup_recipe}")
         except Exception as e:
+            startup_recipe_error = str(e)
             print("[Tool] Recipe not loaded:", e)
             self.tool = self.recipes.tool
         # ========== Root & Top bar ==========
@@ -147,7 +162,7 @@ class MainWindow(QMainWindow):
         top = QHBoxLayout(self.top_bar)
         top.setContentsMargins(14, 8, 14, 8)
         top.setSpacing(8)
-        title = QLabel("HDF Vision")
+        title = QLabel(station_name)
         title.setProperty("role", "appTitle")
         top.addWidget(title)
         top.addStretch(1)
@@ -227,7 +242,7 @@ class MainWindow(QMainWindow):
         status_caption = QLabel("VÝSLEDOK KONTROLY")
         status_caption.setProperty("role", "secondary")
         status_row.addWidget(status_caption)
-        self.lbl_status = QLabel("–")
+        self.lbl_status = QLabel(startup_recipe_error or "–")
         self.lbl_status.setProperty("role", "statusHero")
         self.lbl_status.setProperty("status", "idle")
         self.lbl_status.setAlignment(Qt.AlignLeft)
@@ -633,10 +648,10 @@ class MainWindow(QMainWindow):
         self._sync_mode_chrome()
 
         self._sync_capture_mode_ui()
-        self._apply_capture_mode(ensure_runtime_ready=True)
+        self._start_production()
 
         # Spusť retenciu na pozadí (jednorazovo pri štarte)
-        Thread(target=lambda: RetentionService().run_once(verbose=False), daemon=True).start()
+        Thread(target=lambda: RetentionService(self.data_root).run_once(verbose=False), daemon=True).start()
         self._apply_debug_overlay_setting()
 
     # ---------- Helpers ----------
@@ -679,46 +694,122 @@ class MainWindow(QMainWindow):
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
 
-    def toggle_mode(self):
-        if self.mode == "RUN":
-            answer = QMessageBox.question(
-                self, "Pozastaviť kontroly?",
-                "Prechod do SETUP pozastaví kontroly. Externé vstupy sa počas "
-                "nastavovania nespracujú ani neodložia na neskôr.\n\n"
-                "Kontroly obnovíte návratom do RUN. Pokračovať do SETUP?",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if answer != QMessageBox.Yes:
-                self._sync_mode_chrome()
-                return
-            self._logger.info("[PAGE_SWITCH] from=run to=setup capture_mode=%s", self.capture_mode)
-            if self.capture_mode == "trigger":
-                self._logger.info("[PAGE_SWITCH] cleanup run trigger state without restore_master")
-                self._exit_run_trigger_session(restore_master=False)
+    def _show_trigger_rejection(self, reason: str) -> None:
+        counts = self.inspection.snapshot()["counts"]
+        rejected = sum(value for key, value in counts.items() if key.startswith("rejected_"))
+        self.lbl_status.setText(f"Požiadavka neprijatá: {reason}. Odmietnuté: {rejected}")
+
+    def _set_runtime_controls(self, busy):
+        self.panel_setup.setEnabled(not busy)
+        self.view_strip.setEnabled(not busy)
+        self.btn_live.setEnabled(not busy and self.capture_mode == "master")
+        self.btn_trigger.setEnabled(not busy)
+        self.btn_manual_light.setEnabled(not busy)
+
+    def _start_production(self):
+        if self.runtime_worker.busy:
+            return False
+        initial = getattr(self, "_initial_capture_mode", False)
+        options = (self.current_recipe_name(), None if initial else self.capture_mode, self._active_view_id)
+        self._initial_capture_mode = False
+        self.mode = "SETUP"
+        self.live_enabled = False
+        self.btn_live.setChecked(False)
+        self.btn_live.setText("Live vypnuté")
+        self.chk_filtered_roi.setEnabled(True)
+        self._set_runtime_controls(True)
+        self.lbl_status.setText("Pripravujem kameru a Pico…")
+        runtime, controller = self.runtime, self.inspection
+        return self.runtime_worker.submit("prepare", lambda: controller.prepare(
+            lambda: runtime.prepare(*options), runtime.quiesce))
+
+    def _request_runtime_stop(self, *, close=False):
+        self._pending_runtime_action = "close" if close else "pause"
+        self.live_enabled = False
+        self.btn_live.setChecked(False)
+        self._run_timer.stop()
+        # Reject callbacks immediately, including the gap before worker dispatch.
+        self.mode = "SETUP"
+        self._set_runtime_controls(True)
+        self.lbl_status.setText("Dokončujem kontrolu a zastavujem Pico…")
+        if not self.runtime_worker.busy and self.inspection.state != InspectionState.BUSY:
+            self._dispatch_runtime_stop()
+
+    def _dispatch_runtime_stop(self):
+        close = self._pending_runtime_action == "close"
+        runtime, controller = self.runtime, self.inspection
+        self.runtime_worker.submit("close" if close else "pause",
+            lambda: controller.pause(runtime.shutdown if close else runtime.quiesce, close=close))
+
+    def _runtime_completed(self, kind, result, error):
+        if kind == "cycle":
+            request = self._active_inspection_request
+            self._active_inspection_request = None
+            try:
+                if error is None:
+                    self._display_inspection_result(result)
+                else:
+                    self._logger.error("Kontrola %s zlyhala: %s", request.id, error)
+                    self.lbl_status.setText(f"CHYBA SNÍMANIA / KONTROLY: {error}")
+                    self._apply_run_status_style("nok")
+                    self._run_status_message.setText(str(error))
+            except Exception as display_error:
+                self._logger.exception("Výsledok kontroly sa nepodarilo zobraziť")
+                self.lbl_status.setText(f"Chyba zobrazenia výsledku: {display_error}")
+            finally:
+                self.inspection.finish(request, error=error)
+        elif kind == "prepare":
+            if result and error is None:
+                self.mode = "SETUP" if self._pending_runtime_action else "RUN"
+                self.capture_mode = self.runtime.capture_mode
+                self._sync_capture_mode_ui()
+                self._capture_mode_ready = True
+                self._run_trigger_session_active = self.capture_mode == "trigger"
+                self.stack.setCurrentWidget(self.panel_run)
+                self.lbl_status.setText("RUN pripravený")
             else:
-                self.pico.quiesce()
-            self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
-            self.stack.setCurrentWidget(self.panel_setup)
+                self.mode = "SETUP"
+                self._capture_mode_ready = False
+                self.stack.setCurrentWidget(self.panel_setup)
+                self.lbl_status.setText(f"RUN nie je pripravený: {error or self.inspection.snapshot()['error']}")
+        elif kind in {"pause", "close"}:
+            self._pending_runtime_action = None
+            if result and error is None:
+                self.mode = "SETUP"
+                self._run_trigger_session_active = False
+                self.stack.setCurrentWidget(self.panel_setup)
+                if kind == "close":
+                    self._close_ready = True
+                    self.close()
+                    return
+            else:
+                self.lbl_status.setText(f"Zastavenie zlyhalo: {error or self.inspection.snapshot()['error']}")
+        if self._pending_runtime_action:
             self.mode = "SETUP"
-        else:
-            self._logger.info("[PAGE_SWITCH] from=setup to=run capture_mode=%s", self.capture_mode)
-            self._logger.info("[PAGE_SWITCH] no camera mode change on page switch")
-            self.stack.setCurrentWidget(self.panel_run)
-            self.mode = "RUN"
-            self._reset_external_sequence_state()
-            self._refresh_manual_light()
-            if self.capture_mode == "trigger":
-                self._enter_run_trigger_session()
-                self.live_enabled = False
-                self.btn_live.setChecked(False)
-                self.btn_live.setEnabled(False)
-                self.btn_live.setText("Live vypnuté")
-            else:
-                self.btn_live.setEnabled(True)
-                self.pico.prepare_master(self.cam)
-            if not self.live_enabled:
-                self._apply_run_camera_profile()
+            self._dispatch_runtime_stop()
+            return
+        self._set_runtime_controls(False)
+        if kind == "cycle":
+            self._resume_live_preview_after_trigger(self._runtime_was_live and error is None)
         self._sync_mode_chrome()
+
+    def toggle_mode(self):
+        if self._pending_runtime_action:
+            return
+        if self.mode != "RUN":
+            self._start_production()
+            return
+        answer = QMessageBox.question(
+            self, "Pozastaviť kontroly?",
+            "Prechod do SETUP pozastaví kontroly po dokončení aktuálnej. "
+            "Nové externé vstupy sa nespracujú ani neodložia na neskôr.\n\n"
+            "Kontroly obnovíte návratom do RUN. Pokračovať do SETUP?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            self._sync_mode_chrome()
+            return
+        self._request_runtime_stop()
 
     def _set_live_view_border(self, status: str | None = None) -> None:
         status_key = str(status or "idle").lower()
@@ -763,32 +854,6 @@ class MainWindow(QMainWindow):
         else:
             self.lbl_status.setText("TRIGGER: NORMAL SUCCESS")
 
-    def _reset_manual_trigger_progress(self, recipe_name: str | None = None) -> None:
-        if recipe_name is None:
-            self._manual_trigger_positions.clear()
-            self._manual_trigger_statuses.clear()
-            return
-        self._manual_trigger_positions.pop(recipe_name, None)
-        self._manual_trigger_statuses.pop(recipe_name, None)
-
-    def _reset_external_sequence_state(self) -> None:
-        """Start every source-specific external sequence at its first view."""
-        self._external_sequence_index = {"pico": 0, "modbus": 0}
-        self._external_sequence_statuses.clear()
-
-    def _reset_view_sequence_state(self) -> None:
-        for vid in self.view_strip.view_ids():
-            self.view_strip.set_status(vid, None)
-            state = self._view_states.get(vid)
-            if isinstance(state, dict):
-                state.pop("reports", None)
-                state.pop("status", None)
-                state.pop("cycle_time_ms", None)
-                state.pop("total_cycle_time_ms", None)
-                state.pop("capture_time_ms", None)
-                state.pop("processing_time_ms", None)
-                state.pop("combined_metrics", None)
-        self._update_metrics_panel()
 
     def _signal_outputs(self, status: str) -> None:
         self.modbus.emit_heartbeat()
@@ -804,32 +869,10 @@ class MainWindow(QMainWindow):
             return True, "Flash config uložený"
         return False, self.pico.last_error or "Synchronizácia Pico zlyhala"
 
-    def _handle_master_flash_capture_flow(
-        self, *, view: Any | None, capture_request_source: str,
-    ):
-        source = str(capture_request_source or "manual").lower()
-        if source in {"pico", "picosoftware"}:
-            raise RuntimeError("Pico snímka nemá rezervovaný frame.")
-        view_id = getattr(view, "id", None) or self._active_view_id or "view_1"
-        explicit = (
-            str(getattr(view, "external_trigger_mode", "")).lower() == "explicit"
-            and str(getattr(view, "external_source", "")).lower() == "pico"
-        )
-        if explicit:
-            index = getattr(view, "external_request_input", None)
-            if isinstance(index, bool) or not isinstance(index, Integral) or not 1 <= index <= 8:
-                raise RuntimeError("Pohľad nemá platný Pico vstup.")
-            target = f"IN{index}"
-            if not self.pico_config.is_input_enabled(int(index)):
-                raise RuntimeError("Pico vstup je zakázaný.")
-        else:
-            target = str(getattr(view, "pico_profile", None) or "").upper()
-            if target not in {"V1", "V2"}:
-                target = self.pico._normalize_target(view_id)
-            if target not in {"V1", "V2"}:
-                raise RuntimeError("Pohľad nemá platný Pico profil V1/V2.")
-        self.cam.prepare_master_capture()
-        return self.pico.capture_master(target, self.cam)
+    def _handle_master_flash_capture_flow(self, *, view, capture_request_source):
+        return ViewCapture(self.cam, self.pico, self.pico_config, "master",
+                           self._active_view_id).master_frame(
+            view=view, capture_request_source=capture_request_source)
 
     def _run_trigger_context(self, *, requested_stream_mode: int | None = None) -> dict[str, Any]:
         current_stream_mode: int | None = None
@@ -906,229 +949,9 @@ class MainWindow(QMainWindow):
             stream_mode_error,
         )
 
-    def _send_run_trigger_gpio_pulse(self) -> None:
-        # Kept only to fail closed for stale integrations; never pulse Jetson GPIO.
-        raise RuntimeError("Použite spoločnú Pico PIO capture transakciu.")
 
-    def _build_runtime_view_spec(self, view: Any, index: int) -> dict[str, Any]:
-        settle_ms = getattr(view, "settle_ms", None)
-        settle_ms = int(settle_ms) if isinstance(settle_ms, Integral) else None
-        if settle_ms is not None and settle_ms < 0:
-            settle_ms = 0
-
-        # manual = view sa spracuje iba po kliknutí TRIGGER (bez auto-sleep medzi viewmi)
-        # timed = po spracovaní sa čaká trigger_interval_ms
-        # external = view čaká na externý trigger (Pico/Modbus), interval sa nepoužíva
-        trigger_mode = str(getattr(view, "trigger_mode", "timed") or "timed").strip().lower()
-        if trigger_mode not in {"timed", "external", "manual"}:
-            trigger_mode = "timed"
-
-        interval_ms = getattr(view, "trigger_interval_ms", None)
-        interval_ms = int(interval_ms) if isinstance(interval_ms, Integral) else None
-        if interval_ms is not None and interval_ms < 0:
-            interval_ms = 0
-        if trigger_mode != "timed":
-            interval_ms = None
-
-        trigger_gap_ms = getattr(view, "trigger_gap_ms", None)
-        trigger_gap_ms = float(trigger_gap_ms) if isinstance(trigger_gap_ms, (int, float)) else None
-        if trigger_gap_ms is not None and trigger_gap_ms <= 0:
-            trigger_gap_ms = None
-
-        profile = getattr(view, "camera_profile", None)
-        width = getattr(profile, "width", None) or getattr(self.cam, "width", None)
-        height = getattr(profile, "height", None) or getattr(self.cam, "height", None)
-        fps = getattr(profile, "fps", None) or getattr(self.cam, "fps", None)
-        if trigger_gap_ms is None:
-            trigger_gap_ms = get_default_trigger_gap_ms(width, height, fps)
-
-        frame_source_view_id = str(getattr(view, "frame_source_view_id", "") or "").strip() or None
-        external_trigger_mode = str(
-            getattr(view, "external_trigger_mode", "sequential") or "sequential"
-        ).strip().lower()
-        if external_trigger_mode not in {"sequential", "explicit"}:
-            external_trigger_mode = "sequential"
-        external_request_input_raw = getattr(view, "external_request_input", None)
-        external_source = str(getattr(view, "external_source", "modbus") or "modbus").lower()
-        external_request_input = (
-            int(external_request_input_raw)
-            if isinstance(external_request_input_raw, Integral)
-            else None
-        )
-        if external_request_input is not None and not (1 <= external_request_input <= 8):
-            external_request_input = None
-        return {
-            "index": index,
-            "view": view,
-            "image_rotation": int(getattr(view, "image_rotation", 0) or 0),
-            "settle_ms": settle_ms,
-            "trigger_mode": trigger_mode,
-            "interval_ms": interval_ms,
-            "trigger_gap_ms": trigger_gap_ms,
-            "frame_source_view_id": frame_source_view_id,
-            "external_trigger_mode": external_trigger_mode,
-            "external_source": external_source if external_source in {"pico", "modbus"} else "modbus",
-            "external_request_input": external_request_input,
-            "branch_enabled": bool(getattr(view, "branch_enabled", False)),
-            "branch_targets": dict(getattr(view, "branch_targets", {}) or {}),
-            "branch_default_view_id": str(getattr(view, "branch_default_view_id", "") or "").strip() or None,
-        }
-
-    def _resolve_external_trigger_view(
-        self,
-        *,
-        view_specs: list[dict[str, Any]],
-        source: str,
-        input_index: int,
-    ) -> dict[str, Any] | None:
-        """Resolve an external event without falling back to unrelated views."""
-        source = str(source or "").strip().lower()
-        if self.mode != "RUN" or source not in self._external_sequence_index:
-            return None
-        if isinstance(input_index, bool) or not isinstance(input_index, Integral):
-            return None
-        input_index = int(input_index)
-        if not 1 <= input_index <= 8:
-            return None
-
-        if source == "pico" and not self.pico_config.is_input_enabled(input_index):
-            self._logger.info(
-                "[RUN] external trigger ignored source=pico input=%s reason=disabled",
-                input_index,
-            )
-            return None
-
-        external_specs = [
-            spec for spec in view_specs
-            if spec.get("trigger_mode") == "external"
-            and spec.get("external_source") == source
-        ]
-        explicit = [
-            spec for spec in external_specs
-            if spec.get("external_trigger_mode") == "explicit"
-            and spec.get("external_request_input") == input_index
-        ]
-        if len(explicit) > 1:
-            self._logger.error(
-                "[RUN] external trigger ignored source=%s input=%s reason=duplicate_explicit_match",
-                source,
-                input_index,
-            )
-            return None
-        if explicit:
-            view = explicit[0]["view"]
-            self._logger.info(
-                "[RUN] resolved external trigger mode=explicit source=%s input=%s view=%s",
-                source,
-                input_index,
-                getattr(view, "name", None) or getattr(view, "id", None),
-            )
-            return explicit[0]
-
-        sequential = [
-            spec for spec in external_specs
-            if spec.get("external_trigger_mode") == "sequential"
-        ]
-        if sequential:
-            position = self._external_sequence_index[source] % len(sequential)
-            selected = dict(sequential[position])
-            self._external_sequence_index[source] = (position + 1) % len(sequential)
-            selected["sequence_key"] = source
-            selected["sequence_position"] = position
-            selected["sequence_length"] = len(sequential)
-            view = selected["view"]
-            self._logger.info(
-                "[RUN] resolved external trigger mode=sequential source=%s index=%s view=%s",
-                source,
-                position,
-                getattr(view, "name", None) or getattr(view, "id", None),
-            )
-            return selected
-
-        self._logger.info(
-            "[RUN] external trigger ignored source=%s input=%s reason=no_matching_view",
-            source,
-            input_index,
-        )
-        return None
-
-    def _resolve_manual_sequence_view(
-        self,
-        *,
-        recipe_name: str,
-        view_specs: list[dict[str, Any]],
-        external_source: str | None = None,
-    ) -> dict[str, Any] | None:
-        """Let the RUN button simulate the next signal of an external sequence."""
-        sequential = [
-            spec for spec in view_specs
-            if spec.get("trigger_mode") == "external"
-            and spec.get("external_trigger_mode") == "sequential"
-            and (
-                external_source is None
-                or spec.get("external_source") == str(external_source).lower()
-            )
-        ]
-        if not sequential:
-            return None
-        position = self._manual_trigger_positions.get(recipe_name, 0) % len(sequential)
-        self._manual_trigger_positions[recipe_name] = (position + 1) % len(sequential)
-        selected = dict(sequential[position])
-        selected["sequence_key"] = f"manual:{recipe_name}"
-        selected["sequence_position"] = position
-        selected["sequence_length"] = len(sequential)
-        return selected
-
-    def _request_software_trigger(self) -> None:
-        """Start RUN through the same Pico MASTER timing as a line signal."""
-        if self.mode != "RUN":
-            self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
-            return
-        if self.get_capture_mode() != "master" or not self.pico.is_available():
-            self.manual_trigger("manual", None)
-            return
-
-        recipe_name = self.current_recipe_name()
-        try:
-            recipe_cfg = load_recipe_config(recipe_name)
-            view_specs = [
-                self._build_runtime_view_spec(view, index)
-                for index, view in enumerate(getattr(recipe_cfg, "views", []) or [])
-            ]
-        except Exception as exc:
-            self._logger.warning("[PICO] software trigger preparation failed: %s", exc)
-            self.manual_trigger("manual", None)
-            return
-
-        active_view_id = str(self._active_view_id or "")
-        explicit_spec = next(
-            (
-                spec for spec in view_specs
-                if str(getattr(spec["view"], "id", "")) == active_view_id
-                and spec.get("trigger_mode") == "external"
-                and spec.get("external_source") == "pico"
-                and spec.get("external_trigger_mode") == "explicit"
-                and isinstance(spec.get("external_request_input"), Integral)
-            ),
-            None,
-        )
-        if explicit_spec is not None:
-            selected = dict(explicit_spec)
-        else:
-            selected = self._resolve_manual_sequence_view(
-                recipe_name=recipe_name,
-                view_specs=view_specs,
-                external_source="pico",
-            )
-            profile = getattr(selected["view"], "pico_profile", None) if selected else None
-            profile = str(profile or "").upper()
-            if selected is None or profile not in {"V1", "V2"}:
-                self.manual_trigger("manual", None)
-                return
-
-        # Prepare the view/camera first; its shared capture path requests Pico
-        # and receives a reserved frame during the pulse.
-        self.manual_trigger("manual", {"spec": selected})
+    def _request_software_trigger(self):
+        self.manual_trigger("manual", {"software_button": True})
 
     def _consume_software_pico_request(self, capture_source: str) -> dict[str, Any] | None:
         pending = getattr(self, "_pending_pico_software_request", None)
@@ -1164,78 +987,24 @@ class MainWindow(QMainWindow):
         return None
 
     def _capture_frame_for_view(
-        self,
-        *,
-        trigger_mode_label: str,
-        master_caller: str,
-        view: Any | None = None,
-        view_id: str | None = None,
+        self, *, trigger_mode_label: str, master_caller: str,
+        view: Any | None = None, view_id: str | None = None,
         base_camera_state: Mapping[str, Any] | None = None,
-        settle_ms: int | None = None,
-        transform_stage: str = "inspection",
+        settle_ms: int | None = None, transform_stage: str = "inspection",
         image_rotation_override: int | None = None,
-        capture_request_source: str = "manual",
-        frame_request=None,
+        capture_request_source: str = "manual", frame_request=None,
     ):
-        active_view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
-        active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
-        self._logger.info("[VIEW_CAPTURE] active_view=%s", active_view_id)
-
-        profile = getattr(active_view, "camera_profile", None) if active_view is not None else None
-        self._logger.info("[VIEW_CAPTURE] applying camera profile")
-        resolved_state = apply_view_camera_profile(
-            self.cam,
-            dict(base_camera_state) if isinstance(base_camera_state, Mapping) else snapshot_camera_state(self.cam),
-            profile,
-        )
-        self._logger.info(
-            "[VIEW_CAPTURE] resolved state width=%s height=%s fps=%s pixel_format=%s exposure=%s",
-            resolved_state.get("width"),
-            resolved_state.get("height"),
-            resolved_state.get("fps"),
-            resolved_state.get("pixel_format"),
-            resolved_state.get("exposure_us"),
+        view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
+        capture = ViewCapture(self.cam, self.pico, self.pico_config,
+                              self.get_capture_mode(), self._active_view_id)
+        return capture.capture(
+            trigger_mode_label=trigger_mode_label, master_caller=master_caller,
+            view=view, view_id=view_id, base_camera_state=base_camera_state,
+            settle_ms=settle_ms, transform_stage=transform_stage,
+            image_rotation_override=image_rotation_override,
+            capture_request_source=capture_request_source, frame_request=frame_request,
         )
 
-        width = resolved_state.get("width") or getattr(self.cam, "width", None)
-        height = resolved_state.get("height") or getattr(self.cam, "height", None)
-        fps = resolved_state.get("fps") or getattr(self.cam, "fps", None)
-        trigger_gap_ms = getattr(active_view, "trigger_gap_ms", None) if active_view is not None else None
-        if not isinstance(trigger_gap_ms, (Integral, Real)) or float(trigger_gap_ms) <= 0:
-            trigger_gap_ms = get_default_trigger_gap_ms(width, height, fps)
-        trigger_gap_ms = float(trigger_gap_ms)
-        self._logger.info("[VIEW_CAPTURE] resolved trigger_gap_ms=%.2f", trigger_gap_ms)
-
-        mode = self.get_capture_mode()
-        if mode == "master":
-            frame = self.cam.wait_master_frame(frame_request) if frame_request is not None else self._handle_master_flash_capture_flow(
-                view=active_view,
-                capture_request_source=capture_request_source,
-            )
-        self._logger.info(
-            "[VIEW_CAPTURE] frame_capture_start source=%s capture_mode=%s active_view_id=%s settle_ms=%s",
-            capture_request_source,
-            mode,
-            active_view_id,
-            settle_ms,
-        )
-        # Legacy per-view settle_ms is ignored; Pico owns capture timing.
-
-        if mode == "trigger":
-            self._enter_run_trigger_session(trigger_gap_ms=trigger_gap_ms)
-            frame = self.pico.capture_trigger(self.cam, timeout_s=1.0)
-
-        if image_rotation_override is not None:
-            frame = apply_view_rotation(
-                frame,
-                int(image_rotation_override),
-                context=str(active_view_id or "n/a"),
-            )
-            if transform_stage:
-                self._logger.info("[VIEW_ROTATION] applied before %s", transform_stage)
-        else:
-            frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
-        return frame
 
     def _enter_run_trigger_session(self, *, trigger_gap_ms: float | None = None) -> None:
         # Legacy GAP is not a rising-edge period. Validated PIO profile owns timing.
@@ -1252,6 +1021,13 @@ class MainWindow(QMainWindow):
         self._run_trigger_session_active = False
 
     def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> bool:
+        if self.runtime_worker.busy:
+            return False
+        if self.mode == "RUN":
+            return self._start_production()
+        return self._configure_capture_mode(ensure_runtime_ready=ensure_runtime_ready)
+
+    def _configure_capture_mode(self, *, ensure_runtime_ready: bool = False) -> bool:
         # Architecture rule: global runtime owns capture mode transitions.
         # Low-level camera helpers must never switch capture mode implicitly.
         if self.capture_mode not in {"master", "trigger"}:
@@ -1323,6 +1099,7 @@ class MainWindow(QMainWindow):
         image_rotation_override: int | None = None,
         capture_request_source: str = "golden_wizard",
     ):
+        load_recipe_config(self.current_recipe_name(), base_dir=self.data_root)
         self._logger.info("[GOLDEN_CAPTURE] using shared view capture path")
         active_view = self._resolve_active_capture_view(requested_view_id=view_id)
         settle_ms = getattr(active_view, "settle_ms", None) if active_view is not None else None
@@ -1361,481 +1138,49 @@ class MainWindow(QMainWindow):
             return self.pico.capture_trigger(self.cam, timeout_s=1.0)
         return self.cam.last_frame(caller="run_manual_trigger_master")
 
-    def manual_trigger(
-        self,
-        trigger_source: str | None = None,
-        trigger_context: object | None = None,
-    ):
-        if self.mode != "RUN":
-            self.lbl_status.setText("TRIGGER je dostupný len v RUN režime.")
-            return
+    def manual_trigger(self, trigger_source=None, trigger_context=None):
         context = dict(trigger_context) if isinstance(trigger_context, Mapping) else {}
-        resolved_source = str(trigger_source or "manual").strip().lower()
-        trigger_input_index = context.get("input_index")
-        requested_spec = context.get("spec")
-        self._logger.info(
-            "[CAPTURE_REQUEST] trigger_source=%s trigger_input_index=%s capture_mode=%s",
-            resolved_source,
-            trigger_input_index,
-            self.get_capture_mode(),
-        )
-        self._log_run_trigger_context("RUN trigger start")
-        try:
-            trigger_state = self._prepare_run_trigger(
-                trigger_source=resolved_source,
-                trigger_input_index=trigger_input_index,
-                requested_spec=requested_spec,
-            )
-        except Exception as exc:
-            self.lbl_status.setText(f"Spustenie trigger session zlyhalo: {exc}")
-            self._resume_live_preview_after_trigger(False)
-            return
-        if trigger_state is None:
-            self._resume_live_preview_after_trigger(False)
-            return
-        trigger_state["frame_request"] = context.get("frame_request")
-        try:
-            self._logger.info("trigger_click(caller=run_manual_trigger)")
-            self._log_trigger_cycle("cycle_start", preview_state="paused")
-            if trigger_state["recipe_cfg"] is None:
-                base_frame = self._capture_frame_for_trigger(
-                    trigger_mode_label="manual",
-                    capture_request_source=resolved_source,
-                )
-                active_view = self._resolve_active_capture_view(requested_view_id=self._active_view_id)
-                base_frame = apply_view_image_transform(base_frame, active_view, stage="inspection")
-                self._update_manual_trigger_feedback()
-                self._log_trigger_cycle(
-                    "legacy_capture_done",
-                    trigger_mode="legacy",
-                    frame_received=base_frame is not None,
-                )
-                self._run_legacy_trigger(
-                    base_frame,
-                    trigger_state["recipe_name"],
-                    logging_enabled=trigger_state["logging_enabled"],
-                )
+        source = str(trigger_source or "manual").strip().lower()
+        request = context.get("inspection_request")
+        if request is None:
+            request, reason = self.inspection.admit(source)
+            if request is None:
+                self._show_trigger_rejection(reason)
                 return
+        elif not self.inspection.owns(request):
+            self._show_trigger_rejection("neplatná alebo dokončená požiadavka")
+            return
+        self._runtime_was_live = self._pause_live_preview_for_trigger()
+        self._set_runtime_controls(True)
+        options = dict(context, recipe_name=self.current_recipe_name(), capture_mode=self.capture_mode,
+                       active_view_id=self._active_view_id, capture_filtered_roi=self.chk_filtered_roi.isChecked())
+        self._active_inspection_request = request
+        runtime, controller = self.runtime, self.inspection
+        if not self.runtime_worker.submit("cycle", lambda: runtime.run(controller, request, options)):
+            self._active_inspection_request = None
+            self.inspection.finish(request, error="Pracovník už vykonáva inú operáciu.")
+            self._show_trigger_rejection("pracovník je obsadený")
 
-            queue = list(trigger_state["views_to_process"])
-            while queue:
-                spec = queue.pop(0)
-                execution = self._execute_view_trigger(spec, trigger_state)
-                if execution.get("replace_queue") is not None:
-                    queue = execution["replace_queue"]
-                if execution.get("should_break"):
-                    break
-
-            self._finalize_run_trigger(trigger_state)
-
-        except Exception as exc:
-            self._update_manual_trigger_feedback(force_fail=True)
-            self.lbl_status.setText(f"CHYBA SNÍMANIA / KONTROLY: {exc}")
-            self._signal_outputs("nok")
-            import traceback; traceback.print_exc()
-        finally:
-            self._resume_live_preview_after_trigger(bool(trigger_state.get("was_live_enabled", False)) if trigger_state else False)
-
-    def _prepare_run_trigger(
-        self,
-        *,
-        trigger_source: str,
-        trigger_input_index: int | None = None,
-        requested_spec: object | None = None,
-    ) -> dict[str, Any] | None:
-        was_live_enabled = self._pause_live_preview_for_trigger()
-        gst_starts_before = int(getattr(self.cam, "gst_start_count", lambda: 0)())
-        recipe_name = self.current_recipe_name()
-        base_camera_state = snapshot_camera_state(self.cam)
-        self._logger.info("snapshot camera state taken")
-        self._logger.info("[CAPTURE_MODE] %s", self.capture_mode)
-
-        try:
-            recipe_cfg = load_recipe_config(recipe_name)
-        except Exception as exc:
-            print(f"[Tool] load_recipe_config failed for {recipe_name}: {exc}")
-            recipe_cfg = None
-
-        if recipe_cfg is None or not getattr(recipe_cfg, "views", None):
-            self._reset_manual_trigger_progress(recipe_name)
-            return {
-                "was_live_enabled": was_live_enabled,
-                "gst_starts_before": gst_starts_before,
-                "recipe_name": recipe_name,
-                "recipe_cfg": None,
-                "logging_enabled": bool(
-                    getattr(recipe_cfg, "logging_enabled", True) if recipe_cfg else True
-                ),
-                "base_camera_state": base_camera_state,
-                "trigger_source": trigger_source,
-                "trigger_input_index": trigger_input_index,
-            }
-
-        if not getattr(recipe_cfg, "regions", None):
-            recipe_cfg.regions = list(getattr(self.tool, "regions", []) or [])
-        recipe_cfg.pose_enabled = bool(getattr(self.tool, "pose_enabled", True))
-
-        view_specs: list[dict[str, Any]] = [
-            self._build_runtime_view_spec(view, index)
-            for index, view in enumerate(recipe_cfg.views)
-        ]
-
-        manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
-        all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
-        external_spec = None
-        requested_view_id = ""
-        if isinstance(requested_spec, Mapping):
-            requested_view_id = str(
-                getattr(requested_spec.get("view"), "id", "")
-                or requested_spec.get("view_id")
-                or ""
-            )
-            for spec in view_specs:
-                if str(getattr(spec["view"], "id", "")) == requested_view_id:
-                    external_spec = dict(spec)
-                    for key in ("sequence_key", "sequence_position", "sequence_length"):
-                        if key in requested_spec:
-                            external_spec[key] = requested_spec[key]
-                    all_manual = True
-                    break
-        is_routed_external = trigger_source in {"pico", "modbus"}
-        if external_spec is None and is_routed_external and isinstance(trigger_input_index, Integral):
-            external_spec = self._resolve_external_trigger_view(
-                view_specs=view_specs,
-                source=trigger_source,
-                input_index=int(trigger_input_index),
-            )
-        elif external_spec is None and trigger_source == "manual":
-            external_spec = self._resolve_manual_sequence_view(
-                recipe_name=recipe_name,
-                view_specs=view_specs,
-            )
-            if external_spec is not None:
-                all_manual = True
-
-        if isinstance(requested_spec, Mapping) and external_spec is None:
-            self._logger.warning(
-                "[RUN] software Pico trigger ignored reason=requested_view_not_found view=%s",
-                requested_view_id or "unknown",
-            )
-            return None
-
-        if is_routed_external and external_spec is None:
-            return None
-        if external_spec is not None:
-            sequence_key = str(external_spec.get("sequence_key") or "")
-            sequence_position = int(external_spec.get("sequence_position", 0))
-            if sequence_position == 0:
-                self._reset_view_sequence_state()
-                per_view_statuses = {}
-                if sequence_key.startswith("manual:"):
-                    self._manual_trigger_statuses[recipe_name] = {}
-                else:
-                    self._external_sequence_statuses[sequence_key] = {}
-            elif sequence_key.startswith("manual:"):
-                per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
-            else:
-                per_view_statuses = dict(self._external_sequence_statuses.get(sequence_key, {}))
-            views_to_process = [external_spec]
-            if not sequence_key.startswith("manual:"):
-                self._reset_manual_trigger_progress(recipe_name)
-        elif all_manual:
-            cycle_position = self._manual_trigger_positions.get(recipe_name, 0)
-            index_in_cycle = cycle_position % len(manual_specs)
-            current_spec = manual_specs[index_in_cycle]
-            self._manual_trigger_positions[recipe_name] = (index_in_cycle + 1) % len(manual_specs)
-            if index_in_cycle == 0:
-                self._manual_trigger_statuses[recipe_name] = {}
-                self._reset_view_sequence_state()
-                per_view_statuses = {}
-            else:
-                per_view_statuses = dict(self._manual_trigger_statuses.get(recipe_name, {}))
-            views_to_process = [current_spec]
-        else:
-            self._reset_view_sequence_state()
-            per_view_statuses = {}
-            views_to_process = view_specs
-            self._reset_manual_trigger_progress(recipe_name)
-
-        if len(views_to_process) == 1:
-            selected_view = views_to_process[0]["view"]
-            selected_view_id = (
-                getattr(selected_view, "id", None)
-                or f"view_{views_to_process[0]['index'] + 1}"
-            )
-            self._active_view_id = selected_view_id
-            self.view_strip.set_active(selected_view_id)
-
-        self._last_total_cycle_time_ms = None
-        self.sb_recipe_duration.setText("–")
-        return {
-            "gst_starts_before": gst_starts_before,
-            "recipe_name": recipe_name,
-            "recipe_cfg": recipe_cfg,
-            "logging_enabled": bool(getattr(recipe_cfg, "logging_enabled", True)),
-            "run_id": f"{recipe_name}_{uuid.uuid4().hex[:8]}",
-            "view_specs": view_specs,
-            "views_to_process": views_to_process,
-            "all_manual": all_manual,
-            "sequence_key": str(views_to_process[0].get("sequence_key") or "")
-            if len(views_to_process) == 1 else "",
-            "per_view_statuses": per_view_statuses,
-            "ignored_for_aggregation": set(),
-            "last_preview_frame": None,
-            "last_view_id": None,
-            "captured_frames": {},
-            "pending_overlays": {},
-            "trigger_start_ts": time.monotonic(),
-            "spec_lookup": {
-                getattr(spec["view"], "id", None) or f"view_{spec['index']+1}": spec
-                for spec in view_specs
-            },
-            "base_camera_state": base_camera_state,
-            "trigger_source": trigger_source,
-            "trigger_input_index": (
-                int(trigger_input_index) if trigger_input_index is not None else None
-            ),
-            "fail_fast": bool(getattr(recipe_cfg.aggregation, "fail_fast", False)),
-        }
-
-    def _execute_view_trigger(self, spec: dict[str, Any], trigger_state: dict[str, Any]) -> dict[str, Any]:
-        recipe_name = trigger_state["recipe_name"]
-        recipe_cfg = trigger_state["recipe_cfg"]
-        base_camera_state = trigger_state["base_camera_state"]
-        captured_frames = trigger_state["captured_frames"]
-        per_view_statuses = trigger_state["per_view_statuses"]
-        all_manual = trigger_state["all_manual"]
-
-        view = spec["view"]
-        index = spec["index"]
-        view_id = getattr(view, "id", None) or f"view_{index+1}"
-        view_name = getattr(view, "name", view_id)
-        trigger_mode = spec["trigger_mode"]
-        settle_ms = spec["settle_ms"]
-        interval_ms = spec["interval_ms"]
-        self._logger.info("active view id: %s", view_id)
-        self._logger.info("trigger mode for current view: %s", trigger_mode)
-        self._log_trigger_cycle(
-            "view_start",
-            active_view=view_id,
-            trigger_mode=trigger_mode,
-            preview_state="paused",
-            trigger_primed=bool(getattr(self.cam, "_trigger_primed", False)),
-        )
-
-        golden = self._load_view_golden_array(recipe_name, view)
-        inspection_finished_ts: float | None = None
-        source_view_id = spec.get("frame_source_view_id")
-        view_frame_u8 = None
-        injected_frame = spec.get("injected_frame")
-        if injected_frame is not None:
-            view_frame_u8 = self._clone_frame(injected_frame)
-            view_frame_u8 = apply_view_image_transform(view_frame_u8, view, stage="inspection")
-        elif source_view_id:
-            view_frame_u8 = captured_frames.get(source_view_id)
-            if view_frame_u8 is None:
-                view_frame_u8 = self._clone_frame(self._get_last_frame_for_view(source_view_id))
-            view_frame_u8 = apply_view_image_transform(view_frame_u8, view, stage="inspection")
-
-        trigger_requested_ts = time.monotonic()
-        frame_received_ts = trigger_requested_ts
-
-        if view_frame_u8 is None:
-            self._log_run_trigger_context(
-                f"RUN trigger capture flow for view={view_id}",
-                requested_stream_mode=None,
-                hid_set="skipped",
-            )
-            view_frame = self._capture_frame_for_view(
-                trigger_mode_label=trigger_mode,
-                master_caller="run_manual_trigger_master",
-                view=view,
-                base_camera_state=base_camera_state,
-                settle_ms=settle_ms,
-                transform_stage="inspection",
-                capture_request_source=trigger_state.get("trigger_source", "manual"),
-                frame_request=trigger_state.pop("frame_request", None),
-            )
-            self._update_manual_trigger_feedback()
-            if view_frame is None:
-                self._update_manual_trigger_feedback(force_fail=True)
-                self._apply_run_status_style("nok")
-                self.lbl_status.setText("CHYBA SNÍMANIA")
-                self._run_status_message.setText("Žiadny snímok z kamery")
-                self._reset_manual_trigger_progress(recipe_name)
-                return {"should_break": True}
-            view_frame_u8 = view_frame.copy()
-            frame_received_ts = time.monotonic()
-        else:
-            frame_received_ts = time.monotonic()
-
-        self._log_trigger_cycle(
-            "view_capture_done",
-            active_view=view_id,
-            trigger_mode=trigger_mode,
-            preview_state="paused",
-            trigger_primed=bool(getattr(self.cam, "_trigger_primed", False)),
-            frame_received=view_frame_u8 is not None,
-        )
-
-        if golden is None:
-            status = "nok"
-            reports = []
-            diagnostics_payload = ["missing_golden"]
-            combined_metrics = {}
-            policy_applied = None
-            result = None
-            self._run_overlay_cache.pop(self._view_storage_key(view_id), None)
-            last_preview_frame = view_frame_u8.copy()
-            inspection_finished_ts = time.monotonic()
-        else:
-            view_recipe = RecipeV2(
-                pose_enabled=recipe_cfg.pose_enabled,
-                regions=[dict(r) for r in recipe_cfg.regions],
-                tools=[tool.copy() for tool in getattr(view, "tools", [])],
-                views=[view.copy()],
-                aggregation=recipe_cfg.aggregation.copy(),
-                on_locator_failure=recipe_cfg.on_locator_failure,
-                export_artifacts=recipe_cfg.export_artifacts,
-                logging_enabled=recipe_cfg.logging_enabled,
-            )
-            result = run_pipeline(
-                golden,
-                view_frame_u8,
-                view_recipe,
-                recipe_name=recipe_name,
-                notes=f"manual_trigger::{view_id}",
-                capture_filtered_roi=self.chk_filtered_roi.isChecked(),
-            )
-            inspection_finished_ts = time.monotonic()
-            status = (result.status or "ok").lower()
-            diagnostics_payload = [
-                self._simplify_value(diag) for diag in getattr(result, "diagnostics", []) or []
-            ]
-            reports = [self._serialize_tool_report(report) for report in result.per_tool]
-            combined_metrics = self._merge_pipeline_metrics(reports)
-            policy_applied = getattr(result, "policy_applied", None)
-            context_frame = getattr(result.context, "frame_aligned", None)
-            if context_frame is None:
-                context_frame = getattr(result.context, "frame", None)
-            if isinstance(context_frame, np.ndarray):
-                trigger_state["pending_overlays"][view_id] = (
-                    context_frame,
-                    view,
-                    result,
-                )
-                # Pipeline frames already use the rotated inspection coordinates.
-            last_preview_frame = context_frame.copy() if isinstance(context_frame, np.ndarray) else view_frame_u8.copy()
-
-        per_view_statuses[view_id] = status
-        if all_manual:
-            self._manual_trigger_statuses[recipe_name] = dict(per_view_statuses)
-        sequence_key = trigger_state.get("sequence_key")
-        if sequence_key and not str(sequence_key).startswith("manual:"):
-            self._external_sequence_statuses[str(sequence_key)] = dict(per_view_statuses)
-
-        result_time_ts = inspection_finished_ts or time.monotonic()
-        cycle_time_value = float(result.cycle_time_ms) if result is not None else None
-        total_cycle_time_value = (result_time_ts - trigger_state["trigger_start_ts"]) * 1000.0
-        capture_time_value = (frame_received_ts - trigger_requested_ts) * 1000.0
-        processing_time_value = (result_time_ts - frame_received_ts) * 1000.0
-        meta_payload = {
-            "mode": "manual",
-            "status": status,
-            "view_id": view_id,
-            "view_name": view_name,
-            "cycle_time_ms": cycle_time_value,
-            "capture_time_ms": capture_time_value,
-            "processing_time_ms": processing_time_value,
-            "total_cycle_time_ms": total_cycle_time_value,
-            "per_tool": reports,
-            "diagnostics": diagnostics_payload,
-            "metrics": combined_metrics,
-            "sequence_statuses": dict(per_view_statuses),
-        }
-        if policy_applied:
-            meta_payload["policy_applied"] = policy_applied
-
-        if trigger_state["logging_enabled"]:
-            artifacts = save_production_result(
-                view_frame_u8,
-                meta_payload,
-                recipe_name,
-                store_full_nok=True,
-                nok=status != "ok",
-                run_id=trigger_state["run_id"],
-                view_id=view_id,
-            )
-            self._record_run_result(recipe_name, status=status, metrics=combined_metrics, artifacts=artifacts)
-        else:
-            self._bump_runtime_stats(
-                recipe_name,
-                status=status,
-                view_id=view_id,
-                cycle_time_ms=cycle_time_value,
-            )
-
-        self._set_last_view_frame(view_id, last_preview_frame)
-        captured_frames[view_id] = self._clone_frame(view_frame_u8)
-        trigger_state["last_preview_frame"] = last_preview_frame
-        trigger_state["last_view_id"] = view_id
-        self.view_strip.set_status(view_id, status)
-        self._update_sidebar(
-            per_tool=reports,
-            status=status,
-            cycle_time_ms=cycle_time_value,
-            capture_time_ms=capture_time_value,
-            processing_time_ms=processing_time_value,
-            total_cycle_time_ms=total_cycle_time_value,
-            view_id=view_id,
-        )
-
-        branch_target_id = None
-        replace_queue = None
-        if bool(spec["branch_enabled"]):
-            if index == 0:
-                trigger_state["ignored_for_aggregation"].add(view_id)
-            branch_map = dict(spec["branch_targets"])
-            branch_target_id = branch_map.get(status) or spec.get("branch_default_view_id")
-            if branch_target_id and branch_target_id != view_id:
-                forwarded_frame = self._clone_frame(view_frame_u8)
-                target_spec = trigger_state["spec_lookup"].get(branch_target_id)
-                if target_spec:
-                    queued_spec = dict(target_spec)
-                    queued_spec["injected_frame"] = forwarded_frame
-                    replace_queue = [queued_spec]
-                else:
-                    replace_queue = []
-
-        should_break = bool(trigger_state["fail_fast"] and status == "nok" and not branch_target_id)
-        if trigger_mode == "timed" and interval_ms is not None and interval_ms > 0:
-            time.sleep(interval_ms / 1000.0)
-        return {"replace_queue": replace_queue, "should_break": should_break}
+    def _display_inspection_result(self, trigger_state):
+        for record in trigger_state['records']:
+            view_id = record['view_id']
+            self._set_last_view_frame(view_id, record['frame'])
+            self.view_strip.set_status(view_id, record['status'])
+            self._update_sidebar(per_tool=record['reports'], status=record['status'],
+                cycle_time_ms=record['cycle_time_ms'], capture_time_ms=record['capture_time_ms'],
+                processing_time_ms=record['processing_time_ms'], total_cycle_time_ms=record['total_cycle_time_ms'],
+                view_id=view_id)
+            if not trigger_state['logging_enabled']:
+                self._bump_runtime_stats(trigger_state['recipe_name'], status=record['status'],
+                    view_id=view_id, cycle_time_ms=record['cycle_time_ms'])
+        self._active_view_id = trigger_state['last_view_id']
+        self.view_strip.set_active(self._active_view_id)
+        self._finalize_run_trigger(trigger_state)
 
     def _finalize_run_trigger(self, trigger_state: dict[str, Any]) -> None:
-        recipe_cfg = trigger_state["recipe_cfg"]
-        per_view_statuses = trigger_state["per_view_statuses"]
-        if self._active_view_id and self._active_view_id not in per_view_statuses:
-            self._update_sidebar(view_id=self._active_view_id)
-
-        aggregated_status = aggregate_branching_statuses(
-            recipe_cfg.aggregation,
-            per_view_statuses,
-            trigger_state["ignored_for_aggregation"],
-        )
+        aggregated_status = trigger_state['status']
         self._apply_run_status_style(aggregated_status)
-        relevant_reports: list[Mapping[str, Any]] = []
-        for candidate_view_id, candidate_status in per_view_statuses.items():
-            if candidate_status != aggregated_status:
-                continue
-            state = self._view_states.get(candidate_view_id, {})
-            reports = state.get("reports", []) if isinstance(state, Mapping) else []
-            if isinstance(reports, Sequence):
-                relevant_reports.extend(
-                    entry for entry in reports if isinstance(entry, Mapping)
-                )
-        self._update_operator_status_message(aggregated_status, relevant_reports)
-        self._signal_outputs(aggregated_status)
+        self._update_operator_status_message(aggregated_status, trigger_state['relevant_reports'])
 
         for overlay_view_id, overlay_source in trigger_state.get("pending_overlays", {}).items():
             frame, view, result = overlay_source
@@ -1869,84 +1214,6 @@ class MainWindow(QMainWindow):
         if gst_restarts > 0:
             self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
 
-    def _run_legacy_trigger(
-        self,
-        frame_u8,
-        recipe_name: str,
-        *,
-        logging_enabled: bool = True,
-    ):
-        try:
-            res = self.tool.evaluate(frame_u8)
-            ok = bool(res.get("ok", False))
-            metrics = dict(res.get("metrics", {}) or {})
-            status = "ok" if ok else "nok"
-        except Exception as exc:
-            print("[Tool] evaluate failed:", exc)
-            metrics = {}
-            status = "nok"
-
-        self._set_last_view_frame(None, frame_u8)
-        active_frame = self._get_last_frame_for_view(self._active_view_id)
-        if active_frame is not None:
-            self._last_trigger_frame = self._clone_frame(active_frame)
-            self._last_trigger_view_id = self._active_view_id
-        else:
-            self._last_trigger_frame = self._clone_frame(frame_u8)
-            self._last_trigger_view_id = None
-
-        self._apply_run_status_style(status)
-        self._signal_outputs(status)
-
-        legacy_report = [{
-            "id": "legacy",
-            "name": "Inspection",
-            "type": "legacy",
-            "status": status,
-            "latency_ms": None,
-            "metrics": metrics,
-            "diagnostics": {},
-        }]
-
-        self._last_cycle_time_ms = None
-        self._last_total_cycle_time_ms = None
-        st = self.stats.daily_for_recipe(recipe_name)
-        self._update_sidebar(st, legacy_report, status=status)
-
-        meta_payload = {
-            "mode": "manual",
-            "status": status,
-            "metrics": metrics,
-            "per_tool": legacy_report,
-        }
-
-        if logging_enabled:
-            artifacts = save_production_result(
-                frame_u8,
-                meta_payload,
-                recipe_name,
-                store_full_nok=True,
-                nok=status != "ok",
-            )
-
-            self._record_run_result(
-                recipe_name,
-                status=status,
-                metrics=metrics,
-                artifacts=artifacts,
-            )
-        else:
-            self._bump_runtime_stats(
-                recipe_name,
-                status=status,
-                cycle_time_ms=None,
-            )
-
-        self._reload_results_strip()
-
-        if not self.live_enabled:
-            self._update_live_view()
-
     def open_wizard(self):
         if self.capture_mode == "master":
             self._exit_run_trigger_session(restore_master=False)
@@ -1961,13 +1228,12 @@ class MainWindow(QMainWindow):
             trigger_fn=None,
             get_capture_mode=self.get_capture_mode,
             capture_frame_for_golden=self.capture_frame_for_golden,
+            session_settings=self.session_settings,
             authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
         self._refresh_manual_light()
         self._apply_capture_mode(ensure_runtime_ready=True)
-        self._reset_manual_trigger_progress(self.current_recipe_name())
-        self._reset_external_sequence_state()
         self._refresh_views()
         self._reload_results_strip()
         self._refresh_tool_selector()
@@ -2010,13 +1276,9 @@ class MainWindow(QMainWindow):
         )
         if was_live_enabled:
             self._run_timer.stop()
-        if self.capture_mode == "trigger":
-            self.cam.begin_trigger_capture()
         return was_live_enabled
 
     def _resume_live_preview_after_trigger(self, was_live_enabled: bool = False) -> None:
-        if self.capture_mode == "trigger":
-            self.cam.end_trigger_capture()
         if was_live_enabled:
             self._run_timer.start()
         elif not self.live_enabled:
@@ -2030,6 +1292,8 @@ class MainWindow(QMainWindow):
         )
 
     def _toggle_live(self):
+        if self.runtime_worker.busy:
+            return
         if self.capture_mode != "master":
             self.live_enabled = False
             self.btn_live.setChecked(False)
@@ -2041,11 +1305,9 @@ class MainWindow(QMainWindow):
             self.lbl_filtered_roi.setText("Filtrované ROI patrí poslednej kontrole; vypnite Live pre jeho zobrazenie.")
         self.btn_live.setText("Live zapnuté" if self.live_enabled else "Live vypnuté")
         if self.live_enabled:
-            self._apply_run_camera_profile()
             self._run_timer.start()
         else:
             self._run_timer.stop()
-            self._apply_run_camera_profile()
             self._update_live_view()
 
     def _set_manual_light_ui(self, enabled: bool | None) -> None:
@@ -2058,6 +1320,8 @@ class MainWindow(QMainWindow):
         self.btn_manual_light.blockSignals(False)
 
     def _refresh_manual_light(self) -> None:
+        if getattr(getattr(self, "runtime_worker", None), "busy", False):
+            return
         self._set_manual_light_ui(self.pico.manual_light_status())
 
     def _toggle_manual_light(self, checked: bool) -> None:
@@ -2119,12 +1383,34 @@ class MainWindow(QMainWindow):
             parsed_input = parsed_input if 1 <= parsed_input <= 8 else None
         else:
             parsed_input = None
-        self.external_triggered.emit(
-            resolved_source,
-            {"input_index": parsed_input, "spec": requested_spec,
-             "frame_request": self.cam.arm_master_frame()
-             if resolved_source == "pico" and self.get_capture_mode() == "master" else None},
-        )
+        request, reason = self.inspection.admit(resolved_source)
+        if request is None:
+            self._logger.warning("[RUN] trigger rejected reason=%s counts=%s", reason, self.inspection.snapshot()["counts"])
+            # At most one notification per active request/state; don't replace a
+            # bounded capture queue with an unbounded rejection-notification queue.
+            if self.inspection.snapshot()["counts"].get(f"rejected_{reason}", 0) == 1:
+                self.trigger_rejected.emit(reason)
+            return
+        try:
+            frame_request = (self.cam.arm_master_frame()
+                             if resolved_source == "pico" and self.get_capture_mode() == "master" else None)
+            self.external_triggered.emit(
+                resolved_source,
+                {"input_index": parsed_input, "spec": requested_spec,
+                 "inspection_request": request, "frame_request": frame_request},
+            )
+        except Exception as exc:
+            self.inspection.finish(request, error=exc)
+            self._logger.exception("[RUN] frame reservation failed request=%s", request.id)
+            try:
+                self._signal_outputs("nok")
+            except Exception:
+                self._logger.exception("[RUN] NOK output failed")
+            try:
+                self.pico.quiesce()
+            except Exception:
+                self._logger.exception("[RUN] Pico IDLE failed")
+            self.trigger_rejected.emit(f"rezervácia snímky zlyhala: {exc}")
 
     def _update_live_view(self):
         try:
@@ -2192,7 +1478,7 @@ class MainWindow(QMainWindow):
         import cv2
         import numpy as np
         name = self.current_recipe_name()
-        golden_fp = f"/data/recipes/{name}/golden.png"
+        golden_fp = str(self.data_root / "recipes" / name / "golden.png")
         if not os.path.exists(golden_fp):
             return frame_u8
         g = iio.imread(golden_fp)
@@ -2443,7 +1729,7 @@ class MainWindow(QMainWindow):
 
     def _is_logging_enabled_for_recipe(self, recipe: str) -> bool:
         try:
-            recipe_cfg = load_recipe_config(recipe)
+            recipe_cfg = load_recipe_config(recipe, base_dir=self.data_root)
         except Exception:
             return True
         return bool(getattr(recipe_cfg, "logging_enabled", True))
@@ -2636,61 +1922,6 @@ class MainWindow(QMainWindow):
             elided = metrics.elidedText(full_text, Qt.ElideRight, target_width)
             label.setText(elided)
 
-    def _record_run_result(
-        self,
-        recipe_name: str,
-        *,
-        status: str,
-        metrics: Mapping[str, Any] | None,
-        artifacts: Mapping[str, Any] | None,
-    ) -> None:
-        if not isinstance(artifacts, Mapping):
-            return
-
-        try:
-            rid = self.db.recipe_id(recipe_name)
-            if rid is None:
-                rid = self.db.ensure_recipe(recipe_name)
-        except Exception as exc:
-            print(f"[Run][DB] Failed to resolve recipe '{recipe_name}': {exc}")
-            return
-
-        try:
-            view_id = artifacts.get("view_id")
-            run_id = artifacts.get("run_id")
-            ts_ms = artifacts.get("ts_ms")
-            meta_payload = artifacts.get("meta_payload")
-            if not isinstance(meta_payload, Mapping):
-                meta_payload = {}
-
-            meta_dict = {str(k): v for k, v in dict(meta_payload).items()}
-            if ts_ms is None:
-                ts_ms = int(time.time() * 1000)
-            meta_dict.setdefault("ts_ms", ts_ms)
-            meta_dict.setdefault("status", status)
-            meta_dict.setdefault("recipe", recipe_name)
-            meta_dict.setdefault("nok", status != "ok")
-            if view_id is not None:
-                meta_dict.setdefault("view_id", view_id)
-            if run_id is not None:
-                meta_dict.setdefault("run_id", run_id)
-
-            thumb_path = artifacts.get("thumb") or ""
-            full_path = artifacts.get("full")
-
-            self.db.insert_result(
-                ts_ms=int(ts_ms),
-                recipe_id=int(rid),
-                ok=str(status).lower() == "ok",
-                metrics=dict(metrics or {}),
-                thumb_path=str(thumb_path),
-                full_path=str(full_path) if full_path else None,
-                meta_json=json.dumps(meta_dict, ensure_ascii=False),
-                view_id=view_id,
-                run_id=run_id,
-            )
-        except Exception as exc:
-            print(f"[Run][DB] Failed to record run result: {exc}")
 
     def _update_metrics_panel(self):
         try:
@@ -2917,119 +2148,6 @@ class MainWindow(QMainWindow):
         except Exception:
             return str(value)
 
-    def _serialize_tool_report(self, report) -> dict[str, Any]:
-        metrics = {}
-        raw_metrics = getattr(report, "metrics", None)
-        if isinstance(raw_metrics, Mapping):
-            metrics = {str(k): self._simplify_value(v) for k, v in raw_metrics.items()}
-        diagnostics = {}
-        raw_diag = getattr(report, "diagnostics", None)
-        if isinstance(raw_diag, Mapping):
-            diagnostics = {str(k): self._simplify_value(v) for k, v in raw_diag.items()}
-
-        latency_value = self._simplify_value(getattr(report, "latency_ms", None))
-        if latency_value is not None:
-            metrics.setdefault("latency_ms", latency_value)
-
-        tool = getattr(report, "tool", None)
-        tool_name = getattr(tool, "name", None) if tool is not None else None
-        tool_type = getattr(tool, "type", None) if tool is not None else None
-        tool_order = getattr(tool, "order", None) if tool is not None else None
-        tool_id = getattr(report, "tool_id", None) or tool_name or (f"tool_{tool_order}" if tool_order is not None else None)
-
-        # Persist geometry and thresholds from the executed tool, never rebuild
-        # historical overlays from a subsequently edited recipe.
-        history_overlays = []
-        if tool is not None:
-            geometry = overlay_utils.tool_overlay_items(
-                tool, color=(255, 170, 73), include_ignore_mask=False,
-            )
-            for item in [item for item in geometry if item.z_index == 20] + list(getattr(report, "overlay_items", []) or []):
-                if item.kind not in {"rect", "polygon", "polyline"}:
-                    continue
-                history_overlays.append({
-                    "rect": self._simplify_value(item.rect),
-                    "points": item.points.tolist() if item.points is not None else None,
-                    "closed": item.closed,
-                    "error": item.z_index >= 30 and str(getattr(report, "status", "")).lower() == "nok",
-                })
-            if str(getattr(report, "status", "")).lower() == "nok":
-                for blob in (raw_metrics or {}).get("blobs", []):
-                    if isinstance(blob, Mapping) and "image_x" in blob and "image_y" in blob:
-                        history_overlays.append({
-                            "rect": self._simplify_value([blob["image_x"], blob["image_y"], blob.get("width", 0), blob.get("height", 0)]),
-                            "error": True,
-                        })
-
-        return {
-            "id": tool_id,
-            "name": tool_name or tool_id or "Tool",
-            "type": tool_type or diagnostics.get("type"),
-            "order": getattr(report, "order", tool_order),
-            "status": getattr(report, "status", None),
-            "latency_ms": latency_value,
-            "metrics": metrics,
-            "diagnostics": diagnostics,
-            "thresholds": self._simplify_value(getattr(getattr(tool, "thresholds", None), "values", {})),
-            "roi": tool.roi.to_dict() if tool is not None else None,
-            "history_overlays": history_overlays,
-        }
-
-    def _merge_pipeline_metrics(self, reports: Sequence[dict[str, Any]]) -> dict[str, Any]:
-        combined: dict[str, Any] = {}
-        for entry in reports:
-            metrics = entry.get("metrics")
-            if not isinstance(metrics, Mapping):
-                continue
-            for key, value in metrics.items():
-                if key not in combined and value is not None:
-                    combined[key] = value
-        return combined
-
-    def _apply_run_camera_profile(self, view_id: str | None = None) -> None:
-        """Apply the camera profile for the active recipe view when in RUN mode."""
-
-        if self.mode != "RUN" or (self.capture_mode == "master" and self.live_enabled):
-            return
-
-        try:
-            recipe_name = self.current_recipe_name()
-        except Exception:
-            return
-
-        target_view_id = view_id or self._active_view_id
-        view_obj: Any | None = None
-
-        if target_view_id:
-            view_obj = self._views_by_id.get(target_view_id)
-            if view_obj is None:
-                with suppress(Exception):
-                    view_obj = self.recipes.get_view(recipe_name, target_view_id)
-
-        if view_obj is None:
-            views: list[Any] = []
-            with suppress(Exception):
-                views = self.recipes.list_views(recipe_name)
-            if views:
-                view_obj = views[0]
-                resolved_id = getattr(view_obj, "id", None)
-                if resolved_id:
-                    target_view_id = resolved_id
-                    self._active_view_id = resolved_id
-                    self.view_strip.set_active(resolved_id)
-
-        if view_obj is None:
-            return
-
-        profile = getattr(view_obj, "camera_profile", None)
-        try:
-            apply_view_camera_profile(self.cam, {}, profile)
-            if self.get_capture_mode() == "master":
-                self.cam.prepare_master_capture()
-        except Exception as exc:
-            self.lbl_status.setText(f"Načítanie profilu kamery zlyhalo: {exc}")
-            return
-
 
     def _refresh_views(self):
         self._golden_cache.clear()
@@ -3056,8 +2174,6 @@ class MainWindow(QMainWindow):
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
-        if self.mode == "RUN" and not self.live_enabled:
-            self._apply_run_camera_profile(self._active_view_id)
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -3065,7 +2181,7 @@ class MainWindow(QMainWindow):
         except Exception:
             recipe_name = "default"
         golden_name = getattr(view, "golden_path", "golden.png") or "golden.png"
-        path = Path("/data") / "recipes" / recipe_name / golden_name
+        path = self.data_root / "recipes" / recipe_name / golden_name
         if not path.exists():
             return None
         reader = QImageReader(str(path))
@@ -3079,7 +2195,7 @@ class MainWindow(QMainWindow):
         import imageio.v3 as iio
 
         golden_name = getattr(view, "golden_path", "golden.png") or "golden.png"
-        path = Path("/data") / "recipes" / recipe_name / golden_name
+        path = self.data_root / "recipes" / recipe_name / golden_name
         cache_key = (recipe_name, golden_name)
 
         try:
@@ -3144,8 +2260,6 @@ class MainWindow(QMainWindow):
             self._last_trigger_view_id = view_id
         else:
             self._last_trigger_view_id = None
-        if self.mode == "RUN" and not self.live_enabled:
-            self._apply_run_camera_profile(view_id)
         if not self.live_enabled:
             self._update_live_view()
 
@@ -3254,28 +2368,17 @@ class MainWindow(QMainWindow):
         self._request_host_power_action("reboot")
 
     def _request_host_power_action(self, action: str) -> None:
-        try:
-            self.pico.quiesce()
-        except Exception:
-            self._logger.exception("Pico sa nepodarilo zastaviť pred vypnutím")
-        try:
-            self.cam.stop(caller="main_window_power_action")
-        except Exception:
-            pass
-        try:
-            self.modbus.close()
-        except Exception:
-            pass
-
-        if action == "shutdown":
-            QApplication.exit(10)
-        elif action == "reboot":
-            QApplication.exit(11)
-        else:
+        if action not in {"shutdown", "reboot"}:
             QMessageBox.critical(self, "Chyba", f"Neznáma akcia napájania: {action}")
+            return
+        if self.host_power_action is not None:
+            self.host_power_action(action)
+            return
+        self._power_exit_code = 10 if action == "shutdown" else 11
+        self.close()  # Accepted work and Pico IDLE complete before process exit.
 
     def _apply_debug_overlay_setting(self) -> None:
-        settings = settings_service.get_session_settings()
+        settings = self.session_settings.get_session_settings()
         enabled = bool(getattr(settings, "show_performance_debug_overlay", False))
         self.chk_debug_overlay.blockSignals(True)
         self.chk_debug_overlay.setChecked(enabled)
@@ -3283,7 +2386,7 @@ class MainWindow(QMainWindow):
         self._set_debug_overlay_enabled(enabled)
 
     def _on_debug_overlay_toggled(self, enabled: bool) -> None:
-        settings_service.update_session_settings(show_performance_debug_overlay=enabled)
+        self.session_settings.update_session_settings(show_performance_debug_overlay=enabled)
         self._set_debug_overlay_enabled(bool(enabled))
 
     def _set_debug_overlay_enabled(self, enabled: bool) -> None:
@@ -3307,17 +2410,17 @@ class MainWindow(QMainWindow):
         self._refresh_metric_name_elision()
 
     def closeEvent(self, e):
-        try:
-            self.pico.quiesce()
-        except Exception:
-            self._logger.exception("Pico sa nepodarilo zastaviť pri zatvorení")
-        try:
-            self._jetson_stats_service.stop()
-            self.cam.stop(caller="main_window_close")
-            self.modbus.close()
-            self.pico.close()
-        finally:
-            e.accept()
+        if not self._close_ready:
+            e.ignore()
+            self._request_runtime_stop(close=True)
+            return
+        self.runtime_worker.shutdown()
+        self._jetson_stats_service.stop()
+        self.db.close()
+        self.station_closed.emit(self.camera_id)
+        if self._power_exit_code is not None:
+            QApplication.exit(self._power_exit_code)
+        e.accept()
 
     def _refresh_recipe_list(self):
         self.cmb_recipe.blockSignals(True)
@@ -3375,14 +2478,12 @@ class MainWindow(QMainWindow):
 
     def on_recipe_changed(self, name: str):
         try:
-            self._reset_external_sequence_state()
             self.recipes.load(name)
             self.tool = self.recipes.tool
             if hasattr(self, "setup_recipe_name"):
                 self.setup_recipe_name.setText(name)
             self._persist_last_recipe(name)
             self._refresh_views()
-            self._reset_manual_trigger_progress(name)
             self.lbl_status.setText("Recipe loaded.")
             # refresh štatistík + strip
             st = self.stats.daily_for_recipe(name, view_id=self._active_view_id)
@@ -3391,7 +2492,10 @@ class MainWindow(QMainWindow):
             self._update_sidebar(st, [], view_id=self._active_view_id)
             self._refresh_tool_selector()
         except Exception as e:
-            self.lbl_status.setText(f"Load failed: {e}")
+            self.cmb_recipe.blockSignals(True)
+            self.cmb_recipe.setCurrentText(self.current_recipe_name())
+            self.cmb_recipe.blockSignals(False)
+            self.lbl_status.setText(f"Načítanie receptu zlyhalo: {e}")
 
     def on_recipe_new(self):
         from PySide6.QtWidgets import QInputDialog
@@ -3401,7 +2505,6 @@ class MainWindow(QMainWindow):
         if not authorize_recipe_write(self, self.security):
             return
         name = name.strip()
-        self._reset_external_sequence_state()
         self.recipes.create(name)
         self._refresh_recipe_list()
         self.recipes.load(name)
@@ -3409,7 +2512,6 @@ class MainWindow(QMainWindow):
         self.setup_recipe_name.setText(name)
         self._persist_last_recipe(name)
         self._refresh_views()
-        self._reset_manual_trigger_progress(name)
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
@@ -3423,16 +2525,13 @@ class MainWindow(QMainWindow):
         if not authorize_recipe_write(self, self.security):
             return
         new = new.strip()
-        self._reset_external_sequence_state()
         self.recipes.rename(old, new)
-        self._reset_manual_trigger_progress(old)
         self._refresh_recipe_list()
         self.recipes.load(new)
         self.tool = self.recipes.tool
         self.setup_recipe_name.setText(new)
         self._persist_last_recipe(new)
         self._refresh_views()
-        self._reset_manual_trigger_progress(new)
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
@@ -3448,16 +2547,13 @@ class MainWindow(QMainWindow):
             return
         if not authorize_recipe_write(self, self.security):
             return
-        self._reset_external_sequence_state()
         self.recipes.delete(name)
-        self._reset_manual_trigger_progress(name)
         self._refresh_recipe_list()
         self.recipes.load("default")
         self.tool = self.recipes.tool
         self.setup_recipe_name.setText("default")
         self._persist_last_recipe("default")
         self._refresh_views()
-        self._reset_manual_trigger_progress("default")
         self._reload_results_strip()
         self._refresh_tool_selector()
         self._update_sidebar(view_id=self._active_view_id)
@@ -3467,7 +2563,7 @@ class MainWindow(QMainWindow):
         if rid is None:
             self.lbl_status.setText("Nie je vybraný recept.")
             return
-        out = f"/data/runs/{self.current_recipe_name()}_today.csv"
+        out = str(self.data_root / "runs" / f"{self.current_recipe_name()}_today.csv")
         try:
             path = self.db.export_csv_today(rid, out)
             self.lbl_status.setText(f"CSV export: {path}")

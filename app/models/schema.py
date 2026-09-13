@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from app.models.recipe_contract import RECIPE_FORMAT_VERSION
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Literal, cast
 
@@ -279,14 +280,9 @@ class ToolMask:
             arr = np.asarray(self.value)
         elif isinstance(self.value, dict):
             arr = imaging.decode_mask_from_blob(self.value)
-            if arr is None and self.value.get("type") == "ndarray":
-                try:
-                    dtype = self.value.get("dtype", "uint8")
-                    data = np.asarray(self.value.get("data", []), dtype=dtype)
-                    shape = tuple(self.value.get("shape", []))
-                    arr = data.reshape(shape)
-                except Exception:
-                    arr = None
+            if arr is None:
+                from app.models.recipe_contract import RecipeFormatError
+                raise RecipeFormatError("Maska je poškodená alebo má nepodporovaný formát.")
         else:
             arr = np.asarray(self.value)
 
@@ -317,15 +313,8 @@ class ToolMask:
             decoded = imaging.decode_mask_from_blob(obj)
             if decoded is not None:
                 return cls(decoded)
-            if obj.get("type") == "ndarray" and "data" in obj and "shape" in obj:
-                dtype = obj.get("dtype", "uint8")
-                arr = np.asarray(obj["data"], dtype=dtype)
-                try:
-                    arr = arr.reshape(tuple(obj["shape"]))
-                except Exception:
-                    arr = arr.reshape(-1)
-                return cls(arr)
-            return cls(None)
+            from app.models.recipe_contract import RecipeFormatError
+            raise RecipeFormatError("Maska je poškodená alebo má nepodporovaný formát.")
         if isinstance(obj, (list, tuple)):
             return cls(np.asarray(obj))
         return cls(None)
@@ -352,6 +341,8 @@ class Tool:
     view_id: str = ""
 
     def __post_init__(self) -> None:
+        from app.models.recipe_contract import validate_tool_contract
+        validate_tool_contract(self.type, ToolParams.from_obj(self.params).values)
         self.type = str(self.type)
         self.name = str(self.name)
         self.enabled = bool(self.enabled)
@@ -783,13 +774,9 @@ class RecipeView:
         self.pico_profile = pico_profile
 
         mode = str(self.trigger_mode or "timed").strip().lower()
-        mode = {
-            "timer": "timed", "časovač": "timed", "manual": "external",
-            "manual trigger": "external", "external trigger": "external",
-            "externý signál": "external",
-        }.get(mode, mode)
         if mode not in {"timed", "external"}:
-            mode = "timed"
+            from app.models.recipe_contract import RecipeFormatError
+            raise RecipeFormatError(f"Nepodporovaný režim snímania: {self.trigger_mode!r}.")
         self.trigger_mode = cast(Literal["timed", "external"], mode)
 
         raw_external_mode = (
@@ -805,18 +792,20 @@ class RecipeView:
             if not raw_external_mode:
                 raw_external_mode = "sequential"
             if raw_external_mode not in {"sequential", "explicit"}:
-                raw_external_mode = "sequential"
+                from app.models.recipe_contract import RecipeFormatError
+                raise RecipeFormatError("Neplatný spôsob externého spúšťania.")
             self.external_trigger_mode = raw_external_mode
             source = str(self.external_source or "modbus").strip().lower()
-            self.external_source = source if source in {"pico", "modbus"} else "modbus"
+            if source not in {"pico", "modbus"}:
+                from app.models.recipe_contract import RecipeFormatError
+                raise RecipeFormatError("Neplatný zdroj externého spúšťania.")
+            self.external_source = source
 
             if self.external_trigger_mode != "explicit":
                 self.external_request_input = None
             else:
                 try:
                     raw_input = self.external_request_input
-                    if isinstance(raw_input, str):
-                        raw_input = raw_input.strip().upper().removeprefix("DI").removeprefix("IN")
                     input_value = int(raw_input) if raw_input is not None else None
                 except Exception:
                     input_value = None
@@ -906,6 +895,9 @@ class RecipeView:
             return data.copy()
         if not isinstance(data, dict):
             raise TypeError("RecipeView.from_dict expects a dict or RecipeView instance")
+        from app.models.recipe_contract import RecipeFormatError
+        if "modbus_input" in data:
+            raise RecipeFormatError("Použite external_request_input namiesto modbus_input.")
         return cls(
             id=data.get("id", ""),
             name=data.get("name", ""),
@@ -919,7 +911,7 @@ class RecipeView:
             trigger_mode=data.get("trigger_mode", "timed"),
             external_trigger_mode=data.get("external_trigger_mode"),
             external_source=data.get("external_source"),
-            external_request_input=data.get("external_request_input", data.get("modbus_input")),
+            external_request_input=data.get("external_request_input"),
             trigger_interval_ms=data.get("trigger_interval_ms"),
             trigger_gap_ms=data.get("trigger_gap_ms"),
             image_rotation=data.get("image_rotation", 0),
@@ -965,23 +957,10 @@ class RecipeView:
 
 @dataclass(slots=True)
 class RecipeData:
-    """Structure stored in ``regions.json`` for each recipe."""
+    """In-memory region edits submitted by the Golden Wizard."""
 
     pose_enabled: bool = True
     regions: List[Dict[str, Any]] = field(default_factory=list)
-
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "pose_enabled": bool(self.pose_enabled),
-            "regions": list(self.regions),
-        }
-
-    @staticmethod
-    def from_dict(data: Dict[str, Any]) -> "RecipeData":
-        return RecipeData(
-            pose_enabled=bool(data["pose_enabled"]),
-            regions=list(data.get("regions", [])),
-        )
 
 
 @dataclass(slots=True)
@@ -1050,9 +1029,9 @@ class RecipeV2:
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "format_version": RECIPE_FORMAT_VERSION,
             "pose_enabled": bool(self.pose_enabled),
             "regions": [dict(r) for r in self.regions],
-            "tools": [t.to_dict() for t in self.tools],
             "views": [view.to_dict() for view in self.views],
             "aggregation": self.aggregation.to_dict(),
             "on_locator_failure": self.on_locator_failure,
@@ -1062,39 +1041,16 @@ class RecipeV2:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any] | None) -> "RecipeV2":
-        if not data:
-            return cls()
+        from app.models.recipe_document import validate_recipe_document
+        validate_recipe_document(data)
         return cls(
-            pose_enabled=data.get("pose_enabled", True),
-            regions=data.get("regions", []),
-            tools=data.get("tools", []),
-            views=data.get("views", []),
-            aggregation=data.get("aggregation"),
-            on_locator_failure=data.get(
-                "on_locator_failure", "continue_without_alignment"
-            ),
-            export_artifacts=bool(data.get("export_artifacts", False)),
-            logging_enabled=bool(data.get("logging_enabled", True)),
-        )
-
-    @classmethod
-    def from_recipe_data(cls, recipe: RecipeData) -> "RecipeV2":
-        return cls(
-            pose_enabled=recipe.pose_enabled,
-            regions=recipe.regions,
-            tools=[],
-            views=[
-                RecipeView(
-                    id="view_1",
-                    name="View 1",
-                    golden_path="golden.png",
-                    tools=[],
-                )
-            ],
-            aggregation=RecipeAggregation(),
-            on_locator_failure="continue_without_alignment",
-            export_artifacts=False,
-            logging_enabled=True,
+            pose_enabled=data["pose_enabled"],
+            regions=data["regions"],
+            views=data["views"],
+            aggregation=data["aggregation"],
+            on_locator_failure=data["on_locator_failure"],
+            export_artifacts=data["export_artifacts"],
+            logging_enabled=data["logging_enabled"],
         )
 
     def copy(self) -> "RecipeV2":
