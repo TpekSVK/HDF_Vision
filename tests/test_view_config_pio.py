@@ -99,3 +99,11 @@ def test_removed_controls_and_legacy_timing(dialog):
     assert not errors
     assert d.values()["settle_ms"] is None
     assert d.values()["camera_profile"].flash_mode is None
+
+
+def test_camera_device_is_not_a_view_setting(dialog):
+    d, errors = dialog(camera_profile={"device_id": "/dev/video9", "exposure_us": 1000})
+    assert not hasattr(d, "_device_edit")
+    d.accept()
+    assert not errors
+    assert d._result["camera_profile"].device_id is None

@@ -625,3 +625,15 @@ Ak beží dlhý test, zapísať jeho proces/session a priečinok výsledkov ešt
   a komentár. Merge nadväzuje po kontrolách GitHubu. Staršie lokálne stavy vyššie
   sú historické checkpointy, nie pokyn opätovne publikovať implementáciu.
 - A7, fyzické párovanie, build, nasadenie a reštart zostávajú nevykonané.
+
+## Správa receptov a nastavenie pohľadu – 2026-09-13
+
+- Odstránené nefunkčné pole Zariadenie kamery z Upraviť pohľad. Fyzické
+  priradenie kamery zostáva v Kamery a Pico; uloženie pohľadu už device_id nevytvára.
+- Zmazať recept… ponúka vlastný zoznam aj nepodporovaných receptov aktuálnej
+  stanice. Neaktívny recept sa nemusí načítať; aktívny recept zostáva zachovaný.
+- Potvrdenie zmazania má predvolené Nie a zachovanú autorizáciu. Default je
+  chránený; pri mazaní aktívneho receptu sa najprv overuje dostupný default.
+- Overenie: 479 testov prešlo, 1 existujúce upozornenie ImageIO. Regresie pokrývajú
+  odmietnutý formát, zrušenie, autorizáciu, oddelenie staníc aj aktívny recept.
+- Používateľ schválil push a merge. A7 ani hardvérové testy sa nevykonávali.
