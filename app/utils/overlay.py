@@ -537,8 +537,8 @@ def render_overlay(
             label_text = str(item.label or "").strip()
             if label_text and label_anchor is not None:
                 font = cv2.FONT_HERSHEY_SIMPLEX
-                font_scale = 0.52
-                text_thickness = 1
+                font_scale = max(0.8, width / 1280.0)
+                text_thickness = max(1, round(font_scale * 1.5))
                 (text_width, text_height), baseline = cv2.getTextSize(
                     label_text, font, font_scale, text_thickness
                 )
@@ -685,8 +685,8 @@ def draw_overlay_items(
         if not label_text or label_anchor is None:
             continue
         font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.52
-        text_thickness = 1
+        font_scale = max(0.8, width / 1280.0)
+        text_thickness = max(1, round(font_scale * 1.5))
         (text_width, text_height), baseline = cv2.getTextSize(
             label_text, font, font_scale, text_thickness
         )

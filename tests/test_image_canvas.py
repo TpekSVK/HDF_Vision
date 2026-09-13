@@ -363,3 +363,32 @@ def test_multiple_roi_edits_keep_entire_undo_redo_history(editor):
         view.redo()
         assert editor.roi() == second
         assert not view.can_redo()
+
+
+def test_locator_switch_resets_history_and_preserves_areas(qt_app):
+    from app.ui.roi_mask_editor import LocatorROIEditor
+    widget = LocatorROIEditor()
+    pixmap = QPixmap(800, 600)
+    pixmap.fill(Qt.darkGray)
+    widget.set_background(pixmap)
+    search = dict(x=10, y=10, w=400, h=300)
+    template = dict(x=50, y=50, w=100, h=80)
+    try:
+        widget.set_locator_mode(True)  # Adding a new locator with no ROI.
+        widget.set_locator_mode(True, search=search, template=template)
+        assert widget._view.roi_data() == search
+        widget._view.edit_roi((20, 20, 400, 300))
+        assert widget._view.can_undo()
+        widget._view.undo()
+        assert widget._view.can_redo()
+        widget.select_locator_roi('template')
+        assert widget._view.roi_data() == template
+        assert not widget._view.can_undo()
+        assert not widget._view.can_redo()
+        widget.select_locator_roi('search')
+        assert widget._view.roi_data() == search
+        widget.set_locator_mode(False)
+    finally:
+        widget.close()
+        widget.deleteLater()
+        qt_app.processEvents()
