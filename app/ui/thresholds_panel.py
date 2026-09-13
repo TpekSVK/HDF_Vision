@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.schema import Tool, ToolDefinition, ToolParams, ToolThresholds
-from app.ui.golden_wizard import ToolConfigPanel
+from app.ui.golden_wizard.tool_config_panel import ToolConfigPanel
 
 
 def _schema_from_definition(

@@ -88,6 +88,7 @@ class ResultsStrip(QWidget):
     def __init__(self, mw, limit=12):
         super().__init__(mw)
         self.mw = mw
+        self.data_root = Path(mw.db.db_path).parent
         self.limit = int(limit)
         self._thumb_cache: dict[str, tuple[float, QSize, QPixmap]] = {}
         self._last_folder_to_open: Optional[Path] = None
@@ -280,7 +281,7 @@ class ResultsStrip(QWidget):
         return True
 
     def _default_folder(self, recipe_name: str) -> Path:
-        base = Path("/data/runs")
+        base = (self.data_root / "runs")
         try:
             recipe_name = recipe_name or "default"
         except Exception:
@@ -303,7 +304,7 @@ class ResultsStrip(QWidget):
             return day_dir
         if base.exists():
             return base
-        return Path("/data")
+        return self.data_root
 
     def _show_placeholder(self, folder: Path) -> None:
         container = QWidget(self.wrap)
@@ -324,10 +325,10 @@ class ResultsStrip(QWidget):
         self.h.addStretch(1)
 
     def _open_folder(self) -> None:
-        candidate = self._last_folder_to_open or Path("/data/runs")
+        candidate = self._last_folder_to_open or (self.data_root / "runs")
         folder = self._determine_folder_to_open(candidate)
         if folder is None:
-            fallback = self._existing_folder(Path("/data/runs")) or Path("/data")
+            fallback = self._existing_folder((self.data_root / "runs")) or self.data_root
             folder = fallback
         if not self._open_with_desktop(folder):
             logger.debug("Desktop open failed for folder %s", folder)
@@ -428,7 +429,7 @@ class ResultsStrip(QWidget):
         return pixmap
 
     def _load_filesystem_entries(self, recipe_name: str) -> list[dict[str, Any]]:
-        base = Path("/data/runs")
+        base = (self.data_root / "runs")
         if not base.exists():
             return []
 

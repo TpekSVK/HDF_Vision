@@ -34,18 +34,17 @@ def golden_filtered_roi(image, tool):
     # its parameters or run model-learning/locator side effects for a preview.
     from app.services.tool_registry import ToolRegistry
     from app.services.tools.common import PairTool
-    from app.services.tool_service import ToolRunnerContext, _apply_regions_from_params
-    if tool.type not in {"ssim", "mse", "ssd", "ncc", "edge_change", "edge_profile_deviation", "presence_absence", "light_presence"}:
+    from app.services.tool_contracts import ToolRunnerContext
+    if tool.type not in {"ssim", "mse", "ncc", "edge_change", "edge_profile_deviation", "presence_absence"}:
         return None
     runner = ToolRegistry.create_tool(tool.type)
     if not isinstance(runner, PairTool) and type(runner).__name__ != "SSIMTool":
         return None
-    supported = {'SSIMTool', 'MSETool', 'SSDTool', 'NCCTool', 'EdgeChangeTool',
-                 'EdgeProfileDeviationTool', 'PresenceAbsenceCheckTool', 'LightPresenceCheckTool'}
+    supported = {'SSIMTool', 'MSETool', 'NCCTool', 'EdgeChangeTool',
+                 'EdgeProfileDeviationTool', 'PresenceAbsenceCheckTool'}
     if type(runner).__name__ not in supported:
         return None
     copied = tool.copy()
-    _apply_regions_from_params(copied)
     context = ToolRunnerContext(frame=image, golden_gray=image)
     runner.prepare({'tool': copied, 'runner_context': context, 'capture_filtered_roi': True})
     try:

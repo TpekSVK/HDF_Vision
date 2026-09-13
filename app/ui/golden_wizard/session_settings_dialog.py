@@ -26,12 +26,13 @@ from app.services import settings_service
 class SessionSettingsDialog(QDialog):
     """Modal dialog for editing runtime session toggles."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, *, settings_store=None) -> None:
         super().__init__(parent)
         self.setWindowTitle("Nastavenia relácie")
         self.setModal(True)
 
-        self._settings = settings_service.get_session_settings()
+        self.settings_store = settings_store or settings_service
+        self._settings = self.settings_store.get_session_settings()
 
         layout = QVBoxLayout(self)
 
@@ -132,7 +133,7 @@ class SessionSettingsDialog(QDialog):
                 return
 
         try:
-            settings_service.update_session_settings(
+            self.settings_store.update_session_settings(
                 logging_enabled=self._logging_checkbox.isChecked(),
                 logging_path=target,
                 export_artifacts=self._artifacts_checkbox.isChecked(),

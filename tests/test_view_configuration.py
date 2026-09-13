@@ -6,25 +6,12 @@ import types
 
 import pytest
 
-if "app.utils.imaging" not in sys.modules:  # pragma: no cover - test shim
-    imaging_stub = types.ModuleType("app.utils.imaging")
-    imaging_stub.encode_mask_to_blob = lambda value: value
-    imaging_stub.decode_mask_from_blob = lambda value: value
-    sys.modules["app.utils.imaging"] = imaging_stub
 
-if "app.services.compare_service" not in sys.modules:  # pragma: no cover - test shim
-    compare_stub = types.ModuleType("app.services.compare_service")
-
-    def _analyze_stub(*_args, **_kwargs):
-        return {}
-
-    compare_stub.analyze = _analyze_stub
-    sys.modules["app.services.compare_service"] = compare_stub
 
 from app.models.schema import RecipeView, ViewCameraProfile
 from app.services.recipe_service import RecipeService
-from app.ui.view_utils import apply_view_rotation, view_image_rotation, view_uses_global_golden
-from app.ui.camera_profile_utils import resolve_view_camera_state
+from app.services.view_images import apply_view_rotation, view_image_rotation, view_uses_global_golden
+from app.services.camera_profiles import resolve_view_camera_state
 
 
 def test_recipe_view_normalizes_camera_profile_and_trigger():
@@ -102,17 +89,12 @@ def test_recipe_view_external_trigger_submode_normalization():
     assert legacy_external.external_trigger_mode == "sequential"
     assert legacy_external.external_request_input is None
 
-    invalid_external = RecipeView.from_dict(
-        {
-            "id": "view_ext_invalid",
-            "name": "Invalid",
-            "trigger_mode": "external",
-            "external_trigger_mode": "wrong",
-            "external_request_input": 99,
-        }
-    )
-    assert invalid_external.external_trigger_mode == "sequential"
-    assert invalid_external.external_request_input is None
+    from app.models.recipe_contract import RecipeFormatError
+    with pytest.raises(RecipeFormatError):
+        RecipeView.from_dict({
+            "id": "view_ext_invalid", "trigger_mode": "external",
+            "external_trigger_mode": "wrong", "external_request_input": 99,
+        })
 
     explicit_external = RecipeView.from_dict(
         {
@@ -131,14 +113,12 @@ def test_recipe_view_external_trigger_submode_normalization():
 
 
 def test_legacy_modbus_recipe_and_external_source_roundtrip():
-    legacy = RecipeView.from_dict({
-        "id": "legacy", "name": "Legacy", "trigger_mode": "External Trigger",
-        "external_trigger_mode": "Explicit", "external_request_input": "DI3",
-    })
-    assert legacy.trigger_mode == "external"
-    assert legacy.external_trigger_mode == "explicit"
-    assert legacy.external_source == "modbus"
-    assert legacy.external_request_input == 3
+    from app.models.recipe_contract import RecipeFormatError
+    with pytest.raises(RecipeFormatError):
+        RecipeView.from_dict({
+            "id": "legacy", "trigger_mode": "External Trigger",
+            "external_trigger_mode": "Explicit", "external_request_input": "DI3",
+        })
 
     pico = RecipeView.from_dict({
         "id": "pico", "name": "Pico", "trigger_mode": "external",
@@ -219,6 +199,7 @@ def test_recipe_service_add_and_update_view(tmp_path: Path):
     assert new_view.frame_source_view_id is None
     assert new_view.image_rotation == 90
 
+    service.add_view(recipe_name, view_id="view_source", view_name="Source")
     updated = service.update_view(
         recipe_name,
         new_view.id,

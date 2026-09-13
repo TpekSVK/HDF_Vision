@@ -3,7 +3,7 @@ import cv2
 import pytest
 from app.models.schema import Tool, ToolRoi, ToolParams, ToolThresholds, RecipeV2
 from app.ui.filtered_roi import golden_filtered_roi, compose_filtered_roi
-from app.services.tool_service import run_pipeline
+from app.services.tool_pipeline import run_pipeline
 
 
 def tool(kind='mse', **params):
@@ -12,7 +12,7 @@ def tool(kind='mse', **params):
                 params=ToolParams(params), thresholds=ToolThresholds({}))
 
 
-@pytest.mark.parametrize('kind', ['mse', 'ssd', 'ncc'])
+@pytest.mark.parametrize('kind', ['mse', 'ncc'])
 def test_actual_blur_pixels_and_unmodified_outside(kind):
     image = np.random.default_rng(3).integers(0, 255, (32, 40), dtype=np.uint8)
     original = image.copy()
@@ -57,7 +57,7 @@ def test_no_filter_is_explicit_and_exact():
     np.testing.assert_array_equal(compose_filtered_roi(image,preview),image)
 
 
-@pytest.mark.parametrize('kind', ['light_presence', 'presence_absence'])
+@pytest.mark.parametrize('kind', ['presence_absence'])
 def test_binary_preview_is_actual_threshold(kind):
     image = np.random.default_rng(4).integers(0,255,(32,40),dtype=np.uint8)
     preview = golden_filtered_roi(image, tool(kind, binary_threshold=128, gaussian_blur_kernel=0))

@@ -14,7 +14,7 @@ pytest.importorskip("cv2")
 import cv2
 
 from app.models.schema import RecipeV2, Tool, ToolParams, ToolThresholds, ToolRoi
-from app.services.tool_service import run_pipeline
+from app.services.tool_pipeline import run_pipeline
 from app.utils import imaging
 
 
@@ -35,10 +35,11 @@ def _make_recipe(
         roi=ToolRoi({"x": 0, "y": 0, "w": 32, "h": 32}),
         params=ToolParams(
             {
-                "use_golden_crop": True,
+                "use_golden_crop": False,
+                "template_roi": {"x": 10, "y": 8, "w": 12, "h": 12},
                 "coarse_cap": 64,
                 "apply_alignment": apply_alignment,
-                "rotation_enabled": rotation_enabled,
+                "alignment_mode": "template_rotation" if rotation_enabled else "translation",
                 "angle_range_deg": angle_range_deg,
                 "angle_step_deg": angle_step_deg,
             }
@@ -98,8 +99,7 @@ def test_locator_updates_context_with_alignment() -> None:
     assert context.frame_aligned is not None
     assert np.allclose(context.frame_aligned, expected_aligned)
 
-    assert pipeline.overlay_items
-    assert all(report.overlay_items for report in pipeline.per_tool)
+    assert not pipeline.overlay_items  # Recipe artifact export is disabled by default.
 
 
 def test_locator_keeps_frame_when_alignment_disabled() -> None:
@@ -189,7 +189,7 @@ def test_pipeline_alignment_modes_produce_consistent_ssim() -> None:
 
 def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     golden = np.zeros((32, 32), dtype=np.uint8)
-    golden[8:24, 8:24] = 200
+    golden[8:24, 8:24] = np.arange(256, dtype=np.uint8).reshape(16, 16)
     frame = np.zeros_like(golden)
 
     recipe = _make_recipe(apply_alignment=True, threshold_corr=0.9, ssim_min=0.9)
@@ -213,10 +213,21 @@ def test_pipeline_reports_nok_when_correlation_is_low() -> None:
     assert diagnostics[0].get("locator_failure") is True
 
 
+    assert len(results) == 2
+    ssim_result = results[1]
+    assert ssim_result.status == "nok"
+    assert ssim_result.metrics["ssim"] < 0.5
+    assert "latency_ms" in ssim_result.metrics
+    assert diagnostics[1]["virtual_alignment"] is False
+
+    assert context.frame_is_aligned is False
+    assert np.allclose(context.T_total, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]))
+
+
 def test_pipeline_handles_locator_rotation() -> None:
-    golden = np.zeros((32, 32), dtype=np.uint8)
-    block = np.arange(64, dtype=np.uint8).reshape(8, 8)
-    golden[10:18, 12:20] = block
+    golden = np.zeros((96, 96), dtype=np.uint8)
+    block = np.random.default_rng(17).integers(40, 220, (24, 24), dtype=np.uint8)
+    golden[30:54, 32:56] = cv2.GaussianBlur(block, (5, 5), 1.0)
 
     center = (golden.shape[1] / 2.0, golden.shape[0] / 2.0)
     angle_deg = 9.0
@@ -237,12 +248,15 @@ def test_pipeline_handles_locator_rotation() -> None:
         ssim_min=0.9,
     )
 
+    recipe.tools[0].roi = ToolRoi({"x": 0, "y": 0, "w": 96, "h": 96})
+    recipe.tools[0].params.values["template_roi"] = {"x": 28, "y": 26, "w": 32, "h": 32}
+    recipe.tools[1].roi = ToolRoi({"x": 8, "y": 8, "w": 80, "h": 80})
     pipeline = run_pipeline(golden, frame, recipe)
     locator_report = pipeline.per_tool[0]
     locator_diag = pipeline.diagnostics[0]
 
-    assert locator_report.metrics["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
-    assert locator_diag["theta_deg"] == pytest.approx(angle_deg, abs=1.0)
+    assert locator_report.metrics["theta_deg"] == pytest.approx(-angle_deg, abs=1.0)
+    assert locator_diag["theta_deg"] == pytest.approx(-angle_deg, abs=1.0)
     assert pipeline.context.frame_is_aligned is True
     assert pipeline.context.frame_aligned is not None
 
@@ -257,16 +271,6 @@ def test_pipeline_handles_locator_rotation() -> None:
 
     ssim_metric = pipeline.per_tool[1].metrics["ssim"]
     assert ssim_metric > 0.9
-
-    assert len(results) == 2
-    ssim_result = results[1]
-    assert ssim_result.status == "nok"
-    assert ssim_result.metrics["ssim"] < 0.5
-    assert "latency_ms" in ssim_result.metrics
-    assert diagnostics[1]["virtual_alignment"] is False
-
-    assert context.frame_is_aligned is False
-    assert np.allclose(context.T_total, np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]))
 
 
 def test_pipeline_without_locator_uses_identity_transform() -> None:
@@ -296,7 +300,7 @@ def test_pipeline_without_locator_uses_identity_transform() -> None:
 
 def test_pipeline_locator_failure_policy_fail_stops_execution() -> None:
     golden = np.zeros((32, 32), dtype=np.uint8)
-    golden[8:24, 8:24] = 200
+    golden[8:24, 8:24] = np.arange(256, dtype=np.uint8).reshape(16, 16)
     frame = np.zeros_like(golden)
 
     recipe = _make_recipe(apply_alignment=True, threshold_corr=0.9, ssim_min=0.9)

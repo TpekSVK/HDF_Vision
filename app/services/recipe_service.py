@@ -11,7 +11,7 @@ from app.models.schema import (
     ViewCameraProfile,
 )
 from app.services.db_service import DbService
-from app.services.tool_service import ToolService, DEFAULT_THRESHOLDS
+from app.services.tool_service import ToolService
 from app.services.storage_service import load_recipe_config, save_recipe_config
 from app.services.recipe_audit_service import RecipeAuditService, audit_recipe_diff
 from app.services.security_service import SecurityService
@@ -36,23 +36,16 @@ class RecipeService:
         return self.db.list_recipes()
 
     def load(self, name: str):
+        self._load_recipe_config(name)  # Validate before DB or active ToolService mutation.
         # ensure v DB + load súborov
         rid = self.db.ensure_recipe(name)
         self.tool.load_recipe(name)
-        # ak v DB chýbajú thresholds, doplň z toolu
-        th = self.db.get_thresholds(rid)
-        if not th:
-            self.db.set_thresholds(rid, self.tool.thresholds)
-        else:
-            # sync do toolu (DB má prioritu)
-            self.tool.thresholds.update(th)
-            self.tool.save_thresholds()
 
     def create(self, name: str):
         existed = name in self.list()
+        if existed or (self.base / "recipes" / name).exists():
+            raise ValueError("Recept s týmto názvom už existuje. Zvoľte nový názov.")
         rid = self.db.ensure_recipe(name)
-        # inicializuj thresholds default
-        self.db.set_thresholds(rid, DEFAULT_THRESHOLDS)
         # priprav priečinky
         p = self.base / "recipes" / name
         p.mkdir(parents=True, exist_ok=True)
@@ -91,18 +84,13 @@ class RecipeService:
                               old_value=name, new_value=None, source=self._audit_source("RecipeService"), force=True)
 
     def save_regions(self, name: str, recipe: RecipeData):
-        recipe_dir = self.base / "recipes" / name
-        recipe_dir.mkdir(parents=True, exist_ok=True)
-        with open(recipe_dir / "regions.json", "w", encoding="utf-8") as f:
-            json.dump(recipe.to_dict(), f, ensure_ascii=False, indent=2)
-        if getattr(self.tool, "recipe", None) == name:
-            self.tool.regions = recipe.regions
-            self.tool.pose_enabled = recipe.pose_enabled
-        # sync to recipe.json structure
         recipe_v2 = self._load_recipe_config(name)
         recipe_v2.pose_enabled = recipe.pose_enabled
         recipe_v2.regions = list(recipe.regions)
         self._save_recipe_config(name, recipe_v2)
+        if getattr(self.tool, "recipe", None) == name:
+            self.tool.regions = recipe.regions
+            self.tool.pose_enabled = recipe.pose_enabled
         self.db.mark_recipe_draft_updated(name)
 
     def get_locator_failure_policy(self, name: str) -> str:
@@ -140,10 +128,9 @@ class RecipeService:
     @staticmethod
     def _normalize_trigger_mode(trigger_mode: str | None) -> str:
         mode = str(trigger_mode or "timed").strip().lower()
-        if mode in {"manual", "manual trigger", "external trigger"}:
-            mode = "external"
         if mode not in {"timed", "external"}:
-            mode = "timed"
+            from app.models.recipe_contract import RecipeFormatError
+            raise RecipeFormatError(f"Nepodporovaný režim snímania: {trigger_mode!r}.")
         return mode
 
     @classmethod
@@ -741,8 +728,6 @@ class RecipeService:
 
     def _load_recipe_config(self, name: str) -> RecipeV2:
         recipe = load_recipe_config(name, base_dir=self.base)
-        # ensure persisted if legacy fallback created
-        self._ensure_recipe_file(name, recipe)
         return recipe
 
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
@@ -759,23 +744,19 @@ class RecipeService:
             audit_recipe_diff(self.audit, name, old_data, recipe_copy.to_dict(), source=self._audit_source("RecipeService"))
         return recipe_copy
 
-    def _ensure_recipe_file(self, name: str, recipe: RecipeV2) -> None:
-        path = self.base / "recipes" / name / "recipe.json"
-        if not path.exists():
-            self._save_recipe_config(name, recipe)
-
     def _published_recipe_path(self, name: str) -> Path:
         return self.base / "recipes" / name / "recipe.published.json"
 
     def _load_published_recipe_config(self, name: str) -> RecipeV2:
         path = self._published_recipe_path(name)
         if path.exists():
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            return RecipeV2.from_dict(data)
+            from app.services.recipe_format import read_recipe_document
+            return RecipeV2.from_dict(read_recipe_document(path))
         return self._load_recipe_config(name)
 
     def _save_published_recipe_config(self, name: str, recipe: RecipeV2) -> None:
+        from app.services.recipe_format import validate_recipe_document
+        validate_recipe_document(recipe.to_dict())
         path = self._published_recipe_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w", encoding="utf-8") as f:

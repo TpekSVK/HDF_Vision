@@ -1,12 +1,12 @@
 from PySide6.QtWidgets import QApplication
-from app.ui.main_window import MainWindow
+from app.ui.workstation_window import WorkstationWindow
 import sys
 from app.ui.theme import DARK_STYLE
 
 def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLE)
-    w = MainWindow()
+    w = WorkstationWindow()
     w.resize(900, 600)
     w.showFullScreen()
     return app.exec()

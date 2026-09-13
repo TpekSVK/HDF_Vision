@@ -15,7 +15,8 @@ from app.utils import overlay as overlay_utils  # noqa: E402
 
 
 def test_render_overlay_mask_preserves_holes() -> None:
-    mask = np.ones((10, 10), dtype=np.uint8)
+    mask = np.zeros((10, 10), dtype=np.uint8)
+    mask[1:9, 1:9] = 1
     mask[3:7, 3:7] = 0
     item = overlay_utils.OverlayItem.from_mask(mask, color=(0, 255, 0), alpha=120)
     assert item is not None

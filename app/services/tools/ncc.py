@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import numpy as np
 
 from app.models.schema import ToolParams, ToolThresholds
-from app.services.tool_service import ToolRunResult
+from app.services.tool_contracts import ToolRunResult
 from app.services.tools.common import PairTool
 from app.utils import imaging
 from app.utils.imaging import TimeBlockResult, time_block

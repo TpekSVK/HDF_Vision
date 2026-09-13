@@ -224,7 +224,7 @@ class ModbusService:
             return False, self.last_error or "Connection failed"
         return True, "Connected"
 
-    # High-level helpers mirroring GPIO pipeline hooks -----------------
+    # High-level helpers for inspection pipeline events -----------------
     def emit_heartbeat(self) -> None:
         cfg = self.get_config()
         if not cfg.enabled:

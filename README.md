@@ -4,6 +4,8 @@ HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný 
 
 ## Aktuálne implementované
 
+- Nezávislé kamerové stanice s vlastným Pico, receptmi a výsledkami; explicitné USB párovanie vrátane overenia snímkou. [Ovládanie a stav overenia](docs/architecture/MULTI_CAMERA_SK.md).
+
 - RUN obrazovka s výberom receptu, manuálnym `TRIGGER`, Live preview, pásom View, OK/NOK výsledkom, metrikami a dennými štatistikami.
 - Golden Wizard pre Golden snímku, ROI/masku, vision tools, konfiguráciu View, validáciu a publish.
 - CU55 MASTER flow s kontinuálnym streamom a routovaním asynchrónnych Pico eventov `CAPTURE IN1` až `CAPTURE IN8` aj softvérových `CAPTURE V1/V2`.
@@ -294,13 +296,12 @@ bash docker/build.sh
 bash docker/run.sh
 ```
 
-`docker/build.sh` používa Buildx, default image `hdf_vision:dev` a platformu `linux/arm64`. `docker/run.sh` inicializuje Jetson GPIO, nastaví X11 (`DISPLAY`, `/tmp/.X11-unix`, `QT_QPA_PLATFORM=xcb`), používa NVIDIA runtime a privileged USB/device access. Mountuje `/data:/data`, `/dev/bus/usb`, zvolené `CAM_DEV` (default `/dev/video0`) a povoľuje video/hidraw device cgroups. Kamera je dostupná cez `/dev/video*`; Pico USB CDC musí byť hostiteľovi dostupné ako `/dev/ttyACM*` a do kontajnera sa prenáša cez privileged USB access.
+`docker/build.sh` používa Buildx, default image `hdf_vision:dev` a platformu `linux/arm64`. `docker/run.sh` nastaví X11 (`DISPLAY`, `/tmp/.X11-unix`, `QT_QPA_PLATFORM=xcb`), používa NVIDIA runtime a privileged USB/device access. Mountuje `/data:/data`, `/dev:/dev` a `/sys:/sys:ro`, aby boli dostupné kamery, HID a Pico aj po USB reconnecte. Zariadenia sa explicitne priraďujú v aplikácii podľa USB serial; `videoN` a `ttyACMN` nie sú trvalé identity. Bez priradenia sa snímanie nespustí.
 
 Voliteľne:
 
 ```bash
-CAM_DEV=/dev/video1 bash docker/run.sh
-bash docker/run.sh configure-gpio
+bash docker/run.sh  # Kamery a Pico priraďte v aplikácii.
 ```
 
 Pred použitím CU55 možno nainštalovať existujúce udev pravidlá:
@@ -375,9 +376,15 @@ Overte `LIGHT STATUS`; ak vráti `MANUAL_LIGHT ON`, odošlite `LIGHT OFF`.
 
 ## Plánované / future
 
-AI/TensorRT, PLC/I/O rozšírenia, multi-camera a ďalšie integrácie nie sú v tejto dokumentácii prezentované ako aktuálny produkčný flow.
+AI/TensorRT a ďalšie PLC/I/O rozšírenia nie sú prezentované ako aktuálny produkčný flow. Viac kamerových staníc je implementovaných; fyzický výkon a produkčné overenie A7 sú zatiaľ neoverené.
 
 ## Známe nesúlady v repozitári
 
 - `firmware/pico/main_v3.3.py` je aktuálny firmware pre MASTER production trigger routing.
 - Recipe model a niektoré legacy metódy stále obsahujú `flash_delay_ms`/`flash_pulse_ms` a cestu na publish timingov do Pico. Pico Wizard je však aktuálne určené miesto pre V1/V2 hardware timing; View config ich iba informatívne zobrazuje pre zvolený INx.
+
+### Podporovaný formát receptov
+
+Aplikácia načítava recepty s `format_version: 3`. Staré recepty bez verzie sa
+odmietajú bez automatického prevodu alebo vymazania. Nový recept vytvorte pod
+novým názvom. Podrobnosti: [formát receptov](docs/architecture/RECIPE_FORMAT_SK.md).

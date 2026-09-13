@@ -1,4 +1,3 @@
-import ast
 import logging
 import re
 from numbers import Integral
@@ -8,14 +7,16 @@ import pytest
 
 
 def harness():
-    tree=ast.parse(Path('app/ui/main_window.py').read_text())
-    cls=next(n for n in tree.body if isinstance(n,ast.ClassDef) and n.name=='MainWindow')
-    names={'_handle_pico_trigger','_handle_external_trigger','get_capture_mode','_enter_run_trigger_session','_capture_frame_for_trigger'}
-    cls.body=[n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name in names]
-    cls.bases=[];cls.decorator_list=[]
-    ns={'re':re,'Integral':Integral,'Any':object}
-    exec(compile(ast.fix_missing_locations(ast.Module(body=[cls],type_ignores=[])),'main_window.py','exec'),ns)
-    window=ns['MainWindow']()
+    from types import MethodType
+    from app.ui.main_window import MainWindow
+    from app.services.inspection_controller import InspectionController
+    window = SimpleNamespace()
+    for name in ('_handle_pico_trigger','_handle_external_trigger','get_capture_mode',
+                 '_enter_run_trigger_session','_capture_frame_for_trigger'):
+        setattr(window, name, MethodType(getattr(MainWindow, name), window))
+    window.inspection = InspectionController()
+    window.inspection.prepare(lambda: None, lambda: None)
+    window.trigger_rejected = SimpleNamespace(emit=lambda *args: None)
     window.mode='RUN';window._logger=logging.getLogger(__name__)
     window._consume_software_pico_request=lambda source:None
     return window
@@ -29,6 +30,7 @@ def test_external_event_reserves_master_only_in_master(mode,armed):
     w.cam=SimpleNamespace(arm_master_frame=arm)
     w.external_triggered=SimpleNamespace(emit=lambda *args:events.append(args))
     w._handle_pico_trigger('IN3')
+    assert w.inspection.owns(events[0][1].pop('inspection_request'))
     assert events==[('pico',{'input_index':3,'spec':None,'frame_request':'frame' if armed else None})]
     assert bool(requests)==armed
 

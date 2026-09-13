@@ -45,6 +45,8 @@ def test_golden_checkbox_displays_actual_tool_roi_and_restores_pixels():
         recipes=SimpleNamespace(get_draft_tools=lambda *args:[t]),
         chk_filtered_roi=QCheckBox(),lbl_filtered_roi=QLabel(),
         view=SimpleNamespace(update_display_pixmap=show),roi_editor=SimpleNamespace(update_display_pixmap=lambda pm:None))
+    from app.ui.golden_wizard.preview_presenter import GoldenPreview
+    w._preview_presenter = GoldenPreview(w)
     w.chk_filtered_roi.setChecked(True)
     GoldenWizard._refresh_filtered_roi(w)
     np.testing.assert_array_equal(shown[-1],compose_filtered_roi(image,golden_filtered_roi(image,t)))

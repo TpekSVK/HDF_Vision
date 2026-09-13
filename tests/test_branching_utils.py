@@ -3,7 +3,7 @@ import pytest
 pytest.importorskip("cv2")
 
 from app.models.schema import RecipeAggregation
-from app.ui.branching_utils import aggregate_branching_statuses
+from app.services.view_aggregation import aggregate_branching_statuses
 
 
 def test_branch_router_status_is_ignored_from_aggregation():

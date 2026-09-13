@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 from app.services.tool_registry import ToolRegistry
-from app.services.tool_service import run_pipeline
+from app.services.tool_pipeline import run_pipeline
 from app.models.schema import RecipeV2,ToolRoi,ToolMask
 from app.ui.golden_wizard.golden_wizard import GoldenWizard
 from app.ui.golden_wizard.tool_catalog_dialog import ToolCatalogDialog,make_catalog_tool
-from app.ui.view_utils import apply_view_rotation
+from app.services.view_images import apply_view_rotation
 
 
 @pytest.mark.parametrize('angle',[0,90,180,270])
@@ -46,18 +46,20 @@ def test_catalog_groups_and_legacy_implementations():
     assert entries['mse'].category_label == 'Pokročilé'
     assert entries['ncc'].category_label == 'Pokročilé'
     assert entries['mold.protection_v1'].category_label == 'Špecializované'
-    assert entries['light_presence'].category_label == 'Prednastavenia'
-    assert ToolRegistry.create_tool('ssd') is not None
-    assert ToolRegistry.create_tool('absdiff') is not None
+    assert entries['preset.bright_opening'].category_label == 'Prednastavenia'
+    for kind in ('ssd', 'absdiff', 'light_presence', 'template_match'):
+        with pytest.raises(KeyError):
+            ToolRegistry.create_tool(kind)
     d.close()
 
 
 def test_hole_preset_uses_general_presence_without_rewriting_legacy():
-    new=make_catalog_tool(ToolRegistry,'light_presence')
+    new=make_catalog_tool(ToolRegistry,'preset.bright_opening')
     assert new.type=='presence_absence'
     assert new.params.values['polarity']=='bright'
     assert new.params.values['binary_threshold']==200
-    assert ToolRegistry.make_default_tool('light_presence').type=='light_presence'
+    with pytest.raises(KeyError):
+        ToolRegistry.make_default_tool('light_presence')
 
 
 def test_difference_area_largest_component_and_binary_preview():
