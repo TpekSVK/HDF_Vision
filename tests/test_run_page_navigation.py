@@ -35,6 +35,8 @@ def window(mode='RUN', capture_mode='trigger'):
     patches.setattr(module, 'ResultsPage', History)
     _patches.append(patches)
     w = SimpleNamespace(mode=mode, capture_mode=capture_mode)
+    from threading import Event
+    w._recovery_cancel = Event()
     for name in ('_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
                  '_start_production', '_request_runtime_stop', '_dispatch_runtime_stop', '_runtime_completed'):
         setattr(w, name, MethodType(getattr(MainWindow, name), w))
@@ -193,3 +195,36 @@ def test_display_error_does_not_strand_controller_or_pending_stop():
     w._runtime_completed('cycle', {}, None)
     assert 'stop' in calls
     assert w.inspection.snapshot()['state'] == 'paused'
+
+
+def test_pair_failure_recovers_without_replaying_cycle(tmp_path):
+    from app.services.capture_errors import IncompletePioPair
+    w, calls, _ = window()
+    w._apply_run_status_style = lambda status: calls.append(('style', status))
+    w._run_status_message = SimpleNamespace(setText=lambda text: calls.append(('message', text)))
+    w.recovery_notice = SimpleNamespace(setVisible=lambda value: None,
+        setText=lambda text: calls.append(('recovery', text)))
+    w.recovery_progress = SimpleNamespace(emit=lambda row: calls.append(('audit', row['event'])))
+    w.runtime.data_root = tmp_path
+    w.runtime.camera_id = 'camera_1'; w.runtime.pico_id = 'pico_1'
+    w.runtime.pico = SimpleNamespace(quiesce=lambda: calls.append('idle'))
+    w.runtime.cam = SimpleNamespace(pio=SimpleNamespace(recover_trigger_mode=lambda *a, **kw: calls.append('recover_hardware')))
+    w._active_inspection_request, _ = w.inspection.admit('pico')
+    w._runtime_completed('cycle', None, IncompletePioPair(1, 2))
+    assert calls.count('recover_hardware') == 1
+    assert w.inspection.state.value == 'ready'
+    assert w.inspection.snapshot()['counts']['failed'] == 1
+    assert w.inspection.snapshot()['counts'].get('completed', 0) == 0
+    assert any(x[0] == 'recovery' and 'neoverený' in x[1] for x in calls if isinstance(x, tuple))
+
+
+def test_pending_setup_prevents_automatic_recovery():
+    from app.services.capture_errors import IncompletePioPair
+    w, calls, _ = window()
+    w._apply_run_status_style = lambda status: None
+    w._run_status_message = SimpleNamespace(setText=lambda text: None)
+    w._active_inspection_request, _ = w.inspection.admit('pico')
+    w._pending_runtime_action = 'pause'
+    w._runtime_completed('cycle', None, IncompletePioPair(0, 2))
+    assert w.inspection.state.value == 'paused'
+    assert calls.count('stop') == 1

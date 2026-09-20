@@ -39,6 +39,7 @@ class InspectionController:
         self._request = None
         self._error = ''
         self._counts = Counter()
+        self._recovery_attempts = 0
 
     @property
     def state(self):
@@ -71,7 +72,24 @@ class InspectionController:
             return False
         with self._lock:
             self._state = InspectionState.READY
+            self._recovery_attempts = 0
         return True
+
+    def begin_recovery(self):
+        with self._lock:
+            if self._state != InspectionState.ERROR or self._recovery_attempts >= 2:
+                return 0
+            self._state = InspectionState.PREPARING
+            return 2 - self._recovery_attempts
+
+    def finish_recovery(self, result):
+        with self._lock:
+            self._recovery_attempts += result['attempts']
+            self._counts['recovery_attempts'] += result['attempts']
+            self._counts['recovery_succeeded' if result['ok'] else 'recovery_failed'] += 1
+            self._state = InspectionState.READY if result['ok'] else InspectionState.ERROR
+            if not result['ok']:
+                self._error = result['error']
 
     def pause(self, quiesce, *, close=False):
         with self._lock:
@@ -117,6 +135,8 @@ class InspectionController:
             self._counts['failed' if error else 'completed'] += 1
             self._state = InspectionState.ERROR if error else InspectionState.READY
             self._error = str(error or '')
+            if error is None:
+                self._recovery_attempts = 0
 
     def run_sequence(self, request, trigger_state, execute_view, finalize):
         """Drive finite view branches independently of MainWindow/Qt."""
