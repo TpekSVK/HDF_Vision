@@ -1,4 +1,5 @@
 """Single-owner, two-frame CU55 PIO capture; independent of preview consumers."""
+from app.services.capture_errors import IncompletePioPair
 import threading
 import time
 
@@ -98,7 +99,7 @@ class PioCapture:
                                   result["id"], count, actual, profile.period_us, settling,
                                   [seq for seq, _ in request["frames"]])
                 if actual != count and not allow_missing:
-                    raise RuntimeError(f"Neúplná PIO dvojica: {actual}/{count} snímok.")
+                    raise IncompletePioPair(actual, count)
                 return request["frames"][-1][1] if actual == count and not settling else None
         finally:
             with self._pio_condition:
@@ -203,6 +204,72 @@ class PioCapture:
                 raise
             finally:
                 self.camera.end_trigger_capture()
+
+    def recover_trigger_mode(self, pico, *, cancel, diagnostic):
+        """Re-arm through MASTER on the existing stream; never blindly retry SET."""
+        camera = self.camera
+        def check_cancel():
+            if cancel.is_set():
+                raise RuntimeError("Obnova zrušená operátorom.")
+        def read_mode():
+            for attempt in range(4):
+                check_cancel()
+                try:
+                    return camera._ensure_hid().get_stream_mode()
+                except RuntimeError as exc:
+                    if str(exc) != 'Invalid HID command echo: 0x00' or attempt == 3:
+                        raise
+                    diagnostic(read_attempt=attempt + 1, error=str(exc))
+                    cancel.wait(.02)
+        def set_mode(mode):
+            hid = camera._ensure_hid()
+            hid.timeout_s = 2.0
+            if read_mode() != mode:
+                hid.set_stream_mode(mode)
+            if read_mode() != mode:
+                raise RuntimeError("Kamera nepotvrdila požadovaný režim pri obnove.")
+        with pico._capture_request_lock, self._pio_lock:
+            check_cancel()
+            pipeline = camera.stream._pipeline
+            generation = camera.gst_start_count()
+            if pipeline is None or not camera.is_pipeline_open() or self._pio_pipeline_error:
+                raise RuntimeError("Obnova vyžaduje funkčný kamerový stream.")
+            profile = cu55_pio_profile(camera.width, camera.height, camera.fps,
+                                      camera.pixel_format, camera.exposure_us)
+            self._pio_ready = None
+            camera._trigger_session_ready = False
+            self._pio_configuring = True
+            try:
+                pico.set_session_mode("IDLE")
+                set_mode(0)
+                camera.set_manual_exposure_us(profile.exposure_us)
+                self._pio_wait_master_frames()
+                check_cancel()
+                set_mode(1)
+                self._pio_quiet()
+                camera.set_manual_exposure_us(profile.exposure_us)
+                self._pio_unexpected = False
+                check_cancel()
+                self._pio_burst(pico, profile, count=1, timeout_s=.3, allow_missing=True)
+                self._pio_burst(pico, profile, settling=True)
+                check_cancel()
+                if camera.stream._pipeline is not pipeline or camera.gst_start_count() != generation:
+                    raise RuntimeError("Stream sa počas obnovy zmenil.")
+                if read_mode() != 1:
+                    raise RuntimeError("Kamera nie je v TRIGGER režime.")
+                pico.set_session_mode("TRIGGER")
+                self._pio_initialized_pipeline = pipeline
+                self._pio_recovery_required = False
+                self._pio_ready = self._pio_signature()
+                camera._trigger_session_active = True
+                camera._trigger_session_ready = True
+            except Exception:
+                self._pio_ready = None
+                self._pio_recovery_required = True
+                camera._trigger_session_ready = False
+                raise
+            finally:
+                self._pio_configuring = False
 
     def prepare_pio_master(self, pico):
         with self._pio_lock:

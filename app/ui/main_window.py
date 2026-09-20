@@ -1,3 +1,6 @@
+from threading import Event
+from app.services.capture_errors import IncompletePioPair
+from app.services.trigger_recovery import recover_trigger
 
 from app.services.view_capture import ViewCapture
 from PySide6.QtWidgets import (
@@ -63,6 +66,7 @@ from app.utils.nok_label import nok_label
 
 
 class MainWindow(QMainWindow):
+    recovery_progress = Signal(object)
     station_closed = Signal(str)
     external_triggered = Signal(str, object)
     trigger_rejected = Signal(str)
@@ -81,6 +85,8 @@ class MainWindow(QMainWindow):
         self.session_settings = settings_service.SessionSettingsStore(self.data_root / "logs")
         self._UI_STATE_PATH = self.data_root / "config.json"
         self._logger = logging.getLogger(__name__)
+        self._recovery_cancel = Event()
+        self.recovery_progress.connect(self._show_recovery_progress)
         self.setWindowTitle("HDF Vision")
         self.mode = "SETUP"  # RUN is published only after hardware preparation.
         self.inspection = InspectionController(camera_id)
@@ -251,6 +257,11 @@ class MainWindow(QMainWindow):
         self._run_status_message.setProperty("role", "secondary")
         self._run_status_message.setWordWrap(True)
         status_row.addWidget(self._run_status_message)
+        self.recovery_notice = QLabel("")
+        self.recovery_notice.setWordWrap(True)
+        self.recovery_notice.setStyleSheet("color: #ffc857; font-weight: bold;")
+        self.recovery_notice.setVisible(False)
+        status_row.addWidget(self.recovery_notice)
         self.run_status_card = status_container
 
         # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
@@ -729,6 +740,7 @@ class MainWindow(QMainWindow):
             lambda: runtime.prepare(*options), runtime.quiesce))
 
     def _request_runtime_stop(self, *, close=False):
+        self._recovery_cancel.set()
         self._pending_runtime_action = "close" if close else "pause"
         self.live_enabled = False
         self.btn_live.setChecked(False)
@@ -745,6 +757,12 @@ class MainWindow(QMainWindow):
         runtime, controller = self.runtime, self.inspection
         self.runtime_worker.submit("close" if close else "pause",
             lambda: controller.pause(runtime.shutdown if close else runtime.quiesce, close=close))
+
+    def _show_recovery_progress(self, record):
+        if record['event'] == 'attempt_started':
+            number = 2 - record['budget'] + record['attempt']
+            self.recovery_notice.setVisible(True)
+            self.recovery_notice.setText(f"Obnova kamery: pokus {number}/2. Kontroly sú pozastavené, diel zostáva neoverený.")
 
     def _runtime_completed(self, kind, result, error):
         if kind == "cycle":
@@ -763,6 +781,31 @@ class MainWindow(QMainWindow):
                 self.lbl_status.setText(f"Chyba zobrazenia výsledku: {display_error}")
             finally:
                 self.inspection.finish(request, error=error)
+            if (isinstance(error, IncompletePioPair) and self.capture_mode == "trigger"
+                    and not self._pending_runtime_action):
+                budget = self.inspection.begin_recovery()
+                if budget:
+                    self._recovery_cancel.clear()
+                    self._set_runtime_controls(True)
+                    self.recovery_notice.setVisible(True)
+                    self.recovery_notice.setText("Chyba snímania – obnovujem kameru. Diel zostáva neoverený.")
+                    runtime = self.runtime
+                    operation = lambda: recover_trigger(runtime, request.id, error, budget,
+                        self._recovery_cancel, self.recovery_progress.emit)
+                    if self.runtime_worker.submit("recover", operation):
+                        return
+                    self.inspection.finish_recovery(dict(ok=False, attempts=0, error="Pracovník obnovy nie je dostupný."))
+                self.recovery_notice.setVisible(True)
+                self.recovery_notice.setText("Limit dvoch pokusov obnovy vyčerpaný. Vyžaduje sa zásah operátora.")
+        elif kind == "recover":
+            outcome = result if error is None and result else dict(ok=False, attempts=2, error=str(error))
+            self.inspection.finish_recovery(outcome)
+            self.recovery_notice.setVisible(True)
+            if outcome['ok']:
+                self.recovery_notice.setText("Kamera obnovená. Predchádzajúci diel zostáva neoverený; záznam je v logu obnovy.")
+            else:
+                self.recovery_notice.setText(f"Obnova kamery neúspešná: {outcome['error']} Kontroly sú zastavené.")
+                self._capture_mode_ready = False
         elif kind == "prepare":
             if result and error is None:
                 self.mode = "SETUP" if self._pending_runtime_action else "RUN"
