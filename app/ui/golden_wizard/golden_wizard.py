@@ -420,6 +420,7 @@ class GoldenWizard(QDialog):
         self._tool_panel.locatorAreaRequested.connect(self.roi_editor.select_locator_roi)
         self._tool_panel.locatorFitSearchRequested.connect(self.roi_editor.fit_search_to_template)
         self._tool_panel.presenceLearningRequested.connect(self._on_presence_v2_learning)
+        self._tool_panel.emptyMoldV2Requested.connect(self._open_empty_mold_v2)
         self.roi_editor.ignoreMaskChanged.connect(self._on_workspace_mask_changed)
         self.roi_editor.edgeAnchorsChanged.connect(
             self._on_workspace_edge_anchors_changed
@@ -1647,6 +1648,39 @@ class GoldenWizard(QDialog):
             params["reference_model_ready"] = False
             params["reference_model_invalidated"] = True
         tool.params = ToolParams(params)
+
+    def _open_empty_mold_v2(self):
+        if not self._authorize_write():
+            return
+        recipe, view_id = self._current_recipe_name(), self._active_view_id
+        row = self._selected_tool_row
+        tools = self.recipes.get_draft_tools(recipe, view_id)
+        if not 0 <= row < len(tools) or tools[row].type != "mold.protection_v2":
+            return
+        from app.services.empty_mold_v2.workflow import bind_store
+        from app.services.empty_mold_v2.alignment import capture_aligned
+        from app.ui.golden_wizard.empty_mold_v2_dialog import EmptyMoldV2Dialog
+        tool = tools[row].copy()
+        try:
+            golden = self._current_golden_image()
+            if golden is None:
+                raise ValueError("Najskôr vytvorte Golden a hlavnú ROI.")
+            signature = self._presence_learning_signature(tool, view_id)
+            store = bind_store(tool, self.recipes.db.db_path,
+                               self.recipes.base / "recipes", recipe, view_id)
+            def capture():
+                frame = self._capture_presence_learning_frame(view_id)
+                if frame is None:
+                    return None
+                return capture_aligned(golden, frame, tools)
+            dialog = EmptyMoldV2Dialog(tool, store, golden, signature, capture,
+                                       self._authorize_write, self)
+            dialog.exec()
+            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+            self._tool_panel.refresh_values(tool)
+            self._update_dirty_state(recipe, view_id)
+        except Exception as exc:
+            self._warn(str(exc))
 
     def _presence_v2_context(self):
         row = getattr(self, "_selected_tool_row", -1)

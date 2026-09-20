@@ -8,7 +8,7 @@ from PySide6.QtGui import QImageReader, QPixmap, QColor, QPen, QPolygonF, QPaint
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QDateEdit, QSplitter, QTableWidget, QTableWidgetItem, QAbstractItemView,
-    QHeaderView, QCheckBox, QFileDialog,
+    QHeaderView, QCheckBox, QFileDialog, QMessageBox,
 )
 
 from app.services.results_browser import query_results, metadata, filter_options, export_results
@@ -131,6 +131,12 @@ class ResultsPage(QWidget):
             checkbox.toggled.connect(self._draw)
             toggles.addWidget(checkbox)
         center_layout.addLayout(toggles)
+        feedback = QHBoxLayout()
+        for title, label in [("False NOK → kandidát OK", "false_nok"), ("False OK → kandidát NOK", "false_ok")]:
+            button = QPushButton(title)
+            button.clicked.connect(lambda _checked=False, value=label: self._empty_mold_feedback(value))
+            feedback.addWidget(button)
+        center_layout.addLayout(feedback)
         self.image_note = QLabel('')
         self.image_note.setWordWrap(True)
         center_layout.addWidget(self.image_note)
@@ -247,6 +253,23 @@ class ResultsPage(QWidget):
         self.image_note.setText('Načítavam snímku…')
         self._submit('image', lambda: _image(record))
         self._draw()
+
+    def _empty_mold_feedback(self, label):
+        from app.services.empty_mold_v2.feedback import add_feedback
+        row = self.table.currentRow()
+        if not 0 <= row < len(self.rows):
+            return
+        index = self.tool.currentData()
+        available = [report for report in self.reports if report.get('type') == 'mold.protection_v2']
+        report = self.reports[index] if isinstance(index, int) and index >= 0 else (available[0] if len(available) == 1 else None)
+        if report is None:
+            QMessageBox.warning(self, 'Feedback V2', 'Vyberte konkrétny V2 tool v zozname nástrojov.')
+            return
+        try:
+            ident = add_feedback(self.db_path, dict(self.rows[row]), self.meta, report, label)
+            QMessageBox.information(self, 'Feedback V2', f'Kandidát {ident[:8]} bol uložený. Aktívny model ani recept sa nezmenili.')
+        except Exception as exc:
+            QMessageBox.warning(self, 'Feedback V2', str(exc))
 
     def _draw(self):
         for item in self.overlays:

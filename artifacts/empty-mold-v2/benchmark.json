@@ -1,0 +1,16 @@
+{
+  "shape": [
+    1080,
+    1920
+  ],
+  "training_ok": 50,
+  "zones": 5,
+  "build_seconds": 4.909740381001029,
+  "evaluation_median_ms": 28.910277000250062,
+  "evaluation_p95_ms": 34.415873395118986,
+  "process_peak_rss_mib": 399.5859375,
+  "status": "nok",
+  "blob_count": 1,
+  "largest_blob_area": 1200,
+  "note": "Synthetic CPU evaluator only; excludes capture, Locator, storage and UI; no power-mode control."
+}

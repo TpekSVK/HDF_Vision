@@ -490,6 +490,17 @@ class InspectionRuntime:
                             "error": True,
                         })
 
+        if tool is not None and tool.type == "mold.protection_v2":
+            from app.services.empty_mold_v2.overlays import items as v2_overlay_items
+            transform = metrics.get("alignment_transform")
+            history_overlays = [{
+                "rect": self._simplify_value(item.rect),
+                "points": item.points.tolist() if item.points is not None else None,
+                "closed": item.closed,
+                "error": item.z_index >= 30 and str(getattr(report, "status", "")) == "nok",
+            } for item in v2_overlay_items(tool, metrics, affine=transform)
+              if item.kind in {"rect", "polygon", "polyline"}]
+
         return {
             "id": tool_id,
             "name": tool_name or tool_id or "Tool",
@@ -926,6 +937,19 @@ class InspectionRuntime:
             "metrics": combined_metrics,
             "sequence_statuses": dict(per_view_statuses),
         }
+        if result is not None and any(report.get("type") == "mold.protection_v2" for report in reports):
+            import hashlib
+            meta_payload["recipe_version"] = hashlib.sha256(
+                json.dumps(recipe_cfg.to_dict(), sort_keys=True, ensure_ascii=False).encode("utf-8")
+            ).hexdigest()
+            meta_payload["recipe_id"] = self.db.recipe_id(recipe_name) if self.db is not None else None
+            meta_payload["ts_ms"] = int(time.time() * 1000)
+            matrix = getattr(result.context, "T_total", None)
+            meta_payload["empty_mold_v2_alignment"] = {
+                "T_total": matrix.tolist() if matrix is not None else None,
+                "valid": not any(item.get("locator_failure") for item in diagnostics_payload),
+                "stored_frame_space": "original_rotated",
+            }
         meta_payload.update(camera_id=self.camera_id, pico_id=self.pico_id)
         if policy_applied:
             meta_payload["policy_applied"] = policy_applied
@@ -949,6 +973,8 @@ class InspectionRuntime:
         trigger_state["last_view_id"] = view_id
         self._view_states[view_id] = {'reports': reports}
         self.records.append({'camera_id': self.camera_id, 'pico_id': self.pico_id, 'view_id': view_id, 'status': status, 'frame': last_preview_frame,
+            'v2_feedback': ({'frame': self._clone_frame(view_frame_u8), 'metadata': dict(meta_payload, recipe=recipe_name)}
+                            if 'empty_mold_v2_alignment' in meta_payload else None),
             'reports': reports, 'cycle_time_ms': cycle_time_value, 'capture_time_ms': capture_time_value,
             'processing_time_ms': processing_time_value, 'total_cycle_time_ms': total_cycle_time_value})
 
