@@ -75,6 +75,8 @@ class DbService:
     def _init_schema(self):
         cur = self._conn.cursor()
         cur.executescript(SCHEMA)
+        from app.services.empty_mold_v2.storage import SCHEMA as EMPTY_MOLD_V2_SCHEMA
+        cur.executescript(EMPTY_MOLD_V2_SCHEMA)
         cur.execute("PRAGMA table_info(recipes)")
         columns = {row[1] for row in cur.fetchall()}
         if "draft_updated_at" not in columns:

@@ -56,7 +56,7 @@ def learning_signature(golden, view, target, tools, *, golden_digest=None):
 
 
 def pipeline_learning_signatures(golden, recipe):
-    targets = [tool for tool in recipe.tools if tool.enabled and tool.type in STATISTICAL_TYPES]
+    targets = [tool for tool in recipe.tools if tool.enabled and tool.type in (STATISTICAL_TYPES | {"mold.protection_v2"})]
     if not targets:
         return {}
     digest = image_digest(golden)

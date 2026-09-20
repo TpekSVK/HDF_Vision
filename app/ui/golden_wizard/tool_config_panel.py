@@ -57,6 +57,7 @@ class ToolConfigPanel(QWidget):
     locatorAreaRequested = Signal(str)
     locatorFitSearchRequested = Signal()
     presenceLearningRequested = Signal(str)
+    emptyMoldV2Requested = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -111,6 +112,10 @@ class ToolConfigPanel(QWidget):
         self._description_label.setStyleSheet("color: #666;")
         self._description_label.setWordWrap(True)
         layout.addWidget(self._description_label)
+        self._empty_mold_v2_button = QPushButton("V2: Kavity, vzorky a model", self)
+        self._empty_mold_v2_button.clicked.connect(self.emptyMoldV2Requested.emit)
+        self._empty_mold_v2_button.hide()
+        layout.addWidget(self._empty_mold_v2_button)
 
         self._form_container = QWidget(self)
         self._form_layout = QFormLayout(self._form_container)
@@ -409,6 +414,7 @@ class ToolConfigPanel(QWidget):
 
     def clear(self) -> None:
         self._current_tool = None
+        self._empty_mold_v2_button.hide()
         self._name_input.clear()
         self._name_input.setEnabled(False)
         self._param_specs.clear()
@@ -437,6 +443,7 @@ class ToolConfigPanel(QWidget):
         schema: dict[str, dict[str, dict[str, Any]]],
     ) -> None:
         self._current_tool = tool
+        self._empty_mold_v2_button.setVisible(tool.type == "mold.protection_v2")
         self._name_input.setText(tool_display_name(tool))
         self._name_input.setEnabled(True)
         self._param_specs = {k: dict(v) for k, v in (schema.get("params") or {}).items()}

@@ -295,7 +295,11 @@ def _do_save_production(frame, fthumb: Path, ffull: Path, fmeta: Path, meta: dic
     iio.imwrite(fthumb, frame, extension=".jpg", quality=int(CFG.get("thumb_jpeg_quality", 30)))
     # full podľa politiky
     if do_full:
-        iio.imwrite(ffull, frame, extension=".webp", quality=int(CFG.get("full_webp_quality", 95)))
+        if (meta or {}).get("empty_mold_v2_alignment"):
+            # V2 feedback needs original pixels; retention/admission policy is unchanged.
+            iio.imwrite(ffull, frame, extension=".webp", lossless=True)
+        else:
+            iio.imwrite(ffull, frame, extension=".webp", quality=int(CFG.get("full_webp_quality", 95)))
     # meta.json
     try:
         with open(fmeta, "w", encoding="utf-8") as f:

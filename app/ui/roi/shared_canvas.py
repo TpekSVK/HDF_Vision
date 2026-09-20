@@ -414,6 +414,12 @@ class _SharedCanvasView(_ShapeROIView):
         self._mask_history.future.clear()
         self._finish_mask_change()
 
+    def mask_can_undo(self) -> bool:
+        return bool(self._mask_history.past)
+
+    def mask_can_redo(self) -> bool:
+        return bool(self._mask_history.future)
+
     def mask_undo(self) -> None:
         if not self._mask_history.past or self._mask is None:
             return

@@ -199,8 +199,8 @@ class ROIEditor(QWidget):
             )
         elif self._active_edit_context() == "mask":
             self._btn_reset.setText("Vymazať masku")
-            self._btn_undo.setEnabled(bool(self._view._mask_undo))
-            self._btn_redo.setEnabled(bool(self._view._mask_redo))
+            self._btn_undo.setEnabled(self._view.mask_can_undo())
+            self._btn_redo.setEnabled(self._view.mask_can_redo())
             self._btn_reset.setEnabled(
                 self._view._mask is not None and bool(np.any(self._view._mask))
             )

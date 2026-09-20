@@ -3,7 +3,7 @@ from app.services.view_capture import ViewCapture
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication,
-    QScrollArea,
+    QScrollArea, QInputDialog,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QImageReader
@@ -265,6 +265,11 @@ class MainWindow(QMainWindow):
         self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self._request_software_trigger)
         actions.addWidget(self.btn_trigger)
+        self._v2_feedback_records = {}
+        self.btn_v2_feedback = QPushButton("V2: False NOK / False OK", actions_container)
+        self.btn_v2_feedback.setVisible(False)
+        self.btn_v2_feedback.clicked.connect(self._mark_v2_feedback)
+        actions.addWidget(self.btn_v2_feedback)
 
         self.btn_export = QPushButton("Export CSV", actions_container)
         self.btn_export.clicked.connect(self.export_csv_today)
@@ -1161,9 +1166,43 @@ class MainWindow(QMainWindow):
             self.inspection.finish(request, error="Pracovník už vykonáva inú operáciu.")
             self._show_trigger_rejection("pracovník je obsadený")
 
+    def _mark_v2_feedback(self):
+        from app.services.empty_mold_v2.feedback import add_feedback
+        # Snapshot references before opening any dialog: later cycles may arrive.
+        payload = getattr(self, '_v2_feedback_records', {}).get(self._active_view_id)
+        if not payload:
+            QMessageBox.information(self, 'Feedback V2', 'V aktuálnom pohľade nie je dostupný výsledok V2.')
+            return
+        meta, frame = payload['metadata'], payload['frame']
+        if meta.get('recipe') != self.current_recipe_name():
+            QMessageBox.information(self, 'Feedback V2', 'Najskôr vykonajte kontrolu aktuálneho receptu.')
+            return
+        reports = [r for r in meta['per_tool'] if r.get('type') == 'mold.protection_v2']
+        labels = [f"{i+1}. {r['name']} · {r['status'].upper()}" for i, r in enumerate(reports)]
+        choice, accepted = QInputDialog.getItem(self, 'Feedback V2', 'Vyberte skontrolovaný tool:', labels, 0, False)
+        if not accepted:
+            return
+        report = reports[labels.index(choice)]
+        label = 'false_nok' if report['status'] == 'nok' else 'false_ok'
+        text = ('Forma bola fyzicky overená ako prázdna: uložiť False NOK?' if label == 'false_nok'
+                else 'Vo forme fyzicky zostal diel: uložiť False OK?')
+        if QMessageBox.question(self, 'Feedback V2', text) != QMessageBox.Yes:
+            return
+        try:
+            ident = add_feedback(self.db.db_path, {}, meta, report, label, frame=frame)
+            QMessageBox.information(self, 'Feedback V2', f'Kandidát {ident[:8]} bol uložený. Model sa nezmenil.')
+        except Exception as exc:
+            QMessageBox.warning(self, 'Feedback V2', str(exc))
+
     def _display_inspection_result(self, trigger_state):
         for record in trigger_state['records']:
             view_id = record['view_id']
+            if hasattr(self, '_v2_feedback_records'):
+                if record.get('v2_feedback'):
+                    self._v2_feedback_records[view_id] = record['v2_feedback']
+                else:
+                    self._v2_feedback_records.pop(view_id, None)
+                self.btn_v2_feedback.setVisible(bool(self._v2_feedback_records))
             self._set_last_view_frame(view_id, record['frame'])
             self.view_strip.set_status(view_id, record['status'])
             self._update_sidebar(per_tool=record['reports'], status=record['status'],
@@ -1534,6 +1573,15 @@ class MainWindow(QMainWindow):
             tool = getattr(report, "tool", None)
             tool_id = str(getattr(report, "tool_id", "") or "")
             if tool is None or not tool_id:
+                continue
+            if tool.type == "mold.protection_v2":
+                from app.services.empty_mold_v2.overlays import items as v2_overlay_items
+                context = result.context
+                affine = None if context.frame_is_aligned else context.T_total
+                v2_items = v2_overlay_items(tool, report.metrics, affine=affine)
+                roi_items_by_tool[tool_id] = [item for item in v2_items if item.z_index == 20]
+                if report.status == "nok":
+                    error_items.extend(item for item in v2_items if item.z_index >= 30)
                 continue
             color = palette[index % len(palette)]
             tool_name = tool_display_name(tool)
@@ -2480,6 +2528,9 @@ class MainWindow(QMainWindow):
     def on_recipe_changed(self, name: str):
         try:
             self.recipes.load(name)
+            if hasattr(self, '_v2_feedback_records'):
+                self._v2_feedback_records.clear()
+                self.btn_v2_feedback.setVisible(False)
             self.tool = self.recipes.tool
             if hasattr(self, "setup_recipe_name"):
                 self.setup_recipe_name.setText(name)

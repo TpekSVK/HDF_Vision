@@ -37,6 +37,7 @@ _CATEGORY_SK = {
 _CATEGORY_ORDER = ["Základné", "Prednastavenia", "Špecializované", "Pokročilé", "Ostatné"]
 _CATEGORY_BY_TYPE = {
     "mse": "Pokročilé", "ncc": "Pokročilé", "preset.bright_opening": "Prednastavenia",
+    "mold.protection_v2": "Špecializované",
     "mold.protection_v1": "Špecializované", "light_transmission": "Špecializované",
 }
 
