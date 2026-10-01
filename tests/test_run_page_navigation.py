@@ -43,6 +43,7 @@ def window(mode='RUN', capture_mode='trigger'):
     w.inspection = InspectionController()
     if mode == 'RUN': w.inspection.prepare(lambda: None, lambda: None)
     w.lbl_status = SimpleNamespace(setText=lambda text: calls.append(('status', text)))
+    w.recovery_notice = SimpleNamespace(setVisible=lambda visible: calls.append(('notice_visible', visible)))
     w.trigger_rejected = SimpleNamespace(emit=lambda text: calls.append(('rejected', text)))
     w.panel_run = object(); w.panel_setup = object(); w.panel_results = None
     w.stack = SimpleNamespace(page=w.panel_run if mode == 'RUN' else w.panel_setup)
@@ -216,6 +217,19 @@ def test_pair_failure_recovers_without_replaying_cycle(tmp_path):
     assert w.inspection.snapshot()['counts']['failed'] == 1
     assert w.inspection.snapshot()['counts'].get('completed', 0) == 0
     assert any(x[0] == 'recovery' and 'neoverený' in x[1] for x in calls if isinstance(x, tuple))
+
+
+def test_recovery_notice_disappears_after_next_ok_result_only():
+    w, calls, _ = window()
+    w._display_inspection_result = lambda result: calls.append(('display', result['status']))
+    w._apply_run_status_style = lambda status: None
+    w._run_status_message = SimpleNamespace(setText=lambda text: None)
+    for status in ('nok', 'ok'):
+        w._active_inspection_request, _ = w.inspection.admit('pico')
+        w._runtime_completed('cycle', {'status': status}, None)
+        if status == 'nok':
+            assert ('notice_visible', False) not in calls
+    assert calls.index(('display', 'ok')) < calls.index(('notice_visible', False))
 
 
 def test_pending_setup_prevents_automatic_recovery():

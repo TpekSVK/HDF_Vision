@@ -771,6 +771,8 @@ class MainWindow(QMainWindow):
             try:
                 if error is None:
                     self._display_inspection_result(result)
+                    if result.get('status') == 'ok':
+                        self.recovery_notice.setVisible(False)
                 else:
                     self._logger.error("Kontrola %s zlyhala: %s", request.id, error)
                     self.lbl_status.setText(f"CHYBA SNÍMANIA / KONTROLY: {error}")
