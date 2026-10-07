@@ -136,6 +136,12 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         patch.setattr(MainWindow, '_start_production', lambda self: False)
         patch.setattr(MainWindow, '_refresh_manual_light', lambda self: None)
         window = MainWindow(data_root=tmp_path)
+    top = window.top_bar.layout()
+    positions = [top.indexOf(button) for button in (
+        window.btn_mode_run, window.mode_btn, window.btn_results, window.btn_troubleshooting)]
+    assert all(index >= 0 for index in positions)
+    assert positions == sorted(positions)
+    assert top.indexOf(window.cmb_recipe) > positions[-1]
     save_golden(np.zeros((40, 50), np.uint8), 'default', base_dir=tmp_path)
     window.show()
     calls = []

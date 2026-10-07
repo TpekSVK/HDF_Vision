@@ -219,3 +219,21 @@ def test_ambiguous_locator_does_not_choose_a_production_transform(tmp_path):
     result = service.compare(ref, image)
     assert result.invalid_reason
     assert not result.corrections
+
+
+def test_recipe_locator_works_with_position_alignment_checkbox_disabled(tmp_path):
+    service, ref, image = reference(tmp_path)
+    recipe = ref.recipe
+    recipe.pose_enabled = False
+    save_recipe_config('test', recipe, base_dir=tmp_path)
+    path = tmp_path / 'recipes/test/recipe.json'
+    before = path.read_bytes()
+    ref = service.load_reference('test')
+    assert ref.locator is not None
+    current = cv2.warpAffine(image, np.float32([[1, 0, 35], [0, 1, 0]]), (120, 100))
+    result = service.compare(ref, current)
+    assert result.invalid_reason is None
+    assert result.dx_px == pytest.approx(35)
+    assert result.overall_ok is False
+    assert ref.recipe.pose_enabled is False
+    assert path.read_bytes() == before
