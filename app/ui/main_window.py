@@ -739,7 +739,7 @@ class MainWindow(QMainWindow):
     def _open_troubleshooting(self):
         from app.ui.troubleshooting_home import TroubleshootingHome
         if self.panel_troubleshooting_home is None:
-            self.panel_troubleshooting_home = TroubleshootingHome(self)
+            self.panel_troubleshooting_home = TroubleshootingHome(self, contact_path=self.data_root / 'contact.json')
             self.panel_troubleshooting_home.camera_position_requested.connect(self._request_camera_position)
             self.stack.addWidget(self.panel_troubleshooting_home)
         self.stack.setCurrentWidget(self.panel_troubleshooting_home)
