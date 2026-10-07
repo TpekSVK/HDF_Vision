@@ -12,7 +12,7 @@ Nové súbory:
 
 Zmenené súbory:
 
-- `app/ui/main_window.py`: navigácia TROUBLESHOOTING, dvojriadková horná lišta, pause/resume a zdieľanie existujúceho pracovníka.
+- `app/ui/main_window.py`: navigácia TROUBLESHOOTING v pôvodnom hornom riadku, pause/resume a zdieľanie existujúceho pracovníka.
 - `README.md`: odkaz na diagnostiku.
 
 RUN, produkčný locator, Golden Wizard, recipe modely, Modbus, storage a retention algoritmy sa nemenia. Modul sa otvára pre konkrétnu kamerovú stanicu; ostatné stanice majú svoje vlastné pracovníky a môžu zostať v RUN.
@@ -69,9 +69,9 @@ Pri odchode sa oba timery zastavia, automatika sa vypne a výsledok pre opusten�
 
 ## Testy a výsledky
 
-Nových **51 testov prešlo**. Zahŕňajú hraničné X/Y/R tolerancie, všetky fyzické smery, rotáciu View, syntetický posun mimo pôvodnej search oblasti, znamienko skutočného rotačného matchingu, chýbajúce tolerancie, nejednoznačnú referenciu, nízku confidence, RAW golden orientáciu, nemennosť JSON/recipe/snímok, shared capture v MASTER/TRIGGER, cleanup pri chybe, UI vytvorenie, automatiku bez paralelných requestov, zastavenie timerov, neskorý výsledok, stabilný switching viewport a pause/deferred RUN navigáciu bez Modbus/produkčných počítadiel.
+Nových **52 testov prešlo**. Regresné kontroly overujú funkčný locator aj pri vypnutom checkboxe „Zapnúť zarovnanie pozície“ a pôvodný horný riadok navigácie. Zahŕňajú hraničné X/Y/R tolerancie, všetky fyzické smery, rotáciu View, syntetický posun mimo pôvodnej search oblasti, znamienko skutočného rotačného matchingu, chýbajúce tolerancie, nejednoznačnú referenciu, nízku confidence, RAW golden orientáciu, nemennosť JSON/recipe/snímok, shared capture v MASTER/TRIGGER, cleanup pri chybe, UI vytvorenie, automatiku bez paralelných requestov, zastavenie timerov, neskorý výsledok, stabilný switching viewport a pause/deferred RUN navigáciu bez Modbus/produkčných počítadiel.
 
-Celá sada: **578 passed, 1 failed, 0 skipped**. Existujúce zlyhanie `tests/test_run_page_navigation.py::test_recovery_notice_disappears_after_next_ok_result_only` bolo prítomné pred implementáciou: jeho `SimpleNamespace` nemá `_resume_live_preview_after_trigger`, ktorú existujúci callback volá. Test ani produkčné recovery správanie sa kvôli tomuto problému nemenili. Testy bežali na x86_64 bez fyzického Jetson/USB; produkčné časovanie a mechanické pokyny na skutočnej montáži ešte neboli overené. GUI bolo vizuálne skontrolované pri 960 × 600; stránka používa pružný obrazový priestor a scroll na menších displejoch.
+Celá sada: **579 passed, 1 failed, 0 skipped**. Existujúce zlyhanie `tests/test_run_page_navigation.py::test_recovery_notice_disappears_after_next_ok_result_only` bolo prítomné pred implementáciou: jeho `SimpleNamespace` nemá `_resume_live_preview_after_trigger`, ktorú existujúci callback volá. Test ani produkčné recovery správanie sa kvôli tomuto problému nemenili. Testy bežali na x86_64 bez fyzického Jetson/USB; produkčné časovanie a mechanické pokyny na skutočnej montáži ešte neboli overené. GUI bolo vizuálne skontrolované pri 960 × 600; stránka používa pružný obrazový priestor a scroll na menších displejoch.
 
 Cloud, z koreňa repozitára:
 
@@ -119,7 +119,7 @@ Dodatočne zakryte referenciu/zmeňte osvetlenie: očakáva sa POLOHU SA NEPODAR
 ## Známe obmedzenia
 
 - Bez explicitnej rotačnej tolerancie alebo rotačného merania nemožno deklarovať všetky tri osi OK. Model sa kvôli diagnostike nemení.
-- Pri vypnutej pose kompenzácii, chýbajúcom locatore alebo viacerých aktívnych locatoroch sa nezvolí svojvoľná referenčná transformácia; UI vypíše nedostupné spoľahlivé vyhodnotenie.
+- Diagnostika používa locator receptu nezávisle od checkboxu „Zapnúť zarovnanie pozície“ (`pose_enabled`). Pri chýbajúcom locatore alebo viacerých aktívnych locatoroch sa nezvolí svojvoľná referenčná transformácia; UI vypíše nedostupné spoľahlivé vyhodnotenie.
 - Rotational template search zostáva vo svojom uloženom uhlovom rozsahu a rozlíšení; guided_edge zachováva svoju uloženú šírku referenčného pásu. Pri väčšej odchýlke môže správne odmietnuť hodnotenie.
 - Nálezy s existujúcim upozornením na slabý kontrast/nejednoznačnosť sa nepoužijú na fyzické pokyny.
 - Poloha kamery versus poloha formy a orientácia konkrétnej montáže vyžadujú fyzické overenie; nie je implementovaná perspektívna ani rozmerová kalibrácia.

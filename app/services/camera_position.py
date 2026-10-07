@@ -112,7 +112,7 @@ class CameraPositionService:
         view = recipe.get_view(view_id)
         locators = [t for t in sorted(view.tools, key=lambda t: t.order)
                     if t.enabled and t.type == 'locator.template_match']
-        locator = locators[0] if len(locators) == 1 and recipe.pose_enabled else None
+        locator = locators[0] if len(locators) == 1 else None
         root = (Path(self.recipes.base) / 'recipes' / recipe_name).resolve()
         path = (root / view.golden_path).resolve()
         if not path.is_relative_to(root):
@@ -125,7 +125,7 @@ class CameraPositionService:
 
     def compare(self, reference, raw_frame):
         if reference.locator is None:
-            return CameraPositionResult(invalid_reason='Recept potrebuje práve jednu aktívnu alignment oblasť a zapnutú kompenzáciu polohy.')
+            return CameraPositionResult(invalid_reason='Recept potrebuje práve jeden aktívny locator pre zvolený pohľad.')
         frame = apply_view_rotation(raw_frame, view_image_rotation(reference.view))
         if frame.shape[:2] != reference.golden.shape[:2]:
             return CameraPositionResult(invalid_reason='Rozmery snímky a goldenu sa nezhodujú.')
