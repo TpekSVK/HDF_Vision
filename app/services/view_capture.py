@@ -55,6 +55,7 @@ class ViewCapture:
         image_rotation_override: int | None = None,
         capture_request_source: str = "manual",
         frame_request=None,
+        hardware_prepared: bool = False,
     ):
         if self.mode not in {"master", "trigger"}:
             raise ValueError("Neznámy režim snímania.")
@@ -66,7 +67,7 @@ class ViewCapture:
 
         profile = getattr(active_view, "camera_profile", None) if active_view is not None else None
         self._logger.info("[VIEW_CAPTURE] applying camera profile")
-        resolved_state = apply_view_camera_profile(
+        resolved_state = snapshot_camera_state(self.cam) if hardware_prepared else apply_view_camera_profile(
             self.cam,
             dict(base_camera_state) if isinstance(base_camera_state, Mapping) else snapshot_camera_state(self.cam),
             profile,
@@ -105,7 +106,8 @@ class ViewCapture:
         # Legacy per-view settle_ms is ignored; Pico owns capture timing.
 
         if mode == "trigger":
-            self.pico.prepare_trigger(self.cam)
+            if not hardware_prepared:
+                self.pico.prepare_trigger(self.cam)
             frame = self.pico.capture_trigger(self.cam, timeout_s=1.0)
 
         if image_rotation_override is not None:
@@ -119,5 +121,4 @@ class ViewCapture:
         else:
             frame = apply_view_image_transform(frame, active_view, stage=transform_stage)
         return frame
-
 

@@ -756,12 +756,21 @@ class MainWindow(QMainWindow):
         if self.panel_troubleshooting is None:
             service = CameraPositionService(self.recipes, self.cam, self.pico, self.pico_config)
             self.panel_troubleshooting = TroubleshootingPage(service, self._submit_diagnostic, self)
+            self.panel_troubleshooting.deactivated.connect(self._diagnostic_hidden, Qt.QueuedConnection)
             self.stack.addWidget(self.panel_troubleshooting)
         page = self.panel_troubleshooting
         page.hardware_mode = self.capture_mode
         self.stack.setCurrentWidget(page)
         page.activate(self.current_recipe_name(), self._active_view_id)
         self._sync_mode_chrome()
+
+    def _diagnostic_hidden(self):
+        page = self.panel_troubleshooting
+        # Also release the session when switching to another camera station.
+        # Explicit navigation/close already scheduled cleanup on this lane.
+        if (not page.active and self.stack.currentWidget() is page
+                and not self._pending_runtime_action and not self._close_ready):
+            self._request_runtime_stop()
 
     def _submit_diagnostic(self, kind, operation):
         # The existing one-worker lane excludes RUN, recovery, setup transitions
@@ -827,8 +836,13 @@ class MainWindow(QMainWindow):
     def _dispatch_runtime_stop(self):
         close = self._pending_runtime_action == "close"
         runtime, controller = self.runtime, self.inspection
+        page = getattr(self, 'panel_troubleshooting', None)
+        def stop():
+            if page is not None:
+                page.service.close_session()
+            (runtime.shutdown if close else runtime.quiesce)()
         self.runtime_worker.submit("close" if close else "pause",
-            lambda: controller.pause(runtime.shutdown if close else runtime.quiesce, close=close))
+            lambda: controller.pause(stop, close=close))
 
     def _show_recovery_progress(self, record):
         if record['event'] == 'attempt_started':

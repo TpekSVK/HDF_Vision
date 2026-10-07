@@ -32,7 +32,7 @@ def page(app):
     image = np.zeros((60, 80), np.uint8)
     ref = PositionReference('Test', recipe, view, None, image, image, PositionLimits(12, 10, .4))
     queued = []
-    service = SimpleNamespace(load_reference=lambda *a: ref,
+    service = SimpleNamespace(open_reference=lambda *a: ref,
         capture=lambda *a: (image, CameraPositionResult(overall_ok=True)))
     widget = TroubleshootingPage(service, lambda kind, operation: queued.append((kind, operation)) or True)
     widget.hardware_mode = 'master'
@@ -127,7 +127,8 @@ def test_switching_preserves_same_viewport_scale_and_center(app):
         widget.close()
 
 
-def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app, tmp_path, monkeypatch):
+@pytest.mark.parametrize('destination', ['RUN', 'SETUP', 'RESULTS', 'CLOSE', 'HIDE'])
+def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app, tmp_path, monkeypatch, destination):
     from app.ui.main_window import MainWindow
     from app.services.inspection_controller import InspectionState
     from app.services.camera_position import CameraPositionService
@@ -143,8 +144,10 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
     assert positions == sorted(positions)
     assert top.indexOf(window.cmb_recipe) > positions[-1]
     save_golden(np.zeros((40, 50), np.uint8), 'default', base_dir=tmp_path)
+    monkeypatch.setattr(CameraPositionService, 'prepare_session', lambda *a: None)
     window.show()
     calls = []
+    monkeypatch.setattr(CameraPositionService, 'close_session', lambda self: calls.append('diagnostic_close'))
     window.runtime.quiesce = lambda: calls.append('pause')
     window.runtime.prepare = lambda *a: calls.append('prepare')
     window.runtime.capture_mode = 'master'
@@ -176,14 +179,29 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         page.capture()
         assert started.wait(1)
         assert page.capture() is False
-        window._request_mode('RUN')
+        calls.clear()
+        if destination == 'CLOSE':
+            window.close()
+        elif destination == 'HIDE':
+            page.hide()
+            app.processEvents()
+        else:
+            window._request_mode(destination)
         assert not page.active and not page.capture_timer.isActive()
         assert 'prepare' not in calls
+        assert 'diagnostic_close' not in calls  # Never close under an active capture.
         assert window.mode == 'SETUP'
         release.set()
-        pump(app, lambda: window.mode == 'RUN' and not window.runtime_worker.busy)
-        assert window.inspection.state == InspectionState.READY
-        assert calls.count('prepare') == 1
+        pump(app, lambda: 'diagnostic_close' in calls and not window.runtime_worker.busy
+             and window._pending_runtime_action is None)
+        assert window.inspection.state == (InspectionState.READY if destination == 'RUN'
+             else InspectionState.CLOSED if destination == 'CLOSE' else InspectionState.PAUSED)
+        assert calls.count('prepare') == (1 if destination == 'RUN' else 0)
+        assert calls.count('diagnostic_close') == 1
+        if destination == 'RUN':
+            assert calls.index('diagnostic_close') < calls.index('prepare')
+        if destination == 'RESULTS':
+            assert window.stack.currentWidget() is window.panel_results
         assert page.result is None  # Discard the result after navigating away.
         assert window.inspection.snapshot()['counts'] == counts
     finally:
