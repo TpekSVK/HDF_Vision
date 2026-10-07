@@ -127,7 +127,7 @@ def test_switching_preserves_same_viewport_scale_and_center(app):
         widget.close()
 
 
-@pytest.mark.parametrize('destination', ['RUN', 'SETUP', 'RESULTS', 'CLOSE', 'HIDE'])
+@pytest.mark.parametrize('destination', ['RUN', 'SETUP', 'RESULTS', 'CLOSE', 'HIDE', 'TROUBLESHOOTING'])
 def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app, tmp_path, monkeypatch, destination):
     from app.ui.main_window import MainWindow
     from app.services.inspection_controller import InspectionState
@@ -166,6 +166,11 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
     try:
         counts = window.inspection.snapshot()['counts'].copy()
         window._request_mode('TROUBLESHOOTING')
+        assert window.stack.currentWidget() is window.panel_troubleshooting_home
+        assert window.panel_troubleshooting is None
+        assert not calls
+        assert window.inspection.state == InspectionState.READY
+        window.panel_troubleshooting_home.position_button.click()
         pump(app, lambda: window.panel_troubleshooting is not None and not window.runtime_worker.busy)
         page = window.panel_troubleshooting
         assert window.mode == 'SETUP' and window.inspection.state == InspectionState.PAUSED
@@ -182,6 +187,8 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         calls.clear()
         if destination == 'CLOSE':
             window.close()
+        elif destination == 'TROUBLESHOOTING':
+            page.back_button.click()
         elif destination == 'HIDE':
             page.hide()
             app.processEvents()
@@ -200,6 +207,8 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         assert calls.count('diagnostic_close') == 1
         if destination == 'RUN':
             assert calls.index('diagnostic_close') < calls.index('prepare')
+        if destination == 'TROUBLESHOOTING':
+            assert window.stack.currentWidget() is window.panel_troubleshooting_home
         if destination == 'RESULTS':
             assert window.stack.currentWidget() is window.panel_results
         assert page.result is None  # Discard the result after navigating away.
@@ -209,3 +218,35 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         pump(app, lambda: not window.runtime_worker.busy)
         window.close()
         pump(app, lambda: window._close_ready)
+
+
+def test_arrow_layer_is_current_only_and_preserves_raw_pixels(app):
+    widget, queued = page(app)
+    try:
+        widget.capture()
+        kind, operation = queued.pop()
+        image, _ = operation()
+        result = CameraPositionResult(overall_ok=False, corrections=('→ POSUŇ KAMERU DOPRAVA', '↺ OTOČ KAMERU'))
+        widget.completed(kind, (image, result), None)
+        original = widget.current_view._pixmap_item.pixmap().toImage().copy()
+        assert widget.current_view.corrections == ('→', '↺')
+        widget.resize(960, 600)
+        app.processEvents()
+        widget.grab()  # Exercise the actual painter, including curved arrows.
+        assert widget.current_view._pixmap_item.pixmap().toImage() == original
+        assert np.array_equal(widget.current, image)
+        widget.display_mode.setCurrentIndex(1)
+        assert widget.blink_view.corrections == ()
+        widget._blink()
+        assert widget.blink_view.corrections == ('→', '↺')
+        widget.arrow_toggle.setChecked(False)
+        assert not widget.current_view.corrections and not widget.blink_view.corrections
+        widget.arrow_toggle.setChecked(True)
+        widget.result = CameraPositionResult(invalid_reason='Low confidence', corrections=result.corrections)
+        widget._render_result()
+        assert not widget.current_view.corrections and not widget.blink_view.corrections
+        assert widget.limits_label.parent() is widget.golden_info
+        assert widget.metrics.parent() is widget.current_info
+        assert widget.directions.parent() is widget.current_info
+    finally:
+        widget.close()

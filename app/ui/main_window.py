@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.panel_results = None
         self.panel_troubleshooting = None
+        self.panel_troubleshooting_home = None
         self._troubleshooting_requested = False
         self._diagnostic_target = None
         root_layout.addWidget(self.stack, 1)
@@ -695,9 +696,7 @@ class MainWindow(QMainWindow):
         target_mode = str(target or "").upper()
         page = getattr(self, 'panel_troubleshooting', None)
         if page is not None and page.active:
-            if target_mode == 'TROUBLESHOOTING':
-                return
-            if target_mode not in {'RUN', 'SETUP', 'RESULTS'}:
+            if target_mode not in {'RUN', 'SETUP', 'RESULTS', 'TROUBLESHOOTING'}:
                 return
             page.deactivate()
             self._diagnostic_target = target_mode
@@ -706,21 +705,7 @@ class MainWindow(QMainWindow):
         if target_mode == 'TROUBLESHOOTING':
             if self._pending_runtime_action:
                 return
-            if self.mode == 'RUN':
-                answer = QMessageBox.question(self, 'Pozastaviť kontroly?',
-                    'Troubleshooting pozastaví produkčné kontroly po dokončení aktuálnej. '
-                    'Nové vstupy sa neodložia. Pokračovať?',
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-                if answer != QMessageBox.Yes:
-                    self._sync_mode_chrome()
-                    return
-                self._troubleshooting_requested = True
-                self._request_runtime_stop()
-            elif not self.runtime_worker.busy and self.inspection.state == InspectionState.PAUSED:
-                self._open_troubleshooting()
-            elif self.inspection.state != InspectionState.CLOSED:
-                self._troubleshooting_requested = True
-                self._request_runtime_stop()
+            self._open_troubleshooting()
             return
         if target_mode == "RESULTS":
             # History is a page, not a production mode. Keep capture and sequence
@@ -748,14 +733,44 @@ class MainWindow(QMainWindow):
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
         if hasattr(self, 'btn_troubleshooting'):
             page = getattr(self, 'panel_troubleshooting', None)
-            self.btn_troubleshooting.setChecked(page is not None and self.stack.currentWidget() is page)
+            home = getattr(self, 'panel_troubleshooting_home', None)
+            self.btn_troubleshooting.setChecked(self.stack.currentWidget() in (page, home))
 
     def _open_troubleshooting(self):
+        from app.ui.troubleshooting_home import TroubleshootingHome
+        if self.panel_troubleshooting_home is None:
+            self.panel_troubleshooting_home = TroubleshootingHome(self)
+            self.panel_troubleshooting_home.camera_position_requested.connect(self._request_camera_position)
+            self.stack.addWidget(self.panel_troubleshooting_home)
+        self.stack.setCurrentWidget(self.panel_troubleshooting_home)
+        self._sync_mode_chrome()
+
+    def _request_camera_position(self):
+        if self._pending_runtime_action:
+            return
+        if self.mode == 'RUN':
+            answer = QMessageBox.question(self, 'Pozastaviť kontroly?',
+                'Troubleshooting pozastaví produkčné kontroly po dokončení aktuálnej. '
+                'Nové vstupy sa neodložia. Pokračovať?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer != QMessageBox.Yes:
+                self._sync_mode_chrome()
+                return
+            self._troubleshooting_requested = True
+            self._request_runtime_stop()
+        elif not self.runtime_worker.busy and self.inspection.state == InspectionState.PAUSED:
+            self._open_camera_position()
+        elif self.inspection.state != InspectionState.CLOSED:
+            self._troubleshooting_requested = True
+            self._request_runtime_stop()
+
+    def _open_camera_position(self):
         from app.services.camera_position import CameraPositionService
         from app.ui.troubleshooting_page import TroubleshootingPage
         if self.panel_troubleshooting is None:
             service = CameraPositionService(self.recipes, self.cam, self.pico, self.pico_config)
             self.panel_troubleshooting = TroubleshootingPage(service, self._submit_diagnostic, self)
+            self.panel_troubleshooting.back_requested.connect(lambda: self._request_mode('TROUBLESHOOTING'))
             self.panel_troubleshooting.deactivated.connect(self._diagnostic_hidden, Qt.QueuedConnection)
             self.stack.addWidget(self.panel_troubleshooting)
         page = self.panel_troubleshooting
@@ -922,7 +937,7 @@ class MainWindow(QMainWindow):
                     return
                 if getattr(self, '_troubleshooting_requested', False):
                     self._troubleshooting_requested = False
-                    self._open_troubleshooting()
+                    self._open_camera_position()
                     return
                 target = getattr(self, '_diagnostic_target', None)
                 if target:

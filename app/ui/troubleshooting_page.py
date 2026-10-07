@@ -3,8 +3,9 @@ import numpy as np
 from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QComboBox, QScrollArea, QStackedWidget, QFrame, QSizePolicy)
+    QPushButton, QCheckBox, QComboBox, QScrollArea, QStackedWidget, QFrame, QSizePolicy)
 from app.ui.image_canvas import ImageView
+from app.ui.camera_correction_overlay import CorrectionImageView
 
 
 def _pixmap(image):
@@ -21,6 +22,7 @@ def _pixmap(image):
 
 class TroubleshootingPage(QWidget):
     deactivated = Signal()
+    back_requested = Signal()
 
     def __init__(self, service, submit, parent=None):
         super().__init__(parent)
@@ -47,28 +49,58 @@ class TroubleshootingPage(QWidget):
         content = QWidget()
         scroll.setWidget(content)
         layout = QVBoxLayout(content)
-        self.module = QComboBox()
-        self.module.addItem('Overenie polohy kamery')
-        layout.addWidget(self.module)
+        header = QHBoxLayout()
+        self.back_button = QPushButton('← Späť na Troubleshooting')
+        self.back_button.clicked.connect(self.back_requested)
+        header.addWidget(self.back_button)
+        header.addWidget(QLabel('Overenie polohy kamery'))
+        header.addStretch()
+        layout.addLayout(header)
+        info = QHBoxLayout()
+        info.setSpacing(18)
+        self.golden_info, self.current_info = QWidget(), QWidget()
+        left, right = QVBoxLayout(self.golden_info), QVBoxLayout(self.current_info)
+        for col in (left, right):
+            col.setContentsMargins(0, 0, 0, 0)
         self.recipe_label = QLabel('Aktívny recept: –')
-        layout.addWidget(self.recipe_label)
+        left.addWidget(self.recipe_label)
         self.views = QComboBox()
         self.views.currentIndexChanged.connect(self._view_changed)
-        layout.addWidget(self.views)
+        left.addWidget(self.views)
         self.limits_label = QLabel('Tolerancie receptu: –')
         self.limits_label.setWordWrap(True)
-        layout.addWidget(self.limits_label)
+        left.addWidget(self.limits_label)
+        self.metrics = QLabel('ΔX – | ΔY – | Δrotation – | Confidence –')
+        self.status = QLabel('Zhotovte novú snímku.')
+        self.directions = QLabel()
+        for label in (self.metrics, self.status, self.directions):
+            label.setWordWrap(True)
+            right.addWidget(label)
+        self.directions.setStyleSheet('color: #ffc247; font-weight: bold;')
+        info.addWidget(self.golden_info, 1)
+        info.addWidget(self.current_info, 1)
+        layout.addLayout(info)
+        display = QHBoxLayout()
         self.display_mode = QComboBox()
         self.display_mode.addItems(['VEDĽA SEBA', 'PREPÍNANIE'])
         self.display_mode.currentIndexChanged.connect(self._display_changed)
-        layout.addWidget(self.display_mode)
+        display.addWidget(self.display_mode)
+        self.arrow_toggle = QCheckBox('Šípky korekcie')
+        self.arrow_toggle.setChecked(True)
+        self.arrow_toggle.toggled.connect(self._refresh_arrows)
+        display.addWidget(self.arrow_toggle)
+        display.addStretch()
+        layout.addLayout(display)
         self.images = QStackedWidget()
         pair = QWidget()
         pair_layout = QHBoxLayout(pair)
-        self.golden_view, self.current_view, self.blink_view = ImageView(), ImageView(), ImageView()
+        pair_layout.setContentsMargins(0, 0, 0, 0)
+        pair_layout.setSpacing(18)
+        self.golden_view, self.current_view, self.blink_view = ImageView(), CorrectionImageView(), CorrectionImageView()
         for title, view in [('RAW GOLDEN', self.golden_view), ('RAW AKTUÁLNA', self.current_view)]:
             column = QWidget()
             col = QVBoxLayout(column)
+            col.setContentsMargins(0, 0, 0, 0)
             col.addWidget(QLabel(title))
             col.addWidget(view, 1)
             pair_layout.addWidget(column, 1)
@@ -82,15 +114,6 @@ class TroubleshootingPage(QWidget):
         self.images.setMinimumHeight(180)
         self.images.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Ignored)
         layout.addWidget(self.images, 1)
-        self.metrics = QLabel('ΔX – | ΔY – | Δrotation – | Confidence –')
-        self.metrics.setWordWrap(True)
-        layout.addWidget(self.metrics)
-        self.status = QLabel('Zhotovte novú snímku.')
-        self.status.setWordWrap(True)
-        layout.addWidget(self.status)
-        self.directions = QLabel()
-        self.directions.setWordWrap(True)
-        layout.addWidget(self.directions)
         note = QLabel('Pokyny platia pre pevnú formu a pohyb kamery v jej obrazovej rovine '
                       '(pohľad zozadu smerom na formu). ΔX/ΔY sú v súradniciach receptu. '
                       'Diagnostika nemení recept ani výsledky RUN.')
@@ -109,7 +132,12 @@ class TroubleshootingPage(QWidget):
         layout.addLayout(controls)
         self.capture_button = QPushButton('ZHOTOVIŤ SNÍMKU')
         self.capture_button.clicked.connect(self.capture)
-        layout.addWidget(self.capture_button)
+        controls.addWidget(self.capture_button)
+        controls.addStretch()
+        for combo in (self.views, self.display_mode, self.capture_mode, self.interval):
+            combo.setSizeAdjustPolicy(QComboBox.AdjustToContents)
+            combo.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
+            combo.setMaximumWidth(280)
         self._border(self.golden_view, 'ok')
         self._controls()
 
@@ -135,6 +163,7 @@ class TroubleshootingPage(QWidget):
             view.set_pixmap(None)
         self.metrics.setText('ΔX – | ΔY – | Δrotation – | Confidence –')
         self.directions.clear()
+        self._refresh_arrows(clear=True)
         self.capture_timer.stop()
         self.blink_timer.stop()
         return self._submit('diagnostic_reference', lambda: self.service.open_reference(recipe_name, view_id, self.hardware_mode))
@@ -142,6 +171,7 @@ class TroubleshootingPage(QWidget):
     def deactivate(self):
         was_active = self.active
         self.active = False
+        self._refresh_arrows(clear=True)
         self._generation += 1
         self.capture_timer.stop()
         self.blink_timer.stop()
@@ -155,6 +185,7 @@ class TroubleshootingPage(QWidget):
         self._request_generation = self._generation
         self.status.setText('Načítavam referenciu…' if kind == 'diagnostic_reference' else 'Snímam a vyhodnocujem…')
         self.directions.clear()
+        self._refresh_arrows(clear=True)
         self._controls()
         if self.submit(kind, operation):
             return True
@@ -178,6 +209,7 @@ class TroubleshootingPage(QWidget):
         if error is not None:
             self.result = None
             self.directions.clear()
+            self._refresh_arrows(clear=True)
             self.metrics.setText('ΔX – | ΔY – | Δrotation – | Confidence –')
             self.status.setText(f'POLOHU SA NEPODARILO SPOĽAHLIVO VYHODNOTIŤ: {error}')
             self._border(self.current_view, 'idle')
@@ -227,8 +259,16 @@ class TroubleshootingPage(QWidget):
         else:
             text = 'POLOHA KAMERY OK' if result.overall_ok else 'MIMO TOLERANCIE'
         self.status.setText(text)
-        self.directions.setText('\n'.join(result.corrections))
+        self.directions.setText('\n'.join(result.corrections) if not result.invalid_reason else '')
         self._border(self.current_view, self._current_status())
+        self._refresh_arrows()
+
+    def _refresh_arrows(self, *args, clear=False):
+        corrections = ()
+        if not clear and self.active and not self.busy and self.arrow_toggle.isChecked() and self.result is not None and not self.result.invalid_reason:
+            corrections = self.result.corrections
+        self.current_view.set_corrections(corrections)
+        self.blink_view.set_corrections(corrections if self._blink_current else ())
 
     def _current_status(self):
         return 'idle' if self.result is None or self.result.overall_ok is None else ('ok' if self.result.overall_ok else 'nok')
@@ -269,6 +309,7 @@ class TroubleshootingPage(QWidget):
         else:
             self.blink_view.update_display_pixmap(pixmap)
         self.blink_label.setText('AKTUÁLNA' if current else 'GOLDEN')
+        self._refresh_arrows()
         self._border(self.blink_view, self._current_status() if current else 'ok')
 
     def hideEvent(self, event):

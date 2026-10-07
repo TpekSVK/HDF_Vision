@@ -108,7 +108,8 @@ class ImageView(QGraphicsView):
         if not self._pending_fit_to_view or self._fit_schedule_queued:
             return
         self._fit_schedule_queued = True
-        QTimer.singleShot(0, self._run_scheduled_fit)
+        # Cancel the deferred fit automatically if its view is destroyed.
+        QTimer.singleShot(0, self, self._run_scheduled_fit)
 
     def _run_scheduled_fit(self) -> None:
         self._fit_schedule_queued = False
