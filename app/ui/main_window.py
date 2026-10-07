@@ -165,7 +165,13 @@ class MainWindow(QMainWindow):
 
         self.top_bar = QFrame(root)
         self.top_bar.setObjectName("appTopBar")
-        top = QHBoxLayout(self.top_bar)
+        top_rows = QVBoxLayout(self.top_bar)
+        top_rows.setContentsMargins(0, 0, 0, 0)
+        top = QHBoxLayout()
+        top_rows.addLayout(top)
+        navigation = QHBoxLayout()
+        navigation.setContentsMargins(14, 0, 14, 8)
+        top_rows.addLayout(navigation)
         top.setContentsMargins(14, 8, 14, 8)
         top.setSpacing(8)
         title = QLabel(station_name)
@@ -177,19 +183,24 @@ class MainWindow(QMainWindow):
         self.btn_mode_run.setCheckable(True)
         self.btn_mode_run.setProperty("role", "mode")
         self.btn_mode_run.clicked.connect(lambda: self._request_mode("RUN"))
-        top.addWidget(self.btn_mode_run)
+        navigation.addWidget(self.btn_mode_run)
 
         self.mode_btn = QPushButton("SETUP")
         self.mode_btn.setCheckable(True)
         self.mode_btn.setProperty("role", "mode")
         self.mode_btn.clicked.connect(lambda: self._request_mode("SETUP"))
-        top.addWidget(self.mode_btn)
+        navigation.addWidget(self.mode_btn)
         self.btn_results = QPushButton("VÝSLEDKY")
         self.btn_results.setCheckable(True)
         self.btn_results.setProperty("role", "mode")
         self.btn_results.clicked.connect(lambda: self._request_mode("RESULTS"))
-        top.addWidget(self.btn_results)
-        top.addStretch(1)
+        navigation.addWidget(self.btn_results)
+        self.btn_troubleshooting = QPushButton('TROUBLESHOOTING')
+        self.btn_troubleshooting.setCheckable(True)
+        self.btn_troubleshooting.setProperty('role', 'mode')
+        self.btn_troubleshooting.clicked.connect(lambda: self._request_mode('TROUBLESHOOTING'))
+        navigation.addWidget(self.btn_troubleshooting)
+        navigation.addStretch(1)
 
         recipe_label = QLabel("Recept:")
         recipe_label.setProperty("role", "secondary")
@@ -223,6 +234,9 @@ class MainWindow(QMainWindow):
         # ========== Stacked RUN/SETUP ==========
         self.stack = QStackedWidget()
         self.panel_results = None
+        self.panel_troubleshooting = None
+        self._troubleshooting_requested = False
+        self._diagnostic_target = None
         root_layout.addWidget(self.stack, 1)
 
         # ---------- RUN panel ----------
@@ -685,6 +699,35 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def _request_mode(self, target: str) -> None:
         target_mode = str(target or "").upper()
+        page = getattr(self, 'panel_troubleshooting', None)
+        if page is not None and page.active:
+            if target_mode == 'TROUBLESHOOTING':
+                return
+            if target_mode not in {'RUN', 'SETUP', 'RESULTS'}:
+                return
+            page.deactivate()
+            self._diagnostic_target = target_mode
+            self._request_runtime_stop()
+            return
+        if target_mode == 'TROUBLESHOOTING':
+            if self._pending_runtime_action:
+                return
+            if self.mode == 'RUN':
+                answer = QMessageBox.question(self, 'Pozastaviť kontroly?',
+                    'Troubleshooting pozastaví produkčné kontroly po dokončení aktuálnej. '
+                    'Nové vstupy sa neodložia. Pokračovať?',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+                if answer != QMessageBox.Yes:
+                    self._sync_mode_chrome()
+                    return
+                self._troubleshooting_requested = True
+                self._request_runtime_stop()
+            elif not self.runtime_worker.busy and self.inspection.state == InspectionState.PAUSED:
+                self._open_troubleshooting()
+            elif self.inspection.state != InspectionState.CLOSED:
+                self._troubleshooting_requested = True
+                self._request_runtime_stop()
+            return
         if target_mode == "RESULTS":
             # History is a page, not a production mode. Keep capture and sequence
             # state intact, whether opened from RUN or from paused SETUP.
@@ -709,6 +752,32 @@ class MainWindow(QMainWindow):
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
+        if hasattr(self, 'btn_troubleshooting'):
+            page = getattr(self, 'panel_troubleshooting', None)
+            self.btn_troubleshooting.setChecked(page is not None and self.stack.currentWidget() is page)
+
+    def _open_troubleshooting(self):
+        from app.services.camera_position import CameraPositionService
+        from app.ui.troubleshooting_page import TroubleshootingPage
+        if self.panel_troubleshooting is None:
+            service = CameraPositionService(self.recipes, self.cam, self.pico, self.pico_config)
+            self.panel_troubleshooting = TroubleshootingPage(service, self._submit_diagnostic, self)
+            self.stack.addWidget(self.panel_troubleshooting)
+        page = self.panel_troubleshooting
+        page.hardware_mode = self.capture_mode
+        self.stack.setCurrentWidget(page)
+        page.activate(self.current_recipe_name(), self._active_view_id)
+        self._sync_mode_chrome()
+
+    def _submit_diagnostic(self, kind, operation):
+        # The existing one-worker lane excludes RUN, recovery, setup transitions
+        # and diagnostic capture. Controller remains PAUSED, without RUN counts.
+        if self.mode != 'SETUP' or self.inspection.state != InspectionState.PAUSED or self._pending_runtime_action:
+            return False
+        accepted = self.runtime_worker.submit(kind, operation)
+        if accepted:
+            self._set_runtime_controls(True)
+        return accepted
 
     def _show_trigger_rejection(self, reason: str) -> None:
         counts = self.inspection.snapshot()["counts"]
@@ -721,6 +790,9 @@ class MainWindow(QMainWindow):
         self.btn_live.setEnabled(not busy and self.capture_mode == "master")
         self.btn_trigger.setEnabled(not busy)
         self.btn_manual_light.setEnabled(not busy)
+        if hasattr(self, 'cmb_recipe'):
+            page = getattr(self, 'panel_troubleshooting', None)
+            self.cmb_recipe.setEnabled(not busy and not (page is not None and page.active))
 
     def _start_production(self):
         if self.runtime_worker.busy:
@@ -740,6 +812,12 @@ class MainWindow(QMainWindow):
             lambda: runtime.prepare(*options), runtime.quiesce))
 
     def _request_runtime_stop(self, *, close=False):
+        page = getattr(self, 'panel_troubleshooting', None)
+        if page is not None:
+            page.deactivate()
+        if close:
+            self._troubleshooting_requested = False
+            self._diagnostic_target = None
         self._recovery_cancel.set()
         self._pending_runtime_action = "close" if close else "pause"
         self.live_enabled = False
@@ -765,7 +843,9 @@ class MainWindow(QMainWindow):
             self.recovery_notice.setText(f"Obnova kamery: pokus {number}/2. Kontroly sú pozastavené, diel zostáva neoverený.")
 
     def _runtime_completed(self, kind, result, error):
-        if kind == "cycle":
+        if kind in {'diagnostic_reference', 'diagnostic_capture'}:
+            self.panel_troubleshooting.completed(kind, result, error)
+        elif kind == "cycle":
             request = self._active_inspection_request
             self._active_inspection_request = None
             try:
@@ -832,7 +912,19 @@ class MainWindow(QMainWindow):
                     self._close_ready = True
                     self.close()
                     return
+                if getattr(self, '_troubleshooting_requested', False):
+                    self._troubleshooting_requested = False
+                    self._open_troubleshooting()
+                    return
+                target = getattr(self, '_diagnostic_target', None)
+                if target:
+                    self._diagnostic_target = None
+                    self._set_runtime_controls(False)
+                    self._request_mode(target)
+                    return
             else:
+                self._troubleshooting_requested = False
+                self._diagnostic_target = None
                 self.lbl_status.setText(f"Zastavenie zlyhalo: {error or self.inspection.snapshot()['error']}")
         if self._pending_runtime_action:
             self.mode = "SETUP"
