@@ -104,6 +104,48 @@ class PositionReference:
 class CameraPositionService:
     def __init__(self, recipes, camera, pico, pico_config):
         self.recipes, self.camera, self.pico, self.pico_config = recipes, camera, pico, pico_config
+        self._session_key = None
+        self._session_mode = None
+
+    def open_reference(self, recipe_name, view_id, mode):
+        reference = self.load_reference(recipe_name, view_id)
+        self.prepare_session(reference, mode)
+        return reference
+
+    def prepare_session(self, reference, mode):
+        """Prepare once on entry; a different camera profile needs a transition."""
+        if mode not in {'master', 'trigger'}:
+            raise ValueError('Neznámy režim snímania.')
+        key = (mode, reference.view.to_dict()['camera_profile'])
+        if self._session_key == key:
+            return
+        self.close_session()
+        if not self.pico.is_available() and not self.pico.connect():
+            raise RuntimeError('Pico nie je dostupné.')
+        self._session_mode = mode
+        try:
+            apply_view_camera_profile(self.camera, {}, reference.view.camera_profile)
+            if mode == 'trigger':
+                self.pico.prepare_trigger(self.camera)
+            else:
+                self.pico.prepare_master(self.camera)
+            self._session_key = key
+        except Exception:
+            self.close_session()
+            raise
+
+    def close_session(self):
+        """Worker-only cleanup on departure or a hardware/capture error."""
+        if self._session_mode is None:
+            return
+        try:
+            self.pico.quiesce()
+        finally:
+            if self._session_mode == 'trigger':
+                self.camera.exit_trigger_session(restore_master=False)
+        # Keep ownership on cleanup failure so the pause/close path can retry.
+        self._session_mode = None
+        self._session_key = None
 
     def load_reference(self, recipe_name, view_id=None):
         # Same active recipe document as InspectionRuntime; no RecipeService.load
@@ -159,28 +201,22 @@ class CameraPositionService:
     def capture(self, reference, mode):
         """Shared camera/Pico path; no RUN runner, DB, counters or Modbus handle."""
         cam, pico = self.camera, self.pico
-        if mode not in {'master', 'trigger'}:
-            raise ValueError('Neznámy režim snímania.')
         trigger_started = False
         try:
-            if not pico.is_available() and not pico.connect():
-                raise RuntimeError('Pico nie je dostupné.')
-            apply_view_camera_profile(cam, {}, reference.view.camera_profile)
+            self.prepare_session(reference, mode)
             if mode == 'trigger':
                 cam.begin_trigger_capture()
                 trigger_started = True
-            else:
-                pico.prepare_master(cam)
-            raw = ViewCapture(cam, pico, self.pico_config, mode, reference.view.id).capture(
-                trigger_mode_label='diagnostic', master_caller='camera_position',
-                view=reference.view, image_rotation_override=0,
-                capture_request_source='diagnostic', transform_stage='')
-            raw = np.asarray(raw).copy()
-            return raw, self.compare(reference, raw)
-        finally:
             try:
-                pico.quiesce()
+                raw = ViewCapture(cam, pico, self.pico_config, mode, reference.view.id).capture(
+                    trigger_mode_label='diagnostic', master_caller='camera_position',
+                    view=reference.view, image_rotation_override=0,
+                    capture_request_source='diagnostic', transform_stage='', hardware_prepared=True)
+                raw = np.asarray(raw).copy()
+                return raw, self.compare(reference, raw)
             finally:
                 if trigger_started:
                     cam.end_trigger_capture()
-                    cam.exit_trigger_session(restore_master=False)
+        except Exception:
+            self.close_session()
+            raise

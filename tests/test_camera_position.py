@@ -142,13 +142,14 @@ def test_capture_uses_shared_view_capture_without_any_run_result(tmp_path, monke
         end_trigger_capture=lambda: calls.append('end'),
         exit_trigger_session=lambda **kw: calls.append(('exit', kw)))
     pico = SimpleNamespace(is_available=lambda: True, quiesce=lambda: calls.append('idle'),
-        prepare_master=lambda camera: calls.append('master'))
+        prepare_master=lambda camera: calls.append('master'), prepare_trigger=lambda camera: calls.append('trigger'))
     service.camera, service.pico = cam, pico
     monkeypatch.setattr('app.services.camera_position.apply_view_camera_profile', lambda *a: None)
     def capture(self, **kwargs):
         assert self.cam is cam and self.pico is pico
         assert kwargs['image_rotation_override'] == 0
         assert kwargs['capture_request_source'] == 'diagnostic'
+        assert kwargs['hardware_prepared'] is True
         calls.append('capture')
         return golden
     monkeypatch.setattr('app.services.camera_position.ViewCapture.capture', capture)
@@ -156,9 +157,19 @@ def test_capture_uses_shared_view_capture_without_any_run_result(tmp_path, monke
     monkeypatch.setattr('app.services.modbus_service.ModbusService.signal_result', lambda *a: pytest.fail('Modbus result'))
     monkeypatch.setattr('app.services.db_service.DbService.insert_result', lambda *a, **k: pytest.fail('production DB'), raising=False)
     before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
-    image, result = service.capture(ref, mode)
-    assert result.invalid_reason is None
-    assert calls == (['master', 'capture', 'idle'] if mode == 'master' else ['begin', 'capture', 'idle', 'end', ('exit', {'restore_master': False})])
+    service.open_reference('test', ref.view.id, mode)
+    assert calls == [mode]  # Ready at entry, before the first diagnostic frame.
+    for _ in range(3):
+        image, result = service.capture(ref, mode)
+        assert result.invalid_reason is None
+    assert calls == ([mode] + ['capture'] * 3 if mode == 'master' else [mode] + ['begin', 'capture', 'end'] * 3)
+    service.close_session()
+    service.close_session()  # Idempotent departure cleanup.
+    if mode == 'master':
+        assert calls[-1:] == ['idle']
+    else:
+        assert calls[-2:] == ['idle', ('exit', {'restore_master': False})]
+    assert calls.count('idle') == 1
     assert before == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
 
 
@@ -167,12 +178,14 @@ def test_capture_failure_still_quiesces_and_releases_trigger(tmp_path, monkeypat
     calls = []
     service.camera = SimpleNamespace(begin_trigger_capture=lambda: calls.append('begin'),
         end_trigger_capture=lambda: calls.append('end'), exit_trigger_session=lambda **kw: calls.append('exit'))
-    service.pico = SimpleNamespace(is_available=lambda: True, quiesce=lambda: calls.append('idle'))
+    service.pico = SimpleNamespace(is_available=lambda: True, quiesce=lambda: calls.append('idle'),
+        prepare_trigger=lambda camera: calls.append('trigger'))
     monkeypatch.setattr('app.services.camera_position.apply_view_camera_profile', lambda *a: None)
     monkeypatch.setattr('app.services.camera_position.ViewCapture.capture', lambda *a, **k: (_ for _ in ()).throw(RuntimeError('timeout')))
     with pytest.raises(RuntimeError, match='timeout'):
         service.capture(ref, 'trigger')
-    assert calls == ['begin', 'idle', 'end', 'exit']
+    assert calls == ['trigger', 'begin', 'end', 'idle', 'exit']
+    assert service._session_mode is None
 
 
 @pytest.mark.parametrize('angle,ok', [(0, True), (.4, True), (-.4, True), (.41, False), (-.41, False)])
@@ -237,3 +250,84 @@ def test_recipe_locator_works_with_position_alignment_checkbox_disabled(tmp_path
     assert result.overall_ok is False
     assert ref.recipe.pose_enabled is False
     assert path.read_bytes() == before
+
+
+def session_hardware(service, monkeypatch, image):
+    calls = []
+    service.camera = SimpleNamespace(begin_trigger_capture=lambda: calls.append('begin'),
+        end_trigger_capture=lambda: calls.append('end'), exit_trigger_session=lambda **kw: calls.append('exit'))
+    service.pico = SimpleNamespace(is_available=lambda: True, quiesce=lambda: calls.append('idle'),
+        prepare_trigger=lambda camera: calls.append('trigger'), prepare_master=lambda camera: calls.append('master'))
+    monkeypatch.setattr('app.services.camera_position.apply_view_camera_profile', lambda *a: calls.append('profile'))
+    monkeypatch.setattr('app.services.camera_position.ViewCapture.capture', lambda *a, **kw: calls.append('capture') or image)
+    return calls
+
+
+def test_same_profile_views_keep_session_and_different_profile_reprepares(tmp_path, monkeypatch):
+    from app.models.schema import ViewCameraProfile
+    service, ref, image = reference(tmp_path)
+    calls = session_hardware(service, monkeypatch, image)
+    service.open_reference('test', 'view_1', 'trigger')
+    assert calls == ['profile', 'trigger']
+    other = ref.view.copy()
+    other.id = 'view_2'
+    from dataclasses import replace
+    service.prepare_session(replace(ref, view=other), 'trigger')
+    assert calls == ['profile', 'trigger']  # View identity alone never rebuilds.
+    other.camera_profile = ViewCameraProfile(width=1280, height=720, fps=60)
+    service.prepare_session(replace(ref, view=other), 'trigger')
+    assert calls == ['profile', 'trigger', 'idle', 'exit', 'profile', 'trigger']
+    service.close_session()
+    service.open_reference('test', 'view_1', 'trigger')
+    assert calls[-2:] == ['profile', 'trigger']  # Re-entry prepares a new session.
+    service.close_session()
+
+
+def test_preparation_failure_cleans_partial_session_and_capture_error_can_rearm(tmp_path, monkeypatch):
+    service, ref, image = reference(tmp_path)
+    calls = session_hardware(service, monkeypatch, image)
+    service.pico.prepare_trigger = lambda camera: (_ for _ in ()).throw(RuntimeError('prepare failed'))
+    with pytest.raises(RuntimeError, match='prepare failed'):
+        service.open_reference('test', 'view_1', 'trigger')
+    assert calls == ['profile', 'idle', 'exit']
+    assert service._session_mode is None
+    service.pico.prepare_trigger = lambda camera: calls.append('trigger')
+    monkeypatch.setattr('app.services.camera_position.ViewCapture.capture', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('capture failed')))
+    with pytest.raises(RuntimeError, match='capture failed'):
+        service.capture(ref, 'trigger')
+    assert calls[-5:] == ['trigger', 'begin', 'end', 'idle', 'exit']
+    monkeypatch.setattr('app.services.camera_position.ViewCapture.capture', lambda *a, **kw: image)
+    service.capture(ref, 'trigger')
+    assert calls[-4:] == ['profile', 'trigger', 'begin', 'end']
+    service.close_session()
+
+
+def test_failed_departure_cleanup_retains_ownership_until_successful_retry(tmp_path, monkeypatch):
+    service, ref, image = reference(tmp_path)
+    calls = session_hardware(service, monkeypatch, image)
+    service.prepare_session(ref, 'trigger')
+    service.pico.quiesce = lambda: (_ for _ in ()).throw(RuntimeError('idle failed'))
+    with pytest.raises(RuntimeError, match='idle failed'):
+        service.close_session()
+    assert service._session_mode == 'trigger'
+    assert calls[-1] == 'exit'
+    service.pico.quiesce = lambda: calls.append('idle')
+    service.close_session()
+    assert service._session_mode is None
+    assert calls[-2:] == ['idle', 'exit']
+
+
+def test_prepared_shared_capture_never_reapplies_profile_or_prepares_trigger(monkeypatch):
+    from app.services.view_capture import ViewCapture
+    image = np.zeros((30, 40), np.uint8)
+    calls = []
+    camera = SimpleNamespace(width=640, height=480, fps=112, pixel_format='Y8')
+    pico = SimpleNamespace(prepare_trigger=lambda *a: pytest.fail('redundant prepare'),
+        capture_trigger=lambda *a, **kw: calls.append('trigger') or image)
+    monkeypatch.setattr('app.services.view_capture.apply_view_camera_profile', lambda *a: pytest.fail('profile reapplied'))
+    capture = ViewCapture(camera, pico, None, 'trigger')
+    view = RecipeView(id='view_1')
+    for _ in range(3):
+        assert capture.capture(view=view, trigger_mode_label='diagnostic', master_caller='diagnostic',
+            image_rotation_override=0, hardware_prepared=True) is image
+    assert calls == ['trigger'] * 3

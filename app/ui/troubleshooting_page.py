@@ -1,6 +1,6 @@
 """Extensible diagnostic page with a read-only camera position module."""
 import numpy as np
-from PySide6.QtCore import QTimer, Qt
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QComboBox, QScrollArea, QStackedWidget, QFrame, QSizePolicy)
@@ -20,6 +20,8 @@ def _pixmap(image):
 
 
 class TroubleshootingPage(QWidget):
+    deactivated = Signal()
+
     def __init__(self, service, submit, parent=None):
         super().__init__(parent)
         self.service, self.submit = service, submit
@@ -135,15 +137,18 @@ class TroubleshootingPage(QWidget):
         self.directions.clear()
         self.capture_timer.stop()
         self.blink_timer.stop()
-        return self._submit('diagnostic_reference', lambda: self.service.load_reference(recipe_name, view_id))
+        return self._submit('diagnostic_reference', lambda: self.service.open_reference(recipe_name, view_id, self.hardware_mode))
 
     def deactivate(self):
+        was_active = self.active
         self.active = False
         self._generation += 1
         self.capture_timer.stop()
         self.blink_timer.stop()
         self.capture_mode.setCurrentIndex(0)
         self._controls()
+        if was_active:
+            self.deactivated.emit()
 
     def _submit(self, kind, operation):
         self.busy = True
