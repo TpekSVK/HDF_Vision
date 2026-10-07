@@ -127,3 +127,17 @@ Dodatočne zakryte referenciu/zmeňte osvetlenie: očakáva sa POLOHU SA NEPODAR
 - Nálezy s existujúcim upozornením na slabý kontrast/nejednoznačnosť sa nepoužijú na fyzické pokyny.
 - Poloha kamery versus poloha formy a orientácia konkrétnej montáže vyžadujú fyzické overenie; nie je implementovaná perspektívna ani rozmerová kalibrácia.
 - Reálne Jetson capture/USB/PIO, mechanická presnosť a dotykový displej vyžadujú uvedené manuálne overenie.
+
+### Ponuka diagnostiky a vizuálne pokyny
+
+Tab TROUBLESHOOTING otvorí ponuku diagnostických činností. Kamera sa pripraví až
+po výbere **Overenie polohy kamery**; otvorenie samotnej ponuky nepreruší RUN.
+Tlačidlo **Späť na Troubleshooting** vráti používateľa do ponuky. Pri prebiehajúcej
+snímke počká aplikácia na jej dokončenie a potom ukončí trigger session.
+
+Informácie o recepte, View a toleranciách sú vľavo nad RAW GOLDEN. Merania,
+stav a pokyny na pohyb kamery sú vpravo nad RAW AKTUÁLNA. Žlté šípky ukazujú
+iba potrebné korekcie, v rovnakých fyzických smeroch ako textové pokyny.
+Prepínač **Šípky korekcie** umožňuje vrstvu skryť. Pri prepínaní snímok sa šípky
+zobrazujú iba na aktuálnej snímke. Pri nespoľahlivom výsledku sa nezobrazujú.
+Vrstva nemení RAW pixely, locator, recept ani výsledky RUN.
