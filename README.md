@@ -12,6 +12,15 @@ HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný 
 - Pico Wizard pre V1/V2 timing profily, mapovanie vstupov a HDF whitelist.
 - Manual light v RUN aj Golden Wizard, nezávislé od Live preview.
 
+## Troubleshooting
+
+Tab **TROUBLESHOOTING → Overenie polohy kamery** porovnáva RAW golden aktívneho
+View s novou RAW snímkou bez produkčnej alignment kompenzácie. Používa uložené
+tolerancie receptu, zobrazuje fyzické korekcie a podporuje ručné/automatické
+snímkovanie aj prepínanie Golden/Current. Diagnostika pozastaví RUN danej stanice
+a nemení recept, produkčné výsledky ani Modbus OK/NOK.
+[Implementácia, obmedzenia tolerancií a Jetson testy](docs/CAMERA_POSITION_VERIFICATION_SK.md).
+
 ## Výsledky kontrol
 
 Stránka **VÝSLEDKY** zobrazuje uložené kontroly po 50 záznamoch, od najnovších.
