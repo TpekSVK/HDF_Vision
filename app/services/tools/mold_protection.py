@@ -22,7 +22,14 @@ class MoldProtectionV1Tool(PresenceAbsenceV2Tool):
         thresholds: ToolThresholds,
         context: Dict[str, Any],
     ) -> ToolRunResult:
-        result = super()._run_pipeline(golden, frame, params, thresholds, context)
+        # Legacy recipes may still contain the retired percentage limit.
+        effective_thresholds = ToolThresholds({
+            **dict(thresholds.values or {}),
+            "max_anomaly_area_percent": 0.0,
+        })
+        result = super()._run_pipeline(
+            golden, frame, params, effective_thresholds, context
+        )
         metrics = dict(result.metrics or {})
         model_ready = bool(metrics.get("model_ready", False))
         valid_pixels = int(metrics.get("valid_pixel_count", 0) or 0)
