@@ -740,10 +740,6 @@ def _register_default_tools() -> None:
                         "type": "int", "default": 60, "min": 0, "max": 100,
                         "unit": "%", "label": "Citlivosť na zvyšok",
                     },
-                    "max_anomaly_area_percent": {
-                        "type": "float", "default": 2.0, "min": 0.0, "max": 100.0,
-                        "unit": "%", "label": "Max. zmenená plocha (%)",
-                    },
                     "max_largest_blob_area": {
                         "type": "float", "default": 0.0, "min": 0.0,
                         "unit": "px", "label": "Najväčší povolený zvyšok",
