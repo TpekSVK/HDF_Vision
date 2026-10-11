@@ -392,3 +392,75 @@ def test_locator_switch_resets_history_and_preserves_areas(qt_app):
         widget.close()
         widget.deleteLater()
         qt_app.processEvents()
+
+
+@pytest.fixture
+def locator_editor(qt_app):
+    from app.ui.roi_mask_editor import LocatorROIEditor
+    widget = LocatorROIEditor()
+    widget.resize(900, 650)
+    pixmap = QPixmap(800, 600)
+    pixmap.fill(Qt.darkGray)
+    widget.set_background(pixmap)
+    widget.set_locator_mode(True, search=dict(x=10, y=10, w=500, h=400))
+    widget.show()
+    qt_app.processEvents()
+    yield widget
+    widget.close()
+    widget.deleteLater()
+    qt_app.processEvents()
+
+
+@pytest.mark.parametrize('target', ['search', 'template'])
+def test_locator_draws_polygon_from_toolbar(locator_editor, target):
+    widget = locator_editor
+    QTest.mouseClick(widget._locator_buttons[0 if target == 'search' else 1], Qt.LeftButton)
+    assert widget._active_area == target
+    assert all(button.isVisible() for button in widget._shape_buttons)
+    QTest.mouseClick(widget._shape_buttons[2], Qt.LeftButton)
+    points = [(100, 100), (240, 100), (180, 220)]
+    for point in points:
+        QTest.mouseClick(widget._view.viewport(), Qt.LeftButton,
+                         Qt.NoModifier, widget._view.mapFromScene(QPointF(*point)))
+    QTest.keyClick(widget._view, Qt.Key_Return)
+    area = widget._areas[target]
+    assert area['shape'] == 'polygon'
+    assert len(area['points']) == 3
+    widget.select_locator_roi('template' if target == 'search' else 'search')
+    widget.select_locator_roi(target)
+    assert widget._view.roi_data() == area
+
+
+def test_locator_search_polygon_preserved_with_template_and_fit(locator_editor):
+    widget = locator_editor
+    polygon = dict(shape='polygon', points=[[10, 10], [500, 10], [500, 400], [10, 400]])
+    template = dict(x=100, y=100, w=50, h=50)
+    widget.set_locator_mode(True, search=polygon, template=template)
+    updated = dict(shape='polygon', points=[[20, 20], [480, 20], [480, 380], [20, 380]])
+    widget._view.set_roi_data(updated)
+    widget._active_area_changed(None)
+    assert widget._areas['search'] == updated
+    widget.fit_search_to_template()
+    assert widget._areas['search'] == updated
+    invalid = dict(shape='polygon', points=[[300, 300], [400, 300], [350, 350]])
+    widget._view.set_roi_data(invalid)
+    widget._active_area_changed(None)
+    assert widget._areas['search'] == updated
+    assert widget._view.roi_data() == updated
+
+
+def test_locator_rejects_outside_template_without_rect_conversion(locator_editor):
+    widget = locator_editor
+    template = dict(shape='polygon', points=[[100, 100], [200, 100], [150, 200]])
+    widget.set_locator_mode(True, search=dict(x=10, y=10, w=300, h=300), template=template)
+    widget.select_locator_roi('template')
+    outside = dict(shape='polygon', points=[[290, 100], [400, 100], [350, 200]])
+    widget._view.set_roi_data(outside)
+    widget._active_area_changed(None)
+    assert widget._areas['template'] == template
+    assert widget._view.roi_data() == template
+    # All vertices can be inside a concave search while an edge crosses its notch.
+    search = dict(shape='polygon', points=[[0, 0], [100, 0], [100, 100],
+                                         [60, 100], [60, 40], [40, 40], [40, 100], [0, 100]])
+    crossing = dict(shape='polygon', points=[[20, 80], [80, 80], [20, 20]])
+    assert widget._inside(crossing, search) is None

@@ -53,9 +53,9 @@ class ROIEditor(QWidget):
         layout.setSpacing(6)
         self._navigation = ImageNavigationToolbar(self._view, self)
         self._shape_buttons = self._navigation.set_draw_tools([
-            ("Obdĺžnik", lambda: self._view.set_draw_shape("rect"), "Ťahaním nakresliť obdĺžnikové ROI"),
-            ("Kruh", lambda: self._view.set_draw_shape("ellipse"), "Ťahaním nakresliť kruh alebo elipsu"),
-            ("Polygón", lambda: self._view.set_draw_shape("polygon"), "Klikajte vrcholy; dvojklik alebo Enter dokončí polygón"),
+            ("Obdĺžnik", lambda: self._start_shape_draw("rect"), "Ťahaním nakresliť obdĺžnikové ROI"),
+            ("Kruh", lambda: self._start_shape_draw("ellipse"), "Ťahaním nakresliť kruh alebo elipsu"),
+            ("Polygón", lambda: self._start_shape_draw("polygon"), "Klikajte vrcholy; dvojklik alebo Enter dokončí polygón"),
         ])
         self._navigation.add_history_buttons([
             self._btn_undo,
@@ -77,6 +77,9 @@ class ROIEditor(QWidget):
         self._update_history_buttons()
         self._view.lockChanged.connect(self._on_lock_changed)
         self._sync_geometry_controls()
+
+    def _start_shape_draw(self, shape: str) -> None:
+        self._view.set_draw_shape(shape)
 
     # ------------------------------------------------------------------
     def _build_geometry_controls(self) -> QHBoxLayout:
@@ -304,12 +307,19 @@ class LocatorROIEditor(ROIEditor):
         self._edge_available = False
         self._area_items: List[QGraphicsItem] = []
         self._result_items: List[QGraphicsItem] = []
-        self._locator_buttons = self._navigation.set_draw_tools([
-            ("Hľadanie", lambda: self._start_area_draw("search"), "Nakresliť oblasť hľadania"),
-            ("Šablóna", lambda: self._start_area_draw("template"), "Nakresliť oblasť šablóny"),
-        ])
-        for button in self._locator_buttons:
+        self._locator_buttons = []
+        self._area_group = QButtonGroup(self)
+        self._area_group.setExclusive(True)
+        for label, target in (("Hľadanie", "search"), ("Šablóna", "template")):
+            button = QToolButton(self._navigation)
+            button.setText(label)
+            button.setToolTip(f"Vybrať oblasť: {label}. Potom zvoľ tvar kreslenia.")
+            button.setCheckable(True)
+            button.clicked.connect(lambda _checked=False, area=target: self.select_locator_roi(area))
+            self._area_group.addButton(button)
+            self._locator_buttons.append(button)
             button.hide()
+        self._navigation.add_context_buttons(self._locator_buttons)
         self._btn_roi_mode = QToolButton(self._navigation)
         self._btn_roi_mode.setText("ROI")
         self._btn_roi_mode.setCheckable(True)
@@ -610,7 +620,7 @@ class LocatorROIEditor(ROIEditor):
 
         self._geometry_controls.setVisible(context == "roi")
         for button in self._shape_buttons:
-            button.setVisible(context == "roi" and not self._locator_mode)
+            button.setVisible(context == "roi")
             button.setEnabled(context == "roi")
         for index, button in enumerate(self._locator_buttons):
             button.setVisible(context == "roi" and self._locator_mode)
@@ -705,12 +715,8 @@ class LocatorROIEditor(ROIEditor):
     def set_locator_mode(self, enabled: bool, *, search=None, template=None,
                          use_golden_crop: bool = False) -> None:
         self._locator_mode = bool(enabled)
-        for button in self._shape_buttons:
-            button.setVisible(not enabled and not self._view._mask_editing)
-        for index, button in enumerate(self._locator_buttons):
-            button.setVisible(enabled and not self._view._mask_editing)
-            button.setEnabled(enabled and not self._view._mask_editing
-                              and (index != 1 or not use_golden_crop))
+        self._use_golden_crop = bool(use_golden_crop)
+        self.set_edit_context(self._active_edit_context())
         if not enabled:
             self._clear_area_items()
             return
@@ -732,6 +738,11 @@ class LocatorROIEditor(ROIEditor):
         rect = self._area_rect(template)
         if rect is None:
             return
+        search = ToolRoi.from_obj(self._areas.get("search"))
+        if search.shape() != "rect":
+            self._hint_label.setText("Polygón alebo kruh hľadania uprav ručne; jeho tvar zostáva zachovaný.")
+            self._hint_label.show()
+            return
         x, y, width, height = rect
         mx, my = max(1, round(width * 0.2)), max(1, round(height * 0.2))
         proposed = self._clamp_scene((x - mx, y - my, width + 2 * mx, height + 2 * my))
@@ -742,18 +753,22 @@ class LocatorROIEditor(ROIEditor):
         self._activate_area("search")
         self.locatorRoiChanged.emit("search", self._areas["search"])
 
-    def _start_area_draw(self, target: str) -> None:
-        if target == "template" and self._areas.get("search") is None:
-            self._hint_label.setText("Najprv nastav oblasť hľadania.")
-            self._hint_label.setVisible(True)
-            return
-        if target == "template" and self._use_golden_crop:
-            return
-        self._activate_area(target)
-        self._view.set_draw_shape("rect")
+    def _start_shape_draw(self, shape: str) -> None:
+        if self._locator_mode and self._active_area == "template":
+            if self._use_golden_crop:
+                return
+            if self._areas.get("search") is None:
+                self._hint_label.setText("Najprv nastav oblasť hľadania.")
+                self._hint_label.show()
+                return
+        super()._start_shape_draw(shape)
 
     def _activate_area(self, target: str) -> None:
+        if target == "template" and self._use_golden_crop:
+            return
+        self.set_edit_context("roi")
         self._active_area = target
+        self._locator_buttons[0 if target == "search" else 1].setChecked(True)
         self._locator_syncing = True
         try:
             self.set_roi_data(self._areas.get(target) or {})
@@ -773,10 +788,15 @@ class LocatorROIEditor(ROIEditor):
             contained = self._inside(value, search) if search else None
             value = contained if contained is not None else self._areas.get("template")
         elif value is not None and self._active_area == "search" and self._areas.get("template"):
-            template_rect = self._area_rect(self._areas["template"])
-            value = self._rect_area(self._clamp_scene(self._union(
-                self._area_rect(value), template_rect
-            ))) if template_rect is not None else value
+            if not self._area_path(self._areas["template"]).subtracted(self._area_path(value)).isEmpty():
+                if ToolRoi.from_obj(value).shape() == "rect":
+                    value = self._rect_area(self._clamp_scene(self._union(
+                        self._area_rect(value), self._area_rect(self._areas["template"])
+                    )))
+                else:
+                    value = self._areas.get("search")
+                    self._hint_label.setText("Oblasť hľadania musí obsahovať celú šablónu. Tvar zostal zachovaný.")
+                    self._hint_label.show()
         self._areas[self._active_area] = value
         if value != self._view.roi_data():
             self._locator_syncing = True
@@ -871,18 +891,11 @@ class LocatorROIEditor(ROIEditor):
             return None
         bounds_path = cls._area_path(bounds)
         candidate = ToolRoi.from_obj(value)
-        points = candidate.points()
-        if not points:
-            rect = candidate.rect()
-            if rect is None:
-                return None
-            x, y, width, height = rect
-            points = [(x, y), (x + width, y), (x + width, y + height), (x, y + height)]
-        if all(bounds_path.contains(QPointF(float(x), float(y))) for x, y in points):
+        if cls._area_path(value).subtracted(bounds_path).isEmpty():
             return candidate.to_dict()
-        # Axis-aligned areas can be safely clamped.  Rotated areas remain
-        # unchanged rather than silently distorting their geometry.
-        if candidate.is_rotated_rect() or ToolRoi.from_obj(bounds).is_rotated_rect():
+        # Clamp only axis-aligned rectangles; never replace shaped ROIs
+        # with their bounding boxes (also rejects edges crossing concavities).
+        if candidate.shape() != "rect" or ToolRoi.from_obj(bounds).shape() != "rect":
             return None
         rect = candidate.rect(); bounds_rect = ToolRoi.from_obj(bounds).rect()
         return cls._rect_area(cls._inside_rect(rect, bounds_rect))
