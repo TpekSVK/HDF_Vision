@@ -748,10 +748,6 @@ def _register_default_tools() -> None:
                         "type": "int", "default": 0, "min": 0,
                         "label": "Max. počet zvyškov",
                     },
-                    "score_threshold": {
-                        "type": "float", "default": 4.0, "min": 0.1,
-                        "label": "Základný prah odchýlky",
-                    },
                     "total_area_threshold": {
                         "type": "float", "default": 50.0, "min": 0.0,
                         "unit": "px", "label": "Max. celková plocha zvyškov",
