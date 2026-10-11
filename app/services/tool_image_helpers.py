@@ -14,6 +14,11 @@ def _rect_from_any(value: Any) -> Optional[Tuple[int, int, int, int]]:
     if isinstance(value, ToolRoi):
         return value.rect()
     if isinstance(value, dict):
+        if str(value.get("shape", "")).lower() == "polygon":
+            # Serialized polygons contain vertices instead of x/y/w/h.
+            # Use their bounds for cropping; callers retain the descriptor
+            # to mask out pixels outside the actual polygon.
+            return ToolRoi.from_obj(value).rect()
         keys = ("x", "y", "w", "h")
         if all(k in value for k in keys):
             try:
