@@ -179,3 +179,29 @@ def test_locator_rejects_constant_template_before_downsampling(monkeypatch) -> N
     assert result.metrics["template_contrast"] == 0
     assert result.status != "ok"
 
+
+
+@pytest.mark.parametrize('polygon_search', [False, True])
+def test_serialized_polygon_template_matches_translation(polygon_search):
+    golden = np.random.default_rng(93).integers(0, 255, (80, 100), dtype=np.uint8)
+    transform = np.array([[1, 0, 4], [0, 1, -3]], dtype=np.float32)
+    frame = cv2.warpAffine(golden, transform, (100, 80))
+    template = {'shape': 'polygon', 'points': [[25, 25], [45, 25], [35, 45]]}
+    search = ({'shape': 'polygon', 'points': [[10, 10], [80, 10], [70, 65], [10, 65]]}
+              if polygon_search else {'x': 10, 'y': 10, 'w': 70, 'h': 55})
+    result, diagnostics = run_locator_template_match(
+        golden, frame, {'use_golden_crop': False, 'template_roi': template,
+                        'coarse_cap': 600}, {'threshold_corr': 0.8}, search)
+    assert result.status == 'ok'
+    assert result.metrics['found'] is True
+    assert diagnostics['corr'] == pytest.approx(1.0, abs=1e-4)
+    assert result.metrics['dx'] == pytest.approx(4.0, abs=1e-3)
+    assert result.metrics['dy'] == pytest.approx(-3.0, abs=1e-3)
+
+
+def test_polygon_bounds_are_equal_for_serialized_and_object_roi():
+    from app.models.schema import ToolRoi
+    from app.services.tool_image_helpers import _rect_from_any
+    roi = {'shape': 'polygon', 'points': [[25, 25], [45, 25], [35, 45]]}
+    assert _rect_from_any(roi) == _rect_from_any(ToolRoi.from_obj(roi)) == (25, 25, 20, 20)
+    assert _rect_from_any({'shape': 'polygon', 'points': []}) is None

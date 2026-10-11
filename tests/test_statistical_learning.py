@@ -122,3 +122,15 @@ def test_runtime_refuses_unaligned_model_after_locator_failure(tmp_path, monkeyp
                                                               on_locator_failure='continue_without_alignment'))
     assert result.per_tool[-1].metrics['model_ready'] is False
     assert 'Zarovnanie' in result.per_tool[-1].diagnostics['message']
+
+
+@pytest.mark.parametrize('polygon_search', [False, True])
+def test_mold_learning_accepts_polygon_locator_template(polygon_search):
+    golden, frame, locator, target = scene(kind='mold.protection_v1')
+    locator.params.values['template_roi'] = {
+        'shape': 'polygon', 'points': [[20, 20], [36, 20], [28, 36]]}
+    if polygon_search:
+        locator.roi = ToolRoi({'shape': 'polygon', 'points': [[10, 10], [50, 10],
+                                                             [50, 50], [10, 50]]})
+    sample = LearningSamplePreparer().sample(golden, frame, target, [locator, target])
+    np.testing.assert_array_equal(sample, golden[22:32, 22:32])
