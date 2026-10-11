@@ -83,8 +83,10 @@ class LearningDataset:
             "max_largest_blob_area": float(
                 thresholds.get("max_largest_blob_area", 0.0) or 0.0
             ),
-            "max_anomaly_area_percent": float(
-                thresholds.get("max_anomaly_area_percent", 0.0) or 0.0
+            "max_anomaly_area_percent": (
+                0.0 if tool.type == "mold.protection_v1" else float(
+                    thresholds.get("max_anomaly_area_percent", 0.0) or 0.0
+                )
             ),
         }
         if include_score:
