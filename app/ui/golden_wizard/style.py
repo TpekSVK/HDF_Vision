@@ -192,4 +192,12 @@ QDialog#toolCatalog QPushButton[role="primary"] {
     background: #2f80c9; border-color: #3b91dc; color: white; font-weight: 600;
 }
 QDialog#toolCatalog QSplitter::handle { background: #2a313a; }
+QDialog#toolCatalog QCheckBox { spacing: 8px; }
+QDialog#toolCatalog QCheckBox::indicator {
+    width: 16px; height: 16px; border: 1px solid #8b98a8;
+    border-radius: 3px; background: #11161b;
+}
+QDialog#toolCatalog QCheckBox::indicator:checked {
+    background: #2f80c9; border: 2px solid #b6dcff;
+}
 """
