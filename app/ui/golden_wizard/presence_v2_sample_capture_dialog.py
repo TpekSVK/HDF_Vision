@@ -29,6 +29,7 @@ class PresenceV2SampleCaptureDialog(QDialog):
         capture_fn: Callable[[], np.ndarray | None],
         crop_fn: Callable[[np.ndarray], np.ndarray | None],
         default_mode: str = "manual",
+        retain_frames: bool = False,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -37,6 +38,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._capture_fn = capture_fn
         self._crop_fn = crop_fn
         self._samples: list[np.ndarray] = []
+        self._retain_frames = retain_frames
+        self._frames: list[np.ndarray] = []
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._capture_once)
 
@@ -100,6 +103,9 @@ class PresenceV2SampleCaptureDialog(QDialog):
     def samples(self) -> list[np.ndarray]:
         return [np.asarray(s).copy() for s in self._samples]
 
+    def frames(self) -> list[np.ndarray]:
+        return [frame.copy() for frame in self._frames]
+
     def _start_auto(self) -> None:
         self._auto_timer.start(int(self._interval.value()))
 
@@ -122,6 +128,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
             QMessageBox.warning(self, "Capture", "Veľkosť vzorky sa nezhoduje s existujúcimi vzorkami.")
             return
         self._samples.append(np.asarray(cropped).copy())
+        if self._retain_frames:
+            self._frames.append(np.asarray(frame).copy())
         item = QListWidgetItem(f"#{len(self._samples)}")
         self._thumbs.addItem(item)
         self._thumbs.setCurrentRow(self._thumbs.count() - 1)
@@ -135,6 +143,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
             return
         self._thumbs.takeItem(row)
         self._samples.pop(row)
+        if self._retain_frames:
+            self._frames.pop(row)
         self._counter.setText(f"Počet snímok: {len(self._samples)}")
         if self._thumbs.count() > 0:
             self._thumbs.setCurrentRow(max(0, min(row, self._thumbs.count() - 1)))

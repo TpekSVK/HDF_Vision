@@ -187,6 +187,10 @@ class ToolConfigPanel(QWidget):
             self._presence_capture_labels[action] = caption
             self._presence_capture_buttons[action] = button
         learning_layout.addLayout(capture_row)
+        self._shared_mold_ok = QPushButton("Použiť spoločné OK snímky", learning_content)
+        self._shared_mold_ok.setToolTip("Použiť OK snímky zozbierané pri inom nástroji Kontrola prázdnej formy v tomto pohľade. ROI a model ostávajú samostatné.")
+        self._shared_mold_ok.clicked.connect(lambda: self.presenceLearningRequested.emit('shared_ok'))
+        learning_layout.addWidget(self._shared_mold_ok)
         self._presence_rebuild = QPushButton("Prepočítať model", learning_content)
         self._presence_rebuild.clicked.connect(
             lambda: self.presenceLearningRequested.emit("rebuild")
@@ -461,6 +465,7 @@ class ToolConfigPanel(QWidget):
         is_locator = tool.type == "locator.template_match"
         is_presence_v2 = tool.type in STATISTICAL_TYPES
         self._presence_is_mold = tool.type == "mold.protection_v1"
+        self._shared_mold_ok.setVisible(self._presence_is_mold)
         self._presence_capture_labels["capture_ok"].setText(
             "Prázdna forma (OK)" if self._presence_is_mold else "Vzorky OK"
         )

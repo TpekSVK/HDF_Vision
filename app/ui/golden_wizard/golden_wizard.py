@@ -1709,6 +1709,14 @@ class GoldenWizard(QDialog):
             self.recipes.get_draft_tools(self._current_recipe_name(), view_id),
         )
 
+    def _shared_mold_ok_store(self, view_id):
+        from app.services.learning_context import shared_capture_signature
+        from app.services.shared_mold_ok import SharedMoldOK
+        recipe = self._current_recipe_name()
+        signature = shared_capture_signature(self._current_golden_image(), self._view_by_id(view_id),
+            self.recipes.get_draft_tools(recipe, view_id))
+        return SharedMoldOK(self.recipes.base, recipe, view_id, signature)
+
     def _presence_v2_expected_shape(self, tool: Tool) -> Optional[tuple[int, int]]:
         rect = tool.roi.rect()
         if rect is None:
@@ -1755,7 +1763,32 @@ class GoldenWizard(QDialog):
             except ValueError as exc:
                 self._warn(str(exc))
                 return
-        if action in {"capture_ok", "capture_nok"}:
+        if action == 'shared_ok':
+            if tool.type != 'mold.protection_v1':
+                return
+            try:
+                signature = self._presence_learning_signature(tool, view_id)
+                count = self._shared_mold_ok_store(view_id).import_into(assets, signature,
+                    lambda frame: self._prepare_presence_learning_sample(frame, tool, view_id))
+            except (ValueError, OSError) as exc:
+                if isinstance(exc, OSError):
+                    params = dict(tool.params.values or {})
+                    params.update(reference_model_ready=False, reference_model_needs_rebuild=True)
+                    tool.params = ToolParams(params)
+                    self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+                self._warn(str(exc))
+                return
+            if not count:
+                self._info('Nie sú dostupné nové spoločné OK snímky pre tento pohľad a nastavenie. Staré ROI výrezy nemožno použiť pre inú oblasť.')
+                return
+            params = dict(tool.params.values or {})
+            params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
+                          reference_model_ready=False, reference_model_needs_rebuild=True,
+                          reference_model_invalidated=False)
+            tool.params = ToolParams(params)
+            self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
+            self._info(f'Pridané spoločné OK snímky: {count}. Prepočítajte model tohto nástroja.')
+        elif action in {"capture_ok", "capture_nok"}:
             mode = "ok" if action == "capture_ok" else "nok"
             signature = self._presence_learning_signature(tool, view_id)
             params = dict(tool.params.values or {})
@@ -1788,6 +1821,7 @@ class GoldenWizard(QDialog):
                 capture_fn=lambda: self._capture_presence_learning_frame(view_id),
                 crop_fn=lambda frame: self._prepare_presence_learning_sample(frame, tool, view_id),
                 default_mode=str((tool.params.values or {}).get("capture_mode_default", "manual")),
+                retain_frames=(tool.type == 'mold.protection_v1' and mode == 'ok'),
                 parent=self,
             )
             if dialog.exec() == QDialog.Accepted:
@@ -1798,8 +1832,29 @@ class GoldenWizard(QDialog):
                         return
                     bind_samples(assets, signature)
                     self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-                    for sample in samples:
-                        save_sample(sample, dirs[mode])
+                    if tool.type == 'mold.protection_v1' and mode == 'ok':
+                        try:
+                            shared = self._shared_mold_ok_store(view_id)
+                            frames = dialog.frames()
+                            if len(frames) != len(samples):
+                                raise ValueError('Chýbajú celé OK snímky. Zber zopakujte.')
+                            for frame, sample in zip(frames, samples):
+                                ident = shared.add(frame)
+                                # Same IDs prevent importing a tool's own
+                                # collection again when reusing the shared pool.
+                                import imageio.v3 as iio
+                                iio.imwrite(dirs['ok'] / f'shared_{ident}.png', sample)
+                        except (ValueError, OSError) as exc:
+                            params = dict(tool.params.values or {})
+                            params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
+                                          reference_model_ready=False, reference_model_needs_rebuild=True)
+                            tool.params = ToolParams(params)
+                            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+                            self._warn(str(exc))
+                            return
+                    else:
+                        for sample in samples:
+                            save_sample(sample, dirs[mode])
                     params = dict(tool.params.values or {})
                     params["sample_preparation_version"] = SAMPLE_PREPARATION_VERSION
                     params["reference_model_ready"] = False
@@ -1809,7 +1864,7 @@ class GoldenWizard(QDialog):
         elif action == "reset":
             reply = QMessageBox.question(
                 self, "Resetovať učenie?",
-                "Vymažú sa všetky OK/NOK vzorky a prepočítaný model.",
+                "Vymažú sa OK/NOK vzorky a prepočítaný model tohto nástroja. Spoločné OK snímky ostatných nástrojov zostanú zachované.",
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
