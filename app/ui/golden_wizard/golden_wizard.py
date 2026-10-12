@@ -2113,6 +2113,11 @@ class GoldenWizard(QDialog):
         tool = tools[row]
         thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
         thresholds[name] = value
+        if tool.type == 'mold.protection_v1' and name == 'max_largest_blob_area':
+            largest = float(value or 0)
+            total = float(thresholds.get('total_area_threshold', 50.0))
+            if largest > 0 and total < largest:
+                thresholds['total_area_threshold'] = largest
         tool.thresholds = ToolThresholds(thresholds)
         try:
             self.recipes.update_tool(recipe, row, tool, view_id=view_id)

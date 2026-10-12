@@ -763,6 +763,8 @@ class ToolConfigPanel(QWidget):
                      and name in {"coarse_cap", "apply_alignment"})
                     or self._current_tool.type in STATISTICAL_TYPES
                 ) else self._form_layout
+                if self._current_tool.type == 'mold.protection_v1':
+                    target_layout = self._threshold_layout
                 self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
 
@@ -798,6 +800,8 @@ class ToolConfigPanel(QWidget):
                     self._current_tool.type in STATISTICAL_TYPES
                     and name in {"score_threshold", "total_area_threshold", "min_blob_area"}
                 ) else self._threshold_layout
+                if self._current_tool.type == 'mold.protection_v1':
+                    target_layout = self._threshold_layout
                 self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
 
