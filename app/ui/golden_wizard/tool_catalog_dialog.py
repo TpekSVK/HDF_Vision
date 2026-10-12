@@ -2,18 +2,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import os
+from pathlib import Path
+import tempfile
 from typing import Optional
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPushButton, QSplitter, QVBoxLayout, QWidget,
+    QCheckBox, QMessageBox,
 )
 
 from app.ui.golden_wizard.style import TOOL_CATALOG_STYLE
 
 _ALL = "__all__"
 _RECOMMENDED = "__recommended__"
+_FAVORITES = "__favorites__"
 _RECOMMENDED_TYPES = {
     "locator.template_match", "presence_absence", "presence.absence_v2",
     "ssim", "edge_change", "edge_profile_deviation",
@@ -67,8 +73,9 @@ class _CatalogEntry:
 class ToolCard(QFrame):
     clicked = Signal(str)
     doubleClicked = Signal(str)
+    favoriteChanged = Signal(str, bool)
 
-    def __init__(self, entry: _CatalogEntry, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, entry: _CatalogEntry, parent: Optional[QWidget] = None, *, favorite=False) -> None:
         super().__init__(parent)
         self.entry = entry
         self.setObjectName("toolCard")
@@ -109,6 +116,10 @@ class ToolCard(QFrame):
         technical = QLabel(entry.type_id, self)
         technical.setProperty("role", "technical")
         layout.addWidget(technical)
+        self.favorite_checkbox = QCheckBox("Pridať do obľúbených", self)
+        self.favorite_checkbox.setChecked(favorite)
+        self.favorite_checkbox.toggled.connect(lambda checked: self.favoriteChanged.emit(entry.type_id, checked))
+        layout.addWidget(self.favorite_checkbox)
         for label in self.findChildren(QLabel):
             label.setAttribute(Qt.WA_TransparentForMouseEvents)
 
@@ -143,6 +154,8 @@ class ToolCatalogDialog(QDialog):
         self.setModal(True)
         self.resize(1100, 700)
         self._tool_service = tool_service
+        self._favorites_path = Path(getattr(tool_service, 'base', '/data')) / 'tool_favorites.json'
+        self._favorites = self._load_favorites()
         self._selected_type: str | None = None
         self._cards: dict[str, ToolCard] = {}
         self._entries = self._load_entries()
@@ -253,6 +266,9 @@ class ToolCatalogDialog(QDialog):
         return raw_category
 
     def _populate_categories(self) -> None:
+        favorites = QListWidgetItem("Obľúbené")
+        favorites.setData(Qt.UserRole, _FAVORITES)
+        self._categories.addItem(favorites)
         recommended = QListWidgetItem("Odporúčané")
         recommended.setData(Qt.UserRole, _RECOMMENDED)
         self._categories.addItem(recommended)
@@ -266,7 +282,42 @@ class ToolCatalogDialog(QDialog):
         all_tools = QListWidgetItem("Všetky nástroje")
         all_tools.setData(Qt.UserRole, _ALL)
         self._categories.addItem(all_tools)
-        self._categories.setCurrentRow(0)
+        for row in range(self._categories.count()):
+            self._categories.item(row).setSizeHint(QSize(190, 38))
+        self._categories.setCurrentRow(1)
+
+    def _load_favorites(self) -> set[str]:
+        try:
+            values = json.loads(self._favorites_path.read_text(encoding='utf-8'))
+            return set(values) if isinstance(values, list) and all(isinstance(value, str) for value in values) else set()
+        except (OSError, ValueError):
+            return set()
+
+    def _set_favorite(self, type_id: str, checked: bool) -> None:
+        favorites = self._favorites | {type_id} if checked else self._favorites - {type_id}
+        temporary = None
+        try:
+            self._favorites_path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=self._favorites_path.parent,
+                    prefix='.tool-favorites-', delete=False) as stream:
+                temporary = Path(stream.name)
+                json.dump(sorted(favorites), stream, ensure_ascii=False, indent=2)
+            os.replace(temporary, self._favorites_path)
+        except OSError:
+            card = self._cards.get(type_id)
+            if card is not None:
+                card.favorite_checkbox.blockSignals(True)
+                card.favorite_checkbox.setChecked(type_id in self._favorites)
+                card.favorite_checkbox.blockSignals(False)
+            QMessageBox.warning(self, 'Obľúbené', 'Obľúbené nástroje sa nepodarilo uložiť. Skontrolujte prístup k dátovému adresáru.')
+            return
+        finally:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+        self._favorites = favorites
+        if self._categories.currentItem().data(Qt.UserRole) == _FAVORITES:
+            # Remove the card after its checkbox signal has finished.
+            QTimer.singleShot(0, self, self._apply_filter)
 
     def _apply_filter(self, _text: str = "") -> None:
         pattern = self._search.text().strip().lower()
@@ -276,11 +327,13 @@ class ToolCatalogDialog(QDialog):
         self._tools.clear()
         self._cards.clear()
         for entry in self._entries:
+            if category == _FAVORITES and entry.type_id not in self._favorites:
+                continue
             if category == _RECOMMENDED and (
                 entry.type_id not in _RECOMMENDED_TYPES or entry.deprecated
             ):
                 continue
-            if category not in (_ALL, _RECOMMENDED) and entry.category_label != category:
+            if category not in (_ALL, _RECOMMENDED, _FAVORITES) and entry.category_label != category:
                 continue
             searchable = " ".join(
                 (entry.name, entry.description, entry.category_label, entry.type_id)
@@ -288,8 +341,9 @@ class ToolCatalogDialog(QDialog):
             if pattern and pattern not in searchable:
                 continue
             item = QListWidgetItem()
-            item.setSizeHint(QSize(100, 168 if entry.metrics else 138))
-            card = ToolCard(entry, self._tools)
+            item.setSizeHint(QSize(100, 198 if entry.metrics else 168))
+            card = ToolCard(entry, self._tools, favorite=entry.type_id in self._favorites)
+            card.favoriteChanged.connect(self._set_favorite)
             card.clicked.connect(self._select_type)
             card.doubleClicked.connect(self._accept_type)
             self._tools.addItem(item)
