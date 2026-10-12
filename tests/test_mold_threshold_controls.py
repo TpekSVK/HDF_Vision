@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 import pytest
 from PySide6.QtCore import QTimer
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QFormLayout
 from app.services.recipe_service import RecipeService
 from app.services.tool_registry import ToolRegistry
 from app.ui.golden_wizard.tool_config_panel import ToolConfigPanel
@@ -44,15 +44,22 @@ def test_largest_residual_edit_updates_ui_and_published_recipe(app,tmp_path,tota
     finally:panel.close()
 
 
-def test_empty_mold_advanced_fields_are_in_sensitivity_only(app):
+def test_empty_mold_sensitivity_contains_only_six_requested_fields(app):
     panel=ToolConfigPanel()
     try:
         tool=ToolRegistry.make_default_tool('mold.protection_v1')
         panel.set_tool(tool,ToolRegistry.get_tool_definition(tool.type),ToolRegistry.get_tool_schema(tool.type))
-        assert panel._advanced_layout.rowCount()==0
-        assert panel._advanced_section.isHidden()
-        for wrapper in [*panel._param_wrappers.values(),*panel._threshold_wrappers.values()]:
-            assert panel._threshold_layout.indexOf(wrapper)>=0
+        expected = [panel._threshold_wrappers['sensitivity'], panel._param_wrappers['polarity'],
+                    panel._threshold_wrappers['max_largest_blob_area'], panel._threshold_wrappers['max_blob_count'],
+                    panel._threshold_wrappers['total_area_threshold'], panel._threshold_wrappers['min_blob_area']]
+        assert [panel._threshold_layout.itemAt(row, QFormLayout.ItemRole.SpanningRole).widget()
+                for row in range(6)] == expected
+        assert panel._threshold_layout.rowCount() == 7  # Six fields and the live result label.
+        assert panel._advanced_layout.rowCount()>0
+        assert not panel._advanced_section.isHidden()
+        for name, wrapper in panel._param_wrappers.items():
+            if name != 'polarity':
+                assert panel._advanced_layout.indexOf(wrapper)>=0
         for kind in ('presence.absence_v2','locator.template_match'):
             tool=ToolRegistry.make_default_tool(kind)
             panel.set_tool(tool,ToolRegistry.get_tool_definition(kind),ToolRegistry.get_tool_schema(kind))
