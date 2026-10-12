@@ -1745,12 +1745,37 @@ class MainWindow(QMainWindow):
                 continue
             color = palette[index % len(palette)]
             tool_name = tool_display_name(tool)
+            is_locator = tool.type == 'locator.template_match'
             tool_roi_items = overlay_utils.tool_overlay_items(
                 tool,
-                color=color,
-                label=tool_name,
+                color=(237, 128, 47) if is_locator else color,
+                label=f'{tool_name} | HĽADANIE' if is_locator else tool_name,
                 include_ignore_mask=False,
             )
+            if is_locator:
+                from app.models.schema import ToolRoi
+                params = tool.params.values or {}
+                template = ToolRoi.from_obj(params.get('template_roi'))
+                if params.get('use_golden_crop', False):
+                    template = tool.roi.copy()
+                elif template.rect() is None:
+                    template = tool.template_roi.copy()
+                if template.rect() is not None:
+                    # Use a display-only copy; retain polygon vertices and the
+                    # original recipe geometry used by the locator.
+                    template_tool = tool.copy(copy_mask=False)
+                    template_tool.roi = template
+                    context = getattr(result, 'context', None)
+                    affine = None
+                    if context is not None and not context.frame_is_aligned:
+                        affine = context.T_total
+                    tool_roi_items.extend(overlay_utils.tool_overlay_items(
+                        template_tool,
+                        color=(94, 197, 34),
+                        label=f'{tool_name} | ŠABLÓNA',
+                        affine=affine,
+                        include_ignore_mask=False,
+                    ))
             roi_items = [item for item in tool_roi_items if item.z_index == 20]
             for item in roi_items:
                 item.fill_alpha = None

@@ -81,3 +81,49 @@ def test_filtered_roi_toggle_preserves_orientation_and_restores_original(angle):
     w.chk_filtered_roi.checked = False
     w._on_run_overlay_controls_changed()
     np.testing.assert_array_equal(w.shown[-1],inspected)
+
+
+@pytest.mark.parametrize('aligned', [True, False])
+@pytest.mark.parametrize('shape', ['polygon', 'ellipse', 'rect'])
+def test_locator_roi_toggle_shows_search_and_template_without_changing_recipe(aligned, shape):
+    from app.models.schema import ToolRoi
+    from app.services.tool_service import ToolService
+    from app.ui.main_window import MainWindow
+    tool = ToolService().make_default_tool('locator.template_match')
+    search = dict(shape='polygon', points=[[20,20],[180,20],[180,120],[120,120],[120,180],[20,180]])
+    template = (dict(shape='polygon', points=[[50,50],[90,50],[70,90]]) if shape == 'polygon'
+                else dict(shape=shape, x=50, y=50, w=40, h=40))
+    tool.roi = ToolRoi.from_obj(search)
+    tool.template_roi = ToolRoi.from_obj(template)
+    tool.params.values['template_roi'] = tool.template_roi.to_dict()
+    original = tool.to_dict()
+    frame = np.zeros((220,220,3), np.uint8)
+    view = SimpleNamespace(id='view_1', image_rotation=0)
+    w, _ = window_for(view, frame)
+    matrix = np.float32([[1,0,7],[0,1,-4]])
+    report = SimpleNamespace(tool=tool, tool_id='tool', status='ok', filtered_roi=None)
+    result = SimpleNamespace(per_tool=[report], context=SimpleNamespace(frame_is_aligned=aligned, T_total=matrix))
+    MainWindow._cache_run_overlays(w, view.id, frame, view, result)
+    items = w._run_overlay_cache[view.id]['roi_items']['tool']
+    assert len(items) == 2
+    assert items[0].label.endswith('HĽADANIE')
+    assert items[1].label.endswith('ŠABLÓNA')
+    assert items[0].color != items[1].color
+    np.testing.assert_array_equal(items[0].points, search['points'])
+    if shape == 'polygon':
+        expected = np.array(template['points']) + (np.array([7,-4]) if not aligned else 0)
+        assert items[1].kind == 'polygon'
+        np.testing.assert_array_equal(items[1].points, expected)
+    if shape == 'ellipse':
+        assert items[1].kind == 'polygon' and len(items[1].points) == 64
+    if shape == 'rect':
+        assert items[1].kind == ('rect' if aligned else 'polygon')
+    for checked in (False, True, False, True):
+        w.chk_show_roi.checked = checked
+        rendered = MainWindow._render_run_overlay_frame(w, view.id)
+        expected = overlay_utils.draw_overlay_items(frame, items) if checked else frame
+        np.testing.assert_array_equal(rendered, expected)
+    w.cmb_roi_tool.currentData = lambda: None  # All tools show both regions too.
+    np.testing.assert_array_equal(MainWindow._render_run_overlay_frame(w, view.id), expected)
+    assert tool.to_dict() == original
+    np.testing.assert_array_equal(w._run_overlay_cache[view.id]['frame'], frame)
