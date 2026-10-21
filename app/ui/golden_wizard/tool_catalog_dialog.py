@@ -20,15 +20,16 @@ from app.ui.golden_wizard.style import TOOL_CATALOG_STYLE
 _ALL = "__all__"
 _RECOMMENDED = "__recommended__"
 _FAVORITES = "__favorites__"
+# Keep runtime support for saved recipes, but do not offer these for new tools.
+_HIDDEN_TYPES = {"mold.protection_v2", "presence.absence_v2"}
 _RECOMMENDED_TYPES = {
-    "locator.template_match", "presence_absence", "presence.absence_v2",
+    "locator.template_match", "presence_absence",
     "ssim", "edge_change", "edge_profile_deviation",
 }
 _NAME_SK = {
     "locator.template_match": "Vyhľadanie a zarovnanie vzoru",
     "mold.protection_v1": "Kontrola prázdnej formy",
     "presence_absence": "Prítomnosť podľa svetlej/tmavej plochy",
-    "presence.absence_v2": "Naučená kontrola odchýlok (V2)",
     "ssim": "Podobnosť vzhľadu (SSIM)",
     "edge_change": "Plocha rozdielov oproti referencii",
     "edge_profile_deviation": "Odchýlka profilu hrany",
@@ -43,7 +44,6 @@ _CATEGORY_SK = {
 _CATEGORY_ORDER = ["Základné", "Prednastavenia", "Špecializované", "Pokročilé", "Ostatné"]
 _CATEGORY_BY_TYPE = {
     "mse": "Pokročilé", "ncc": "Pokročilé", "preset.bright_opening": "Prednastavenia",
-    "mold.protection_v2": "Špecializované",
     "mold.protection_v1": "Špecializované", "light_transmission": "Špecializované",
 }
 
@@ -233,6 +233,8 @@ class ToolCatalogDialog(QDialog):
     def _load_entries(self) -> list[_CatalogEntry]:
         entries: list[_CatalogEntry] = []
         for type_id in [*self._tool_service.list_tool_types(), "preset.bright_opening"]:
+            if type_id in _HIDDEN_TYPES:
+                continue
             try:
                 definition = self._tool_service.get_tool_meta("presence_absence" if type_id == "preset.bright_opening" else type_id)
             except KeyError:

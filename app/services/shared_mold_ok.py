@@ -1,5 +1,6 @@
 """Shared full OK frames; ROI crops, NOK datasets and models remain tool-local."""
 from pathlib import Path
+import shutil
 import imageio.v3 as iio
 import numpy as np
 from uuid import uuid4
@@ -8,6 +9,16 @@ from app.services.learning_context import bind_samples
 
 
 class SharedMoldOK:
+    @staticmethod
+    def clear_view(base, recipe, view_id):
+        """Reset every capture context in this view, including older settings."""
+        directory = Path(base) / 'recipes' / recipe / 'shared_mold_ok' / view_id
+        try:
+            shutil.rmtree(directory)
+        except FileNotFoundError:
+            if directory.exists():
+                raise
+
     def __init__(self, base, recipe, view_id, capture_signature):
         self.directory = (Path(base) / 'recipes' / recipe / 'shared_mold_ok'
                           / view_id / capture_signature)

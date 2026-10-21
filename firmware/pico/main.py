@@ -1,6 +1,6 @@
-# HDF_Vision Pico firmware 4.0 — PIO_PAIR_V1 / SESSION_V1
-# Deploy this file as main.py. Previous firmware preserved in main_v3.3.py.
-"""HDF Pico4.0: host-owned MASTER/TRIGGER transitions and precise PIO pairs.
+# HDF_Vision Pico firmware 4.1 — PIO_PAIR_V1 / SESSION_V1
+# Deploy this file as main.py. Previous firmware preserved in main_v4.0.py.
+"""HDF Pico4.1: host-owned MASTER/TRIGGER transitions and precise PIO pairs.
 
 SESSION IDLE|MASTER|TRIGGER is volatile and bootsIDLE. MASTER keeps legacy
 FIRE/TRIGGER input timing and CAPTURE events. In TRIGGER, physical/software
@@ -19,7 +19,7 @@ import time
 from machine import Pin
 
 FIRMWARE_NAME = "pico_hdf_controller"
-FIRMWARE_VERSION = "4.0-pio-pair"
+FIRMWARE_VERSION = "4.1-pio-pair"
 CONFIG_FILE = "hdf_pico_config.json"
 
 LED_PIN = 17
@@ -338,6 +338,8 @@ def fire_view(view, capture_source=None):
         mode = session_mode
         if mode == "IDLE":
             return "BUSY SESSION_NOT_READY"
+        # A new inspection releases the manual override permanently.
+        set_manual_light(False)
         if mode == "TRIGGER":
             # Request only. Host arms its receiver before sending PIO FIRE.
             source = capture_source or view
@@ -562,6 +564,7 @@ def pio_fire(tokens):
         if busy:return ['BUSY PIO']
         busy=True
         owns_outputs=True
+        set_manual_light(False)
         trigger_start=2000+max(pre,0);light_start=2000+max(-pre,0)
         events=[]
         for i in range(count):
@@ -627,8 +630,10 @@ def handle_command(line):
         return inputs_lines()
 
     if command == "LIGHT ON":
-        if session_mode != "MASTER":
-            return ["ERR LIGHT SESSION_NOT_MASTER"]
+        if session_mode not in ("MASTER", "TRIGGER"):
+            return ["ERR LIGHT SESSION_NOT_READY"]
+        if busy:
+            return ["BUSY LIGHT"]
         return [set_manual_light(True)]
 
     if command == "LIGHT OFF":

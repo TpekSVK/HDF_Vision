@@ -10,6 +10,10 @@ from PySide6.QtGui import QPixmap, QImage, QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QCheckBox, QTableWidgetItem, QWidget, QHeaderView, QAbstractItemView, QSizePolicy, QFileDialog, QToolButton, QScrollArea, QSplitter, QFrame
 
 import os
+import re
+import shutil
+from uuid import uuid4
+from PySide6.QtWidgets import QMenu
 from app.ui.responsive import WrapLayout
 import logging
 from pathlib import Path
@@ -26,13 +30,13 @@ from app.ui.roi_mask_editor import MASK_WARN_PIXELS, MAX_MASK_PIXELS, MAX_ROI_PI
 from app.services.storage_service import save_golden
 from app.models.regions import Region, validate_cardinality
 from app.models.learning_contract import SAMPLE_PREPARATION_VERSION
-from app.services.learning_context import learning_signature, samples_match, bind_samples
+from app.services.learning_context import learning_signature, samples_match
 from app.models.schema import RecipeData, RecipeV2, Tool, RecipeView, ToolMask, ToolParams, ToolRoi, ToolThresholds
 from app.services.recipe_service import RecipeService
 from app.services.roi_geometry import roi_local_exclusion_mask
 from app.services.tool_pipeline import run_tool_test
 from app.services.tools.edge_profile_deviation import detect_guided_reference_edge
-from app.services.presence_absence_v2_service import compute_roi_hash, ensure_assets_dirs, evaluate_dataset, load_samples, optimize_sensitivity, reset_learning_assets, resolve_assets_dir, save_sample, sensitivity_to_score_threshold
+from app.services.presence_absence_v2_service import compute_roi_hash, ensure_assets_dirs, evaluate_dataset, load_samples, optimize_sensitivity, reset_learning_assets, resolve_assets_dir, sensitivity_to_score_threshold
 from app.utils.tool_identity import compute_tool_identity
 from app.services.view_images import apply_view_image_transform, view_image_rotation
 from app.services.camera_profiles import apply_camera_state, apply_view_camera_profile, snapshot_camera_state
@@ -260,13 +264,15 @@ class GoldenWizard(QDialog):
         header = self.tools_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tools_table.verticalHeader().setVisible(False)
         self.tools_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tools_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tools_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tools_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tools_table.customContextMenuRequested.connect(self._show_tool_context_menu)
         self.tools_table.setDragEnabled(True)
         self.tools_table.setAcceptDrops(True)
         self.tools_table.setDropIndicatorShown(True)
@@ -298,7 +304,7 @@ class GoldenWizard(QDialog):
 
         left_panel = QFrame(self)
         left_panel.setObjectName("workspacePanel")
-        left_panel.setMinimumWidth(220)
+        left_panel.setMinimumWidth(365)
         left_panel.setMaximumWidth(420)
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(10, 10, 10, 10)
@@ -342,25 +348,20 @@ class GoldenWizard(QDialog):
         center_layout.addWidget(self.live_lbl, 1)
         center_layout.addWidget(self.roi_editor, 1)
 
-        properties_scroll = QScrollArea(self)
-        properties_scroll.setObjectName("propertiesScroll")
-        properties_scroll.setWidgetResizable(True)
-        properties_scroll.setFrameShape(QScrollArea.NoFrame)
-        properties_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        properties_scroll.setMinimumWidth(300)
-        properties_scroll.setMaximumWidth(480)
-        properties_scroll.setWidget(self._tool_panel)
+        # The inspector owns its middle scroll area; its header and results
+        # remain outside scrolling content.
+        self._tool_panel.setMinimumWidth(300)
+        self._tool_panel.setMaximumWidth(480)
+        self._tool_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
 
         self._workspace_splitter = QSplitter(Qt.Horizontal, self)
         self._workspace_splitter.setChildrenCollapsible(False)
         self._workspace_splitter.setHandleWidth(5)
         self._workspace_splitter.addWidget(left_panel)
         self._workspace_splitter.addWidget(center_panel)
-        self._workspace_splitter.addWidget(properties_scroll)
         self._workspace_splitter.setStretchFactor(0, 0)
         self._workspace_splitter.setStretchFactor(1, 1)
-        self._workspace_splitter.setStretchFactor(2, 0)
-        self._workspace_splitter.setSizes([250, 800, 340])
+        self._workspace_splitter.setSizes([365, 800])
 
         top_controls = QVBoxLayout()
         top_controls.setContentsMargins(10, 8, 10, 8)
@@ -384,7 +385,17 @@ class GoldenWizard(QDialog):
         workspace_scroll = QScrollArea(self)
         workspace_scroll.setWidgetResizable(True)
         workspace_scroll.setWidget(workspace)
-        layout.addWidget(workspace_scroll, 1)
+        # Let the inspector span the toolbar and workspace height, rather than
+        # reserving an empty toolbar-sized strip above its properties header.
+        self._inspector_splitter = QSplitter(Qt.Horizontal, self)
+        self._inspector_splitter.setChildrenCollapsible(False)
+        self._inspector_splitter.setHandleWidth(5)
+        self._inspector_splitter.addWidget(workspace_scroll)
+        self._inspector_splitter.addWidget(self._tool_panel)
+        self._inspector_splitter.setStretchFactor(0, 1)
+        self._inspector_splitter.setStretchFactor(1, 0)
+        self._inspector_splitter.setSizes([1165, 340])
+        layout.addWidget(self._inspector_splitter, 1)
         layout.addLayout(buttons)
         self._status_bar = QLabel("Pripravené", self)
         self._status_bar.setWordWrap(True)
@@ -458,6 +469,14 @@ class GoldenWizard(QDialog):
         available = self.screen().availableGeometry()
         self.resize(min(1400, available.width()-40), min(900, available.height()-80))
         self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        # Editors handle Enter first. Do not let an unhandled Enter activate
+        # QDialog's default button (for example, Add view).
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ---------- Live ----------
     def _set_manual_light_ui(self, enabled: bool | None) -> None:
@@ -1172,6 +1191,7 @@ class GoldenWizard(QDialog):
             order_flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
             order_item.setFlags(order_flags)
             name_item = QTableWidgetItem(tool_display_name(tool))
+            name_item.setToolTip(tool_display_name(tool))
             try:
                 tool_meta = self.recipes.tool.get_tool_meta(tool.type)
                 secondary = getattr(tool_meta, "category", "") or getattr(tool_meta, "name", "")
@@ -1194,6 +1214,7 @@ class GoldenWizard(QDialog):
                 type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
             else:
                 type_item.setToolTip("Analyzátory bežia po locator nástrojoch.")
+            type_item.setToolTip(f"{type_item.text()}\n{tool.type}\n{type_item.toolTip()}")
             self.tools_table.setItem(row, 0, order_item)
             self.tools_table.setItem(row, 1, name_item)
             self.tools_table.setItem(row, 2, type_item)
@@ -1242,8 +1263,9 @@ class GoldenWizard(QDialog):
             self.tools_table.setCellWidget(row, 4, actions_widget)
 
         self.tools_table.resizeRowsToContents()
-        self.tools_table.blockSignals(False)
 
+        # Selecting the same row does not emit a selection change. Refresh
+        # explicitly once, after the table and selection are both complete.
         if tools:
             if previous_row < 0:
                 target_row = 0
@@ -1256,11 +1278,60 @@ class GoldenWizard(QDialog):
         else:
             self.tools_table.clearSelection()
             self._selected_tool_row = -1
-            self._on_tool_selection_changed()
+        self.tools_table.blockSignals(False)
+        self._on_tool_selection_changed()
 
         self._set_selected_tool_overlay(tools)
 
         self._update_dirty_state(recipe, view_id)
+
+    def _show_tool_context_menu(self, position):
+        index = self.tools_table.indexAt(position)
+        if not index.isValid():
+            return
+        row = index.row()
+        menu = QMenu(self)
+        copy_action = menu.addAction("Kopírovať nástroj")
+        if menu.exec(self.tools_table.viewport().mapToGlobal(position)) == copy_action:
+            self._copy_tool(row)
+
+    def _copy_tool(self, index: int):
+        recipe = self._current_recipe_name()
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        try:
+            tools = self.recipes.get_draft_tools(recipe, view_id)
+            if not 0 <= index < len(tools):
+                return
+            tool = tools[index].copy()
+            source_name = tool_display_name(tool).rstrip()
+            numbered = re.fullmatch(r"(.*?)(\d+)", source_name)
+            base_name = numbered.group(1) if numbered else f"{source_name} "
+            suffix = int(numbered.group(2)) + 1 if numbered else 2
+            names = {entry.name for entry in tools}
+            tool.name = f"{base_name}{suffix}"
+            while tool.name in names:
+                suffix += 1
+                tool.name = f"{base_name}{suffix}"
+            # Learned data must be independent: retraining the copy must not
+            # overwrite the source tool's model or samples.
+            if tool.type in _STATISTICAL_PRESENCE_TYPES:
+                identity, _, _ = compute_tool_identity(tools[index])
+                source = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                stored = str(tool.params.values.get("reference_assets_dir", "") or "")
+                if stored and Path(stored).resolve().is_relative_to(source.parents[1].resolve()):
+                    source = Path(stored)
+                target = resolve_assets_dir(self.recipes.base, recipe, view_id, f"copy-{uuid4().hex}")
+                if source.is_dir():
+                    shutil.copytree(source, target)
+                tool.params.values["reference_assets_dir"] = str(target)
+            self.recipes.add_tool(recipe, tool, view_id=view_id)
+            self._selected_tool_row = len(tools)
+            self._refresh_tools_table()
+            self._update_dirty_state(recipe, view_id)
+        except Exception as exc:
+            self._err(f"Kopírovanie nástroja zlyhalo: {exc}")
 
     def _delete_tool(self, index: int):
         recipe = self._current_recipe_name()
@@ -1749,6 +1820,77 @@ class GoldenWizard(QDialog):
             self._warn(str(exc))
             return None
 
+    def _apply_mold_learning(self, action, context):
+        recipe, view_id, row, tool, assets = context
+        title = "Použiť spoločné OK snímky" if action == "shared_ok" else "Prepočítať model"
+        confirmation = QMessageBox(self)
+        confirmation.setWindowTitle(title)
+        confirmation.setIcon(QMessageBox.Question)
+        confirmation.setText(
+            "Použiť spoločné OK snímky? Každý nástroj použije vlastnú ROI a masku. Modely potom treba prepočítať."
+            if action == "shared_ok" else
+            "Prepočítať model z OK vzoriek? Každý nástroj bude mať vlastný model."
+        )
+        confirmation.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        confirmation.setDefaultButton(QMessageBox.No)
+        apply_all = QCheckBox("Použiť pre všetky nástroje Kontrola prázdnej formy v aktuálnom pohľade aktuálneho receptu", confirmation)
+        apply_all.setChecked(True)
+        confirmation.setCheckBox(apply_all)
+        if confirmation.exec() != QMessageBox.Yes:
+            return
+        targets = [(row, tool)]
+        if apply_all.isChecked():
+            targets = [(i, entry) for i, entry in enumerate(self.recipes.get_draft_tools(recipe, view_id))
+                       if entry.type == "mold.protection_v1"]
+        completed = 0
+        unchanged = 0
+        failures = []
+        for target_row, target in targets:
+            try:
+                identity, _, _ = compute_tool_identity(target)
+                target_assets = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                stored = str(target.params.values.get("reference_assets_dir", "") or "")
+                if stored and Path(stored).resolve().is_relative_to(target_assets.parents[1].resolve()):
+                    target_assets = Path(stored)
+                signature = self._presence_learning_signature(target, view_id)
+                if action == "shared_ok":
+                    count = self._shared_mold_ok_store(view_id).import_into(
+                        target_assets, signature,
+                        lambda frame: self._prepare_presence_learning_sample(frame, target, view_id),
+                    )
+                    if not count:
+                        unchanged += 1
+                        continue
+                    params = dict(target.params.values or {})
+                    params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
+                                  reference_model_ready=False, reference_model_needs_rebuild=True,
+                                  reference_model_invalidated=False)
+                    target.params = ToolParams(params)
+                else:
+                    LearningDataset().rebuild(target, ensure_assets_dirs(target_assets), view_id, signature)
+                target.params.values["reference_assets_dir"] = str(target_assets)
+                self._presence_tuning_results.pop((view_id, int(target.order), target.type), None)
+                self.recipes.update_tool(recipe, target_row, target, view_id=view_id)
+                completed += 1
+            except (ValueError, OSError) as exc:
+                if isinstance(exc, OSError):
+                    target.params.values.update(reference_model_ready=False, reference_model_needs_rebuild=True)
+                    self._presence_tuning_results.pop((view_id, int(target.order), target.type), None)
+                    self.recipes.update_tool(recipe, target_row, target, view_id=view_id)
+                failures.append(f"{tool_display_name(target)}: {exc}")
+        self._refresh_tools_table()
+        self._update_dirty_state(recipe, view_id)
+        summary = f"{title}: dokončené pre {completed} z {len(targets)} nástrojov."
+        if action == "shared_ok":
+            if unchanged:
+                summary += f" Bez nových spoločných OK snímok: {unchanged}."
+            if completed:
+                summary += " Prepočítajte modely aktualizovaných nástrojov."
+        if failures:
+            self._warn(summary + "\n\n" + "\n".join(failures))
+        else:
+            self._info(summary)
+
     def _on_presence_v2_learning(self, action: str) -> None:
         context = self._presence_v2_context()
         if context is None:
@@ -1756,6 +1898,9 @@ class GoldenWizard(QDialog):
         if action != "validate" and not self._authorize_write():
             return
         recipe, view_id, row, tool, assets = context
+        if tool.type == "mold.protection_v1" and action in {"shared_ok", "rebuild"}:
+            self._apply_mold_learning(action, context)
+            return
         dirs = ensure_assets_dirs(assets)
         if action != "reset":
             try:
@@ -1763,32 +1908,7 @@ class GoldenWizard(QDialog):
             except ValueError as exc:
                 self._warn(str(exc))
                 return
-        if action == 'shared_ok':
-            if tool.type != 'mold.protection_v1':
-                return
-            try:
-                signature = self._presence_learning_signature(tool, view_id)
-                count = self._shared_mold_ok_store(view_id).import_into(assets, signature,
-                    lambda frame: self._prepare_presence_learning_sample(frame, tool, view_id))
-            except (ValueError, OSError) as exc:
-                if isinstance(exc, OSError):
-                    params = dict(tool.params.values or {})
-                    params.update(reference_model_ready=False, reference_model_needs_rebuild=True)
-                    tool.params = ToolParams(params)
-                    self.recipes.update_tool(recipe, row, tool, view_id=view_id)
-                self._warn(str(exc))
-                return
-            if not count:
-                self._info('Nie sú dostupné nové spoločné OK snímky pre tento pohľad a nastavenie. Staré ROI výrezy nemožno použiť pre inú oblasť.')
-                return
-            params = dict(tool.params.values or {})
-            params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
-                          reference_model_ready=False, reference_model_needs_rebuild=True,
-                          reference_model_invalidated=False)
-            tool.params = ToolParams(params)
-            self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-            self._info(f'Pridané spoločné OK snímky: {count}. Prepočítajte model tohto nástroja.')
-        elif action in {"capture_ok", "capture_nok"}:
+        if action in {"capture_ok", "capture_nok"}:
             mode = "ok" if action == "capture_ok" else "nok"
             signature = self._presence_learning_signature(tool, view_id)
             params = dict(tool.params.values or {})
@@ -1811,6 +1931,19 @@ class GoldenWizard(QDialog):
                               sample_count_ok=0, sample_count_nok=0)
                 tool.params = ToolParams(params)
                 self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+            from app.services.capture_batch import CaptureBatch
+            shared = self._shared_mold_ok_store(view_id) if tool.type == 'mold.protection_v1' and mode == 'ok' else None
+
+            def validate_commit():
+                if self._presence_learning_signature(tool, view_id) != signature:
+                    raise ValueError("Počas zberu sa zmenilo nastavenie. Snímky neboli pridané.")
+
+            try:
+                batch = CaptureBatch(assets, mode, signature,
+                                     shared.directory if shared is not None else None)
+            except OSError as exc:
+                self._warn(f"Príprava ukladania snímok zlyhala: {exc}")
+                return
             dialog = PresenceV2SampleCaptureDialog(
                 title=(
                     "Zber prázdnej formy" if mode == "ok"
@@ -1822,64 +1955,78 @@ class GoldenWizard(QDialog):
                 crop_fn=lambda frame: self._prepare_presence_learning_sample(frame, tool, view_id),
                 default_mode=str((tool.params.values or {}).get("capture_mode_default", "manual")),
                 retain_frames=(tool.type == 'mold.protection_v1' and mode == 'ok'),
+                batch=batch,
+                validate_commit=validate_commit,
                 parent=self,
             )
-            if dialog.exec() == QDialog.Accepted:
-                samples = dialog.samples()
-                if samples:
-                    if self._presence_learning_signature(tool, view_id) != signature:
-                        self._warn("Počas zberu sa zmenilo nastavenie. Snímky neboli pridané.")
-                        return
-                    bind_samples(assets, signature)
-                    self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-                    if tool.type == 'mold.protection_v1' and mode == 'ok':
-                        try:
-                            shared = self._shared_mold_ok_store(view_id)
-                            frames = dialog.frames()
-                            if len(frames) != len(samples):
-                                raise ValueError('Chýbajú celé OK snímky. Zber zopakujte.')
-                            for frame, sample in zip(frames, samples):
-                                ident = shared.add(frame)
-                                # Same IDs prevent importing a tool's own
-                                # collection again when reusing the shared pool.
-                                import imageio.v3 as iio
-                                iio.imwrite(dirs['ok'] / f'shared_{ident}.png', sample)
-                        except (ValueError, OSError) as exc:
-                            params = dict(tool.params.values or {})
-                            params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
-                                          reference_model_ready=False, reference_model_needs_rebuild=True)
-                            tool.params = ToolParams(params)
-                            self.recipes.update_tool(recipe, row, tool, view_id=view_id)
-                            self._warn(str(exc))
-                            return
-                    else:
-                        for sample in samples:
-                            save_sample(sample, dirs[mode])
-                    params = dict(tool.params.values or {})
-                    params["sample_preparation_version"] = SAMPLE_PREPARATION_VERSION
-                    params["reference_model_ready"] = False
-                    params["reference_model_needs_rebuild"] = True
-                    params["reference_model_invalidated"] = False
-                    tool.params = ToolParams(params)
+            try:
+                accepted = dialog.exec() == QDialog.Accepted
+                if not accepted or not dialog.saved_count:
+                    return
+                self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
+                params = dict(tool.params.values or {})
+                params["sample_preparation_version"] = SAMPLE_PREPARATION_VERSION
+                params["reference_model_ready"] = False
+                params["reference_model_needs_rebuild"] = True
+                params["reference_model_invalidated"] = False
+                tool.params = ToolParams(params)
+            finally:
+                batch.discard()
+                dialog.deleteLater()
         elif action == "reset":
-            reply = QMessageBox.question(
-                self, "Resetovať učenie?",
-                "Vymažú sa OK/NOK vzorky a prepočítaný model tohto nástroja. Spoločné OK snímky ostatných nástrojov zostanú zachované.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
+            confirmation = QMessageBox(self)
+            confirmation.setWindowTitle("Resetovať učenie?")
+            confirmation.setIcon(QMessageBox.Question)
+            confirmation.setText("Vymažú sa OK/NOK vzorky a prepočítané modely.")
+            confirmation.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            confirmation.setDefaultButton(QMessageBox.No)
+            reset_all = None
+            if tool.type == "mold.protection_v1":
+                confirmation.setText("Vymažú sa OK/NOK vzorky a prepočítané modely. Pri resete všetkých nástrojov sa vymažú aj spoločné OK snímky aktuálneho pohľadu vrátane starších zberov. Pri resete iba tohto nástroja zostanú spoločné OK snímky zachované.")
+                reset_all = QCheckBox("Resetovať učenie všetkých nástrojov Kontrola prázdnej formy v aktuálnom pohľade aktuálneho receptu", confirmation)
+                reset_all.setChecked(True)
+                confirmation.setCheckBox(reset_all)
+            if confirmation.exec() != QMessageBox.Yes:
                 return
-            ok, error = reset_learning_assets(assets)
-            if not ok:
-                self._warn(f"Reset učenia zlyhal: {error or 'neznáma chyba'}")
-                return
-            params = dict(tool.params.values or {})
-            params.update(reference_model_ready=False, reference_model_invalidated=False,
-                          sample_count_ok=0, sample_count_nok=0)
-            self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-            params.pop("model_stats", None)
-            params.pop("model_warnings", None)
-            tool.params = ToolParams(params)
+            targets = [(view_id, row, tool, assets)]
+            if reset_all is not None and reset_all.isChecked():
+                targets = []
+                for target_row, target_tool in enumerate(self.recipes.get_draft_tools(recipe, view_id)):
+                    if target_tool.type != "mold.protection_v1":
+                        continue
+                    identity, _, _ = compute_tool_identity(target_tool)
+                    target_assets = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                    stored = str(target_tool.params.values.get("reference_assets_dir", "") or "")
+                    if stored and Path(stored).resolve().is_relative_to(target_assets.parents[1].resolve()):
+                        target_assets = Path(stored)
+                    targets.append((view_id, target_row, target_tool, target_assets))
+            failures = []
+            if reset_all is not None and reset_all.isChecked():
+                from app.services.shared_mold_ok import SharedMoldOK
+                try:
+                    SharedMoldOK.clear_view(self.recipes.base, recipe, view_id)
+                except OSError as exc:
+                    failures.append(f"{view_id} / spoločné OK snímky: {exc}")
+            for target_view, target_row, target_tool, target_assets in targets:
+                ok, error = reset_learning_assets(target_assets)
+                params = dict(target_tool.params.values or {})
+                # A partially failed deletion must not leave a model marked ready.
+                params.update(reference_model_ready=False, reference_model_invalidated=not ok,
+                              reference_model_needs_rebuild=False)
+                if ok:
+                    params.update(sample_count_ok=0, sample_count_nok=0)
+                else:
+                    failures.append(f"{target_view} / {tool_display_name(target_tool)}: {error or 'neznáma chyba'}")
+                params.pop("model_stats", None)
+                params.pop("model_warnings", None)
+                target_tool.params = ToolParams(params)
+                self._presence_tuning_results.pop((target_view, int(target_tool.order), target_tool.type), None)
+                self.recipes.update_tool(recipe, target_row, target_tool, view_id=target_view)
+                self._update_dirty_state(recipe, target_view)
+            self._refresh_tools_table()
+            if failures:
+                self._warn("Reset učenia nebol úplný:\n" + "\n".join(failures))
+            return
         elif action == "rebuild":
             if self._rebuild_presence_v2_model(tool, dirs, view_id) is None:
                 return

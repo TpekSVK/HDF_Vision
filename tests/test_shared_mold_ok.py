@@ -111,24 +111,50 @@ def test_wizard_collection_and_reuse_do_not_change_other_tool_or_nok(tmp_path, m
         _info=messages.append,_update_dirty_state=lambda *a:None,
         _tool_panel=SimpleNamespace(refresh_values=lambda *a:None,refresh_presence_learning=lambda *a,**kw:None),
         _capture_presence_learning_frame=lambda _:golden.copy())
-    for name in ('_presence_learning_signature','_shared_mold_ok_store','_prepare_presence_learning_sample','_refresh_presence_v2_learning'):
+    for name in ('_presence_learning_signature','_shared_mold_ok_store','_prepare_presence_learning_sample','_refresh_presence_v2_learning','_apply_mold_learning'):
         setattr(w,name,MethodType(getattr(GoldenWizard,name),w))
     def context():
         row=w._selected_tool_row
         return 'recipe',view.id,row,current[row].copy(),tmp_path/f'tool-{row}'
     w._presence_v2_context=context
+    # The current shared-OK flow asks whether to apply to all tools. Exercise
+    # selected-only reuse, retaining the isolation assertions below.
+    class Confirmation:
+        Question = 0
+        Yes = 1
+        No = 2
+        def __init__(self, *args): pass
+        def __getattr__(self, name): return lambda *args: None
+        def exec(self): return self.Yes
+    class SelectedOnly:
+        def __init__(self, *args): pass
+        def setChecked(self, value): pass
+        def isChecked(self): return False
+    monkeypatch.setattr(module, 'QMessageBox', Confirmation)
+    monkeypatch.setattr(module, 'QCheckBox', SelectedOnly)
+    monkeypatch.setattr(module, 'resolve_assets_dir',
+                        lambda *args: tmp_path / f'tool-{w._selected_tool_row}')
+    w._refresh_tools_table = lambda: w._refresh_presence_v2_learning(
+        current[w._selected_tool_row], w._selected_tool_row)
     class Capture:
         def __init__(self,**kw):
             assert kw['retain_frames'] is True
             self.full=[kw['capture_fn']()]
             self.crops=[kw['crop_fn'](self.full[0])]
-        def exec(self):return QDialog.Accepted
+            self.batch = kw['batch']
+            self.validate = kw['validate_commit']
+        def exec(self):
+            self.validate()
+            ids = [self.batch.add(crop, self.full[i] if hasattr(self, 'full') else None)
+                   for i, crop in enumerate(self.crops)]
+            self.saved_count = self.batch.commit(ids).result(timeout=5)
+            return QDialog.Accepted
+        def deleteLater(self): pass
         def samples(self):return self.crops
         def frames(self):return self.full
     monkeypatch.setattr(module,'PresenceV2SampleCaptureDialog',Capture)
     GoldenWizard._on_presence_v2_learning(w,'capture_ok')
     assert len(load_samples(tmp_path/'tool-0/ok'))==1
-    current[0].params.values['reference_model_ready']=True
     snapshot=current[0].to_dict()
     w._selected_tool_row=1
     GoldenWizard._on_presence_v2_learning(w,'shared_ok')
@@ -148,6 +174,8 @@ def test_wizard_collection_and_reuse_do_not_change_other_tool_or_nok(tmp_path, m
         def __init__(self,**kw):
             assert kw['retain_frames'] is False
             self.crops=[kw['crop_fn'](kw['capture_fn']())]
+            self.batch = kw['batch']
+            self.validate = kw['validate_commit']
         def frames(self):pytest.fail('NOK must not enter shared OK pool')
     monkeypatch.setattr(module,'PresenceV2SampleCaptureDialog',NOKCapture)
     GoldenWizard._on_presence_v2_learning(w,'capture_nok')

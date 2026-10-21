@@ -99,6 +99,7 @@ FIELD_LABELS_SK = {
 }
 
 METRIC_LABELS_SK = {
+    "mold_empty": "Prázdna forma",
     "changed_area_pct": "Zmenená plocha",
     "largest_change_px": "Najväčšia súvislá chyba",
     "mse": "Stredná štvorcová chyba (MSE)",

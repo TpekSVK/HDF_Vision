@@ -954,6 +954,10 @@ class MainWindow(QMainWindow):
             self._dispatch_runtime_stop()
             return
         self._set_runtime_controls(False)
+        # Firmware releases manual light when capture starts. Read it back
+        # after the worker finishes, without racing its serial commands.
+        if self.btn_manual_light.isChecked():
+            self._refresh_manual_light()
         if kind == "cycle":
             self._resume_live_preview_after_trigger(self._runtime_was_live and error is None)
         self._sync_mode_chrome()
