@@ -54,6 +54,7 @@ class MoldProtectionV1Tool(PresenceAbsenceV2Tool):
             "residual_detected": bool(residual_detected),
             "residual_count": len(blobs) if residual_detected else 0,
             "candidate_count": len(blobs),
+            "smallest_blob_area": min((int(blob["area"]) for blob in blobs), default=0),
             "inspection_fault": bool(inspection_fault),
             "inspection_state": inspection_state,
             "residual_x": int(largest_dict.get("image_x", 0)),

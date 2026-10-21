@@ -30,6 +30,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
         crop_fn: Callable[[np.ndarray], np.ndarray | None],
         default_mode: str = "manual",
         retain_frames: bool = False,
+        batch=None,
+        validate_commit: Callable[[], None] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
@@ -40,6 +42,14 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._samples: list[np.ndarray] = []
         self._retain_frames = retain_frames
         self._frames: list[np.ndarray] = []
+        self._batch = batch
+        self._validate_commit = validate_commit
+        self._sample_ids = []
+        self._commit_future = None
+        self.saved_count = 0
+        self._save_timer = QTimer(self)
+        self._save_timer.setInterval(25)
+        self._save_timer.timeout.connect(self._check_save)
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._capture_once)
 
@@ -113,6 +123,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._auto_timer.stop()
 
     def _capture_once(self) -> None:
+        if self._commit_future is not None:
+            return
         try:
             frame = self._capture_fn()
             if frame is None:
@@ -130,6 +142,9 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._samples.append(np.asarray(cropped).copy())
         if self._retain_frames:
             self._frames.append(np.asarray(frame).copy())
+        if self._batch is not None:
+            self._sample_ids.append(self._batch.add(
+                self._samples[-1], self._frames[-1] if self._retain_frames else None))
         item = QListWidgetItem(f"#{len(self._samples)}")
         self._thumbs.addItem(item)
         self._thumbs.setCurrentRow(self._thumbs.count() - 1)
@@ -143,6 +158,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
             return
         self._thumbs.takeItem(row)
         self._samples.pop(row)
+        if self._batch is not None:
+            self._sample_ids.pop(row)
         if self._retain_frames:
             self._frames.pop(row)
         self._counter.setText(f"Počet snímok: {len(self._samples)}")
@@ -162,6 +179,56 @@ class PresenceV2SampleCaptureDialog(QDialog):
         pix = QPixmap.fromImage(qimg.copy())
         self._preview.setPixmap(pix.scaled(self._preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
+    def accept(self) -> None:
+        self._stop_auto()
+        if self._batch is None:
+            super().accept()
+            return
+        if self._commit_future is not None:
+            return
+        try:
+            if self._sample_ids and self._validate_commit is not None:
+                self._validate_commit()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zber vzoriek", str(exc))
+            return
+        self._commit_future = self._batch.commit(self._sample_ids)
+        self._set_saving(True)
+        self._save_timer.start()
+
+    def _set_saving(self, saving):
+        for widget in (self._btn_capture, self._btn_start, self._btn_delete,
+                       self._buttons, self._mode, self._target, self._interval):
+            widget.setEnabled(not saving)
+        self._counter.setText("Dokončujem uloženie snímok…" if saving
+                              else f"Počet snímok: {len(self._samples)}")
+
+    def _check_save(self):
+        if not self._commit_future.done():
+            return
+        self._save_timer.stop()
+        try:
+            self.saved_count = self._commit_future.result()
+        except Exception as exc:
+            self._commit_future = None
+            self._set_saving(False)
+            QMessageBox.warning(self, "Uloženie snímok zlyhalo", str(exc))
+            return
+        self._commit_future = None
+        super().accept()
+
+    def done(self, result):
+        self._stop_auto()
+        if self._commit_future is not None:
+            return
+        self._save_timer.stop()
+        if self._batch is not None:
+            self._batch.discard()
+        super().done(result)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self._stop_auto()
+        if self._commit_future is not None:
+            event.ignore()
+            return
         super().closeEvent(event)

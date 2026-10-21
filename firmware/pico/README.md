@@ -1,8 +1,8 @@
-# Raspberry Pi Pico – HDF_Vision 4.0
+# Raspberry Pi Pico – HDF_Vision 4.1
 
-Nový firmvér je **main_v4.0.py**, identifikácia `pico_hdf_controller 4.0-pio-pair`.
+Nový firmvér je **main_v4.1.py**, identifikácia `pico_hdf_controller 4.1-pio-pair`.
 `main.py` je jeho identická nasadzovacia kópia. Na Pico s MicroPython pre RP2040
-sa kopíruje ako `main.py`. Verzia `main_v3.3.py` zostáva ako predchádzajúca verzia.
+sa kopíruje ako `main.py`. Verzie `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
 Stav overenia a nasadenia uvádza `docs/PIO_IMPLEMENTATION_CHECKPOINT.md` v aplikácii.
 
 ## Zapojenie
@@ -25,7 +25,12 @@ Aplikácia rezervuje čerstvý frame pri udalosti CAPTURE.
 V TRIGGER fyzický vstup odošle iba `REQUEST INx`. Aplikácia vyberie pohľad,
 pripraví kameru, rezervuje prijímač dvojice a až potom odošle `PIO FIRE`.
 Samotný vstup negeneruje impulzy ani svetlo. Takto sa rámce nestratia pred rezerváciou.
-Manuálne svetlo ON je dostupné iba v MASTER; v TRIGGER ho vlastní PIO sekvencia.
+Od v4.1 je manuálne svetlo ON dostupné v MASTER aj TRIGGER, iba mimo aktívneho cyklu.
+Prijatý FIRE/TRIGGER vstup alebo PIO FIRE automaticky zruší manuálne zapnutie.
+Svetlo potom riadi snímací cyklus a po skončení zostáva vypnuté; manuálny režim
+sa neobnoví ani po chybe PIO. LIGHT STATUS aj STATUS vracajú MANUAL_LIGHT OFF.
+V IDLE sa LIGHT ON odmietne. Odmietnutý príkaz snímania (nesprávny režim,
+parametre alebo obsadený radič) manuálne svetlo nemení.
 
 ## Protokol PIO_PAIR_V1 / SESSION_V1
 
