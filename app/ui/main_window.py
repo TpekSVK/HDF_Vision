@@ -312,6 +312,11 @@ class MainWindow(QMainWindow):
         actions.addWidget(self.cmb_roi_tool)
 
         actions.addStretch(1)
+        self.btn_hold_nok = QPushButton("Ponechať NOK", actions_container)
+        self.btn_hold_nok.setEnabled(False)
+        self.btn_hold_nok.setToolTip("Zastaviť porovnanie a ponechať NOK snímku. Pri ďalšej NOK sa prepínanie obnoví.")
+        self.btn_hold_nok.clicked.connect(lambda: self._nok_comparison.hold_nok())
+        actions.addWidget(self.btn_hold_nok)
         # Live toggle
         self.btn_live = QPushButton("Live vypnuté")
         self.btn_live.setCheckable(True)
@@ -385,7 +390,22 @@ class MainWindow(QMainWindow):
         self.live_view.setMinimumSize(640, 360)
         self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.live_view.setContentsMargins(0,0,0,0)
-        preview_row.addWidget(self.live_view, 4)
+        comparison_panel = QWidget()
+        comparison_layout = QVBoxLayout(comparison_panel)
+        comparison_layout.setContentsMargins(0, 0, 0, 0)
+        self._comparison_caption = QLabel("")
+        self._comparison_caption.setAlignment(Qt.AlignCenter)
+        comparison_layout.addWidget(self._comparison_caption)
+        comparison_layout.addWidget(self.live_view, 1)
+        preview_row.addWidget(comparison_panel, 4)
+        from app.ui.nok_comparison import NokComparison
+        self._nok_comparison = NokComparison(
+            lambda frame: self._show_gray_or_bgr(self.live_view, frame),
+            self._comparison_caption.setText,
+            lambda: self.mode == "RUN" and self.stack.currentWidget() is self.panel_run,
+            self)
+
+        self._nok_comparison.switchingChanged.connect(self.btn_hold_nok.setEnabled)
 
         # Pravý panel (štatistiky + posledné metriky)
         self.side_panel = QFrame(); self.side_panel.setObjectName("sidePanel")
@@ -694,6 +714,8 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def _request_mode(self, target: str) -> None:
         target_mode = str(target or "").upper()
+        if target_mode != "RUN" and getattr(self, '_nok_comparison', None) is not None:
+            self._nok_comparison.stop()
         page = getattr(self, 'panel_troubleshooting', None)
         if page is not None and page.active:
             if target_mode not in {'RUN', 'SETUP', 'RESULTS', 'TROUBLESHOOTING'}:
@@ -830,6 +852,8 @@ class MainWindow(QMainWindow):
             lambda: runtime.prepare(*options), runtime.quiesce))
 
     def _request_runtime_stop(self, *, close=False):
+        if getattr(self, '_nok_comparison', None) is not None:
+            self._nok_comparison.stop()
         page = getattr(self, 'panel_troubleshooting', None)
         if page is not None:
             page.deactivate()
@@ -1319,6 +1343,8 @@ class MainWindow(QMainWindow):
         elif not self.inspection.owns(request):
             self._show_trigger_rejection("neplatná alebo dokončená požiadavka")
             return
+        if getattr(self, '_nok_comparison', None) is not None:
+            self._nok_comparison.stop()
         self._runtime_was_live = self._pause_live_preview_for_trigger()
         self._set_runtime_controls(True)
         options = dict(context, recipe_name=self.current_recipe_name(), capture_mode=self.capture_mode,
@@ -1379,6 +1405,22 @@ class MainWindow(QMainWindow):
         self._active_view_id = trigger_state['last_view_id']
         self.view_strip.set_active(self._active_view_id)
         self._finalize_run_trigger(trigger_state)
+        comparison = getattr(self, '_nok_comparison', None)
+        if comparison is not None:
+            comparison.stop()
+            if trigger_state['status'] == 'nok':
+                failed = next((r for r in trigger_state['records'] if r['status'] == 'nok'), None)
+                if failed is not None:
+                    view_id = failed['view_id']
+                    view = self._views_by_id.get(view_id)
+                    if view is not None:
+                        self._on_view_selected_view(view_id)
+                        nok = (self._render_run_overlay_frame(view_id)
+                               if view_id in trigger_state.get('pending_overlays', {}) else None)
+                        if nok is None:
+                            nok = failed['frame']
+                        golden = self._load_view_golden_array(trigger_state['recipe_name'], view)
+                        comparison.start(golden, nok)
 
     def _finalize_run_trigger(self, trigger_state: dict[str, Any]) -> None:
         aggregated_status = trigger_state['status']
@@ -1418,10 +1460,9 @@ class MainWindow(QMainWindow):
             self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
 
     def open_wizard(self):
-        if self.capture_mode == "master":
-            self._exit_run_trigger_session(restore_master=False)
-        else:
-            self._apply_capture_mode(ensure_runtime_ready=True)
+        # Manual light requires an active MASTER/TRIGGER session, not IDLE.
+        if not self._apply_capture_mode(ensure_runtime_ready=True):
+            return
         dlg = GoldenWizard(
             self.cam,
             self.recipes,
@@ -1435,8 +1476,8 @@ class MainWindow(QMainWindow):
             authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
-        self._refresh_manual_light()
         self._apply_capture_mode(ensure_runtime_ready=True)
+        self._refresh_manual_light()
         self._refresh_views()
         self._reload_results_strip()
         self._refresh_tool_selector()
@@ -1617,6 +1658,10 @@ class MainWindow(QMainWindow):
             self.trigger_rejected.emit(f"rezervácia snímky zlyhala: {exc}")
 
     def _update_live_view(self):
+        comparison = getattr(self, '_nok_comparison', None)
+        if comparison is not None and comparison.active:
+            comparison.render()
+            return
         try:
             if self.cam.is_trigger_capture_in_progress():
                 return
@@ -1896,7 +1941,11 @@ class MainWindow(QMainWindow):
         self._set_last_view_frame(view_id, rendered)
         self._last_trigger_frame = self._clone_frame(rendered)
         self._last_trigger_view_id = view_id
-        if not self.live_enabled:
+        comparison = getattr(self, '_nok_comparison', None)
+        if comparison is not None and comparison.active:
+            comparison.nok = rendered.copy()
+            comparison.render()
+        elif not self.live_enabled:
             self._show_gray_or_bgr(self.live_view, rendered)
 
     def _clone_frame(self, frame: Any):
@@ -2388,6 +2437,8 @@ class MainWindow(QMainWindow):
 
 
     def _refresh_views(self):
+        if getattr(self, '_nok_comparison', None) is not None:
+            self._nok_comparison.stop()
         self._golden_cache.clear()
         self._run_overlay_cache.clear()
         try:
@@ -2485,6 +2536,8 @@ class MainWindow(QMainWindow):
     def _on_view_selected_view(self, view_id: str):
         if not view_id or view_id == self._active_view_id:
             return
+        if getattr(self, '_nok_comparison', None) is not None:
+            self._nok_comparison.stop()
         if not self.view_strip.has_view(view_id):
             return
         self._active_view_id = view_id
