@@ -381,13 +381,20 @@ a PBKDF2-HMAC-SHA256 hash a má oprávnenia `0600`. Pico Wizard a runtime akcie
 
 ## Raspberry Pi Pico firmware update
 
-Repozitárový firmware je v `firmware/pico/main_v3.3.py`. Nahrajte ho na Pico pod presným názvom `main.py`, Pico reštartujte a cez serial odošlite:
+Po zastavení výroby a zatvorení HDF Vision spustite na Jetson hoste:
 
-```text
-STATUS
+```bash
+bash docker/update-pico.sh
 ```
 
-Pred produkciou musí prvý riadok potvrdiť `FIRMWARE pico_hdf_controller 3.3-master-production-capture`.
+Skript porovná bežiaci HDF firmvér s `firmware/pico/main.py` v lokálnom projekte
+(aktuálne **4.1-pio-pair**). Staršiu verziu zálohuje a aktualizuje, rovnakú alebo
+novšiu nemení. Pri viacerých Pico vyberte `--port /dev/ttyACM0`; samotnú kontrolu
+bez nahrávania spustíte s `--check`. Uložená konfigurácia zostáva zachovaná.
+
+[Použitie, zálohy a obnova](docs/PICO_UPDATE_SK.md),
+[prehľad príkazov](docs/PRIKAZY_SK.md#aktualizácia-firmvéru-pico),
+[aktuálny Pico protokol](firmware/pico/README.md).
 
 ## Troubleshooting
 

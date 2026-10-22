@@ -5,6 +5,10 @@ Nový firmvér je **main_v4.1.py**, identifikácia `pico_hdf_controller 4.1-pio-
 sa kopíruje ako `main.py`. Verzie `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
 Stav overenia a nasadenia uvádza `docs/PIO_IMPLEMENTATION_CHECKPOINT.md` v aplikácii.
 
+Na Jetson hoste možno starší HDF firmvér aktualizovať príkazom
+`bash docker/update-pico.sh` po zatvorení aplikácie a zastavení výroby.
+[Návod na aktualizáciu a zálohy](../../docs/PICO_UPDATE_SK.md).
+
 ## Zapojenie
 
 - GP16: TRIG kamery, aktívny HIGH, cez existujúci prevodník úrovní.

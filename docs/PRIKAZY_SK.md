@@ -185,6 +185,26 @@ Pre vývojára: `git diff --check` skontroluje formátovanie zmien a
 `bash -n tools/setup-desktop.sh` skontroluje syntax skriptu bez jeho vykonania.
 Rovnako možno skontrolovať jednotlivé `docker/*.sh` súbory.
 
+## Aktualizácia firmvéru Pico
+
+Na Jetson hoste, mimo Dockeru, po zastavení výroby a zatvorení HDF Vision:
+
+| Príkaz | Význam |
+|---|---|
+| `bash docker/update-pico.sh` | Zistí verziu jediného pripojeného Pico a starší HDF firmvér aktualizuje podľa lokálneho `firmware/pico/main.py`. Pred zápisom vytvorí zálohu. |
+| `bash docker/update-pico.sh --check` | Iba porovná verzie, bez nahrávania a reštartu Pico. |
+| `bash docker/update-pico.sh --port /dev/ttyACM0` | Vyberie konkrétne Pico; pri viacerých zariadeniach je výber povinný. |
+| `bash docker/update-pico.sh --check --port /dev/ttyACM0` | Skontroluje konkrétne Pico bez aktualizácie. |
+| `bash docker/update-pico.sh --help` | Zobrazí pomoc; funguje aj `-h`, bez potreby Docker obrazu. |
+
+Skript používa rovnaký obraz `hdf_vision:dev` ako aplikácia (možno zmeniť cez
+`IMAGE_NAME`). Nový Docker build nie je potrebný, ak tento obraz už existuje.
+Najnovšia verzia znamená verziu v lokálnom projekte; skript nesťahuje GitHub.
+Rovnakú ani novšiu verziu neprepisuje. Aktualizuje iba HDF `main.py`, nie MicroPython.
+Zálohy sú v `artifacts/pico-backups/`, mimo Gitu.
+
+Podrobnosti: [aktualizácia Pico, zálohy a obnova](PICO_UPDATE_SK.md).
+
 ## Sériové príkazy Pico
 
 **Nie sú to príkazy pre linuxový terminál.** Posielajú sa Pico cez USB serial.
