@@ -2,6 +2,8 @@
 
 HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný stack je JetPack, Docker, Python, PySide6, OpenCV, GStreamer/V4L2, kamera See3CAM_CU55M, Raspberry Pi Pico a SQLite. Windows sa používa iba na vývoj a editáciu; runtime, testovanie s hardvérom aj produkcia sú Jetson-only a bežia v Dockeri.
 
+Príkazy na spustenie, nastavenie a servis nájdete v [prehľade príkazov](docs/PRIKAZY_SK.md).
+
 ## Aktuálne implementované
 
 - Nezávislé kamerové stanice s vlastným Pico, receptmi a výsledkami; explicitné USB párovanie vrátane overenia snímkou. [Ovládanie a stav overenia](docs/architecture/MULTI_CAMERA_SK.md).
@@ -295,6 +297,36 @@ Golden Wizard má vedľa Live samostatné tlačidlo Manual light. Live ON/OFF ne
 - **Manual light:** samostatné tlačidlo `Svetlo zapnuté/vypnuté`, ktoré používa Pico `LIGHT ON/OFF`.
 
 `Live ON/OFF` nikdy implicitne nemení `Light ON/OFF` a opačne. Stav svetla sa číta z Pico cez `STATUS`; pri staršom firmware sa zobrazí neznámy stav alebo chyba commandu.
+
+## Tichá pracovná plocha Jetsonu
+
+Jednorazovo spustite **v termináli pracovnej plochy Jetsonu, bez sudo a mimo Dockeru**:
+
+```bash
+bash tools/setup-desktop.sh
+```
+
+Skript zapne režim **Nerušiť**, vypne oznámenia aktualizácií Ubuntu a GNOME
+Software a zakáže automatické spustenie Ubuntu Update Notifier pre aktuálneho
+používateľa. Nerušiť potlačí aj bežné oznámenia ostatných aplikácií; nejde o blokovanie
+všetkých systémových dialógov. Samotné sťahovanie/inštalovanie aktualizácií,
+APT služby a ručné otvorenie správcu aktualizácií zostávajú nezmenené.
+
+Nerušiť sa zapne ihneď. **Po spustení sa odhláste a znova prihláste alebo
+reštartujte**, aby prestal bežať aj pôvodný oznamovač. Už otvorené okná skript
+nezatvára. Nastavenia pretrvajú reštart a skript možno spustiť opakovane;
+prvú zálohu neprepíše. Iných používateľov neovplyvní.
+
+Obnova pôvodného stavu (potom sa opäť odhláste/prihláste):
+
+```bash
+bash tools/setup-desktop.sh --restore
+```
+
+Záloha je v `${XDG_STATE_HOME:-~/.local/state}/hdf-vision/desktop/original`.
+Obnova vráti iba zmenené nastavenia a pôvodný súbor automatického spúšťania;
+úspešne obnovenú zálohu odstráni. Následné nové nastavenie uloží novú zálohu.
+Skript zatiaľ nenastavuje automatické spúšťanie HDF Vision ani štartovacie logo.
 
 ## Docker / Jetson
 

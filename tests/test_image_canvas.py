@@ -11,7 +11,7 @@ from PySide6.QtGui import QFocusEvent, QMouseEvent, QPixmap, QWheelEvent
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QDialog, QVBoxLayout
 
-from app.ui.image_canvas import InteractionMode
+from app.ui.image_canvas import ImageView, InteractionMode
 from app.ui.roi_mask_editor import ROIEditor, MaskEditor
 
 
@@ -63,6 +63,42 @@ def test_select_default_does_not_replace_roi(editor):
     drag(view, QPoint(100, 100), QPoint(220, 200))
     assert editor.roi() == (500, 300, 200, 100)
     assert not view.can_undo()
+
+
+def test_image_replacement_never_publishes_or_paints_temporary_actual_size(qt_app):
+    class RecordingCanvas(ImageView):
+        def __init__(self):
+            super().__init__()
+            self.painted_zooms = []
+
+        def paintEvent(self, event):
+            super().paintEvent(event)
+            if self._pixmap_item is not None:
+                self.painted_zooms.append(self.zoom())
+
+    view = RecordingCanvas()
+    view.resize(640, 480)
+    view.show()
+    qt_app.processEvents()
+    changes = []
+    view.zoomChanged.connect(changes.append)
+    try:
+        for width, height in [(1920, 1080), (2592, 1944), (1920, 1080)]:
+            # Results clears the old image while its worker loads the next one.
+            view.set_pixmap(None)
+            qt_app.processEvents()
+            pixmap = QPixmap(width, height)
+            pixmap.fill(Qt.darkGray)
+            view.set_pixmap(pixmap)
+            assert view.zoom() < 0.5  # Already fitted, before processing timers.
+            view.viewport().repaint()
+            qt_app.processEvents()
+        assert changes and all(scale < 0.5 for scale in changes)
+        assert view.painted_zooms and all(scale < 0.5 for scale in view.painted_zooms)
+    finally:
+        view.close()
+        view.deleteLater()
+        qt_app.processEvents()
 
 
 @pytest.mark.parametrize("mode", list(InteractionMode))

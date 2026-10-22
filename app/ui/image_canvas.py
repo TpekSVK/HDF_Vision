@@ -93,10 +93,12 @@ class ImageView(QGraphicsView):
             self.scene().setSceneRect(self._pixmap_item.boundingRect())
         else:
             self.scene().setSceneRect(QRectF())
-        self.resetTransform()
         self._pending_fit_to_view = self._pixmap_item is not None
         self._fit_on_resize = True
-        self.zoomChanged.emit(self.zoom())
+        # Replacing/clearing a result must not publish a temporary 100% zoom.
+        # Visible views already have a viewport: fit before pixels can paint.
+        # Hidden views retain their transform until layout/show permits a fit.
+        self.fit_image_to_view(force=False)
         self.imageChanged.emit(self._pixmap_item is not None)
         self.schedule_fit_to_view(source="set_pixmap")
 
@@ -298,6 +300,12 @@ class ImageView(QGraphicsView):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self.schedule_fit_to_view(source="showEvent")
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        # A paint can precede the queued fit after show/layout/resize.
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
+        super().paintEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
