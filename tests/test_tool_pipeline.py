@@ -350,3 +350,42 @@ def test_pipeline_enforces_locator_first_even_when_order_swapped() -> None:
     assert pipeline.per_tool
     assert pipeline.per_tool[0].tool.type.startswith("locator")
     assert pipeline.diagnostics[0]["type"].startswith("locator")
+
+
+@pytest.mark.parametrize('diagnostic', [False, True])
+@pytest.mark.parametrize('measurement_matches', [False, True])
+def test_measurement_locator_preserves_previous_alignment(diagnostic, measurement_matches):
+    from app.services.tool_pipeline import run_tool_test
+    from app.services.statistical_learning import LearningSamplePreparer
+    rng = np.random.default_rng(61)
+    golden = rng.integers(20, 180, (80, 100), dtype=np.uint8)
+    # Move only the second object by four pixels, then move the whole scene.
+    scene = golden.copy()
+    scene[40:60, 60:80] = 0
+    if measurement_matches:
+        scene[40:60, 64:84] = golden[40:60, 60:80]
+    frame = imaging.warp_by_translation_u8(scene, 3, 2)
+    first = _make_recipe(True).tools[0].copy()
+    first.roi = ToolRoi(dict(x=0,y=0,w=40,h=40))
+    first.params.values['template_roi'] = dict(x=10,y=10,w=15,h=15)
+    first.thresholds.values['threshold_corr'] = .95
+    second = first.copy(); second.name='position check';second.order=2
+    second.roi=ToolRoi(dict(x=50,y=30,w=45,h=40))
+    second.params.values.update(template_roi=dict(x=60,y=40,w=20,h=20),apply_alignment=False)
+    if not measurement_matches:
+        second.thresholds.values['threshold_corr']=1.1
+    target = _make_recipe(True).tools[-1].copy();target.order=3
+    reference=run_pipeline(golden,frame,RecipeV2(tools=[first,target],logging_enabled=False))
+    recipe=RecipeV2(tools=[first,second,target],logging_enabled=False)
+    result=(run_tool_test if diagnostic else run_pipeline)(golden,frame,recipe)
+    assert result.context.frame_is_aligned
+    np.testing.assert_array_equal(result.context.frame_aligned,reference.context.frame_aligned)
+    np.testing.assert_array_equal(result.context.frame_aligned_gray,reference.context.frame_aligned_gray)
+    np.testing.assert_allclose(result.context.T_total,reference.context.T_total)
+    reports=result.reports if diagnostic else result.per_tool
+    if measurement_matches:
+        assert reports[1].metrics['dx'] == pytest.approx(4,abs=.2)
+        assert reports[1].metrics['dy'] == pytest.approx(0,abs=.2)
+        learned=LearningSamplePreparer().sample(golden,frame,target,[first,second,target])
+        expected=LearningSamplePreparer().sample(golden,frame,target,[first,target])
+        np.testing.assert_array_equal(learned,expected)

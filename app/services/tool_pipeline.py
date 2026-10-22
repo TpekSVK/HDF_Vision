@@ -306,7 +306,9 @@ class PipelineOrchestrator:
                         diag_entry["locator_failure_reason"] = failure_reason
                     diag_entry["policy_applied"] = failure_policy
                     policy_applied = policy_applied or failure_policy
-                    self._reset_alignment(context)
+                    if (not context.frame_is_aligned
+                            or bool(tool.params.values.get("apply_alignment", True))):
+                        self._reset_alignment(context)
                     if failure_policy == "fail":
                         break
                 else:
@@ -541,7 +543,9 @@ class PipelineOrchestrator:
                         diag_entry["locator_failure_reason"] = failure_reason
                     diag_entry["policy_applied"] = failure_policy
                     policy_applied = policy_applied or failure_policy
-                    self._reset_alignment(context)
+                    if (not context.frame_is_aligned
+                            or bool(tool.params.values.get("apply_alignment", True))):
+                        self._reset_alignment(context)
                     if failure_policy == "fail":
                         break
                 else:
@@ -591,11 +595,15 @@ class PipelineOrchestrator:
     ) -> None:
         from app.utils import imaging
 
-        T_new = diagnostics.get("T")
-        context.T_total = compose_affine(context.T_total, T_new)
-
         params_dict = dict(tool.params.values or {})
         apply_alignment = bool(params_dict.get("apply_alignment", True))
+        if not apply_alignment and context.frame_is_aligned:
+            # This locator only measures the already aligned image. Its local
+            # displacement must not undo or modify an earlier locator's pose.
+            return
+
+        T_new = diagnostics.get("T")
+        context.T_total = compose_affine(context.T_total, T_new)
         if apply_alignment:
             source = (
                 context.frame_aligned if context.frame_aligned is not None else context.frame
