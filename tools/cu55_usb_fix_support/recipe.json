@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "id": "cu55-orin-r36.4.7-5.15.148-v1",
+  "architecture": "aarch64",
+  "kernel_release": "5.15.148-tegra",
+  "l4t": "36.4.7",
+  "source_repository": "https://gitlab.com/nvidia/nv-tegra/3rdparty/canonical/linux-jammy.git",
+  "source_tag": "jetson_36.4.7",
+  "source_commit": "1a9075adac170fa159a97ded84cd2a482de31e8f",
+  "upstream_fix": "25e531b422dc2ac90cdae3b6e74b5cdeb081440d",
+  "functional_config_sha256": "c0a18590623d658536e78cd1e784a8acf9acb7aef670aefb2905d74281fe508d",
+  "abi_sha256": "7a221ff1be2fd9e23e4e1b27178858d75e33f90a6fb5a2403f332d46ab923e89",
+  "abi_symbols": 18031,
+  "original_kernel_sha256": "b844b7cfaafd071a25f1dc91d2ad1d7369008c28ce84b25625efc425825a2120",
+  "original_uvc_sha256": "ccdb713534a72d94107399e28818fa52ac107661955661f760f1b1aecf308d0f",
+  "uvc_version": "1.1.1-hdf-usb64-prealloc",
+  "build_version": "2-hdf-hcpriv",
+  "patches": [
+    {
+      "file": "01-xhci-hcpriv.patch",
+      "sha256": "45fefda7965f5b66aa315b9691dadc8df3ae88f1c6f4d53e1cb1194997242d75",
+      "files": {
+        "drivers/usb/host/xhci.c": {
+          "before": "63a378e4672bf40a97aa413979f5596f02a74cce643b5d18cf94b5bf84891733",
+          "after": "e6953ec7aa9b4efa4cc70c9f863cf22f2449ddac66c49decabbe384d03ba1bda"
+        }
+      }
+    },
+    {
+      "file": "02-uvc-usb64-prealloc.patch",
+      "sha256": "eda162d95ece5d8a770abe6a36f2f485d2fd08adee349a38f5b11c21bae45d71",
+      "files": {
+        "drivers/media/usb/uvc/uvcvideo.h": {
+          "before": "2034a0eaa448563e8177f4d2f05e94f958c064dab98cd719ac91d6f56e13d607",
+          "after": "f63d1670371bb269ed31528bf09c094f553109f3320a9ea9d3629569154072cc"
+        },
+        "drivers/media/usb/uvc/uvc_video.c": {
+          "before": "186d7b53e0f9bf76718389d669fcbc81188bcfc47ecae8593c3eb7f678b571b0",
+          "after": "53a3a55dbeb97e142a8cd8770a295ad037b497f81648ed0ee164c99fc221d2ed"
+        }
+      }
+    }
+  ]
+}
