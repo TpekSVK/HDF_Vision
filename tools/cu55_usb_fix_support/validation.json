@@ -1,0 +1,7 @@
+{
+  "state": "experimental",
+  "recipe": "cu55-orin-r36.4.7-5.15.148-v1",
+  "reason": "Post-boot validation is incomplete. An application MASTER preparation timeout occurred before the 720p trigger test. This release is not certified for production.",
+  "required_formal_cases": 14,
+  "required_formal_measurement_s": 61200
+}

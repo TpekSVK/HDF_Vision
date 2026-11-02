@@ -1,0 +1,87 @@
+--- a/drivers/media/usb/uvc/uvcvideo.h
++++ b/drivers/media/usb/uvc/uvcvideo.h
+@@ -180,12 +180,12 @@
+  * Driver specific constants.
+  */
+ 
+-#define DRIVER_VERSION		"1.1.1"
++#define DRIVER_VERSION		"1.1.1-hdf-usb64-prealloc"
+ 
+ /* Number of isochronous URBs. */
+-#define UVC_URBS		5
++#define UVC_URBS		64
+ /* Maximum number of packets per URB. */
+-#define UVC_MAX_PACKETS		32
++#define UVC_MAX_PACKETS		64
+ /* Maximum status buffer size in bytes of interrupt URB. */
+ #define UVC_MAX_STATUS_SIZE	16
+ 
+--- a/drivers/media/usb/uvc/uvc_video.c
++++ b/drivers/media/usb/uvc/uvc_video.c
+@@ -1563,6 +1563,9 @@
+ 	unsigned long flags;
+ 	int ret;
+ 
++	if (urb->status || !urb->actual_length)
++		dev_warn(&stream->intf->dev, "HDF completion urb=%px status=%d actual=%u requested=%u frozen=%u\n", urb, urb->status, urb->actual_length, urb->transfer_buffer_length, stream->frozen);
++
+ 	switch (urb->status) {
+ 	case 0:
+ 		break;
+@@ -1884,6 +1887,17 @@
+ 	return 0;
+ }
+ 
++/* CU55 image DMA can start at COMMIT. Allocate its complete receive pool
++ * before COMMIT, but do not overlap bulk IN with the endpoint reset in COMMIT.
++ * Submit immediately after COMMIT returns, without allocating in that gap. */
++static bool uvc_cu55_bulk_preallocate(struct uvc_streaming *stream)
++{
++ return stream->type == V4L2_BUF_TYPE_VIDEO_CAPTURE &&
++        stream->intf->num_altsetting == 1 &&
++        le16_to_cpu(stream->dev->udev->descriptor.idVendor) == 0x2560 &&
++        le16_to_cpu(stream->dev->udev->descriptor.idProduct) == 0xc155;
++}
++
+ /*
+  * Initialize isochronous/bulk URBs and allocate transfer buffers.
+  */
+@@ -1986,6 +2000,14 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	if (uvc_cu55_bulk_preallocate(stream)) {
++		ret = uvc_commit_video(stream, &stream->ctrl);
++		if (ret < 0) {
++			uvc_video_stop_transfer(stream, 1);
++			return ret;
++		}
++	}
++
+ 	/* Submit the URBs. */
+ 	for_each_uvc_urb(uvc_urb, stream) {
+ 		ret = uvc_submit_urb(uvc_urb, gfp_flags);
+@@ -2055,6 +2077,9 @@
+ 
+ 	if (!uvc_queue_streaming(&stream->queue))
+ 		return 0;
++
++	if (uvc_cu55_bulk_preallocate(stream))
++		return uvc_video_start_transfer(stream, GFP_NOIO);
+ 
+ 	ret = uvc_commit_video(stream, &stream->ctrl);
+ 	if (ret < 0)
+@@ -2184,6 +2209,13 @@
+ 	if (ret < 0)
+ 		return ret;
+ 
++	if (uvc_cu55_bulk_preallocate(stream)) {
++		ret = uvc_video_start_transfer(stream, GFP_KERNEL);
++		if (ret < 0)
++			goto error_video;
++		return 0;
++	}
++
+ 	/* Commit the streaming parameters. */
+ 	ret = uvc_commit_video(stream, &stream->ctrl);
+ 	if (ret < 0)

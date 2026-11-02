@@ -65,7 +65,9 @@ def test_unique_id_and_firmware_are_parsed_from_verified_reply_layout(monkeypatc
     dev.open()
 
     assert dev.read_unique_id() == "1D3A5806"
+    assert fake.last_write == bytes([0, 0x41]) + bytes(63)
     assert dev.read_firmware_version() == (1, 5, 131, 1648)
+    assert fake.last_write == bytes([0, 0x40]) + bytes(63)
     assert dev.read_firmware_version_string() == "1.5.131.1648"
 
 
