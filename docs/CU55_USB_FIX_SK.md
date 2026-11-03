@@ -29,9 +29,15 @@ neukladá obrázky, nenačítava modul do bežiaceho jadra a nereštartuje zaria
 Najprv ukončite aplikáciu a ostatné procesy používajúce kameru.
 Zostavenie spustite ako bežný používateľ priamo na Jetson hostiteľovi.
 Potrebujete aspoň 12 GiB voľného miesta mimo aplikačného priečinka,
-prístup na GitLab a vývojové balíky: `build-essential git bc flex bison
-libssl-dev libelf-dev gcc-11-plugin-dev kmod patch initramfs-tools`.
-Inštalátor balíky neinštaluje automaticky. Zostavenie trvá desiatky minút.
+prístup na GitLab a k balíkovým repozitárom Ubuntu/NVIDIA.
+Príkaz `build` automaticky skontroluje a cez `apt-get` doinštaluje chýbajúce
+balíky: `build-essential gcc-11 git bc flex bison libssl-dev libelf-dev
+gcc-11-plugin-dev kmod patch initramfs-tools openssl ca-certificates`.
+Pri tom môže `sudo` požiadať o heslo. Samotné zostavenie pokračuje pod bežným
+používateľom; celý príkaz `build` nespúšťajte cez `sudo`. Už nainštalované
+balíky preskočí. Pri chybe sťahovania alebo inštalácie sa zostavenie nezačne;
+po vyriešení príčiny môžete zopakovať rovnaký príkaz. Kontrola `doctor` systém
+nemení. Zostavenie trvá desiatky minút.
 
 ```bash
 python3 tools/cu55_usb_fix.py doctor
