@@ -714,6 +714,8 @@ class MainWindow(QMainWindow):
     # ---------- UI akcie ----------
     def _request_mode(self, target: str) -> None:
         target_mode = str(target or "").upper()
+        if target_mode != "RUN":
+            self._stop_live_and_light()
         if target_mode != "RUN" and getattr(self, '_nok_comparison', None) is not None:
             self._nok_comparison.stop()
         page = getattr(self, 'panel_troubleshooting', None)
@@ -827,7 +829,7 @@ class MainWindow(QMainWindow):
     def _set_runtime_controls(self, busy):
         self.panel_setup.setEnabled(not busy)
         self.view_strip.setEnabled(not busy)
-        self.btn_live.setEnabled(not busy and self.capture_mode == "master")
+        self.btn_live.setEnabled(not busy)
         self.btn_trigger.setEnabled(not busy)
         self.btn_manual_light.setEnabled(not busy)
         if hasattr(self, 'cmb_recipe'):
@@ -1233,7 +1235,7 @@ class MainWindow(QMainWindow):
                 self._enter_run_trigger_session()
                 self.live_enabled = False
                 self.btn_live.setChecked(False)
-                self.btn_live.setEnabled(False)
+                self.btn_live.setEnabled(True)
                 self.btn_live.setText("Live vypnuté")
             else:
                 self._exit_run_trigger_session(restore_master=True)
@@ -1460,6 +1462,7 @@ class MainWindow(QMainWindow):
             self._logger.warning("any unexpected GST restart (count=%s)", gst_restarts)
 
     def open_wizard(self):
+        self._stop_live_and_light()
         # Manual light requires an active MASTER/TRIGGER session, not IDLE.
         if not self._apply_capture_mode(ensure_runtime_ready=True):
             return
@@ -1520,11 +1523,15 @@ class MainWindow(QMainWindow):
             note="manual trigger cycle start",
         )
         if was_live_enabled:
+            if self.capture_mode == "trigger":
+                self.pico.set_live_preview(False, self.cam)
             self._run_timer.stop()
         return was_live_enabled
 
     def _resume_live_preview_after_trigger(self, was_live_enabled: bool = False) -> None:
         if was_live_enabled:
+            if self.capture_mode == "trigger":
+                self.pico.set_live_preview(True, self.cam)
             self._run_timer.start()
         elif not self.live_enabled:
             # Po ukončení trigger capture obnov statický preview frame.
@@ -1536,14 +1543,28 @@ class MainWindow(QMainWindow):
             note="manual trigger cycle end",
         )
 
+    def _stop_live_and_light(self):
+        if self.live_enabled:
+            if self.capture_mode == "trigger":
+                self.pico.set_live_preview(False, self.cam)
+            self.live_enabled = False
+            self._run_timer.stop()
+            self.btn_live.setChecked(False)
+            self.btn_live.setText("Live vypnuté")
+            self.chk_filtered_roi.setEnabled(True)
+        self.pico.set_manual_light(False)
+        self._set_manual_light_ui(False)
+
     def _toggle_live(self):
         if self.runtime_worker.busy:
             return
-        if self.capture_mode != "master":
-            self.live_enabled = False
-            self.btn_live.setChecked(False)
-            self.btn_live.setText("Live vypnuté")
-            return
+        if self.capture_mode == "trigger":
+            try:
+                self.pico.set_live_preview(self.btn_live.isChecked(), self.cam)
+            except Exception as exc:
+                self.btn_live.setChecked(self.live_enabled)
+                self.lbl_status.setText(str(exc))
+                return
         self.live_enabled = self.btn_live.isChecked()
         self.chk_filtered_roi.setEnabled(not self.live_enabled)
         if self.live_enabled:
@@ -2701,6 +2722,7 @@ class MainWindow(QMainWindow):
         self._refresh_metric_name_elision()
 
     def closeEvent(self, e):
+        self._stop_live_and_light()
         if not self._close_ready:
             e.ignore()
             self._request_runtime_stop(close=True)

@@ -1,9 +1,9 @@
-# Raspberry Pi Pico – HDF_Vision 4.1
+# Raspberry Pi Pico – HDF_Vision 4.2.1
 
-Nový firmvér je **main_v4.1.py**, identifikácia `pico_hdf_controller 4.1-pio-pair`.
+Nový firmvér je **main_v4.2.1.py**, identifikácia `pico_hdf_controller 4.2.1-pio-pair`.
 `main.py` je jeho identická nasadzovacia kópia. Na Pico s MicroPython pre RP2040
-sa kopíruje ako `main.py`. Verzie `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
-Stav overenia a nasadenia uvádza `docs/PIO_IMPLEMENTATION_CHECKPOINT.md` v aplikácii.
+sa kopíruje ako `main.py`. Predchádzajúce kópie `main_v4.1.py`, `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
+Historické výsledky overenia sú v externom archíve uvedenom v hlavnom README projektu.
 
 Na Jetson hoste možno starší HDF firmvér aktualizovať príkazom
 `bash docker/update-pico.sh` po zatvorení aplikácie a zastavení výroby.
@@ -69,3 +69,10 @@ starý firmvér v MASTER, pre TRIGGER vyžaduje v4.0.
 
 Pred trvalým nasadením zálohovať pôvodný `main.py` aj konfiguráciu. Nahratie do RAM
 pri vývoji nie je trvalé nasadenie; po reštarte sa spustí verzia uložená na flash.
+
+## Trigger Live 4.2.1
+
+`LIVE ON <period_us> <pulse_us>` spúšťa hardvérové PIO na GP16; GP17
+(svetlo) zostáva nezmenené. Aplikácia posiela periódu kamerového profilu,
+zahadzuje prvú PRIME snímku a po LIVE OFF vyčká na dobehnutie náhľadu.
+STATUS obsahuje `LIVE_PIO_V1`. Podrobnosti: [Trigger Live](../../docs/TRIGGER_LIVE_SK.md).

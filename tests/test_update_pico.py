@@ -130,7 +130,7 @@ def test_unknown_versions_refused(value):
 
 
 def test_project_firmware_identity():
-    assert updater.firmware_info((updater.ROOT / 'firmware/pico/main.py').read_bytes()) == '4.1-pio-pair'
+    assert updater.firmware_info((updater.ROOT / 'firmware/pico/main.py').read_bytes()) == '4.2.1-pio-pair'
     with pytest.raises(ValueError):
         updater.firmware_info(b'FIRMWARE_NAME="other"\nFIRMWARE_VERSION="1.0"')
 

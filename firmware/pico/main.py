@@ -1,4 +1,4 @@
-# HDF_Vision Pico firmware 4.1 — PIO_PAIR_V1 / SESSION_V1
+# HDF_Vision Pico firmware 4.2 — PIO_PAIR_V1 / SESSION_V1
 # Deploy this file as main.py. Previous firmware preserved in main_v4.0.py.
 """HDF Pico4.1: host-owned MASTER/TRIGGER transitions and precise PIO pairs.
 
@@ -19,7 +19,7 @@ import time
 from machine import Pin
 
 FIRMWARE_NAME = "pico_hdf_controller"
-FIRMWARE_VERSION = "4.1-pio-pair"
+FIRMWARE_VERSION = "4.2.1-pio-pair"
 CONFIG_FILE = "hdf_pico_config.json"
 
 LED_PIN = 17
@@ -242,8 +242,9 @@ def status_lines():
     lines = [
         "FIRMWARE {} {}".format(FIRMWARE_NAME, FIRMWARE_VERSION),
         "PINS LED=GP{} TRIG=GP{}".format(LED_PIN, CAM_TRIG_PIN),
-        "CAPABILITIES PIO_PAIR_V1 SESSION_V1",
+        "CAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1",
         "SESSION_MODE " + session_mode,
+        "LIVE_PREVIEW {} PERIOD_US={} PULSE_US={}".format("ON" if live_preview else "OFF", live_period_us, live_pulse_us),
     ]
     for view in ("V1", "V2"):
         lines.extend([
@@ -600,6 +601,55 @@ def pio_fire(tokens):
 
 
 
+@rp2.asm_pio(set_init=rp2.PIO.OUT_LOW, out_shiftdir=rp2.PIO.SHIFT_RIGHT)
+def live_trigger_program():
+    pull(block)
+    mov(isr, osr)
+    label('pulse')
+    set(pins, 1)
+    mov(osr, isr)
+    out(y, 16)
+    label('high')
+    jmp(y_dec, 'high')
+    set(pins, 0)
+    out(y, 16)
+    label('low')
+    jmp(y_dec, 'low')
+    jmp('pulse')
+
+
+live_preview = False
+live_sm = None
+live_period_us = 33340
+live_pulse_us = 100
+
+
+def stop_live_preview():
+    global live_sm, live_preview
+    if live_sm is not None:
+        live_sm.active(0)
+        live_sm = None
+    cam_trig.init(Pin.OUT, value=0)
+    live_preview = False
+
+
+def start_live_preview(period, pulse):
+    global live_sm, live_preview, live_period_us, live_pulse_us
+    if live_preview and period == live_period_us and pulse == live_pulse_us:
+        return
+    stop_live_preview()
+    # Both HIGH and LOW consume counter + 4 clocks, as in the finite train.
+    packed = (pulse - 4) | ((period - pulse - 4) << 16)
+    try:
+        live_sm = rp2.StateMachine(0, live_trigger_program, freq=1000000, set_base=Pin(16))
+        live_sm.put(packed)
+        live_period_us, live_pulse_us = period, pulse
+        live_preview = True
+        live_sm.active(1)
+    except Exception:
+        stop_live_preview()
+        raise
+
 def handle_command(line):
     global session_mode
     command = line.strip().upper()
@@ -608,10 +658,31 @@ def handle_command(line):
 
     tokens = command.split()
 
+    if tokens[0] == "LIVE":
+        if tokens == ["LIVE", "OFF"]:
+            stop_live_preview()
+            return ["OK LIVE OFF"]
+        if len(tokens) not in (2, 4) or tokens[1] != "ON":
+            return ["ERR LIVE ARGUMENTS"]
+        if session_mode != "TRIGGER" or busy:
+            return ["ERR LIVE SESSION"]
+        try:
+            period, pulse = (33340, 100) if len(tokens) == 2 else (int(tokens[2]), int(tokens[3]))
+            if not (8930 <= period <= 65535 and 10 <= pulse <= 1000 and pulse < period - 4):
+                return ["ERR LIVE RANGE"]
+            start_live_preview(period, pulse)
+        except Exception as exc:
+            return ["ERR LIVE " + str(exc)]
+        return ["OK " + command]
+
+    if live_preview and command.startswith("PIO FIRE"):
+        return ["BUSY LIVE"]
+
     if len(tokens)==2 and tokens[0]=="SESSION":
         if tokens[1] not in ("IDLE","MASTER","TRIGGER"):
             return ["ERR SESSION MODE"]
         if busy:return ["BUSY SESSION"]
+        stop_live_preview()
         session_mode=tokens[1]
         set_manual_light(False)
         cam_trig.value(0)
@@ -731,8 +802,12 @@ def main():
             if line:
                 print_response(handle_command(line))
 
-        poll_inputs()
-        time.sleep_ms(5)
+        if live_preview:
+            # PIO continues independently of serial handling and MicroPython GC.
+            time.sleep_ms(1)
+        else:
+            poll_inputs()
+            time.sleep_ms(5)
 
 
 main()
