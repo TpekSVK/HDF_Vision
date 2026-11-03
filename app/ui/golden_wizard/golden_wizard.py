@@ -113,7 +113,7 @@ class GoldenWizard(QDialog):
         # --- Live infra (len video label, bez kreslenia) ---
 
         self._live_timer = QTimer(self)
-        self._live_timer.setInterval(50)  # ~20 FPS
+        self._live_timer.setInterval(33)  # UI refresh ~30 FPS; camera timing belongs to Pico PIO.
         self._live_timer.timeout.connect(self._live_tick)
         self._live_on = False
 
@@ -527,7 +527,10 @@ class GoldenWizard(QDialog):
         self.view.hide()
         self.roi_editor.hide()
         self.live_lbl.show()
-        self.cam.start(caller="golden_preview")
+        if self._runtime_capture_mode() == "trigger":
+            self.pico.set_live_preview(True, self.cam)
+        else:
+            self.cam.start(caller="golden_preview")
         self._live_timer.start()
         self._live_on = True
         self.btn_live.setText("Live zapnuté")
@@ -539,6 +542,8 @@ class GoldenWizard(QDialog):
         clear_label: bool = False,
     ) -> None:
         # Vypnúť live: skryť label, ukázať DrawView
+        if self._live_on and self._runtime_capture_mode() == "trigger":
+            self.pico.set_live_preview(False, self.cam)
         self._live_timer.stop()
         if self._live_on:
             self._logger.info("wizard_preview state=stopped")
@@ -575,7 +580,7 @@ class GoldenWizard(QDialog):
         return mode if mode in {"master", "trigger"} else "master"
 
     def _is_live_allowed_by_capture_mode(self) -> bool:
-        return self._runtime_capture_mode() == "master"
+        return True
 
     def _sync_live_policy_ui(self) -> None:
         allowed = self._is_live_allowed_by_capture_mode()
@@ -682,6 +687,9 @@ class GoldenWizard(QDialog):
 
     # ---------- Akcie ----------
     def _capture_golden(self):
+        if self._live_on:
+            self.btn_live.setChecked(False)
+            self._toggle_live(False)
         try:
             runtime_capture_mode = self._runtime_capture_mode()
             self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
@@ -2538,6 +2546,12 @@ class GoldenWizard(QDialog):
         return True, autosorted
 
     # ---------- Shutdown ----------
+    def done(self, result):
+        self._stop_preview_session()
+        if self.pico is not None:
+            self.pico.set_manual_light(False)
+        super().done(result)
+
     def closeEvent(self, e):
         if self._has_unsaved_changes():
             result = QMessageBox.question(
@@ -2551,4 +2565,6 @@ class GoldenWizard(QDialog):
                 e.ignore()
                 return
         self._stop_preview_session()
+        if self.pico is not None:
+            self.pico.set_manual_light(False)
         e.accept()

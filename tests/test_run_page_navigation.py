@@ -37,7 +37,7 @@ def window(mode='RUN', capture_mode='trigger'):
     w = SimpleNamespace(mode=mode, capture_mode=capture_mode)
     from threading import Event
     w._recovery_cancel = Event()
-    for name in ('_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
+    for name in ('_stop_live_and_light', '_set_manual_light_ui', '_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
                  '_start_production', '_request_runtime_stop', '_dispatch_runtime_stop', '_runtime_completed'):
         setattr(w, name, MethodType(getattr(MainWindow, name), w))
     w.inspection = InspectionController()
@@ -56,6 +56,7 @@ def window(mode='RUN', capture_mode='trigger'):
         b.isChecked = lambda: b.checked
         b.setEnabled = lambda v: None
         b.setText = lambda v: None
+        b.blockSignals = lambda v: None
         return b
     w.btn_manual_light = button()
     w._refresh_manual_light = lambda: calls.append('light_status')
@@ -85,6 +86,7 @@ def window(mode='RUN', capture_mode='trigger'):
     w.cam = SimpleNamespace(arm_master_frame=lambda: 'reserved')
     w.get_capture_mode = lambda: capture_mode
     w.external_triggered = SimpleNamespace(emit=lambda *args: calls.append(('event', args)))
+    w.pico = SimpleNamespace(set_manual_light=lambda enabled: True)
     w.live_enabled = False
     w._run_timer = SimpleNamespace(stop=lambda: None)
     return w, calls, box

@@ -21,6 +21,9 @@ class PioCapture:
         self._pio_receive_count = 0
         self._pio_initialized_pipeline = None
         self._pio_recovery_required = False
+        self._live_preview = False
+        self._live_drop_remaining = 0
+        self._live_discarded = 0
 
     def _invalidate_pio(self):
         if not hasattr(self, "_pio_condition"):
@@ -36,6 +39,14 @@ class PioCapture:
         with self._pio_condition:
             self._pio_last_receive = time.monotonic()
             self._pio_receive_count += 1
+            if getattr(self, "_live_preview", False):
+                if self._live_drop_remaining:
+                    self._live_drop_remaining -= 1
+                    self._live_discarded += 1
+                else:
+                    self.camera.stream._ring.append(frame)
+                self._pio_condition.notify_all()
+                return
             request = self._pio_request
             if request is None and self._pio_ready is not None:
                 self._pio_unexpected = True
@@ -52,6 +63,33 @@ class PioCapture:
                     request["error"] = "Neočekávaná ďalšia trigger snímka."
                 else:
                     request["frames"].append((sequence, frame))
+            self._pio_condition.notify_all()
+
+    def begin_live_preview(self):
+        with self._pio_condition:
+            self.camera.stream._clear_ring()
+            self._live_drop_remaining = 1  # First exposure after the idle gap is PRIME.
+            self._live_discarded = 0
+            self._live_preview = True
+
+    def wait_live_preview(self, timeout_s=1.0):
+        deadline = time.monotonic() + timeout_s
+        with self._pio_condition:
+            while not self.camera.stream._ring:
+                if self._pio_pipeline_error or not self._live_preview:
+                    raise RuntimeError(self._pio_pipeline_error or "Trigger Live bolo zastavené.")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("Trigger Live nedoručilo platnú snímku.")
+                self._pio_condition.wait(remaining)
+
+    def end_live_preview(self):
+        # Keep publishing late frames as preview until the stopped train drains.
+        self._pio_quiet(quiet_s=0.1)
+        with self._pio_condition:
+            self._live_preview = False
+            self._live_drop_remaining = 0
+            self._pio_ready = None
             self._pio_condition.notify_all()
 
     def _pio_signature(self):

@@ -34,7 +34,7 @@ Pomoc: `bash docker/update-pico.sh --help`.
 ## Čo znamená aktuálna verzia
 
 Cieľom je `firmware/pico/main.py` **v lokálnej kópii projektu**. Aktuálne je to
-`4.1-pio-pair`. Skript automaticky nesťahuje zdroje z internetu. Ak chcete novší
+`4.2.1-pio-pair`. Skript automaticky nesťahuje zdroje z internetu. Ak chcete novší
 firmvér z projektu, najprv aktualizujte príslušnú lokálnu vetvu projektu.
 
 Číselné verzie porovnáva ako čísla (napr. 4.10 je novšia než 4.9). Rovnakú
@@ -45,6 +45,23 @@ Neznámu identitu/verziu alebo neodpovedajúce Pico odmietne.
 Aktualizuje **aplikačný súbor `main.py`**, nie samotný MicroPython ani UF2.
 Predpokladá už fungujúci MicroPython s HDF firmvérom a USB sériovým protokolom.
 Pico v BOOTSEL alebo prázdne Pico týmto skriptom prvotne nenainštalujete.
+
+## Verzia 4.2.1: hardvérové Live v TRIGGER režime
+
+RUN a Golden Wizard používajú PIO impulzy s periódou aktuálneho kamerového
+profilu: 33 340 µs (5 MP), 16 670 µs (1080p/720p), 8 930 µs (VGA).
+HIGH trvá 100 µs. Odstraňuje sa pôvodné softvérové časovanie, ktoré
+používalo pevných 33 333 µs pre všetky rozlíšenia. Prvá PRIME snímka sa
+z náhľadu vynechá. Svetlo sa ovláda samostatne a Live jeho stav nemení.
+
+Aktualizujte aplikáciu aj Pico. Aplikácia overuje schopnosť `LIVE_PIO_V1`;
+so starým firmvérom vypíše pokyn na aktualizáciu. LIVE OFF zastaví PIO,
+vyčká sa na dobehnutie preview snímok a produkcia sa pripraví nanovo.
+Verzionovaný zdroj je `firmware/pico/main_v4.2.1.py`, nasadzovaný súbor je
+`firmware/pico/main.py`. Kontrolné súčty sú v `firmware/pico/SHA256SUMS`.
+
+Podrobný postup, protokol a overenie RUN/Golden Wizard:
+[Live náhľad v TRIGGER režime](TRIGGER_LIVE_SK.md).
 
 ## Postup aktualizácie
 
