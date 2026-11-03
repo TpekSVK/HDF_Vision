@@ -172,3 +172,72 @@ def test_initrd_with_stock_uvc_is_rejected_before_creating_state(monkeypatch, tm
         fix.install(tmp_path, experimental=True)
     assert paths['CONFIG'].read_text() == BOOT
     assert not paths['STATE'].exists()
+
+
+def test_dependency_query_distinguishes_installed_and_residual_config(monkeypatch):
+    from types import SimpleNamespace
+    monkeypatch.setattr(fix.shutil, 'which', lambda name: '/usr/bin/' + name)
+    output = '\n'.join(name + '\t' + ('deinstall ok config-files' if name == 'bc' else 'install ok installed')
+                       for name in fix.BUILD_PACKAGES if name != 'gcc-11-plugin-dev')
+    def query(args, **kwargs):
+        assert args[:3] == ['dpkg-query', '-W', '-f=${Package}\t${Status}\n']
+        return SimpleNamespace(returncode=1, stdout=output, stderr='package missing')
+    monkeypatch.setattr(fix.subprocess, 'run', query)
+    assert fix.missing_build_packages() == ['bc', 'gcc-11-plugin-dev']
+
+
+def test_all_dependencies_present_never_invokes_sudo_or_apt(monkeypatch):
+    monkeypatch.setattr(fix, 'missing_build_packages', lambda: [])
+    monkeypatch.setattr(fix.subprocess, 'run', lambda *args, **kwargs: pytest.fail('No apt operation expected'))
+    fix.ensure_build_dependencies()
+
+
+def test_dependency_install_only_requests_missing_packages_and_rechecks(monkeypatch):
+    queries = iter([['bc', 'gcc-11-plugin-dev'], []])
+    monkeypatch.setattr(fix, 'missing_build_packages', lambda: next(queries))
+    monkeypatch.setattr(fix.shutil, 'which', lambda name: '/usr/bin/' + name)
+    calls = []
+    monkeypatch.setattr(fix.subprocess, 'run', lambda args, **kwargs: calls.append((args, kwargs)))
+    fix.ensure_build_dependencies()
+    assert calls == [
+        (['sudo', '--', 'apt-get', 'update'], {'check': True}),
+        (['sudo', '--', 'apt-get', 'install', '--yes', '--no-install-recommends', 'bc', 'gcc-11-plugin-dev'], {'check': True}),
+    ]
+
+
+@pytest.mark.parametrize('failed_step', ['update', 'install'])
+def test_apt_failure_stops_dependency_setup(monkeypatch, failed_step):
+    import subprocess
+    monkeypatch.setattr(fix, 'missing_build_packages', lambda: ['bc'])
+    monkeypatch.setattr(fix.shutil, 'which', lambda name: '/usr/bin/' + name)
+    calls = []
+    def command(args, **kwargs):
+        calls.append(args)
+        if args[3] == failed_step:
+            raise subprocess.CalledProcessError(100, args)
+    monkeypatch.setattr(fix.subprocess, 'run', command)
+    with pytest.raises(subprocess.CalledProcessError):
+        fix.ensure_build_dependencies()
+    assert len(calls) == (1 if failed_step == 'update' else 2)
+
+
+def test_dependency_install_rejects_incomplete_installation(monkeypatch):
+    monkeypatch.setattr(fix, 'missing_build_packages', lambda: ['bc'])
+    monkeypatch.setattr(fix.shutil, 'which', lambda name: '/usr/bin/' + name)
+    monkeypatch.setattr(fix.subprocess, 'run', lambda *args, **kwargs: None)
+    with pytest.raises(RuntimeError, match='installation incomplete'):
+        fix.ensure_build_dependencies()
+
+
+def test_build_dependency_failure_leaves_output_directory_uncreated(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    output = tmp_path / 'new-build'
+    monkeypatch.setattr(fix, 'doctor', lambda: {})
+    monkeypatch.setattr(fix.os, 'geteuid', lambda: 1000)
+    monkeypatch.setattr(fix.shutil, 'disk_usage', lambda path: SimpleNamespace(free=20 * 1024**3))
+    def failed_setup():
+        raise RuntimeError('dependency setup failed')
+    monkeypatch.setattr(fix, 'ensure_build_dependencies', failed_setup)
+    with pytest.raises(RuntimeError, match='dependency setup failed'):
+        fix.build(output)
+    assert not output.exists()

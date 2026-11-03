@@ -22,6 +22,11 @@ IMAGE = Path('/boot/Image.hdf-cu55-usb-fix')
 MODULE = Path('/lib/modules') / RELEASE / 'updates/hdf-cu55/uvcvideo.ko'
 OPTIONS = Path('/etc/modprobe.d/zz-hdf-cu55-usb-fix.conf')
 LABEL = 'HDF_CU55_USB_FIX'
+BUILD_PACKAGES = (
+    'build-essential', 'gcc-11', 'git', 'bc', 'flex', 'bison',
+    'libssl-dev', 'libelf-dev', 'gcc-11-plugin-dev', 'kmod', 'patch',
+    'initramfs-tools', 'openssl', 'ca-certificates',
+)
 
 
 def sha(data):
@@ -85,6 +90,38 @@ def idle():
 
 def root_only():
     require(os.geteuid() == 0, 'Run install/verify/rollback with sudo on the host')
+
+
+def missing_build_packages():
+    require(shutil.which('dpkg-query'), 'Automatic dependency setup requires dpkg-query')
+    result = subprocess.run(
+        ['dpkg-query', '-W', '-f=${Package}\t${Status}\n', *BUILD_PACKAGES],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    # dpkg-query returns 1 when one or more requested packages are absent.
+    require(result.returncode in (0, 1), 'Could not query build packages: ' + result.stderr.strip())
+    installed = set()
+    for line in result.stdout.splitlines():
+        name, separator, status = line.partition('\t')
+        if separator and status == 'install ok installed':
+            installed.add(name)
+    return [name for name in BUILD_PACKAGES if name not in installed]
+
+
+def ensure_build_dependencies():
+    missing = missing_build_packages()
+    if not missing:
+        return
+    require(shutil.which('apt-get'), 'Automatic dependency setup requires apt-get')
+    require(shutil.which('sudo'), 'Install the missing packages with an administrator: ' + ' '.join(missing))
+    print('Installing missing build packages: ' + ', '.join(missing), flush=True)
+    print('sudo may ask for your password; compilation continues as your ordinary user.', flush=True)
+    # Inherit the terminal so sudo and apt can show progress and report failures.
+    # Install only missing prerequisites; do not perform a system upgrade.
+    subprocess.run(['sudo', '--', 'apt-get', 'update'], check=True)
+    subprocess.run(['sudo', '--', 'apt-get', 'install', '--yes', '--no-install-recommends', *missing], check=True)
+    remaining = missing_build_packages()
+    require(not remaining, 'Dependency installation incomplete: ' + ', '.join(remaining))
 
 
 def atomic(path, data, expected=None):
@@ -171,6 +208,7 @@ def build(output):
     require(not output.is_relative_to(repository), 'Use a build directory outside the application repository')
     require(not output.exists(), 'Output exists; choose a fresh directory')
     require(shutil.disk_usage(output.parent).free > 12 * 1024**3, 'Build requires 12 GiB free space')
+    ensure_build_dependencies()
     for command in ('git', 'make', 'gcc-11', 'bc', 'flex', 'bison', 'openssl', 'patch', 'modinfo'):
         require(shutil.which(command), 'Missing build dependency: ' + command)
     plugin = Path(run(['gcc-11', '-print-file-name=plugin'])) / 'include/gcc-plugin.h'
