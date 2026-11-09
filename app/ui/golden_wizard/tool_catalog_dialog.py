@@ -229,6 +229,7 @@ class ToolCatalogDialog(QDialog):
         layout.addLayout(actions)
         self._categories.currentItemChanged.connect(lambda *_: self._apply_filter())
         self._apply_filter()
+        self._categories.setFocus(Qt.OtherFocusReason)
 
     def _load_entries(self) -> list[_CatalogEntry]:
         entries: list[_CatalogEntry] = []
@@ -286,7 +287,7 @@ class ToolCatalogDialog(QDialog):
         self._categories.addItem(all_tools)
         for row in range(self._categories.count()):
             self._categories.item(row).setSizeHint(QSize(190, 38))
-        self._categories.setCurrentRow(1)
+        self._categories.setCurrentRow(0)
 
     def _load_favorites(self) -> set[str]:
         try:

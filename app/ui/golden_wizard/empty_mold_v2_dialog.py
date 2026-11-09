@@ -75,8 +75,9 @@ class AnnotationDialog(QDialog):
         self.polygons = deepcopy(list(polygons))
         self.frame, self.tool = frame, tool
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel('Nakreslite polygón, dokončite dvojklikom a pridajte ho. Možno označiť viac defektov.'))
+        layout.addWidget(QLabel('Nakreslite polygón, stlačte Dokončiť polygón a pridajte ho. Možno označiť viac defektov.'))
         self.editor = ROIEditor(self)
+        self.editor.enable_touch_controls()
         layout.addWidget(self.editor, 1)
         self.list = QListWidget()
         self.list.setMaximumHeight(100)
@@ -225,6 +226,7 @@ class EmptyMoldV2Dialog(QDialog):
         layout.addWidget(QLabel('Hlavnú ROI a ignore zóny kreslite v Golden Wizarde. Tu pridajte kavity; OUTSIDE sa vypočíta automaticky.'))
         layout.addWidget(QLabel('Modrá: hlavná ROI · žltá: kavity · červená: ignore · fialová: NOK anotácie'))
         self.region_editor = ROIEditor()
+        self.region_editor.enable_touch_controls()
         layout.addWidget(self.region_editor, 1)
         self.cavities = QListWidget()
         self.cavities.setMaximumHeight(100)
@@ -538,6 +540,7 @@ class EmptyMoldV2Dialog(QDialog):
         for entry in images:
             label, image = entry[:2]
             editor = ROIEditor()
+            editor.enable_touch_controls()
             if len(entry) > 2:
                 set_region_background(editor, image, self.tool, entry[2])
             else:

@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS recipe_change_log (
   source TEXT,
   details_json TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_results_ts_id ON results(ts_ms DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_ts ON recipe_change_log(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_recipe ON recipe_change_log(recipe_name);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_view ON recipe_change_log(view_id);

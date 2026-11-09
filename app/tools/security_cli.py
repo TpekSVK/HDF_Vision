@@ -1,4 +1,4 @@
-"""Terminal-only recipe password management."""
+"""Terminal-only shared recipe and power-menu password management."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ def _new_password(first: str = "Nové heslo: ", second: str = "Zopakovať heslo:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="bash docker/security.sh", description="Správa ochrany receptov")
+    parser = argparse.ArgumentParser(prog="bash docker/security.sh", description="Správa ochrany receptov a napájania")
     parser.add_argument("command", choices=("set-password", "change-password", "verify", "status", "remove-password", "reset-password", "help"), nargs="?")
     return parser
 
@@ -34,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     service = SecurityService()
     if args.command == "status":
-        print(f"Ochrana receptov: {'ZAPNUTÁ' if service.has_password() else 'VYPNUTÁ'}")
+        print(f"Ochrana receptov a napájania: {'ZAPNUTÁ' if service.has_password() else 'VYPNUTÁ'}")
         print("Súbor: /data/security.json")
         print("Algoritmus: PBKDF2-SHA256")
         return 0
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "change-password":
         if not service.has_password():
-            print("Ochrana receptov nie je nastavená.")
+            print("Ochrana receptov a napájania nie je nastavená.")
             return 1
         old = getpass.getpass("Aktuálne heslo: ")
         if not service.verify_password(old):
@@ -68,20 +68,20 @@ def main(argv: list[str] | None = None) -> int:
         return 0 if valid else 1
     if args.command == "remove-password":
         if not service.has_password():
-            print("Ochrana receptov nie je nastavená.")
+            print("Ochrana receptov a napájania nie je nastavená.")
             return 1
         password = getpass.getpass("Aktuálne heslo: ")
         if not service.verify_password(password):
             print("Nesprávne heslo.")
             return 1
-        if input("Naozaj chcete vypnúť ochranu receptov? [y/N]: ") not in ("y", "Y"):
+        if input("Naozaj chcete vypnúť ochranu receptov a napájania? [y/N]: ") not in ("y", "Y"):
             print("Operácia zrušená.")
             return 1
         service.remove_password(password)
-        print("Ochrana receptov bola vypnutá.")
+        print("Ochrana receptov a napájania bola vypnutá.")
         return 0
     if args.command == "reset-password":
-        print("ADMIN RESET OCHRANY RECEPTOV")
+        print("ADMIN RESET OCHRANY RECEPTOV A NAPÁJANIA")
         password = _new_password("Nové heslo: ", "Zopakovať nové heslo: ")
         if password is None:
             return 1

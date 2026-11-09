@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 import numpy as np
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QButtonGroup, QCheckBox, QComboBox, QGraphicsPathItem, QGraphicsItem, QGraphicsRectItem, QGraphicsSimpleTextItem, QHBoxLayout, QLabel, QPushButton, QSlider, QSpinBox, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
@@ -77,6 +77,15 @@ class ROIEditor(QWidget):
         self._update_history_buttons()
         self._view.lockChanged.connect(self._on_lock_changed)
         self._sync_geometry_controls()
+
+    def enable_touch_controls(self):
+        if not hasattr(self, "_touch"):
+            from app.ui.roi.touch_controls import TouchROIControls
+            self._view.HANDLE_SIZE = 14.0
+            self._view.HANDLE_HIT_RADIUS = 22.0
+            self._view.ROTATION_HANDLE_OFFSET = 62.0
+            self._touch = TouchROIControls(self)
+        self._touch.sync()
 
     def _start_shape_draw(self, shape: str) -> None:
         self._view.set_draw_shape(shape)
@@ -433,29 +442,6 @@ class LocatorROIEditor(ROIEditor):
         self._view.edgeAnchorsChanged.connect(self._on_edge_anchors_changed)
         self._view.interactionModeChanged.connect(self._sync_mask_interaction_mode)
         self.roiChanged.connect(self._active_area_changed)
-        self._view.viewport().installEventFilter(self)
-
-    def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if (self._locator_mode and watched is self._view.viewport()
-                and event.type() == QEvent.MouseButtonPress
-                and event.button() == Qt.LeftButton
-                and self._view.interaction_mode() == InteractionMode.SELECT):
-            point = self._view.mapToScene(event.position().toPoint())
-            candidates = []
-            for target in ("template", "search"):
-                area = self._areas.get(target)
-                rect = self._area_rect(area)
-                if rect is None or not self._area_path(area).contains(point):
-                    continue
-                if target == "template" and self._use_golden_crop:
-                    continue
-                candidates.append((rect[2] * rect[3], target))
-            if candidates:
-                target = min(candidates)[1]
-                if target != self._active_area:
-                    self._activate_area(target)
-        return super().eventFilter(watched, event)
-
     def set_background(self, pixmap: Optional[QPixmap]) -> None:
         self._area_items.clear()  # scene.clear() owns/deletes these items
         self._result_items.clear()

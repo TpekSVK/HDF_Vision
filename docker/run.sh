@@ -27,6 +27,18 @@ fi
 # X11 (GUI)
 xhost +local:root >/dev/null 2>&1 || true
 echo "[diag] DISPLAY=${DISPLAY:-<unset>}"
+# GNOME's keyboard follows IBus focus. Only the input-service address and the
+# desktop identity are passed; no session D-Bus socket or password is shared.
+HDF_DESKTOP_UID="${SUDO_UID:-$(id -u)}"
+HDF_DESKTOP_GID="${SUDO_GID:-$(id -g)}"
+HDF_KEYBOARD_IBUS_ADDRESS="${IBUS_ADDRESS:-}"
+if [[ -z "${HDF_KEYBOARD_IBUS_ADDRESS}" ]] && command -v ibus >/dev/null 2>&1; then
+  if [[ "$(id -u)" -eq 0 && -n "${SUDO_USER:-}" ]] && command -v runuser >/dev/null 2>&1; then
+    HDF_KEYBOARD_IBUS_ADDRESS="$(runuser -u "${SUDO_USER}" -- env DISPLAY="${DISPLAY:-:0}" ibus address 2>/dev/null || true)"
+  else
+    HDF_KEYBOARD_IBUS_ADDRESS="$(DISPLAY="${DISPLAY:-:0}" ibus address 2>/dev/null || true)"
+  fi
+fi
 echo "[diag] /dev/video* na hostovi:"; ls -l /dev/video* 2>/dev/null || true
 echo "[diag] /dev/hidraw* na hostovi:"; ls -l /dev/hidraw* 2>/dev/null || true
 
@@ -46,6 +58,9 @@ docker run --rm -it \
   --env DISPLAY="${DISPLAY:-:0}" \
   --env QT_X11_NO_MITSHM=1 \
   --env QT_QPA_PLATFORM=xcb \
+  --env IBUS_ADDRESS="${HDF_KEYBOARD_IBUS_ADDRESS}" \
+  --env HDF_DESKTOP_UID="${HDF_DESKTOP_UID}" \
+  --env HDF_DESKTOP_GID="${HDF_DESKTOP_GID}" \
   --env PYTHONFAULTHANDLER=1 \
   --env OPENCV_LOG_LEVEL=INFO \
   --env HDF_ADMIN_MODE="${ADMIN_MODE}" \

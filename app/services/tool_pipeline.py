@@ -14,6 +14,18 @@ from app.services.tool_status import _safe_float
 logger = logging.getLogger(__name__)
 
 
+class ToolTestBlockedError(RuntimeError):
+    """A selected tool was not run because an upstream locator stopped the test."""
+
+    def __init__(self, failure: Dict[str, Any], reports: Sequence[PipelineToolReport], elapsed_ms: float):
+        self.failure = dict(failure)
+        self.reports = list(reports)
+        self.elapsed_ms = float(elapsed_ms)
+        tool_name = failure.get("tool") or failure.get("tool_id") or "locator"
+        reason = failure.get("locator_failure_reason") or "locator failure"
+        super().__init__(f"Pipeline stopped after locator '{tool_name}': {reason}.")
+
+
 def compose_affine(
     T_total: np.ndarray | None, T_new: np.ndarray | None
 ) -> np.ndarray:
@@ -513,6 +525,10 @@ class PipelineOrchestrator:
                     (time.perf_counter() - report_start) * 1000.0,
                 )
 
+            if index == len(tools) - 1:
+                target_result = result
+                target_report = report
+
             if self._is_locator(tool):
                 diag_data = diagnostics_payload if isinstance(diagnostics_payload, dict) else {}
                 locator_found = bool(metrics.get("found", diag_data.get("found", True)))
@@ -551,10 +567,6 @@ class PipelineOrchestrator:
                 else:
                     self._apply_locator_alignment(tool, context, diag_entry)
 
-            if index == len(tools) - 1:
-                target_result = result
-                target_report = report
-
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
 
         if target_result is None or target_report is None:
@@ -563,11 +575,7 @@ class PipelineOrchestrator:
                 None,
             )
             if failure_entry:
-                tool_name = failure_entry.get("tool_id") or failure_entry.get("type") or "locator"
-                reason = failure_entry.get("locator_failure_reason") or "locator failure"
-                raise RuntimeError(
-                    f"Pipeline stopped after locator '{tool_name}': {reason}."
-                )
+                raise ToolTestBlockedError(failure_entry, per_tool, elapsed_ms)
             raise RuntimeError("Target tool was not executed")
 
         return ToolTestRun(

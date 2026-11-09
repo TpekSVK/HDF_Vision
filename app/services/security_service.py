@@ -1,4 +1,4 @@
-"""Recipe-write password configuration and runtime ADMIN policy."""
+"""Shared recipe-write and power-menu password configuration and ADMIN policy."""
 
 from __future__ import annotations
 

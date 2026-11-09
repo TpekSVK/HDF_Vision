@@ -58,6 +58,7 @@ class ToolConfigPanel(QWidget):
     locatorFitSearchRequested = Signal()
     presenceLearningRequested = Signal(str)
     emptyMoldV2Requested = Signal()
+    presenceValidationChanged = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -66,6 +67,10 @@ class ToolConfigPanel(QWidget):
 
         self._current_tool: Optional[Tool] = None
         self._presence_is_mold = False
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
+        self._validation_weak = False
+        self._tuning_weak = False
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
         self._current_metrics_spec: list[ToolMetricSpec] = []
@@ -220,6 +225,7 @@ class ToolConfigPanel(QWidget):
         self._presence_recommended.setWordWrap(True)
         learning_layout.addWidget(self._presence_recommended)
         reset_learning = QPushButton("Resetovať učenie", learning_content)
+        self._presence_reset = reset_learning
         reset_learning.setProperty("role", "destructive")
         reset_learning.clicked.connect(lambda: self.presenceLearningRequested.emit("reset"))
         learning_layout.addWidget(reset_learning)
@@ -235,8 +241,10 @@ class ToolConfigPanel(QWidget):
         validation_layout.setContentsMargins(0, 0, 0, 0)
         validation_layout.setSpacing(6)
         validate_samples = QPushButton("Otestovať vzorky", validation_content)
+        self._presence_validate_button = validate_samples
         validate_samples.clicked.connect(lambda: self.presenceLearningRequested.emit("validate"))
         auto_settings = QPushButton("Automaticky navrhnúť nastavenia", validation_content)
+        self._presence_auto_settings_button = auto_settings
         auto_settings.clicked.connect(
             lambda: self.presenceLearningRequested.emit("auto_settings")
         )
@@ -438,6 +446,8 @@ class ToolConfigPanel(QWidget):
 
     def clear(self) -> None:
         self._current_tool = None
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
         self._empty_mold_v2_button.hide()
         self._name_input.clear()
         self._name_input.setEnabled(False)
@@ -467,6 +477,9 @@ class ToolConfigPanel(QWidget):
         schema: dict[str, dict[str, dict[str, Any]]],
     ) -> None:
         self._current_tool = tool
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
+        self._presence_validation_result.setText("Zatiaľ bez výsledku")
         self._empty_mold_v2_button.setVisible(tool.type == "mold.protection_v2")
         self._name_input.setText(tool_display_name(tool))
         self._name_input.setEnabled(True)
@@ -562,6 +575,7 @@ class ToolConfigPanel(QWidget):
                 f"OK vzorky: {ok_count} / {target}\nNOK vzorky: {nok_value}"
             )
         self._presence_warning.setText(warning)
+        self._presence_warning.setVisible(bool(warning))
         self._presence_rebuild.setEnabled(tool.roi.rect() is not None and ok_count >= minimum)
         values = dict(recommended or {})
         if values:
@@ -575,8 +589,11 @@ class ToolConfigPanel(QWidget):
             self._presence_recommended.setText("Základný odhad modelu nie je dostupný.")
         self._presence_tuning_result.hide()
         self._presence_apply_tuned.hide()
+        self._compact_tuning_summary = None
         if validation_text is not None:
             self._presence_validation_result.setText(validation_text)
+            self._compact_validation_summary = None
+        self.presenceValidationChanged.emit()
 
     def show_presence_validation(
         self, summary: dict[str, Any], *, weak_dataset: bool = False
@@ -617,6 +634,9 @@ class ToolConfigPanel(QWidget):
         color = "#22c55e" if good else "#d29922"
         self._presence_validation_result.setText(f"{quality}\n\n{text}")
         self._presence_validation_result.setStyleSheet(f"color: {color};")
+        self._compact_validation_summary = dict(summary)
+        self._validation_weak = weak_dataset
+        self.presenceValidationChanged.emit()
 
     def show_presence_tuning(self, tuning: dict[str, Any], *, weak_dataset: bool) -> None:
         current = tuning["current_validation_summary"]
@@ -656,6 +676,9 @@ class ToolConfigPanel(QWidget):
         self._presence_tuning_result.setText(text)
         self._presence_tuning_result.show()
         self._presence_apply_tuned.show()
+        self._compact_tuning_summary = dict(tuning)
+        self._tuning_weak = weak_dataset
+        self.presenceValidationChanged.emit()
 
     def refresh_geometry(self, tool: Tool) -> None:
         rect = tool.roi.rect()
@@ -999,6 +1022,12 @@ class ToolConfigPanel(QWidget):
         self._update_diagnostics("nok", {}, None, message=message)
         self._set_perf_overlay(None)
         self.locatorPolicyWarningChanged.emit("")
+
+    def show_test_blocked(self, message: str, elapsed_ms: float, breakdown: list) -> None:
+        self._update_diagnostics("warn", {}, None, elapsed_ms=elapsed_ms, message=message)
+        self._status_value_label.setText("NEOTESTOVANÉ")
+        self._set_perf_overlay(breakdown)
+        self.locatorPolicyWarningChanged.emit(message)
 
     def _set_perf_overlay(self, breakdown: Optional[list[dict[str, Any]]]) -> None:
         if not breakdown:

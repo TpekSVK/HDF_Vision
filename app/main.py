@@ -2,10 +2,12 @@ from PySide6.QtWidgets import QApplication
 from app.ui.workstation_window import WorkstationWindow
 import sys
 from app.ui.theme import DARK_STYLE
+from app.ui.system_keyboard import SystemKeyboard
 
 def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(DARK_STYLE)
+    app.system_keyboard = SystemKeyboard(app)
     w = WorkstationWindow()
     w.resize(900, 600)
     w.showFullScreen()
