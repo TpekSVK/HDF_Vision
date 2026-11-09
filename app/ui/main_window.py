@@ -6,7 +6,7 @@ from app.services.view_capture import ViewCapture
 from PySide6.QtWidgets import (
     QWidget, QMainWindow, QPushButton, QVBoxLayout, QLabel, QHBoxLayout, QComboBox,
     QStackedWidget, QFrame, QCheckBox, QSizePolicy, QGridLayout, QMessageBox, QApplication,
-    QScrollArea, QInputDialog,
+    QScrollArea, QInputDialog, QDialog,
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap, QImageReader
@@ -38,7 +38,6 @@ from app.ui.pico_wizard import PicoWizard
 from app.services.db_service import DbService
 from app.services.recipe_service import RecipeService
 from app.services.stats_service import StatsService
-from app.ui.view_strip import ViewStrip
 from app.services.tool_registry import ToolRegistry
 from app.services.modbus_service import ModbusService
 from app.services.pico_service import PicoService
@@ -57,6 +56,9 @@ from app.ui.recipe_change_log_dialog import RecipeChangeLogDialog
 from app.services.security_service import SecurityService
 from app.ui.password_dialog import authorize_recipe_write
 from app.ui.theme import refresh_style
+from app.ui.run_options_overlay import RunOptionsOverlay
+from app.ui.run_widgets import SummaryLabel, NoticeState, RunViewGrid, RunResultsOverlay
+from app.ui.power_dialog import PowerDialog
 from app.ui.results_page import ResultsPage
 from app.ui.filtered_roi import compose_filtered_roi
 from app.ui.golden_wizard.style import metric_label
@@ -154,7 +156,7 @@ class MainWindow(QMainWindow):
         # ========== Root & Top bar ==========
         root = QWidget(); root.setObjectName("mainWindowRoot"); self.setCentralWidget(root)
         root_layout = QVBoxLayout(root)
-        root_layout.setContentsMargins(10, 10, 10, 10)
+        root_layout.setContentsMargins(8, 8, 8, 8)
         root_layout.setSpacing(8)
 
         self._jetson_stats_service = JetsonStatsService(self)
@@ -171,6 +173,7 @@ class MainWindow(QMainWindow):
         title = QLabel(station_name)
         title.setProperty("role", "appTitle")
         top.addWidget(title)
+        self.station_title = title
         top.addStretch(1)
 
         self.btn_mode_run = QPushButton("RUN")
@@ -201,13 +204,14 @@ class MainWindow(QMainWindow):
         top.addWidget(recipe_label)
         self.cmb_recipe = QComboBox(); self._refresh_recipe_list()
         self.cmb_recipe.setMinimumWidth(190)
+        self.cmb_recipe.setMinimumHeight(44)
         self.cmb_recipe.currentTextChanged.connect(self.on_recipe_changed)
         top.addWidget(self.cmb_recipe)
 
         self.security_status = QLabel(
             "ADMIN MODE" if self.security.is_admin_mode()
-            else ("Ochrana receptov: ZAPNUTÁ" if self.security.has_password()
-                  else "Ochrana receptov: VYPNUTÁ")
+            else ("Ochrana: ZAPNUTÁ" if self.security.has_password()
+                  else "Ochrana: VYPNUTÁ")
         )
         self.security_status.setProperty("role", "secondary")
         if self.security.is_admin_mode():
@@ -250,27 +254,22 @@ class MainWindow(QMainWindow):
         status_container.setObjectName("runStatusCard")
         status_container.setProperty("role", "card")
         status_container.setProperty("status", "idle")
-        status_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        status_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         status_row = QVBoxLayout(status_container)
-        status_row.setContentsMargins(14, 12, 14, 12)
-        status_row.setSpacing(3)
+        status_row.setContentsMargins(10, 6, 10, 6)
+        status_row.setSpacing(2)
         status_caption = QLabel("VÝSLEDOK KONTROLY")
         status_caption.setProperty("role", "secondary")
         status_row.addWidget(status_caption)
-        self.lbl_status = QLabel(startup_recipe_error or "–")
+        self.lbl_status = SummaryLabel(startup_recipe_error or "–")
         self.lbl_status.setProperty("role", "statusHero")
         self.lbl_status.setProperty("status", "idle")
         self.lbl_status.setAlignment(Qt.AlignLeft)
         status_row.addWidget(self.lbl_status)
-        self._run_status_message = QLabel("Čaká na prvú kontrolu")
+        self._run_status_message = SummaryLabel("Čaká na prvú kontrolu")
         self._run_status_message.setProperty("role", "secondary")
-        self._run_status_message.setWordWrap(True)
         status_row.addWidget(self._run_status_message)
-        self.recovery_notice = QLabel("")
-        self.recovery_notice.setWordWrap(True)
-        self.recovery_notice.setStyleSheet("color: #ffc857; font-weight: bold;")
-        self.recovery_notice.setVisible(False)
-        status_row.addWidget(self.recovery_notice)
+        self.recovery_notice = NoticeState(self)
         self.run_status_card = status_container
 
         # Akcie (TRIGGER, Export, Wizard) + Live + Heatmap + minimalizácia stripu
@@ -280,7 +279,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout(actions_container)
         actions.setContentsMargins(10, 6, 10, 6)
         actions.setSpacing(8)
-        self.btn_trigger = QPushButton("TRIGGER")  # berie posledný kontinuálny frame
+        self.btn_trigger = QPushButton(f"TRIGGER · {station_name}")
         self.btn_trigger.setProperty("role", "primary")
         self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self._request_software_trigger)
@@ -289,15 +288,16 @@ class MainWindow(QMainWindow):
         self.btn_v2_feedback = QPushButton("V2: False NOK / False OK", actions_container)
         self.btn_v2_feedback.setVisible(False)
         self.btn_v2_feedback.clicked.connect(self._mark_v2_feedback)
-        actions.addWidget(self.btn_v2_feedback)
 
         self.btn_export = QPushButton("Export CSV", actions_container)
         self.btn_export.clicked.connect(self.export_csv_today)
 
-        self.chk_show_roi = QCheckBox("Zobraziť ROI", actions_container)
+        self.chk_show_roi = QPushButton("ROI vypnuté", actions_container)
+        self.chk_show_roi.setCheckable(True)
+        self.chk_show_roi.toggled.connect(lambda checked: self.chk_show_roi.setText(
+            "ROI zapnuté" if checked else "ROI vypnuté"))
         self.chk_show_roi.setToolTip("Zobraziť kontrolovanú oblasť vybraného nástroja")
         self.chk_show_roi.toggled.connect(self._on_run_overlay_controls_changed)
-        actions.addWidget(self.chk_show_roi)
 
         self.chk_filtered_roi = QCheckBox("Zobraziť filtrované ROI", actions_container)
         self.chk_filtered_roi.setToolTip("Skutočný medzivýsledok vybraného nástroja z nasledujúcej kontroly")
@@ -309,14 +309,12 @@ class MainWindow(QMainWindow):
         self.cmb_roi_tool.setMinimumWidth(190)
         self.cmb_roi_tool.setToolTip("Vybrať nástroj, ktorého ROI sa zobrazí")
         self.cmb_roi_tool.currentIndexChanged.connect(self._on_run_overlay_controls_changed)
-        actions.addWidget(self.cmb_roi_tool)
 
         actions.addStretch(1)
         self.btn_hold_nok = QPushButton("Ponechať NOK", actions_container)
         self.btn_hold_nok.setEnabled(False)
         self.btn_hold_nok.setToolTip("Zastaviť porovnanie a ponechať NOK snímku. Pri ďalšej NOK sa prepínanie obnoví.")
         self.btn_hold_nok.clicked.connect(lambda: self._nok_comparison.hold_nok())
-        actions.addWidget(self.btn_hold_nok)
         # Live toggle
         self.btn_live = QPushButton("Live vypnuté")
         self.btn_live.setCheckable(True)
@@ -328,6 +326,12 @@ class MainWindow(QMainWindow):
         self.btn_manual_light.clicked.connect(self._toggle_manual_light)
         actions.addWidget(self.btn_manual_light)
         QTimer.singleShot(0, self._refresh_manual_light)
+        actions.addWidget(self.chk_show_roi)
+        self.btn_run_options = QPushButton("Ďalšie")
+        self.btn_run_options.setCheckable(True)
+        self.btn_run_options.clicked.connect(self._toggle_run_options)
+        actions.addWidget(self.btn_run_options)
+        actions_container.setObjectName("runActions")
 
         # Heatmap toggle
         self.chk_heatmap = QCheckBox("Mapa rozdielov", actions_container)
@@ -343,33 +347,16 @@ class MainWindow(QMainWindow):
         self.cmb_tool.currentIndexChanged.connect(self._on_tool_selection_changed)
         self.cmb_tool.hide()
 
-        actions_container.setMaximumHeight(actions_container.sizeHint().height())
-        run.addWidget(actions_container)
-        filtered_controls = QHBoxLayout()
-        filtered_controls.addWidget(self.chk_filtered_roi)
-        filtered_controls.addWidget(self.lbl_filtered_roi, 1)
-        run.addLayout(filtered_controls)
 
-        view_strip_container = QFrame()
-        view_strip_container.setProperty("role", "panel")
-        view_strip_container.setMinimumWidth(126)
-        view_strip_container.setMaximumWidth(146)
+        view_strip_container = QWidget()
         view_strip_layout = QVBoxLayout(view_strip_container)
-        view_strip_layout.setContentsMargins(10, 7, 10, 7)
-        view_strip_layout.setSpacing(6)
+        view_strip_layout.setContentsMargins(0, 0, 0, 0)
+        view_strip_layout.setSpacing(4)
         view_strip_label = QLabel("POHĽADY")
         view_strip_label.setProperty("role", "secondary")
         view_strip_layout.addWidget(view_strip_label)
-        self.view_strip = ViewStrip(
-            on_view_selected=self._on_view_selected_view,
-            orientation=Qt.Vertical,
-        )
-        self.view_strip_scroll = QScrollArea()
-        self.view_strip_scroll.setWidgetResizable(True)
-        self.view_strip_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.view_strip_scroll.setFrameShape(QFrame.NoFrame)
-        self.view_strip_scroll.setWidget(self.view_strip)
-        view_strip_layout.addWidget(self.view_strip_scroll, 1)
+        self.view_strip = RunViewGrid(on_view_selected=self._on_view_selected_view)
+        view_strip_layout.addWidget(self.view_strip)
         self.view_strip_container = view_strip_container
         self.strip = None
 
@@ -380,149 +367,104 @@ class MainWindow(QMainWindow):
         preview_row.setContentsMargins(0, 0, 0, 0)
         preview_row.setSpacing(10)
 
-        preview_row.addWidget(self.view_strip_container, 0)
 
         # Live view panel (aktuálny záber)
         self.live_view = QLabel("— aktuálny záber —")
         self.live_view.setObjectName("liveInspectionView")
         self.live_view.setProperty("status", "idle")
         self.live_view.setAlignment(Qt.AlignCenter)
-        self.live_view.setMinimumSize(640, 360)
-        self.live_view.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.live_view.setMinimumSize(320, 240)
+        self.live_view.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
         self.live_view.setContentsMargins(0,0,0,0)
         comparison_panel = QWidget()
         comparison_layout = QVBoxLayout(comparison_panel)
         comparison_layout.setContentsMargins(0, 0, 0, 0)
         self._comparison_caption = QLabel("")
         self._comparison_caption.setAlignment(Qt.AlignCenter)
+        self._comparison_caption.hide()
         comparison_layout.addWidget(self._comparison_caption)
         comparison_layout.addWidget(self.live_view, 1)
         preview_row.addWidget(comparison_panel, 4)
+        self.run_options = RunOptionsOverlay(self.live_view, station_name)
+        self.run_options.closed.connect(lambda: self.btn_run_options.setChecked(False))
+        tool_row = QHBoxLayout()
+        tool_row.addWidget(QLabel("Detail ROI"))
+        tool_row.addWidget(self.cmb_roi_tool, 1)
+        self.run_options.controls.addLayout(tool_row)
+        self.run_options.controls.addWidget(self.btn_hold_nok)
+        self.run_options.controls.addWidget(self.chk_filtered_roi)
+        self.run_options.controls.addWidget(self.lbl_filtered_roi)
+        self.run_options.controls.addWidget(self.btn_v2_feedback)
+        self.run_options.hide()
+        self.run_details = RunResultsOverlay(self.live_view, station_name)
+        self._metrics_rows = []
         from app.ui.nok_comparison import NokComparison
         self._nok_comparison = NokComparison(
             lambda frame: self._show_gray_or_bgr(self.live_view, frame),
-            self._comparison_caption.setText,
+            self._set_comparison_caption,
             lambda: self.mode == "RUN" and self.stack.currentWidget() is self.panel_run,
             self)
 
         self._nok_comparison.switchingChanged.connect(self.btn_hold_nok.setEnabled)
 
-        # Pravý panel (štatistiky + posledné metriky)
-        self.side_panel = QFrame(); self.side_panel.setObjectName("sidePanel")
+        # Fixed summary, touch actions and a paginated 2x2 view grid.
+        self.side_panel = QFrame()
+        self.side_panel.setObjectName("sidePanel")
         self.side_panel.setProperty("role", "panel")
         self.side_panel.setMinimumWidth(300)
-        self.side_panel.setMaximumWidth(380)
-        self.side_panel.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        self.side_panel.setMaximumWidth(340)
         side = QVBoxLayout(self.side_panel)
-        side.setSpacing(8)
-        side.setContentsMargins(10,10,10,10)
-
+        side.setSpacing(4)
+        side.setContentsMargins(8, 6, 8, 6)
         side.addWidget(self.run_status_card)
-
-        # Nadpis a recept
-        t = QLabel("PREVÁDZKOVÝ PREHĽAD")
-        t.setProperty("role", "secondary")
-        side.addWidget(t)
-        self.sb_recipe = QLabel("Recept: –")
-        self.sb_recipe.hide()
-        self.sb_pose = QLabel("Pose alignment: –")
-        self.sb_pose.hide()
-        cycle_card = QFrame()
-        cycle_card.setProperty("role", "card")
-        cycle_layout = QVBoxLayout(cycle_card)
-        cycle_layout.setContentsMargins(10, 8, 10, 8)
-        cycle_layout.setSpacing(2)
-        cycle_caption = QLabel("ČAS CYKLU")
-        cycle_caption.setProperty("role", "secondary")
-        cycle_layout.addWidget(cycle_caption)
+        self.sb_recipe = QLabel("Recept: –"); self.sb_recipe.hide()
+        self.sb_pose = QLabel("Pose alignment: –"); self.sb_pose.hide()
+        self.sb_total_test_time = QLabel("Čas testov (dnes): –"); self.sb_total_test_time.hide()
+        self.sb_yield = QLabel("Úspešnosť: –"); self.sb_yield.hide()
         self.sb_recipe_duration = QLabel("–")
         self.sb_recipe_duration.setProperty("role", "metricValue")
-        cycle_layout.addWidget(self.sb_recipe_duration)
-        side.addWidget(cycle_card)
-
-        # Denné štatistiky
-        today_label = QLabel("DNES")
-        today_label.setProperty("role", "secondary")
-        side.addWidget(today_label)
-        self.sb_total = QLabel("Celkom: –")
-        self.sb_ok    = QLabel("OK: –")
-        self.sb_nok   = QLabel("NOK: –")
-        self.sb_yield = QLabel("Úspešnosť: –")
-        self.sb_total_test_time = QLabel("Čas testov (dnes): –")
-        self.sb_total_test_time.hide()
+        self.sb_total = QLabel("Dnes: –")
+        self.sb_ok, self.sb_nok = QLabel("OK: –"), QLabel("NOK: –")
         self.sb_ok.setProperty("status", "ok")
         self.sb_nok.setProperty("status", "nok")
-        daily_card = QFrame()
-        daily_card.setProperty("role", "card")
-        daily_layout = QGridLayout(daily_card)
-        daily_layout.setContentsMargins(10, 8, 10, 8)
-        daily_layout.setHorizontalSpacing(12)
-        daily_layout.setVerticalSpacing(5)
-        daily_layout.addWidget(self.sb_total, 0, 0)
-        daily_layout.addWidget(self.sb_yield, 0, 1)
-        daily_layout.addWidget(self.sb_ok, 1, 0)
-        daily_layout.addWidget(self.sb_nok, 1, 1)
-        side.addWidget(daily_card)
-
-        # Posledné meranie (TRIGGER)
-        last_measurement = QLabel("POSLEDNÁ KONTROLA")
-        last_measurement.setProperty("role", "secondary")
-        side.addWidget(last_measurement)
-        self.metrics_scroll = QScrollArea()
-        self.metrics_scroll.setWidgetResizable(True)
-        self.metrics_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self.metrics_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self.metrics_scroll.setFrameShape(QFrame.NoFrame)
-        self.metrics_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
-        self.metrics_container = QWidget()
-        self.metrics_container.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
-        self.metrics_layout = QGridLayout(self.metrics_container)
-        self.metrics_layout.setContentsMargins(0, 0, 0, 0)
-        self.metrics_layout.setSpacing(4)
-        self.metrics_layout.setColumnStretch(0, 2)
-        self.metrics_layout.setColumnStretch(1, 1)
-        self.metrics_layout.setColumnMinimumWidth(1, 110)
-        self._metrics_widgets: list[QLabel] = []
-        self._metric_name_labels: list[tuple[QLabel, str]] = []
-        self._metrics_placeholder = QLabel("Žiadne dáta")
-        self._metrics_placeholder.setProperty("role", "secondary")
-        self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
-        self.metrics_scroll.setWidget(self.metrics_container)
-        side.addWidget(self.metrics_scroll, 1)
-
+        stats = QFrame(); stats.setProperty("role", "card")
+        stats.setAccessibleName("Čas posledného cyklu a dnešné štatistiky")
+        grid = QGridLayout(stats)
+        grid.setContentsMargins(8, 6, 8, 6)
+        grid.setVerticalSpacing(4)
+        cycle = QHBoxLayout()
+        caption = QLabel("Cyklus"); caption.setProperty("role", "secondary")
+        cycle.addWidget(caption); cycle.addWidget(self.sb_recipe_duration)
+        grid.addLayout(cycle, 0, 0)
+        grid.addWidget(self.sb_total, 0, 1)
+        grid.addWidget(self.sb_ok, 1, 0)
+        grid.addWidget(self.sb_nok, 1, 1)
+        side.addWidget(stats)
+        self.btn_result_details = QPushButton("Detail výsledku →")
+        self.btn_result_details.clicked.connect(self._toggle_result_details)
+        side.addWidget(self.btn_result_details)
+        side.addStretch(1)
+        side.addWidget(self.view_strip_container)
         preview_row.addWidget(self.side_panel, 1)
-        preview_row.setStretch(0, 0)
-        preview_row.setStretch(1, 4)
-        preview_row.setStretch(2, 1)
-
+        preview_row.setStretch(0, 4)
+        preview_row.setStretch(1, 1)
+        self.lbl_status.changed.connect(self._sync_run_details)
+        self._run_status_message.changed.connect(self._sync_run_details)
+        self.recovery_notice.changed.connect(self._sync_run_notice)
         run.addWidget(preview_container, 1)
+        run.addWidget(actions_container)
+        run_root.setContentsMargins(0, 0, 0, 0)
+        run.setContentsMargins(0, 0, 0, 0)
+        self.panel_run.setObjectName("runWorkspace")
 
         # timer pre RUN live view refresh
         self._run_timer = QTimer(self)
         self._run_timer.setInterval(100)  # ~10 FPS
         self._run_timer.timeout.connect(self._update_live_view)
 
-        # Systémové akcie (spodná ľavá časť RUN)
-        power_actions_container = QWidget()
-        power_actions_row = QHBoxLayout(power_actions_container)
-        power_actions_row.setContentsMargins(0, 0, 0, 0)
-        power_actions_row.setSpacing(10)
-
-        self.btn_shutdown_pc = QPushButton("Vypnúť počítač")
-        self.btn_shutdown_pc.setToolTip("Bezpečne vypnúť aplikáciu aj počítač")
-        self.btn_shutdown_pc.setProperty("role", "destructive")
-        self.btn_shutdown_pc.clicked.connect(self._confirm_shutdown_pc)
-        power_actions_row.addWidget(self.btn_shutdown_pc)
-
-        self.btn_reboot_pc = QPushButton("Reštartovať počítač")
-        self.btn_reboot_pc.setToolTip("Bezpečne reštartovať aplikáciu aj počítač")
-        self.btn_reboot_pc.setProperty("role", "warning")
-        self.btn_reboot_pc.clicked.connect(self._confirm_reboot_pc)
-        power_actions_row.addWidget(self.btn_reboot_pc)
-
-        power_actions_row.addStretch(1)
-        self.power_actions_container = power_actions_container
-        # spúšťa sa až pri Live zapnuté v _toggle_live()
+        self.btn_power = QPushButton("Napájanie")
+        self.btn_power.clicked.connect(self._show_power_menu)
+        self.btn_power.setToolTip("Zavrieť aplikáciu, reštartovať alebo vypnúť počítač")
 
         # inicializuj pohľady a pravý panel
         self._refresh_views()
@@ -535,33 +477,25 @@ class MainWindow(QMainWindow):
         setup_root = QVBoxLayout(self.panel_setup)
         setup_root.setContentsMargins(0, 0, 0, 0)
 
-        setup_scroll = QScrollArea(self.panel_setup)
-        setup_scroll.setWidgetResizable(True)
-        setup_scroll.setFrameShape(QFrame.NoFrame)
-        setup_root.addWidget(setup_scroll)
-
         setup_content = QWidget()
         setup_content.setObjectName("setupContent")
+        setup_root.addWidget(setup_content)
         setup_layout = QVBoxLayout(setup_content)
-        setup_layout.setContentsMargins(10, 10, 10, 10)
-        setup_layout.setSpacing(12)
-        setup_scroll.setWidget(setup_content)
+        setup_layout.setContentsMargins(6, 6, 6, 6)
+        setup_layout.setSpacing(10)
 
         setup_hero = QFrame(setup_content)
         setup_hero.setObjectName("setupHero")
         hero_layout = QHBoxLayout(setup_hero)
-        hero_layout.setContentsMargins(22, 18, 22, 18)
+        hero_layout.setContentsMargins(12, 8, 12, 8)
         hero_layout.setSpacing(18)
         hero_copy = QVBoxLayout()
         hero_copy.setSpacing(4)
-        hero_kicker = QLabel("NASTAVENIE KONTROLY")
-        hero_kicker.setProperty("role", "setupKicker")
-        hero_copy.addWidget(hero_kicker)
         hero_title = QLabel("Golden, ROI a nástroje")
         hero_title.setProperty("role", "setupHeroTitle")
         hero_copy.addWidget(hero_title)
         hero_description = QLabel(
-            "Vytvorte referenčný obraz, nastavte kontrolované oblasti a nakonfigurujte pipeline."
+            "Nastavenie kontroly pre vybranú kameru."
         )
         hero_description.setProperty("role", "setupDescription")
         hero_description.setWordWrap(True)
@@ -580,10 +514,9 @@ class MainWindow(QMainWindow):
             card = QFrame(setup_content)
             card.setProperty("role", "card")
             card.setProperty("setupCard", True)
-            card.setMinimumHeight(220)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(18, 16, 18, 16)
-            card_layout.setSpacing(8)
+            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setSpacing(6)
             kicker_label = QLabel(kicker)
             kicker_label.setProperty("role", "setupKicker")
             card_layout.addWidget(kicker_label)
@@ -597,15 +530,15 @@ class MainWindow(QMainWindow):
             return card, card_layout
 
         setup_grid = QGridLayout()
-        setup_grid.setHorizontalSpacing(12)
-        setup_grid.setVerticalSpacing(12)
+        setup_grid.setHorizontalSpacing(10)
+        setup_grid.setVerticalSpacing(10)
         setup_grid.setColumnStretch(0, 1)
         setup_grid.setColumnStretch(1, 1)
 
         recipe_card, recipe_layout = create_setup_card(
             "AKTÍVNY RECEPT",
             "Správa receptu",
-            "Recept združuje Golden snímky, pohľady, nástroje a rozhodovacie pravidlá.",
+            "Golden snímky, pohľady a kontrolné nástroje.",
         )
         self.setup_recipe_name = QLabel(self.current_recipe_name())
         self.setup_recipe_name.setProperty("role", "setupRecipeName")
@@ -623,7 +556,7 @@ class MainWindow(QMainWindow):
         camera_card, camera_layout = create_setup_card(
             "KAMERA",
             "Snímanie a spúšťanie",
-            "Vyberte spôsob získania obrazu. Nastavenie konkrétnej kamery je súčasťou Golden Setupu.",
+            "Nastavenia kamery nájdete v Golden Setupe.",
         )
         capture_row = QHBoxLayout()
         capture_label = QLabel("Režim snímania")
@@ -647,23 +580,23 @@ class MainWindow(QMainWindow):
         communication_card, communication_layout = create_setup_card(
             "KOMUNIKÁCIA",
             "Prepojenie s linkou",
-            "Nastavte vstupy pre snímanie a výstupy výsledkov OK/NOK.",
+            "Vstupy snímania a výstupy výsledkov OK/NOK.",
         )
         self.btn_modbus_wizard = QPushButton("Modbus TCP", communication_card)
         self.btn_modbus_wizard.setProperty("role", "setupAction")
         self.btn_modbus_wizard.clicked.connect(self.open_modbus_wizard)
-        communication_layout.addWidget(self.btn_modbus_wizard)
+        communication_layout.addWidget(self.btn_modbus_wizard, 0, Qt.AlignLeft)
         self.btn_pico_wizard = QPushButton("Raspberry Pi Pico", communication_card)
         self.btn_pico_wizard.setProperty("role", "setupAction")
         self.btn_pico_wizard.clicked.connect(self.open_pico_wizard)
-        communication_layout.addWidget(self.btn_pico_wizard)
+        communication_layout.addWidget(self.btn_pico_wizard, 0, Qt.AlignLeft)
         communication_layout.addStretch(1)
         setup_grid.addWidget(communication_card, 1, 0)
 
         system_card, system_layout = create_setup_card(
             "SYSTÉM",
             "Dáta a diagnostika",
-            "Exportujte výsledky, skontrolujte zmeny receptu alebo zapnite servisné informácie.",
+            "Export výsledkov, história zmien a servis.",
         )
         system_actions = QHBoxLayout()
         system_actions.setSpacing(8)
@@ -676,12 +609,16 @@ class MainWindow(QMainWindow):
         system_actions.addWidget(self.btn_change_log)
         system_actions.addStretch(1)
         system_layout.addLayout(system_actions)
-        self.chk_debug_overlay = QCheckBox("Zobraziť servisný overlay výkonu", system_card)
+        self.chk_debug_overlay = QPushButton("Servisný overlay vypnutý", system_card)
+        self.chk_debug_overlay.setCheckable(True)
         self.chk_debug_overlay.setToolTip("Zobraziť diagnostické informácie o výkone")
         self.chk_debug_overlay.toggled.connect(self._on_debug_overlay_toggled)
-        system_layout.addWidget(self.chk_debug_overlay)
+        service_actions = QHBoxLayout()
+        service_actions.addWidget(self.chk_debug_overlay)
+        service_actions.addWidget(self.btn_power)
+        service_actions.addStretch(1)
+        system_layout.addLayout(service_actions)
         system_layout.addStretch(1)
-        system_layout.addWidget(self.power_actions_container)
         setup_grid.addWidget(system_card, 1, 1)
 
         setup_layout.addLayout(setup_grid)
@@ -700,6 +637,29 @@ class MainWindow(QMainWindow):
         self._apply_debug_overlay_setting()
 
     # ---------- Helpers ----------
+    def _set_comparison_caption(self, text):
+        self._comparison_caption.setText(text)
+        self._comparison_caption.setVisible(bool(text))
+
+    def use_shared_navigation(self):
+        """Keep station context here; the host owns the common navigation."""
+        self._shared_navigation = True
+        for button in (self.btn_mode_run, self.mode_btn, self.btn_results, self.btn_troubleshooting):
+            button.hide()
+
+    def _toggle_run_options(self, checked):
+        if checked:
+            self.run_details.hide()
+            self.run_options.open(self.btn_run_options)
+        else:
+            self.run_options.hide()
+
+    def hideEvent(self, event):
+        if hasattr(self, "run_options"):
+            self.run_options.hide()
+            self.run_details.hide()
+        super().hideEvent(event)
+
     def current_recipe_name(self) -> str:
         return getattr(self.tool, "recipe", "default") or "default"
 
@@ -709,10 +669,12 @@ class MainWindow(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._refresh_metric_name_elision()
 
     # ---------- UI akcie ----------
     def _request_mode(self, target: str) -> None:
+        if getattr(self, "run_options", None) is not None:
+            self.run_options.hide()
+            self.run_details.hide()
         target_mode = str(target or "").upper()
         if target_mode != "RUN":
             self._stop_live_and_light()
@@ -735,7 +697,11 @@ class MainWindow(QMainWindow):
             # History is a page, not a production mode. Keep capture and sequence
             # state intact, whether opened from RUN or from paused SETUP.
             if self.panel_results is None:
-                self.panel_results = ResultsPage(self.db.db_path, self)
+                self.panel_results = ResultsPage(self.db.db_path, self,
+                    station_id=self.camera_id, station_name=self.station_name,
+                    sources=lambda: self.results_sources() if hasattr(self, 'results_sources') else [
+                        dict(id=self.camera_id, name=self.station_name, db_path=self.db.db_path,
+                             active=self.mode == 'RUN')])
                 self.stack.addWidget(self.panel_results)
             self.panel_results.set_production_active(self.mode == "RUN")
             self.stack.setCurrentWidget(self.panel_results)
@@ -752,6 +718,8 @@ class MainWindow(QMainWindow):
 
     def _sync_mode_chrome(self) -> None:
         is_run = self.stack.currentWidget() is self.panel_run
+        is_results = self.panel_results is not None and self.stack.currentWidget() is self.panel_results
+        self.top_bar.setVisible(not (getattr(self, '_shared_navigation', False) and is_results))
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
@@ -1404,19 +1372,19 @@ class MainWindow(QMainWindow):
             if not trigger_state['logging_enabled']:
                 self._bump_runtime_stats(trigger_state['recipe_name'], status=record['status'],
                     view_id=view_id, cycle_time_ms=record['cycle_time_ms'])
-        self._active_view_id = trigger_state['last_view_id']
-        self.view_strip.set_active(self._active_view_id)
+        # Processing order never changes the operator's selected view.
+        self._update_sidebar(view_id=self._active_view_id)
         self._finalize_run_trigger(trigger_state)
         comparison = getattr(self, '_nok_comparison', None)
         if comparison is not None:
             comparison.stop()
             if trigger_state['status'] == 'nok':
-                failed = next((r for r in trigger_state['records'] if r['status'] == 'nok'), None)
+                failed = next((r for r in trigger_state['records']
+                               if r['view_id'] == self._active_view_id and r['status'] == 'nok'), None)
                 if failed is not None:
                     view_id = failed['view_id']
                     view = self._views_by_id.get(view_id)
                     if view is not None:
-                        self._on_view_selected_view(view_id)
                         nok = (self._render_run_overlay_frame(view_id)
                                if view_id in trigger_state.get('pending_overlays', {}) else None)
                         if nok is None:
@@ -1433,20 +1401,14 @@ class MainWindow(QMainWindow):
             frame, view, result = overlay_source
             self._cache_run_overlays(overlay_view_id, frame, view, result)
 
-        overlay_view_id = trigger_state.get("last_view_id")
+        overlay_view_id = self._active_view_id
         rendered_overlay_frame = self._render_run_overlay_frame(overlay_view_id)
         if rendered_overlay_frame is not None:
-            trigger_state["last_preview_frame"] = rendered_overlay_frame
             self._set_last_view_frame(overlay_view_id, rendered_overlay_frame)
 
-        if trigger_state["last_preview_frame"] is not None:
-            self._last_trigger_frame = self._clone_frame(trigger_state["last_preview_frame"])
-            self._last_trigger_view_id = trigger_state["last_view_id"]
-        else:
-            active_frame = self._get_last_frame_for_view(self._active_view_id)
-            if active_frame is not None:
-                self._last_trigger_frame = self._clone_frame(active_frame)
-                self._last_trigger_view_id = self._active_view_id
+        active_frame = self._get_last_frame_for_view(self._active_view_id)
+        self._last_trigger_frame = self._clone_frame(active_frame) if active_frame is not None else None
+        self._last_trigger_view_id = self._active_view_id if active_frame is not None else None
 
         self._reload_results_strip()
         if not self.live_enabled:
@@ -1691,7 +1653,7 @@ class MainWindow(QMainWindow):
                 src = self.cam.last_frame(caller="run_live_view")
             else:
                 src = self._get_last_frame_for_view(self._active_view_id)
-                if src is None:
+                if src is None and getattr(self, '_last_trigger_view_id', None) == self._active_view_id:
                     src = self._last_trigger_frame
             if src is None:
                 self.live_view.clear()
@@ -2067,7 +2029,7 @@ class MainWindow(QMainWindow):
                     st = self._merge_stats(st, runtime_stats)
             pose_enabled = getattr(self.tool, "pose_enabled", True)
             self.sb_pose.setText(f"Zarovnanie pozície: {'ZAP' if pose_enabled else 'VYP'}")
-            self.sb_total.setText(f"Celkom: {st.get('total','–')}")
+            self.sb_total.setText(f"Dnes: {st.get('total','–')}")
             self.sb_ok.setText(f"OK: {st.get('ok','–')}")
             self.sb_nok.setText(f"NOK: {st.get('nok','–')}")
             yield_raw = st.get("yield")
@@ -2166,70 +2128,34 @@ class MainWindow(QMainWindow):
         self._run_status_message.setText(message)
 
     def _set_metrics_rows(self, rows: Sequence[tuple[str, str]]):
-        with suppress(Exception):
-            while self.metrics_layout.count():
-                item = self.metrics_layout.takeAt(0)
-                widget = item.widget()
-                if widget is None:
-                    continue
-                if widget is self._metrics_placeholder:
-                    widget.setParent(None)
-                else:
-                    widget.deleteLater()
-            self._metrics_widgets.clear()
-            self._metric_name_labels.clear()
-            self.metrics_container.adjustSize()
+        self._metrics_rows = [(str(name), str(value)) for name, value in rows]
+        self._sync_run_details()
 
-            if not rows:
-                self._metrics_placeholder.setParent(self.metrics_container)
-                self._metrics_placeholder.setText("Žiadne dáta")
-                self.metrics_layout.addWidget(self._metrics_placeholder, 0, 0, 1, 2)
-                self._metrics_placeholder.show()
-                self.metrics_container.adjustSize()
-                return
+    def _sync_run_notice(self):
+        text = self.recovery_notice.text() if self.recovery_notice.isVisible() else None
+        self._run_status_message.set_override(text)
+        self._run_status_message.setProperty('status', 'warn' if text else None)
+        refresh_style(self._run_status_message)
+        self._sync_run_details()
 
-            self._metrics_placeholder.hide()
-            for row_index, (label_text, value_text) in enumerate(rows):
-                full_label = str(label_text)
-                name_label = QLabel(full_label)
-                name_label.setProperty("role", "resultName")
-                name_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-                name_label.setWordWrap(False)
-                name_label.setToolTip(full_label)
-                name_label.setMaximumWidth(240)
-                name_label.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
-                value_label = QLabel(value_text if value_text else "-")
-                value_label.setProperty("role", "resultValue")
-                normalized_value = str(value_text or "").strip().lower()
-                if normalized_value in {"ok", "warn", "nok"}:
-                    value_label.setProperty("status", normalized_value)
-                value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                value_label.setWordWrap(False)
-                value_label.setMinimumWidth(110)
-                value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-                self.metrics_layout.addWidget(name_label, row_index, 0)
-                self.metrics_layout.addWidget(value_label, row_index, 1)
-                self._metrics_widgets.extend([name_label, value_label])
-                self._metric_name_labels.append((name_label, full_label))
-
-            self._refresh_metric_name_elision()
-            self.metrics_container.adjustSize()
-
-    def _refresh_metric_name_elision(self) -> None:
-        if not self._metric_name_labels:
+    def _sync_run_details(self):
+        if not hasattr(self, "run_details"):
             return
-        viewport_width = self.metrics_scroll.viewport().width()
-        spacing = self.metrics_layout.horizontalSpacing()
-        margins = self.metrics_layout.contentsMargins()
-        reserved = self.metrics_layout.columnMinimumWidth(1)
-        available = viewport_width - reserved - spacing - margins.left() - margins.right()
-        target_width = max(80, available)
-        for label, full_text in self._metric_name_labels:
-            label.setMaximumWidth(target_width)
-            metrics = label.fontMetrics()
-            elided = metrics.elidedText(full_text, Qt.ElideRight, target_width)
-            label.setText(elided)
+        view = self._views_by_id.get(self._active_view_id)
+        name = getattr(view, "name", self._active_view_id or "Pohľad")
+        self.run_details.set_content(
+            f"{self.station_name} · {name}", self.lbl_status.full_text,
+            self._run_status_message.full_text,
+            self.recovery_notice.text() if self.recovery_notice.isVisible() else '',
+            self._metrics_rows or [("Nástroje", "Žiadne dáta")])
 
+    def _toggle_result_details(self):
+        if self.run_details.isVisible():
+            self.run_details.hide()
+        else:
+            self.run_options.hide()
+            self._sync_run_details()
+            self.run_details.open(self.btn_result_details)
 
     def _update_metrics_panel(self):
         try:
@@ -2655,6 +2581,21 @@ class MainWindow(QMainWindow):
         self._update_metrics_panel()
         self._reload_results_strip()
 
+    def _show_power_menu(self):
+        dialog = PowerDialog(self.security, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        if dialog.action == 'shutdown':
+            self._confirm_shutdown_pc()
+        elif dialog.action == 'reboot':
+            self._confirm_reboot_pc()
+        elif dialog.action == 'exit':
+            answer = QMessageBox.question(self, 'Zavrieť aplikáciu?',
+                'Bezpečne ukončiť všetky kamerové stanice a prejsť na pracovnú plochu? '
+                'Počítač zostane zapnutý.', QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if answer == QMessageBox.Yes:
+                self._request_host_power_action('exit')
+
     def _confirm_shutdown_pc(self) -> None:
         answer = QMessageBox.question(
             self,
@@ -2680,13 +2621,13 @@ class MainWindow(QMainWindow):
         self._request_host_power_action("reboot")
 
     def _request_host_power_action(self, action: str) -> None:
-        if action not in {"shutdown", "reboot"}:
+        if action not in {"shutdown", "reboot", "exit"}:
             QMessageBox.critical(self, "Chyba", f"Neznáma akcia napájania: {action}")
             return
         if self.host_power_action is not None:
             self.host_power_action(action)
             return
-        self._power_exit_code = 10 if action == "shutdown" else 11
+        self._power_exit_code = {"shutdown": 10, "reboot": 11, "exit": 0}[action]
         self.close()  # Accepted work and Pico IDLE complete before process exit.
 
     def _apply_debug_overlay_setting(self) -> None:
@@ -2695,9 +2636,11 @@ class MainWindow(QMainWindow):
         self.chk_debug_overlay.blockSignals(True)
         self.chk_debug_overlay.setChecked(enabled)
         self.chk_debug_overlay.blockSignals(False)
+        self.chk_debug_overlay.setText("Servisný overlay zapnutý" if enabled else "Servisný overlay vypnutý")
         self._set_debug_overlay_enabled(enabled)
 
     def _on_debug_overlay_toggled(self, enabled: bool) -> None:
+        self.chk_debug_overlay.setText("Servisný overlay zapnutý" if enabled else "Servisný overlay vypnutý")
         self.session_settings.update_session_settings(show_performance_debug_overlay=enabled)
         self._set_debug_overlay_enabled(bool(enabled))
 
@@ -2719,7 +2662,6 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_debug_overlay"):
             self._debug_overlay.place_top_left(margin=10)
             self._debug_overlay.raise_()
-        self._refresh_metric_name_elision()
 
     def closeEvent(self, e):
         self._stop_live_and_light()

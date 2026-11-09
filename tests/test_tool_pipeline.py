@@ -389,3 +389,76 @@ def test_measurement_locator_preserves_previous_alignment(diagnostic, measuremen
         learned=LearningSamplePreparer().sample(golden,frame,target,[first,second,target])
         expected=LearningSamplePreparer().sample(golden,frame,target,[first,target])
         np.testing.assert_array_equal(learned,expected)
+
+
+@pytest.mark.parametrize('kind', ['ssim','mse','ncc','presence_absence','light_transmission',
+    'edge_change','edge_profile_deviation','presence.absence_v2','mold.protection_v1','mold.protection_v2'])
+def test_diagnostic_blocked_locator_does_not_run_selected_analyzer(monkeypatch, kind):
+    from app.services.tool_registry import ToolRegistry
+    from app.services.tool_pipeline import ToolTestBlockedError, run_tool_test
+    image = np.random.default_rng(22).integers(0,255,(32,32),dtype=np.uint8)
+    locator = _make_recipe(True).tools[0].copy()
+    locator.params.values.update(use_golden_crop=False,template_roi=None)
+    locator.template_roi=ToolRoi()
+    locator.roi=ToolRoi(dict(x=0,y=0,w=16,h=16))
+    locator.thresholds.values['threshold_corr']=.55
+    target=ToolRegistry.make_default_tool(kind)
+    target.order=2
+    target.roi=ToolRoi(dict(x=8,y=8,w=16,h=16))
+    recipe=RecipeV2(tools=[locator,target],on_locator_failure='fail',logging_enabled=False)
+    create=ToolRegistry.create_tool
+    def only_locator(type_id):
+        assert type_id=='locator.template_match', 'Blocked analyzer was executed'
+        return create(type_id)
+    monkeypatch.setattr(ToolRegistry,'create_tool',only_locator)
+    with pytest.raises(ToolTestBlockedError) as caught:
+        run_tool_test(image,image,recipe)
+    assert caught.value.failure['locator_failure_reason']=='not_found'
+    assert len(caught.value.reports)==1
+    assert caught.value.reports[0].tool.type=='locator.template_match'
+    runtime=run_pipeline(image,image,recipe)
+    assert runtime.policy_applied=='fail'
+    assert runtime.diagnostics[0]['locator_failure']
+    assert len(runtime.per_tool)==1
+
+
+def test_failed_selected_locator_returns_its_nok_result_in_diagnostic():
+    from app.services.tool_pipeline import run_tool_test
+    image=np.zeros((32,32),dtype=np.uint8)
+    locator=_make_recipe(True).tools[0].copy()
+    locator.params.values.update(use_golden_crop=False,template_roi=None,alignment_mode="guided_edge")
+    locator.template_roi=ToolRoi()
+    locator.roi=ToolRoi(dict(x=0,y=0,w=16,h=16))
+    locator.thresholds.values['threshold_corr']=.55
+    result=run_tool_test(image,image,RecipeV2(tools=[locator],on_locator_failure='fail',logging_enabled=False))
+    assert result.result.status=='nok'
+    assert result.result.metrics['found'] is False
+    assert result.diagnostics[0]['locator_failure']
+    assert result.report.tool.type=='locator.template_match'
+
+
+def test_ssim_diagnostic_matches_runtime_when_locator_succeeds():
+    from app.services.tool_pipeline import run_tool_test
+    golden,frame=_make_test_images()
+    recipe=_make_recipe(True,threshold_corr=.8)
+    recipe.on_locator_failure='fail'
+    diagnostic=run_tool_test(golden,frame,recipe)
+    runtime=run_pipeline(golden,frame,recipe)
+    assert diagnostic.report.tool.type=='ssim'
+    assert diagnostic.result.status==runtime.per_tool[-1].status
+    assert diagnostic.result.metrics['ssim']==pytest.approx(runtime.per_tool[-1].metrics['ssim'])
+
+
+def test_ssim_diagnostic_respects_continue_without_alignment_policy():
+    from app.services.tool_pipeline import run_tool_test
+    image=np.random.default_rng(33).integers(0,255,(32,32),dtype=np.uint8)
+    locator,target=_make_recipe(True).tools
+    locator.params.values.update(use_golden_crop=False,template_roi=None)
+    locator.template_roi=ToolRoi()
+    locator.roi=ToolRoi(dict(x=0,y=0,w=16,h=16))
+    recipe=RecipeV2(tools=[locator,target],on_locator_failure='continue_without_alignment',logging_enabled=False)
+    result=run_tool_test(image,image,recipe)
+    assert result.policy_applied=='continue_without_alignment'
+    assert result.diagnostics[0]['locator_failure']
+    assert result.report.tool.type=='ssim'
+    assert result.result.metrics['ssim']==pytest.approx(1.)

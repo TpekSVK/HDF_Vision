@@ -325,14 +325,15 @@ class _ROIView(_ImageView):
         rect = self._preview_rect or self._roi_qrect()
         if rect.isNull():
             return None
+        candidates = []
         for handle, center in self._handle_centers(rect).items():
             handle_pos = self.mapFromScene(center)
             if (
                 abs(handle_pos.x() - view_pos.x()) <= self.HANDLE_HIT_RADIUS
                 and abs(handle_pos.y() - view_pos.y()) <= self.HANDLE_HIT_RADIUS
             ):
-                return handle
-        return None
+                candidates.append(((handle_pos - view_pos).manhattanLength(), handle))
+        return min(candidates, key=lambda item: item[0])[1] if candidates else None
 
     @staticmethod
     def _handle_cursor(handle: RoiHandle):

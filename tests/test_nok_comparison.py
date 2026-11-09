@@ -58,7 +58,7 @@ def test_nok_uses_matching_golden_and_existing_bbox_frame():
     c=Mock();frame=np.ones((8,8),np.uint8);golden=np.zeros_like(frame);bbox=frame+2
     host=SimpleNamespace(_nok_comparison=c,_set_last_view_frame=Mock(),
         view_strip=SimpleNamespace(set_status=Mock(),set_active=Mock()),_update_sidebar=Mock(),
-        _finalize_run_trigger=Mock(),_views_by_id={'bad':object()},
+        _finalize_run_trigger=Mock(),_views_by_id={'bad':object()},_active_view_id='bad',
         _on_view_selected_view=Mock(),_render_run_overlay_frame=lambda v:bbox,
         _load_view_golden_array=lambda recipe,view:golden)
     record=dict(view_id='bad',status='nok',frame=frame,reports=[],cycle_time_ms=1,
@@ -66,7 +66,8 @@ def test_nok_uses_matching_golden_and_existing_bbox_frame():
     state=dict(records=[record],logging_enabled=True,last_view_id='other',status='nok',
                recipe_name='r',pending_overlays={'bad':object()})
     MainWindow._display_inspection_result(host,state)
-    host._on_view_selected_view.assert_called_once_with('bad')
+    host._on_view_selected_view.assert_not_called()
+    assert host._active_view_id == 'bad'
     assert c.start.call_args.args[0] is golden
     assert c.start.call_args.args[1] is bbox
     c.reset_mock();state['status']='ok'

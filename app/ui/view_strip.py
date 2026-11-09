@@ -22,6 +22,7 @@ class _ViewItem(QFrame):
         name: str,
         *,
         on_click: Callable[[str], None],
+        compact: bool = False,
     ) -> None:
         super().__init__()
         self.view_id = view_id
@@ -32,7 +33,7 @@ class _ViewItem(QFrame):
         self.setFrameShadow(QFrame.Plain)
         self.setCursor(Qt.PointingHandCursor)
 
-        layout = QVBoxLayout(self)
+        layout = QHBoxLayout(self) if compact else QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(4)
 
@@ -54,6 +55,10 @@ class _ViewItem(QFrame):
         layout.addWidget(self.label)
 
         layout.addStretch(1)
+        if compact:
+            self.thumbnail.hide()
+            self.setMinimumHeight(44)
+            self.setMinimumWidth(110)
 
     def mousePressEvent(self, event):  # noqa: N802 - Qt API
         if event.button() == Qt.LeftButton:
@@ -98,10 +103,12 @@ class ViewStrip(QWidget):
         parent: QWidget | None = None,
         on_view_selected: Callable[[str], None] | None = None,
         orientation: Qt.Orientation = Qt.Horizontal,
+        compact: bool = False,
     ) -> None:
         super().__init__(parent)
         self._on_view_selected = on_view_selected or (lambda _vid: None)
         self._orientation = orientation
+        self._compact = compact
         self._items: dict[str, _ViewItem] = {}
         self._layout = (
             QVBoxLayout(self) if orientation == Qt.Vertical else QHBoxLayout(self)
@@ -144,7 +151,7 @@ class ViewStrip(QWidget):
                 source = entry
             if not view_id:
                 continue
-            item = _ViewItem(view_id, name, on_click=self._handle_click)
+            item = _ViewItem(view_id, name, on_click=self._handle_click, compact=self._compact)
             if self._orientation == Qt.Vertical:
                 item.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
                 item.setMaximumHeight(144)

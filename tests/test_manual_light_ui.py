@@ -20,6 +20,9 @@ class FakeButton:
     def setChecked(self, checked):
         self.checked = checked
 
+    def setToolTip(self, text):
+        self.tooltip = text
+
     def setText(self, text):
         self.text = text
 

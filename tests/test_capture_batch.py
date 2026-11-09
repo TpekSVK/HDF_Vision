@@ -151,3 +151,37 @@ def test_changed_context_keeps_batch_unpublished(tmp_path, monkeypatch):
     assert not (tmp_path / 'ok').exists()
     d.reject(); batch.cleanup_future.result(timeout=5)
     d.deleteLater()
+
+
+@pytest.mark.parametrize('title', ['Zber prázdnej formy', 'Zber vzoriek so zvyškom'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_capture_background_matches_panels_even_inside_styled_wizard(title, nested):
+    import os
+    from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE
+    from app.ui.theme import COLOR_PANEL
+    app = QApplication.instance() or QApplication([])
+    parent = QDialog() if nested else None
+    if parent:
+        parent.setObjectName('goldenWizard')
+        parent.setStyleSheet(GOLDEN_WIZARD_STYLE)
+        parent.resize(1200,740)
+        parent.show()
+    dialog = PresenceV2SampleCaptureDialog(title=title, parent=parent,
+        capture_fn=lambda: np.zeros((32,40),np.uint8), crop_fn=lambda f:f)
+    try:
+        dialog.show(); app.processEvents()
+        image = dialog.grab().toImage()
+        assert image.pixelColor(4,4).name() == COLOR_PANEL
+        preview = dialog._preview.grab().toImage()
+        assert preview.pixelColor(4,4).name() == COLOR_PANEL
+        dialog._mode.showPopup(); app.processEvents()
+        popup = dialog._mode.view().window()
+        assert popup.grab().toImage().pixelColor(0,0).lightness() < 100
+        assert dialog._mode.view().visualRect(dialog._mode.model().index(0,0)).height() >= 48
+        dialog._mode.hidePopup()
+        if nested and os.environ.get('HDF_CAPTURE_PALETTE_SCREENSHOT'):
+            dialog.grab().save('/testdeps/capture-nested-gray.png')
+    finally:
+        dialog.reject()
+        if parent: parent.close()
+        app.processEvents()

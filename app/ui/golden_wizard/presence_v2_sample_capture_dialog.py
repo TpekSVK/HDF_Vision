@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE
+from app.ui.theme import COLOR_PANEL
+
 
 class PresenceV2SampleCaptureDialog(QDialog):
     def __init__(
@@ -35,6 +38,12 @@ class PresenceV2SampleCaptureDialog(QDialog):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        # A distinct scope prevents the parent wizard's transparent-descendant
+        # rule from matching this top-level dialog itself.
+        self.setObjectName("sampleCaptureDialog")
+        capture_style = GOLDEN_WIZARD_STYLE.replace("#goldenWizard", "#sampleCaptureDialog")
+        self.setStyleSheet(capture_style +
+                          f"\nQDialog#sampleCaptureDialog {{ background-color: {COLOR_PANEL}; }}")
         self.setWindowTitle(title)
         self.resize(1000, 640)
         self._capture_fn = capture_fn
@@ -94,7 +103,7 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._preview = QLabel("Náhľad vzorky", self)
         self._preview.setMinimumSize(580, 420)
         self._preview.setAlignment(Qt.AlignCenter)
-        self._preview.setStyleSheet("background:#111;color:#999;border:1px solid #444;")
+        self._preview.setStyleSheet(f"background:{COLOR_PANEL};color:#9aa4af;border:1px solid #343c46;")
         body.addWidget(self._preview, 2)
 
         self._thumbs = QListWidget(self)

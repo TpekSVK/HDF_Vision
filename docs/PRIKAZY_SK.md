@@ -23,7 +23,7 @@ samostatné možnosti, nie postup, ktorý treba celý vykonať.
 | Príkaz | Význam |
 |---|---|
 | `bash docker/run.sh` | Spustí HDF Vision v bežnom režime s kamerami, Pico a grafickým rozhraním. |
-| `sudo bash docker/run.sh --admin` | Spustí servisný ADMIN režim, ktorý obchádza výzvu na heslo pri zápise receptov. Heslo nemení a audit zostáva aktívny. Režim skončí ukončením aplikácie. |
+| `sudo bash docker/run.sh --admin` | Spustí servisný ADMIN režim, ktorý obchádza výzvy na spoločné heslo pri zápise receptov aj otvorení ponuky Napájanie. Heslo nemení a audit zostáva aktívny. Režim skončí ukončením aplikácie. |
 
 Spúšťajte z grafickej pracovnej plochy Jetsonu. Nespúšťajte súčasne druhú
 aplikáciu nad rovnakou kamerou/Pico. Skript spracuje aj požiadavku aplikácie
@@ -64,20 +64,28 @@ IMAGE_NAME=hdf_vision:servis bash docker/run.sh
 Podrobnosti: [Docker / Jetson](../README.md#docker--jetson),
 [skript build.sh](../docker/build.sh).
 
-## Heslo a ochrana receptov
+## Spoločné heslo pre recepty a napájanie
 
 Aplikácia nemusí byť spustená. Heslá sa zadávajú až do interaktívnej výzvy,
 nie ako súčasť príkazu.
 
 | Príkaz | Význam |
 |---|---|
-| `bash docker/security.sh status` | Zobrazí, či je ochrana receptov zapnutá. |
+| `bash docker/security.sh status` | Zobrazí, či je ochrana receptov a Napájania zapnutá. |
 | `bash docker/security.sh set-password` | Nastaví prvé heslo. Ak už existuje, použite `change-password`. |
 | `bash docker/security.sh change-password` | Zmení heslo po overení aktuálneho hesla. |
 | `bash docker/security.sh verify` | Overí zadané heslo bez zmeny nastavení. |
-| `bash docker/security.sh remove-password` | Po overení hesla a potvrdení vypne ochranu receptov. |
+| `bash docker/security.sh remove-password` | Po overení hesla a potvrdení vypne ochranu receptov aj ponuky Napájanie. |
 | `sudo bash docker/security.sh reset-password` | Nastaví nové heslo bez znalosti pôvodného; vyžaduje oprávnenia správcu Linuxu. Heslo neodstraňuje. |
 | `bash docker/security.sh --help` | Zobrazí dostupné príkazy; funguje aj bez zostaveného obrazu. |
+
+Rovnaké heslo chráni zápis receptov aj ponuku **NASTAVENIA → Systém → Napájanie**.
+Pri existujúcom hesle sa nič ďalšie nenastavuje. Bez hesla fungujú obe oblasti
+bez výzvy. V ponuke sú **Zavrieť aplikáciu · pracovná plocha**, **Reštartovať počítač**
+a **Vypnúť počítač**. Zatvorenie aplikácie ponechá počítač zapnutý; pri každej
+akcii sa najprv bezpečne ukončia všetky kamerové stanice. Heslo sa zadáva cez
+systémovú klávesnicu GNOME, ktorá sa vyvolá dotykom textového poľa. Odomknutie platí len do zatvorenia
+ponuky. Servisný režim `sudo bash docker/run.sh --admin` obíde obe výzvy.
 
 Namiesto `--help` možno použiť `-h` alebo `help`; pomoc zobrazí aj spustenie
 bez argumentov. Nastavenie sa ukladá do `/data/security.json`.
@@ -136,33 +144,11 @@ Podrobnosti: [Docker / Jetson](../README.md#docker--jetson),
 
 ## Servisné overovanie a testy
 
-### Hardvérová validácia Pico PIO
+### Historické hardvérové merania
 
-Nasledujúci príkaz patrí **dovnútra pripraveného aplikačného Docker prostredia**,
-v ktorom je projekt dostupný v pracovnom priečinku, importovateľný modul `app`
-a sprístupnená kamera/HID/Pico:
-
-```bash
-python3 tools/validate_pico_pio.py --output /tmp/hdf-pio-validation-01 --samples 20 --switches 3
-```
-
-| Voľba | Význam |
-|---|---|
-| `--output ADRESAR` | Povinný nový, ešte neexistujúci priečinok pre snímky, stav a logy. Použite pripojený priečinok hostiteľa, ak majú výsledky prežiť odstránenie kontajnera. |
-| `--samples 20` | Počet snímok na kombináciu rozlíšenia a expozície; predvolene 20, najmenej 1. |
-| `--switches 3` | Počet prepnutí MASTER/TRIGGER pre rozlíšenie; predvolene 3, najmenej 0. |
-| `--help` | Pomoc nástroja; vyžaduje prostredie s jeho Python závislosťami. |
-
-Je to servisný nástroj pre zastavenú výrobu, nie bežná kontrola stavu.
-Mení expozíciu, rozlíšenie, mapovanie a dočasné Pico profily; neposiela `SAVE`
-ani neprepisuje firmvér. Má pevne zadaný port `/dev/ttyACM0`, preto pred použitím
-overte pripojené zariadenie. Nesľubuje obnovu všetkých pôvodných nastavení.
-Aktuálnu kompatibilitu s pripojenou kamerou a verziou aplikácie treba overiť;
-historický validačný report nie je dôkazom nového testu.
-
-Podrobnosti: [validačný report](PIO_VALIDATION_20260911_SK.md),
-[zdroj nástroja](../tools/validate_pico_pio.py),
-[stav implementácie PIO](PIO_IMPLEMENTATION_CHECKPOINT.md).
+Meracie skripty a ich výsledky sú v externom archíve uvedenom v hlavnom README
+projektu. Historické skripty obsahujú pôvodné cesty; pred ďalším meraním ich
+treba pripraviť pre samostatný testovací priečinok mimo aplikácie.
 
 ### Automatizované testy aplikácie
 
@@ -176,8 +162,8 @@ python3 -m pytest tests -q -p no:cacheprovider
 Testy GUI používajú `QT_QPA_PLATFORM=offscreen`. Používajte oddelené testovacie
 dáta, nie produkčné `/data`. Produkčný obraz nemusí mať `pytest` nainštalovaný.
 Kompletné príkazy na vytvorenie testovacieho kontajnera a podmienky jednotlivých
-kontrol sú v [overení polohy kamery](CAMERA_POSITION_VERIFICATION_SK.md)
-a [reporte Empty Mold V2](EMPTY_MOLD_V2_REPORT_SK.md).
+kontrol sú v [overení polohy kamery](CAMERA_POSITION_VERIFICATION_SK.md).
+Historický implementačný report Empty Mold V2 je v externom archíve.
 Cloudový pomocný príkaz `/workspace/hdf-runtime/run-python` zo starších reportov
 nie je štandardný príkaz tohto Jetsonu.
 
@@ -220,7 +206,7 @@ Port nesmie súčasne používať aplikácia a ďalší sériový terminál.
 | `PIO FIRE ...` | Nízkoúrovňový časovaný cyklus kamery a svetla; syntax a jednotky určuje protokol PIO. |
 
 Úplná syntax a verzované pravidlá: [aktuálny Pico firmvér 4.1](../firmware/pico/README.md),
-[integrácia PIO](PIO_APP_INTEGRATION_SK.md),
+historická integrácia PIO v externom archíve uvedenom v hlavnom README,
 [starší protokol 3.3](../README.md#serial-command-reference).
 Staršie `MODE/TRIG/GAP/COUNT` nastavenia nemožno automaticky považovať za
 riadenie nového PIO režimu. Historické laboratórne skripty mimo tohto repozitára
