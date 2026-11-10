@@ -19,7 +19,13 @@ Príkazy na spustenie, nastavenie a servis nájdete v [prehľade príkazov](docs
 Tab **TROUBLESHOOTING → Overenie polohy kamery** porovnáva RAW golden aktívneho
 View s novou RAW snímkou bez produkčnej alignment kompenzácie. Používa uložené
 tolerancie receptu, zobrazuje fyzické korekcie a podporuje ručné/automatické
-snímkovanie aj prepínanie Golden/Current. Diagnostika pozastaví RUN danej stanice
+snímkovanie aj automatické prepínanie Golden/Current každých 400 ms.
+Dotykové rozloženie má veľké snímky, merania pod obrazom a tolerancie aj pokyny
+v prekrytí **Podrobnosti**. Tlačidlo Späť sa nezobrazuje; na odchod slúži horná
+navigácia. Toggle **Automatické snímanie** sprístupní výber **Rozostup**
+(0,5 / 1 / 2 / 5 s), ktorý možno meniť aj počas snímania. Odstup sa počíta od
+ukončenia predchádzajúcej kontroly; požiadavky sa neprekrývajú.
+Diagnostika pozastaví RUN danej stanice
 a nemení recept, produkčné výsledky ani Modbus OK/NOK.
 [Implementácia, obmedzenia tolerancií a Jetson testy](docs/CAMERA_POSITION_VERIFICATION_SK.md).
 

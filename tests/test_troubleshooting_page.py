@@ -188,7 +188,7 @@ def test_main_window_pauses_run_and_defers_resume_until_diagnostic_finishes(app,
         if destination == 'CLOSE':
             window.close()
         elif destination == 'TROUBLESHOOTING':
-            page.back_button.click()
+            window._request_mode('TROUBLESHOOTING')
         elif destination == 'HIDE':
             page.hide()
             app.processEvents()
@@ -248,5 +248,73 @@ def test_arrow_layer_is_current_only_and_preserves_raw_pixels(app):
         assert widget.limits_label.parent() is widget.golden_info
         assert widget.metrics.parent() is widget.current_info
         assert widget.directions.parent() is widget.current_info
+    finally:
+        widget.close()
+
+
+@pytest.mark.parametrize('height', [768,704])
+def test_touch_layout_and_overlay_fit_without_back_or_scroll(app, height):
+    from PySide6.QtWidgets import QWidget,QVBoxLayout,QLabel,QScrollArea,QPushButton
+    from app.ui.theme import DARK_STYLE
+    app.setStyleSheet(DARK_STYLE)
+    widget, queued = page(app)
+    shell = QWidget()
+    layout = QVBoxLayout(shell)
+    header = QLabel('HDF VISION · DIAGNOSTIKA\nKamera 1 · SETUP')
+    header.setFixedHeight(125)
+    layout.addWidget(header)
+    layout.addWidget(widget,1)
+    shell.setFixedSize(1366,height); shell.show()
+    widget.activate('Test')
+    kind,operation=queued.pop(); widget.completed(kind,operation(),None)
+    try:
+        widget.capture()
+        kind,operation=queued.pop()
+        image,_=operation()
+        result=CameraPositionResult(dx_px=28.4,dy_px=-6.2,rotation_deg=.18,confidence=.984,
+            x_within_tolerance=False,y_within_tolerance=True,rotation_within_tolerance=True,
+            overall_ok=False,corrections=('→ POSUŇ KAMERU DOPRAVA',))
+        widget.completed(kind,(image,result),None)
+        app.processEvents()
+        assert not widget.findChildren(QScrollArea)
+        assert not any('Späť' in b.text() for b in widget.findChildren(QPushButton))
+        assert widget.images.height()>=240
+        for control in [widget.capture_button,widget.automatic_button,widget.arrow_toggle,widget.details_button]:
+            assert control.height()>=44
+            assert shell.rect().contains(control.mapTo(shell,control.rect().bottomRight()))
+        assert widget.metric_values[0].text()=='+28.40 px'
+        assert widget.metric_values[3].text()=='98.4 %'
+        before=widget.images.geometry()
+        widget.details_button.click();app.processEvents()
+        assert widget.detail_overlay.isVisible() and widget.images.geometry()==before
+        widget.detail_overlay.hide()
+        widget.grab().save(f'/testdeps/diagnostics-touch-{height}.png')
+        widget.display_group.button(1).click();app.processEvents()
+        assert widget.blink_timer.isActive()
+        before=widget.blink_label.text()
+        widget.blink_timer.timeout.emit()
+        assert widget.blink_label.text()!=before
+        widget.grab().save(f'/testdeps/diagnostics-switching-{height}.png')
+    finally:
+        shell.close();widget.close();app.processEvents()
+
+
+def test_auto_capture_interval_remains_editable_and_applies_immediately(app):
+    widget,queued=page(app)
+    try:
+        widget.automatic_button.click()
+        assert widget.interval.isVisible() and widget.interval_label.isVisible()
+        widget.interval.setCurrentIndex(widget.interval.findData(5000))
+        assert widget.capture_timer.interval()==5000
+        widget.interval.setCurrentIndex(widget.interval.findData(500))
+        assert widget.capture_timer.interval()==500
+        widget.capture_timer.timeout.emit()
+        assert len(queued)==1 and widget.busy
+        widget.interval.setCurrentIndex(widget.interval.findData(2000))
+        assert not widget.capture_timer.isActive()
+        kind,operation=queued.pop(); widget.completed(kind,operation(),None)
+        assert widget.capture_timer.interval()==2000 and widget.capture_timer.isActive()
+        widget.automatic_button.click()
+        assert not widget.capture_timer.isActive() and not widget.interval.isVisible()
     finally:
         widget.close()
