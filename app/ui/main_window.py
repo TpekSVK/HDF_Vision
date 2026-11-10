@@ -719,7 +719,8 @@ class MainWindow(QMainWindow):
     def _sync_mode_chrome(self) -> None:
         is_run = self.stack.currentWidget() is self.panel_run
         is_results = self.panel_results is not None and self.stack.currentWidget() is self.panel_results
-        self.top_bar.setVisible(not (getattr(self, '_shared_navigation', False) and is_results))
+        is_diagnostic = self.panel_troubleshooting is not None and self.stack.currentWidget() is self.panel_troubleshooting
+        self.top_bar.setVisible(not (getattr(self, '_shared_navigation', False) and (is_results or is_diagnostic)))
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
@@ -762,7 +763,6 @@ class MainWindow(QMainWindow):
         if self.panel_troubleshooting is None:
             service = CameraPositionService(self.recipes, self.cam, self.pico, self.pico_config)
             self.panel_troubleshooting = TroubleshootingPage(service, self._submit_diagnostic, self)
-            self.panel_troubleshooting.back_requested.connect(lambda: self._request_mode('TROUBLESHOOTING'))
             self.panel_troubleshooting.deactivated.connect(self._diagnostic_hidden, Qt.QueuedConnection)
             self.stack.addWidget(self.panel_troubleshooting)
         page = self.panel_troubleshooting

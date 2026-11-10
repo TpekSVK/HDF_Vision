@@ -292,3 +292,17 @@ QWidget#resultsPage QPushButton#historyCard {
   min-height: 42px; max-height: 42px; padding: 5px 10px;
 }
 """
+
+DARK_STYLE += """
+QWidget#diagnosticsPage QPushButton, QWidget#diagnosticsPage QComboBox {
+  min-height: 32px;
+}
+QWidget#diagnosticsPage QFrame#resultsOverlay {
+  background: #181d23; border: 1px solid #46515e; border-radius: 8px;
+}
+QWidget#diagnosticsPage QFrame#resultsOverlay QLabel {
+  background: transparent; border: none;
+}
+QWidget#diagnosticsPage QWidget#resultsOverlayContent { background: transparent; }
+QWidget#diagnosticsPage QLabel#diagnosticStatus { font-weight: 600; }
+"""
