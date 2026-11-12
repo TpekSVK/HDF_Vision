@@ -1,7 +1,8 @@
-# Dvojkamerová implementácia — experimentálna vetva
+# Dvojkamerová implementácia
 
-Implementácia vo vetve `codex/experimental-dual-camera`, základ `1a3b0cf`
-(main po PR378). Nezlučuje sa do main/dev. Používateľský postup je
+Implementácia vznikla vo vetve `codex/experimental-dual-camera`, základ `1a3b0cf`
+(main po PR378), a je určená na začlenenie do `dev` na žiadosť používateľa.
+Prenos do `main` sa rieši samostatne. Používateľský postup je
 v [DUAL_CAMERA_SK.md](DUAL_CAMERA_SK.md), výsledky overenia v
 `artifacts/dual-camera-implementation/2026-11-12/`.
 

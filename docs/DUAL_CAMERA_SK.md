@@ -1,8 +1,9 @@
-# Dve kamery s jedným Picom — experimentálna verzia
+# Dve kamery s jedným Picom
 
-Táto verzia je vo vetve `codex/experimental-dual-camera`. Používa jeden recept
-s pohľadmi z dvoch kamier a jedno spoločné Pico. Rozloženie obrazoviek, farby
-a dotykové ovládanie zostávajú zachované. Zmeny nie sú zlúčené do `main` ani `dev`.
+Táto podpora je súčasťou vývojovej verzie `dev`; vznikla vo vetve
+`codex/experimental-dual-camera`. Používa jeden recept s pohľadmi z dvoch kamier
+a jedno spoločné Pico. Rozloženie obrazoviek, farby a dotykové ovládanie zostávajú
+zachované. Prenos do `main` sa rieši samostatne.
 
 ## Spustenie a priradenie zariadení
 

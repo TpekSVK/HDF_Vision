@@ -1,0 +1,24 @@
+{
+  "solo_1": {
+    "view_1": {
+      "evaluation_ms": 157.0882468497075,
+      "complete_ms": 183.740105799734
+    }
+  },
+  "solo_2": {
+    "view_2": {
+      "evaluation_ms": 140.63090925028519,
+      "complete_ms": 165.71194014995854
+    }
+  },
+  "simultaneous": {
+    "view_1": {
+      "evaluation_ms": 176.38684994981304,
+      "complete_ms": 201.4305371503724
+    },
+    "view_2": {
+      "evaluation_ms": 149.4067213998278,
+      "complete_ms": 175.20160444983048
+    }
+  }
+}
