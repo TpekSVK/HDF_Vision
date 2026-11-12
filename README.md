@@ -438,6 +438,9 @@ Tento skript upravuje oznámenia. Spúšťanie s logom nastavuje samostatný pos
 
 ## Spúšťanie s logom a bez terminálu
 
+Samostatný návod vrátane nastavenia ďalšieho Jetsonu, výpisov a obnovy:
+[setup_launcher_SK.md](docs/setup_launcher_SK.md).
+
 Na pracovnej ploche ako bežný používateľ spustite:
 
 ```bash

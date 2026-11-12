@@ -33,6 +33,7 @@ aplikáciu nad rovnakou kamerou/Pico. Skript spracuje aj požiadavku aplikácie
 na vypnutie alebo reštart hostiteľského Jetsonu.
 
 Podrobnosti: [Docker / Jetson](../README.md#docker--jetson),
+[spúšťanie s logom a bez terminálu](setup_launcher_SK.md),
 [ochrana receptov](../README.md#recipe-security), [skript run.sh](../docker/run.sh).
 
 Pre zostavu s dvoma kamerami a jedným Picom platí rovnaký
