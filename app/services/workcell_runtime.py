@@ -1,5 +1,6 @@
 """A shared recipe with independent camera lanes and grouped PLC decisions."""
 from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
 import time
@@ -118,33 +119,38 @@ class WorkcellRuntime:
         self.config = config
         self._frame_sources.clear()
         self._recovery_cancel.clear()
-        try:
-            for ident, runtime in self.runtimes.items():
-                views = [view for view in config.views if view.camera_id == ident]
-                if not views:
-                    continue
-                selected = next((view for view in views if view.id == active_view_id), views[0])
-                # New channel firmware is mandatory even when only one role is
-                # configured in the shared-board topology.
-                self.registry.picos[ident].require_pio()
-                pico = self.registry.picos[ident]
-                if capture_mode == 'master':
-                    for view in views:
-                        profile = view.pico_profile or 'V1'
-                        value = (view.flash_delay_ms, view.flash_pulse_ms)
-                        if hasattr(pico, 'configure_view_flash') and not pico.configure_view_flash(profile, *value):
-                            raise RuntimeError(pico.last_error or 'Nastavenie blesku zlyhalo.')
+        def prepare_camera(item):
+            ident, runtime = item
+            views = [view for view in config.views if view.camera_id == ident]
+            if not views:
+                return
+            selected = next((view for view in views if view.id == active_view_id), views[0])
+            # New channel firmware is mandatory even when only one role is
+            # configured in the shared-board topology.
+            self.registry.picos[ident].require_pio()
+            pico = self.registry.picos[ident]
+            if capture_mode == 'master':
                 for view in views:
-                    if (view.trigger_mode == 'external' and view.external_source == 'pico'
-                            and view.external_trigger_mode == 'explicit'):
-                        if not self.runtimes[ident].pico_config.is_input_enabled(view.external_request_input):
-                            raise ValueError(f'{view.name}: povoľte Pico IN{view.external_request_input} v Pico sprievodcovi.')
-                        if not pico.map_input(view.external_request_input, view.pico_profile or 'V1'):
-                            raise RuntimeError(pico.last_error or 'Priradenie vstupu Pica zlyhalo.')
-                controller = self.controllers[ident]
-                if not controller.prepare(lambda rt=runtime, view=selected: rt.prepare(
-                        recipe_name, capture_mode, view.id), runtime.quiesce):
-                    raise RuntimeError(controller.snapshot()['error'])
+                    profile = view.pico_profile or 'V1'
+                    value = (view.flash_delay_ms, view.flash_pulse_ms)
+                    if hasattr(pico, 'configure_view_flash') and not pico.configure_view_flash(profile, *value):
+                        raise RuntimeError(pico.last_error or 'Nastavenie blesku zlyhalo.')
+            for view in views:
+                if (view.trigger_mode == 'external' and view.external_source == 'pico'
+                        and view.external_trigger_mode == 'explicit'):
+                    if not self.runtimes[ident].pico_config.is_input_enabled(view.external_request_input):
+                        raise ValueError(f'{view.name}: povoľte Pico IN{view.external_request_input} v Pico sprievodcovi.')
+                    if not pico.map_input(view.external_request_input, view.pico_profile or 'V1'):
+                        raise RuntimeError(pico.last_error or 'Priradenie vstupu Pica zlyhalo.')
+            controller = self.controllers[ident]
+            if not controller.prepare(lambda rt=runtime, view=selected: rt.prepare(
+                    recipe_name, capture_mode, view.id), runtime.quiesce):
+                raise RuntimeError(controller.snapshot()['error'])
+        try:
+            # Each task owns a concrete camera and Pico channel. Wait for both
+            # tasks before cleanup, including when one preparation fails.
+            with ThreadPoolExecutor(max_workers=2, thread_name_prefix="camera-prepare") as pool:
+                list(pool.map(prepare_camera, self.runtimes.items()))
             if self._hardware_fault:
                 raise RuntimeError(self._hardware_fault)
         except Exception:
@@ -358,10 +364,13 @@ class WorkcellRuntime:
         if self.groups:
             self.groups.close()
             self.groups.wait_publications()
-        errors = []
-        for ident, runtime in self.runtimes.items():
+        def stop_camera(item):
+            ident, runtime = item
             if not self.controllers[ident].pause(runtime.quiesce):
-                errors.append(self.controllers[ident].snapshot()['error'])
+                return self.controllers[ident].snapshot()['error']
+            return None
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix='camera-stop') as pool:
+            errors = [error for error in pool.map(stop_camera, self.runtimes.items()) if error]
         if errors:
             raise RuntimeError('; '.join(errors))
 

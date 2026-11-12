@@ -47,6 +47,26 @@ def test_shared_pico_opens_one_recipe_workspace_and_two_camera_history_sources(a
     workspace.cam.registry.select('camera_2')
     assert workspace.pico.channel == 2
     assert workspace.cam.width == 1280
+    recipe = workspace.current_recipe_name()
+    workspace.recipes.update_view(recipe, 'view_1', view_name='celust',
+        frame_source_view_id=None, camera_profile=None, settle_ms=None, output_group='group_1',
+        trigger_mode='timed', trigger_interval_ms=1000)
+    workspace.recipes.add_view(recipe, view_id='view_2', view_name='diel',
+        camera_id='camera_2', output_group='group_2')
+    workspace._refresh_views()
+    assert workspace.station_title.text() == 'celust'
+    workspace._on_view_selected_view('view_2')
+    assert workspace.station_title.text() == 'diel'
+    assert workspace.btn_trigger.text() == 'Trigger'
+    workspace._workcell_outcome(SimpleNamespace(group_id='group_2', status='ok', reason=''))
+    assert workspace.lbl_status.full_text == 'OK'
+    assert 'group_2' not in workspace._run_status_message.text()
+    workspace.stack.setCurrentWidget(workspace.panel_setup)
+    workspace._sync_mode_chrome()
+    assert workspace.station_title.isHidden() and workspace.station_title.text() == ''
+    workspace.stack.setCurrentWidget(workspace.panel_run)
+    workspace._sync_mode_chrome()
+    assert workspace.station_title.text() == 'diel'
     workspace._close_ready = True
     shell._closing = True
     workspace.close(); app.processEvents(); shell.close(); app.processEvents()

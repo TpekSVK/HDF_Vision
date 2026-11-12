@@ -297,7 +297,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout(actions_container)
         actions.setContentsMargins(10, 6, 10, 6)
         actions.setSpacing(8)
-        self.btn_trigger = QPushButton(f"TRIGGER · {station_name}")
+        self.btn_trigger = QPushButton("Trigger")
         self.btn_trigger.setProperty("role", "primary")
         self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self._request_software_trigger)
@@ -739,6 +739,7 @@ class MainWindow(QMainWindow):
         is_results = self.panel_results is not None and self.stack.currentWidget() is self.panel_results
         is_diagnostic = self.panel_troubleshooting is not None and self.stack.currentWidget() is self.panel_troubleshooting
         self.top_bar.setVisible(not (getattr(self, '_shared_navigation', False) and (is_results or is_diagnostic)))
+        self._sync_view_title(is_run)
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
@@ -746,6 +747,13 @@ class MainWindow(QMainWindow):
             page = getattr(self, 'panel_troubleshooting', None)
             home = getattr(self, 'panel_troubleshooting_home', None)
             self.btn_troubleshooting.setChecked(self.stack.currentWidget() in (page, home))
+
+    def _sync_view_title(self, is_run=None):
+        if is_run is None:
+            is_run = self.stack.currentWidget() is self.panel_run
+        view = self._views_by_id.get(self._active_view_id)
+        self.station_title.setText(view.name if is_run and view is not None else '')
+        self.station_title.setVisible(bool(is_run and view is not None))
 
     def _open_troubleshooting(self):
         from app.ui.troubleshooting_home import TroubleshootingHome
@@ -817,11 +825,8 @@ class MainWindow(QMainWindow):
         if view is not None and view.output_group != outcome.group_id:
             return
         self._apply_run_status_style(outcome.status)
-        message = f'{outcome.group_id or "výstup"}: {outcome.status.upper()}'
         if outcome.reason:
-            message += f' — {outcome.reason}'
-        self.lbl_status.setText(message)
-        self._run_status_message.setText(message)
+            self._run_status_message.setText(outcome.reason)
 
     def _workcell_idle(self):
         if self.runtime_worker.busy:
@@ -1515,8 +1520,9 @@ class MainWindow(QMainWindow):
 
     def open_wizard(self):
         self._stop_live_and_light()
-        # Manual light requires an active MASTER/TRIGGER session, not IDLE.
-        if not self._apply_capture_mode(ensure_runtime_ready=True):
+        # In the shared workcell GoldenWizard applies the selected view's profile
+        # and prepares its channel itself; preparing here repeats that transition.
+        if getattr(self, 'workcell', None) is None and not self._apply_capture_mode(ensure_runtime_ready=True):
             return
         dlg = GoldenWizard(
             self.cam,
@@ -1531,7 +1537,8 @@ class MainWindow(QMainWindow):
             authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
-        self._apply_capture_mode(ensure_runtime_ready=True)
+        if getattr(self, 'workcell', None) is None:
+            self._apply_capture_mode(ensure_runtime_ready=True)
         self._refresh_manual_light()
         self._refresh_views()
         self._reload_results_strip()
@@ -2521,6 +2528,7 @@ class MainWindow(QMainWindow):
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
+        self._sync_view_title()
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -2600,6 +2608,7 @@ class MainWindow(QMainWindow):
             return
         self._active_view_id = view_id
         self.view_strip.set_active(view_id)
+        self._sync_view_title()
         if getattr(self, 'workcell', None) is not None:
             view = self._views_by_id.get(view_id)
             if view is not None:

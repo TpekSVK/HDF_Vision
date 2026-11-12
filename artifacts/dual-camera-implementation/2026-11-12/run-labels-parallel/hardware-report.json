@@ -1,0 +1,685 @@
+{
+  "status": "passed",
+  "cycles": [
+    {
+      "mode": "master",
+      "cycle": 0,
+      "elapsed_ms": 488.95525600164547,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "87d1f997efef4a3bb8113a80d38ad150",
+        "87d1f997efef4a3bb8113a80d38ad150"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "87d1f997efef4a3bb8113a80d38ad150",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22490.144895412,
+        "finished_at": 22490.629224418
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 1,
+      "elapsed_ms": 351.6031720027968,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "947b7359864a4bca99b1fc4157f89f42",
+        "947b7359864a4bca99b1fc4157f89f42"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "947b7359864a4bca99b1fc4157f89f42",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22490.634450046,
+        "finished_at": 22490.982077323
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 2,
+      "elapsed_ms": 339.8738320029224,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "10efdc5979c34d039710ef1f4c8ec39d",
+        "10efdc5979c34d039710ef1f4c8ec39d"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "10efdc5979c34d039710ef1f4c8ec39d",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22490.986679348,
+        "finished_at": 22491.321930995
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 3,
+      "elapsed_ms": 362.5354989999323,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "53a9fbd9c31b45908330a65ac4144d6a",
+        "53a9fbd9c31b45908330a65ac4144d6a"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "53a9fbd9c31b45908330a65ac4144d6a",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22491.327408598,
+        "finished_at": 22491.685859303
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 4,
+      "elapsed_ms": 326.30476000122144,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "7c2aef0a8f1c4e69b5e7b5b0b12ee84b",
+        "7c2aef0a8f1c4e69b5e7b5b0b12ee84b"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "7c2aef0a8f1c4e69b5e7b5b0b12ee84b",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22491.690660886,
+        "finished_at": 22492.012848596
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 5,
+      "elapsed_ms": 339.7563300022739,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "eaeaa847dfa24bcf910ad44a7e87e754",
+        "eaeaa847dfa24bcf910ad44a7e87e754"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "eaeaa847dfa24bcf910ad44a7e87e754",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22492.017806631,
+        "finished_at": 22492.353618203
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 6,
+      "elapsed_ms": 361.3519809987338,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "bc55b87ad3c147b4b0662a3241166139",
+        "bc55b87ad3c147b4b0662a3241166139"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "bc55b87ad3c147b4b0662a3241166139",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22492.359128864,
+        "finished_at": 22492.716388339
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 7,
+      "elapsed_ms": 342.04017799856956,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "1309c9396719442199fc1f14654e3549",
+        "1309c9396719442199fc1f14654e3549"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "1309c9396719442199fc1f14654e3549",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22492.721809172,
+        "finished_at": 22493.058984245
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 8,
+      "elapsed_ms": 339.78209500128287,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "03e588712dda4ea08b9ed37070cc3c18",
+        "03e588712dda4ea08b9ed37070cc3c18"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "03e588712dda4ea08b9ed37070cc3c18",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22493.064743169,
+        "finished_at": 22493.400541434
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 9,
+      "elapsed_ms": 370.9108949988149,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "c1443614903a4d0b8169d9288b6460c5",
+        "c1443614903a4d0b8169d9288b6460c5"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "c1443614903a4d0b8169d9288b6460c5",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22493.405546639,
+        "finished_at": 22493.772482472
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 0,
+      "elapsed_ms": 399.672825999005,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "5328d0f4013b48579d39f5acdb279cdb",
+        "5328d0f4013b48579d39f5acdb279cdb"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "5328d0f4013b48579d39f5acdb279cdb",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22496.047521249,
+        "finished_at": 22496.443635856
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 1,
+      "elapsed_ms": 388.2039089985483,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "02c6ba9ae93740c79843e30cbadb8589",
+        "02c6ba9ae93740c79843e30cbadb8589"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "02c6ba9ae93740c79843e30cbadb8589",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22496.448209849,
+        "finished_at": 22496.832829874
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 2,
+      "elapsed_ms": 397.0062560001679,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "6d0a0f5f56d14a32b9f641400cb84373",
+        "6d0a0f5f56d14a32b9f641400cb84373"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "6d0a0f5f56d14a32b9f641400cb84373",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22496.837485758,
+        "finished_at": 22497.23089645
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 3,
+      "elapsed_ms": 404.9664300000586,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "868607b569a94a49b430f1e85d33b8ac",
+        "868607b569a94a49b430f1e85d33b8ac"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "868607b569a94a49b430f1e85d33b8ac",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22497.235862742,
+        "finished_at": 22497.637254281
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 4,
+      "elapsed_ms": 387.34632399791735,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "3ee1fe41af294e64b5f4d72acd296b32",
+        "3ee1fe41af294e64b5f4d72acd296b32"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "3ee1fe41af294e64b5f4d72acd296b32",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22497.641975126,
+        "finished_at": 22498.022968908
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 5,
+      "elapsed_ms": 404.64226599942776,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "e96c36cd52154e0695c11dbab938f677",
+        "e96c36cd52154e0695c11dbab938f677"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "e96c36cd52154e0695c11dbab938f677",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22498.031204706,
+        "finished_at": 22498.432321427
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 6,
+      "elapsed_ms": 410.1023340008396,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "3fba9c430f924a31918411282c2c3208",
+        "3fba9c430f924a31918411282c2c3208"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "3fba9c430f924a31918411282c2c3208",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22498.437139587,
+        "finished_at": 22498.843679159
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 7,
+      "elapsed_ms": 395.8083120014635,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "d85d59e6b0ab46e79e20e547c46c6821",
+        "d85d59e6b0ab46e79e20e547c46c6821"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "d85d59e6b0ab46e79e20e547c46c6821",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22498.848611082,
+        "finished_at": 22499.240970106
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 8,
+      "elapsed_ms": 389.94215200000326,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "e5f5ae5ff3544e2e85872806a55fd758",
+        "e5f5ae5ff3544e2e85872806a55fd758"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "e5f5ae5ff3544e2e85872806a55fd758",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22499.24576849,
+        "finished_at": 22499.632310956
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 9,
+      "elapsed_ms": 397.5009739988309,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "310c2882109a422ea78359927444e922",
+        "310c2882109a422ea78359927444e922"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "310c2882109a422ea78359927444e922",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 22499.637173918,
+        "finished_at": 22500.031170051
+      }
+    }
+  ],
+  "cleanup_errors": [],
+  "modbus": "disabled; no physical PLC writes",
+  "status_before_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 OFF\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=OFF IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_before_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 OFF\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=OFF IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "preparation_intervals": [
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 22490.113218821,
+      "finished": 22490.128151234
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 22490.117581415,
+      "finished": 22490.132218971
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 22493.785814549,
+      "finished": 22496.044077018
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 22493.786179808,
+      "finished": 22496.042659983
+    }
+  ],
+  "preparation_total_ms": {
+    "master": 51.67405000247527,
+    "trigger": 2261.8097420017875
+  },
+  "cameras_before": {
+    "camera_1": {
+      "device": "/dev/video0",
+      "serial": "162A5806",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 5
+    },
+    "camera_2": {
+      "device": "/dev/video2",
+      "serial": "1D3A5806",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 10
+    }
+  },
+  "history_counts": {
+    "camera_1": 20,
+    "camera_2": 20
+  },
+  "status_after_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 OFF\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=OFF IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_after_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 OFF\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=OFF IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  }
+}

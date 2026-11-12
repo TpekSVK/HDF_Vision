@@ -67,3 +67,16 @@ firmvéru a diffu je súčasťou záverečnej kontroly.
 Konečný výsledok: **871 passed**, všetkých34 dávok overených. GoldenTouch
 prekročil240s limit dávkového spúšťača; samostatný úplný beh prešiel
 28/28 za318,42s. Pôvodný timeout aj úspešný protokol sú zachované.
+
+
+## Následná úprava názvov a prípravy
+
+RUN používa názov pohľadu, SETUP ho skrýva, tlačidlo má text Trigger,
+výsledok nepoužíva interné group_id. Príprava aj zastavenie oboch kamier
+prebiehajú súbežne, chyby čakajú na dokončenie prípravy druhej kamery pred
+čistením. Golden Wizard neopakuje prípravu z hlavného okna.
+
+Cielená regresia669 passed. Opakovaný fyzický test10 MASTER +10 TRIGGER
+bez chyby snímania; príprava TRIGGER oboch kamier2262ms oproti súčtu
+samostatných intervalov4514ms. Dôkazy v podpriečinku artefaktov
+`run-labels-parallel/`. Aplikácia znovu spustená s pôvodným receptom test2.

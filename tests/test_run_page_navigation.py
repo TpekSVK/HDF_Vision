@@ -40,7 +40,9 @@ def window(mode='RUN', capture_mode='trigger'):
     w.top_bar = SimpleNamespace(setVisible=lambda visible: None)
     from threading import Event
     w._recovery_cancel = Event()
-    for name in ('_stop_live_and_light', '_set_manual_light_ui', '_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
+    w.station_title = SimpleNamespace(setText=lambda text: None, setVisible=lambda visible: None)
+    w._views_by_id = {}
+    for name in ('_stop_live_and_light', '_set_manual_light_ui', '_request_mode', '_sync_mode_chrome', '_sync_view_title', 'toggle_mode', '_handle_external_trigger',
                  '_start_production', '_request_runtime_stop', '_dispatch_runtime_stop', '_runtime_completed'):
         setattr(w, name, MethodType(getattr(MainWindow, name), w))
     w.inspection = InspectionController()

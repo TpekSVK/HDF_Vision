@@ -88,9 +88,17 @@ sa považujú za ten istý diel/formu. Nastavte preto čas podľa skutočného p
 ## RUN a vstupy
 
 Recept používa spoločný režim **MASTER** alebo **TRIGGER**. Aplikácia pripraví
-obe potrebné kamery. Každá má vlastné snímanie a spracovanie, pričom snímky
+obe potrebné kamery súbežne. Súbežne ich aj zastaví pri odchode do nastavení;
+pred zastavením naďalej počká na prijaté kontroly a publikovanie výsledkov.
+Golden Wizard pripravuje kameru vybraného pohľadu a pri otvorení neopakuje
+predbežnú prípravu z hlavného okna.
+Každá kamera má vlastné snímanie a spracovanie, pričom snímky
 môžu prísť súčasne. Prepnutie zobrazovaného pohľadu nemení už prijatú kontrolu.
 Po kontrole zostane vybraný pohľad zobrazený.
+
+Nad obrazom sa zobrazuje názov vybraného pohľadu nastavený v Golden Wizarde;
+v nastaveniach je toto miesto prázdne. Tlačidlo sa volá **Trigger**.
+Hlavný výsledok zobrazuje **OK/NOK**, bez interného označenia skupiny.
 
 Manuálne tlačidlo **TRIGGER** spustí pri samostatnom vyhodnotení vybranú kameru;
 pri vybranej AND skupine vyžiada oba kamerové príspevky. Fyzické vstupy nastavte

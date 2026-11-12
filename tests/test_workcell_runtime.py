@@ -69,6 +69,56 @@ def test_one_recipe_runs_both_real_pipelines_concurrently_with_one_and_verdict(t
     runtime.quiesce()
 
 
+def test_camera_preparation_and_stop_overlap_on_separate_threads(tmp_path, monkeypatch):
+    runtime, _, _ = workcell(tmp_path, monkeypatch)
+    runtime.quiesce()
+    prepare_gate, stop_gate = threading.Barrier(2), threading.Barrier(2)
+    threads = set()
+    for lane in runtime.runtimes.values():
+        original = lane.prepare
+        def prepare(*args, original=original):
+            threads.add(threading.get_ident())
+            prepare_gate.wait(timeout=2)
+            return original(*args)
+        monkeypatch.setattr(lane, 'prepare', prepare)
+    runtime.prepare('test', 'master', 'view_1')
+    assert len(threads) == 2
+    for lane in runtime.runtimes.values():
+        original = lane.quiesce
+        def stop(original=original):
+            stop_gate.wait(timeout=2)
+            return original()
+        monkeypatch.setattr(lane, 'quiesce', stop)
+    runtime.quiesce()
+    assert all(controller.state.value == 'paused' for controller in runtime.controllers.values())
+
+
+def test_failed_preparation_waits_for_peer_before_global_cleanup(tmp_path, monkeypatch):
+    runtime, _, _ = workcell(tmp_path, monkeypatch)
+    runtime.quiesce()
+    started, release, peer_stopped = threading.Event(), threading.Event(), threading.Event()
+    def slow(*args):
+        started.set()
+        assert release.wait(3)
+    def fail(*args):
+        assert started.wait(2)
+        raise RuntimeError('camera failed')
+    monkeypatch.setattr(runtime.runtimes['camera_1'], 'prepare', fail)
+    monkeypatch.setattr(runtime.runtimes['camera_2'], 'prepare', slow)
+    monkeypatch.setattr(runtime.runtimes['camera_2'], 'quiesce', peer_stopped.set)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        result = pool.submit(runtime.prepare, 'test', 'master', 'view_1')
+        try:
+            assert started.wait(2)
+            assert not peer_stopped.is_set()
+        finally:
+            release.set()
+        with pytest.raises(RuntimeError, match='camera failed'):
+            result.result(timeout=3)
+    assert peer_stopped.is_set()
+    assert all(controller.state.value == 'paused' for controller in runtime.controllers.values())
+
+
 def test_asynchronous_external_and_rejects_completed_camera_but_accepts_missing_peer(tmp_path, monkeypatch):
     runtime, signals, _ = workcell(tmp_path, monkeypatch)
     first, reason = runtime.admit('modbus', {'input_index': 1})
