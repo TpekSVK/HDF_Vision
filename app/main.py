@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QApplication
 from app.ui.workstation_window import WorkstationWindow
 import sys
+import os
 from app.ui.theme import DARK_STYLE
 from app.ui.system_keyboard import SystemKeyboard
 
@@ -11,6 +12,10 @@ def main():
     w = WorkstationWindow()
     w.resize(900, 600)
     w.showFullScreen()
+    ready_file = os.environ.get('HDF_STARTUP_READY_FILE')
+    if ready_file:
+        from app.ui.startup_ready import StartupReady
+        w.startup_ready = StartupReady(w, ready_file)
     return app.exec()
 
 

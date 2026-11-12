@@ -434,7 +434,40 @@ bash tools/setup-desktop.sh --restore
 Záloha je v `${XDG_STATE_HOME:-~/.local/state}/hdf-vision/desktop/original`.
 Obnova vráti iba zmenené nastavenia a pôvodný súbor automatického spúšťania;
 úspešne obnovenú zálohu odstráni. Následné nové nastavenie uloží novú zálohu.
-Skript zatiaľ nenastavuje automatické spúšťanie HDF Vision ani štartovacie logo.
+Tento skript upravuje oznámenia. Spúšťanie s logom nastavuje samostatný postup nižšie.
+
+## Spúšťanie s logom a bez terminálu
+
+Na pracovnej ploche ako bežný používateľ spustite:
+
+```bash
+python3 tools/setup-launcher.py
+```
+
+Nastaví ikonu na ploche aj automatické spustenie po prihlásení. Hneď po spustení
+prekryje plochu pôvodným logom na pozadí aplikácie (`#14181d`), bez terminálu
+a bez pôvodného umelého8s čakania. Po zobrazení rozhrania a dokončení prípravy
+kamier sa úvodná obrazovka počas0,5s plynulo skryje. Nezasahuje do firmvérového
+ani prihlasovacieho zobrazenia operačného systému. Prechod po štarte grafickej
+relácie závisí aj od GNOME; celý reštart hostiteľa sa pri skúške nevykonával.
+
+Výpisy sú v `${XDG_STATE_HOME:-~/.local/state}/hdf-vision/logs/application.log`
+s rotáciou5MB a dvoma archívmi. Chyba spustenia sa zobrazí na úvodnej obrazovke;
+pri dlhom načítavaní možno aplikáciu odkryť. Opätovné kliknutie na ikonu počas
+bežiacej aplikácie nevytvorí druhú inštanciu spustenú týmto launcherom.
+Ručné spúšťanie cez `bash docker/run.sh` zostáva dostupné pre servis.
+
+Náhľad loga bez kamier: `python3 tools/launch-app.py --preview`.
+Obnova pôvodných súborov ikony a automatického spúšťania:
+
+```bash
+python3 tools/setup-launcher.py --restore
+```
+
+Prvá záloha pôvodných launcherov sa uchováva v
+`~/.local/state/hdf-vision/startup-launchers/original`; opakované nastavenie ju
+neprepíše. Potrebné hostiteľské GTK3/PyGObject sú na GNOME pracovnej ploche
+Jetsonu dostupné; kvôli tejto úprave netreba znovu zostavovať Docker obraz.
 
 ## Docker / Jetson
 

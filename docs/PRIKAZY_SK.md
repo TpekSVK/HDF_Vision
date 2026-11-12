@@ -23,6 +23,9 @@ samostatné možnosti, nie postup, ktorý treba celý vykonať.
 | Príkaz | Význam |
 |---|---|
 | `bash docker/run.sh` | Spustí HDF Vision v bežnom režime s kamerami, Pico a grafickým rozhraním. |
+| `python3 tools/setup-launcher.py` | Nastaví ikonu a automatický štart s logom, plynulým prechodom a bez terminálu. |
+| `python3 tools/launch-app.py` | Spustí aplikáciu s úvodným logom a výpismi do súboru. |
+| `python3 tools/setup-launcher.py --restore` | Obnoví pôvodnú ikonu a automatické spúšťanie zo zálohy. |
 | `sudo bash docker/run.sh --admin` | Spustí servisný ADMIN režim, ktorý obchádza výzvy na spoločné heslo pri zápise receptov aj otvorení ponuky Napájanie. Heslo nemení a audit zostáva aktívny. Režim skončí ukončením aplikácie. |
 
 Spúšťajte z grafickej pracovnej plochy Jetsonu. Nespúšťajte súčasne druhú
