@@ -63,4 +63,6 @@ def test_legacy_live_defaults_and_deployment(fw):
     assert cmd('LIVE ON') == ['OK LIVE ON']
     assert fw['live_period_us']==33340
     assert 'LIVE_PIO_V1' in ' '.join(cmd('STATUS'))
-    assert Path('firmware/pico/main.py').read_bytes()==Path('firmware/pico/main_v4.2.1.py').read_bytes()
+    import hashlib
+    archived = Path('firmware/pico/main_v4.2.1.py').read_bytes()
+    assert hashlib.sha256(archived).hexdigest() in Path('firmware/pico/SHA256SUMS').read_text()

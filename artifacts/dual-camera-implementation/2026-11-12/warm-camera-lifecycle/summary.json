@@ -1,0 +1,50 @@
+[
+  {
+    "batch": "unit",
+    "status": 0,
+    "elapsed": 16.85,
+    "summary": "635 passed, 1 warning in 15.72s"
+  },
+  {
+    "batch": "test_dual_camera_ui",
+    "status": 0,
+    "elapsed": 2.8,
+    "summary": "5 passed in 1.99s"
+  },
+  {
+    "batch": "test_dual_golden_workflow",
+    "status": 0,
+    "elapsed": 2.54,
+    "summary": "1 passed in 1.82s"
+  },
+  {
+    "batch": "test_results_touch",
+    "status": 0,
+    "elapsed": 11.89,
+    "summary": "8 passed in 10.88s"
+  },
+  {
+    "batch": "test_run_touch_layout",
+    "status": 0,
+    "elapsed": 8.63,
+    "summary": "4 passed in 7.66s"
+  },
+  {
+    "batch": "test_setup_power",
+    "status": 0,
+    "elapsed": 7.54,
+    "summary": "13 passed in 6.49s"
+  },
+  {
+    "batch": "test_workcell_session",
+    "status": 0,
+    "elapsed": 1.8,
+    "summary": "1 passed in 1.01s"
+  },
+  {
+    "batch": "test_workstation_window",
+    "status": 0,
+    "elapsed": 3.02,
+    "summary": "5 passed in 2.06s"
+  }
+]

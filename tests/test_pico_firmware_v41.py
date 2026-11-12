@@ -53,4 +53,6 @@ def test_pio_failure_does_not_restore_override(fw):
 
 def test_deployment_copy_matches_version(fw):
     assert fw['FIRMWARE_VERSION'] == '4.1-pio-pair'
-    assert Path('firmware/pico/main.py').read_bytes() == Path('firmware/pico/main_v4.1.py').read_bytes()
+    import hashlib
+    archived = Path('firmware/pico/main_v4.1.py').read_bytes()
+    assert hashlib.sha256(archived).hexdigest() in Path('firmware/pico/SHA256SUMS').read_text()

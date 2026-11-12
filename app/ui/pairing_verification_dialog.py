@@ -7,7 +7,7 @@ from app.ui.inspection_worker import InspectionWorker
 
 
 class PairingVerificationDialog(QDialog):
-    def __init__(self, camera_serial, pico_serial, parent=None):
+    def __init__(self, camera_serial, pico_serial, parent=None, *, channel=None):
         super().__init__(parent)
         self.setWindowTitle('Overenie dvojice kamera / Pico')
         self.resize(850, 600)
@@ -21,7 +21,7 @@ class PairingVerificationDialog(QDialog):
         self.worker = InspectionWorker(self)
         self.worker.completed.connect(self.completed)
         self._finished = False
-        QTimer.singleShot(0, lambda: self.worker.submit('pair', lambda: verify_pair(camera_serial, pico_serial)))
+        QTimer.singleShot(0, lambda: self.worker.submit('pair', lambda: verify_pair(camera_serial, pico_serial, channel=channel)))
 
     def completed(self, kind, frame, error):
         self._finished = True

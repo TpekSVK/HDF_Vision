@@ -1,0 +1,1127 @@
+{
+  "status": "passed",
+  "cycles": [
+    {
+      "mode": "master",
+      "cycle": 0,
+      "elapsed_ms": 534.3311399992672,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "6f6902fb8e31426d90b3b1a99a9ff7f0",
+        "6f6902fb8e31426d90b3b1a99a9ff7f0"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "6f6902fb8e31426d90b3b1a99a9ff7f0",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23609.163487913,
+        "finished_at": 23609.693296648
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 1,
+      "elapsed_ms": 388.3404469997913,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "3504b934026d491089264dc5eeede25c",
+        "3504b934026d491089264dc5eeede25c"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "3504b934026d491089264dc5eeede25c",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23609.735986234,
+        "finished_at": 23610.119759379
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 2,
+      "elapsed_ms": 349.10096999738016,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "5e5de7ca468e452cb079f8ee1e2ec4f6",
+        "5e5de7ca468e452cb079f8ee1e2ec4f6"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "5e5de7ca468e452cb079f8ee1e2ec4f6",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23610.164305769,
+        "finished_at": 23610.508988307
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 3,
+      "elapsed_ms": 333.25383299961686,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "74abeccb0cdd49c898214e9ade47f875",
+        "74abeccb0cdd49c898214e9ade47f875"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "74abeccb0cdd49c898214e9ade47f875",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23610.551638468,
+        "finished_at": 23610.881021792
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 4,
+      "elapsed_ms": 333.0451219990209,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "3b5aec2c7319464e945ed2b62f09b274",
+        "3b5aec2c7319464e945ed2b62f09b274"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "3b5aec2c7319464e945ed2b62f09b274",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23610.923623024,
+        "finished_at": 23611.25199572
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 5,
+      "elapsed_ms": 397.47409199844697,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "7d306f02dbbf4849901b129cf5f66fee",
+        "7d306f02dbbf4849901b129cf5f66fee"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "7d306f02dbbf4849901b129cf5f66fee",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23611.310589438,
+        "finished_at": 23611.700171627
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 6,
+      "elapsed_ms": 354.4811669999035,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "19e2f0ded762422aaa90fb2fb393e7ec",
+        "19e2f0ded762422aaa90fb2fb393e7ec"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "19e2f0ded762422aaa90fb2fb393e7ec",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23611.747424036,
+        "finished_at": 23612.096705909
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 7,
+      "elapsed_ms": 341.02826099842787,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "4034879a510a4e3fbbe9e4316d9fdfd8",
+        "4034879a510a4e3fbbe9e4316d9fdfd8"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "4034879a510a4e3fbbe9e4316d9fdfd8",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23612.142590333,
+        "finished_at": 23612.479268259
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 8,
+      "elapsed_ms": 356.33585899995524,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "901509af0d124bdda7aacbe39d093026",
+        "901509af0d124bdda7aacbe39d093026"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "901509af0d124bdda7aacbe39d093026",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23612.523841627,
+        "finished_at": 23612.875915571
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 9,
+      "elapsed_ms": 360.06393199932063,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "b5343c0c2df945aaa42ae5dfd9d0d852",
+        "b5343c0c2df945aaa42ae5dfd9d0d852"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "b5343c0c2df945aaa42ae5dfd9d0d852",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23612.91905615,
+        "finished_at": 23613.275035548
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 0,
+      "elapsed_ms": 410.0987800011353,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "4ba7777b6be54e7e9b54be69557fd5eb",
+        "4ba7777b6be54e7e9b54be69557fd5eb"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "4ba7777b6be54e7e9b54be69557fd5eb",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23615.920742035,
+        "finished_at": 23616.32716228
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 1,
+      "elapsed_ms": 416.3338550024491,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "288faec1ec904e64b36d40c8a763517f",
+        "288faec1ec904e64b36d40c8a763517f"
+      ],
+      "statuses": [
+        "ok",
+        "ok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "288faec1ec904e64b36d40c8a763517f",
+        "status": "ok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "ok",
+          "view_2": "ok"
+        },
+        "missing_views": [],
+        "started_at": 23616.689861061,
+        "finished_at": 23617.102159218
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 2,
+      "elapsed_ms": 403.322500998911,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "bf359dbb4d51474b93e992341b59c4ce",
+        "bf359dbb4d51474b93e992341b59c4ce"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "bf359dbb4d51474b93e992341b59c4ce",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23617.468174248,
+        "finished_at": 23617.867438906
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 3,
+      "elapsed_ms": 424.5435630000429,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "c543efb44ae64f20871254c37b63daff",
+        "c543efb44ae64f20871254c37b63daff"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "c543efb44ae64f20871254c37b63daff",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23618.22837868,
+        "finished_at": 23618.649136889
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 4,
+      "elapsed_ms": 413.3829330021399,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "98feed91a97449a48771019f0094276c",
+        "98feed91a97449a48771019f0094276c"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "98feed91a97449a48771019f0094276c",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23619.013126407,
+        "finished_at": 23619.422711057
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 5,
+      "elapsed_ms": 390.6192570029816,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "6e188a6eace9455eb06bff9745ed561f",
+        "6e188a6eace9455eb06bff9745ed561f"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "6e188a6eace9455eb06bff9745ed561f",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23619.783613999,
+        "finished_at": 23620.170616964
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 6,
+      "elapsed_ms": 418.98832200240577,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "5b9b6091c64543bb91bd3ce8a431a08b",
+        "5b9b6091c64543bb91bd3ce8a431a08b"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "5b9b6091c64543bb91bd3ce8a431a08b",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23620.534036349,
+        "finished_at": 23620.948829671
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 7,
+      "elapsed_ms": 415.4421140010527,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "d7d05b8ed0a04c228c47a4a041748809",
+        "d7d05b8ed0a04c228c47a4a041748809"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "d7d05b8ed0a04c228c47a4a041748809",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23621.313965311,
+        "finished_at": 23621.725885345
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 8,
+      "elapsed_ms": 414.8528769983386,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "ab5944c673fa46378607564f529ef592",
+        "ab5944c673fa46378607564f529ef592"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "ab5944c673fa46378607564f529ef592",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23622.090903701,
+        "finished_at": 23622.501989017
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 9,
+      "elapsed_ms": 419.5138479990419,
+      "cameras": [
+        "camera_1",
+        "camera_2"
+      ],
+      "cycle_ids": [
+        "1e1c2e14f9884460a90a96bf498c3fa6",
+        "1e1c2e14f9884460a90a96bf498c3fa6"
+      ],
+      "statuses": [
+        "nok",
+        "nok"
+      ],
+      "outcome": {
+        "group_id": "group_1",
+        "cycle_id": "1e1c2e14f9884460a90a96bf498c3fa6",
+        "status": "nok",
+        "reason": "",
+        "view_statuses": {
+          "view_1": "nok",
+          "view_2": "nok"
+        },
+        "missing_views": [],
+        "started_at": 23622.862686673,
+        "finished_at": 23623.278619142
+      }
+    }
+  ],
+  "cleanup_errors": [],
+  "modbus": "disabled; no physical PLC writes",
+  "status_before_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 OFF\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=OFF IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_before_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 OFF\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=OFF IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "preparation_intervals": [
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23609.109063339,
+      "finished": 23609.118899057
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23609.114037536,
+      "finished": 23609.12204698
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23609.146953455,
+      "finished": 23609.159644413
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23609.152170445,
+      "finished": 23609.162919572
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23609.721238209,
+      "finished": 23609.732825159
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23609.726441151,
+      "finished": 23609.735697936
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23610.147939413,
+      "finished": 23610.159722051
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23610.153250487,
+      "finished": 23610.163274532
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23610.53693486,
+      "finished": 23610.548501426
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23610.542135786,
+      "finished": 23610.551243478
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23610.908840213,
+      "finished": 23610.919801989
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23610.91400885,
+      "finished": 23610.923275651
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23611.284134618,
+      "finished": 23611.300293415
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23611.297644806,
+      "finished": 23611.310041098
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23611.732282876,
+      "finished": 23611.743518261
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23611.737910793,
+      "finished": 23611.747107256
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23612.126456529,
+      "finished": 23612.137992757
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23612.131763442,
+      "finished": 23612.142280177
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23612.508100926,
+      "finished": 23612.51931215
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23612.513315068,
+      "finished": 23612.52338833
+    },
+    {
+      "camera": "camera_1",
+      "mode": "master",
+      "started": 23612.90455143,
+      "finished": 23612.916784931
+    },
+    {
+      "camera": "camera_2",
+      "mode": "master",
+      "started": 23612.909670752,
+      "finished": 23612.918686985
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23613.288489575,
+      "finished": 23615.547055622
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23613.288842227,
+      "finished": 23615.545220227
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23615.904540997,
+      "finished": 23615.918419038
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23615.90508588,
+      "finished": 23615.920352389
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23616.674981511,
+      "finished": 23616.689452886
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23616.675333268,
+      "finished": 23616.687454542
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23617.454072614,
+      "finished": 23617.465865428
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23617.454463412,
+      "finished": 23617.467803386
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23618.215092372,
+      "finished": 23618.225388907
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23618.21538979,
+      "finished": 23618.228048716
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23618.9978975,
+      "finished": 23619.012527473
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23618.9982298,
+      "finished": 23619.010534984
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23619.770466896,
+      "finished": 23619.783310532
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23619.770812444,
+      "finished": 23619.781330012
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23620.519573038,
+      "finished": 23620.531792171
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23620.519948764,
+      "finished": 23620.533683248
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23621.298528685,
+      "finished": 23621.31354984
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23621.298880186,
+      "finished": 23621.311523014
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23622.075755213,
+      "finished": 23622.090493799
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23622.07615334,
+      "finished": 23622.088608482
+    },
+    {
+      "camera": "camera_1",
+      "mode": "trigger",
+      "started": 23622.849749081,
+      "finished": 23622.86035958
+    },
+    {
+      "camera": "camera_2",
+      "mode": "trigger",
+      "started": 23622.851053993,
+      "finished": 23622.862398406
+    }
+  ],
+  "preparation_total_ms": {
+    "master": 32.387355000537354,
+    "trigger": 2261.1674219988345
+  },
+  "warm_transitions": [
+    {
+      "mode": "master",
+      "cycle": 0,
+      "resume_ms": 35.00972300025751,
+      "total_transition_ms": 39.73863099963637,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 1,
+      "resume_ms": 32.57513800053857,
+      "total_transition_ms": 37.499797999771545,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 2,
+      "resume_ms": 34.439366001606686,
+      "total_transition_ms": 39.20494699923438,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 3,
+      "resume_ms": 32.48553499724949,
+      "total_transition_ms": 37.325902998418314,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 4,
+      "resume_ms": 33.2065539987525,
+      "total_transition_ms": 37.86729900093633,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 5,
+      "resume_ms": 47.1150920020591,
+      "total_transition_ms": 52.680413999041775,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 6,
+      "resume_ms": 33.186041000590194,
+      "total_transition_ms": 38.12394899796345,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 7,
+      "resume_ms": 33.96882200104301,
+      "total_transition_ms": 38.553180998860626,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 8,
+      "resume_ms": 34.05711199957295,
+      "total_transition_ms": 38.936649998504436,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "master",
+      "cycle": 9,
+      "resume_ms": 32.39263599971309,
+      "total_transition_ms": 37.48299699873314,
+      "gst_starts": {
+        "camera_1": 1,
+        "camera_2": 1
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 0,
+      "resume_ms": 19.32848000069498,
+      "total_transition_ms": 366.8920860000071,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 1,
+      "resume_ms": 17.868715000076918,
+      "total_transition_ms": 357.42342099911184,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 2,
+      "resume_ms": 16.949385000771144,
+      "total_transition_ms": 360.000859000138,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 3,
+      "resume_ms": 15.395473001262872,
+      "total_transition_ms": 354.8134390002815,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 4,
+      "resume_ms": 17.834922000474762,
+      "total_transition_ms": 358.3119989998522,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 5,
+      "resume_ms": 15.357775999291334,
+      "total_transition_ms": 355.28942499877303,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 6,
+      "resume_ms": 17.460252001910703,
+      "total_transition_ms": 357.8554699997767,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 7,
+      "resume_ms": 18.24213700092514,
+      "total_transition_ms": 358.9183900003263,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 8,
+      "resume_ms": 17.97716700093588,
+      "total_transition_ms": 359.4193369972345,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    },
+    {
+      "mode": "trigger",
+      "cycle": 9,
+      "resume_ms": 14.986305999627803,
+      "total_transition_ms": 354.7766720002983,
+      "gst_starts": {
+        "camera_1": 2,
+        "camera_2": 2
+      }
+    }
+  ],
+  "cameras_before": {
+    "camera_1": {
+      "device": "/dev/video0",
+      "serial": "162A5806",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 5
+    },
+    "camera_2": {
+      "device": "/dev/video2",
+      "serial": "1D3A5806",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 10
+    }
+  },
+  "history_counts": {
+    "camera_1": 20,
+    "camera_2": 20
+  },
+  "status_after_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 OFF\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=OFF IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_after_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 OFF\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=OFF IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  }
+}

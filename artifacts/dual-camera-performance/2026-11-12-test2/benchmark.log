@@ -1,0 +1,444 @@
+(Argus) Error FileOperationFailed: Connecting to nvargus-daemon failed: No such file or directory (in src/rpc/socket/client/SocketClientDispatch.cpp, function openSocketConnection(), line 205)
+(Argus) Error FileOperationFailed: Cannot create camera provider (in src/rpc/socket/client/SocketClientDispatch.cpp, function createCameraProvider(), line 107)
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000001
+[RUN_STORAGE] run_id=d426729c9dd3426a8e2debe36ee274c3:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000001/
+ROUND 0 solo_1 warmup pipeline [157.9] capture [120.5] both_eval 397.3 full 431.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000002
+[RUN_STORAGE] run_id=375098c956224c45a2f99aad362c8673:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000002/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000003
+[RUN_STORAGE] run_id=23ce45c9d02042b69e72f712ca6ffe1d:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000003/
+ROUND 0 simultaneous warmup pipeline [26.2, 9.8] capture [120.8, 120.9] both_eval 226.2 full 249.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000004
+[RUN_STORAGE] run_id=375a6bda5c5446c28d0f16f32f227c43:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000004/
+ROUND 0 solo_2 warmup pipeline [9.8] capture [123.3] both_eval 141.5 full 168.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000005
+[RUN_STORAGE] run_id=4e9979b410864ed98be2f278edbd013e:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000005/
+ROUND 1 solo_1 warmup pipeline [25.2] capture [122.5] both_eval 156.4 full 180.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000006
+[RUN_STORAGE] run_id=ebe17902a29e4e9b985617badac87ab7:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000006/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000007
+[RUN_STORAGE] run_id=b72f2ac8ab3e4dba87a28175930529cd:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000007/
+ROUND 1 simultaneous warmup pipeline [24.8, 11.0] capture [141.2, 122.4] both_eval 179.6 full 203.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000008
+[RUN_STORAGE] run_id=37d9874940564fbdbaec1f39663650da:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000008/
+ROUND 1 solo_2 warmup pipeline [9.9] capture [121.4] both_eval 139.6 full 161.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000009
+[RUN_STORAGE] run_id=7a7ffeb553c2441d9fef30c6c979265d:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000009/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000010
+[RUN_STORAGE] run_id=94fffaa770a84b0490b668a71e13c035:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000010/
+ROUND 2 simultaneous warmup pipeline [24.3, 11.3] capture [141.1, 121.8] both_eval 178.4 full 201.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000011
+[RUN_STORAGE] run_id=e4d9c133bd0c416bbae2d2e080c1f96f:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000011/
+ROUND 2 solo_1 warmup pipeline [29.3] capture [121.8] both_eval 159.5 full 190.4
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000012
+[RUN_STORAGE] run_id=d78a9b9ac2c84ce4b313a4ad68c3af1a:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000012/
+ROUND 2 solo_2 warmup pipeline [10.0] capture [122.2] both_eval 140.5 full 166.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000013
+[RUN_STORAGE] run_id=4986037388ce4368af5124d7fe06bd9e:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000013/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000014
+[RUN_STORAGE] run_id=d8e8f98479834c2da93feaba791fea71:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000014/
+ROUND 3 simultaneous measured pipeline [28.1, 10.8] capture [142.5, 122.7] both_eval 183.9 full 206.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000015
+[RUN_STORAGE] run_id=cc6512057ac44ba28306b4523c028670:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000015/
+ROUND 3 solo_2 measured pipeline [10.6] capture [121.5] both_eval 140.3 full 166.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000016
+[RUN_STORAGE] run_id=849cc56437334f8aa4b43df3a91ffa72:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000016/
+ROUND 3 solo_1 measured pipeline [24.6] capture [122.3] both_eval 155.2 full 178.8
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000017
+[RUN_STORAGE] run_id=1e83cb66f0c244448980836f27628bb2:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000017/
+ROUND 4 solo_2 measured pipeline [10.7] capture [122.6] both_eval 141.9 full 164.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000018
+[RUN_STORAGE] run_id=56fe004f258243b0b7f418d0b257919b:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000018/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000019
+[RUN_STORAGE] run_id=dbf99b1ca685406f86220f5f82ddf34b:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000019/
+ROUND 4 simultaneous measured pipeline [29.2, 17.9] capture [123.6, 136.8] both_eval 166.1 full 192.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000020
+[RUN_STORAGE] run_id=f65605ff4e7a4f52829a62204b572417:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000020/
+ROUND 4 solo_1 measured pipeline [24.5] capture [121.8] both_eval 154.8 full 178.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000021
+[RUN_STORAGE] run_id=a012f3c54a2b4208a5322ac116bcbd4f:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000021/
+ROUND 5 solo_1 measured pipeline [31.4] capture [121.9] both_eval 161.6 full 187.8
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000022
+[RUN_STORAGE] run_id=bbe68859cfa24bb4b6244491edcec6ee:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000022/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000023
+[RUN_STORAGE] run_id=95d94aac516a410bb0f5599daad885a2:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000023/
+ROUND 5 simultaneous measured pipeline [25.8, 11.8] capture [139.0, 122.4] both_eval 178.6 full 202.2
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000024
+[RUN_STORAGE] run_id=b79809c0441a413faadab0af92b9a23c:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000024/
+ROUND 5 solo_2 measured pipeline [10.5] capture [121.6] both_eval 140.5 full 165.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000025
+[RUN_STORAGE] run_id=4a62580a3e9140f59e43ceff0f1fec07:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000025/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000026
+[RUN_STORAGE] run_id=eaec7e3f83ed4f02b3cd56b7049e3f5c:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000026/
+ROUND 6 simultaneous measured pipeline [26.0, 11.7] capture [142.9, 123.6] both_eval 180.6 full 201.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000027
+[RUN_STORAGE] run_id=6bdb1b827e0c43c7a05ffa9a73f54131:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000027/
+ROUND 6 solo_1 measured pipeline [31.3] capture [119.3] both_eval 159.0 full 184.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000028
+[RUN_STORAGE] run_id=db7174c2c88d4caebfabe90734933c4b:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000028/
+ROUND 6 solo_2 measured pipeline [10.6] capture [122.0] both_eval 140.9 full 165.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000029
+[RUN_STORAGE] run_id=7207e5ae28b843a5b49cd83eb2db1fcc:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000029/
+ROUND 7 solo_1 measured pipeline [24.4] capture [122.0] both_eval 154.6 full 179.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000030
+[RUN_STORAGE] run_id=580ee0ed665c4fe7b0b2e10e74cd3d7b:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000030/
+ROUND 7 solo_2 measured pipeline [10.4] capture [121.5] both_eval 140.0 full 163.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000031
+[RUN_STORAGE] run_id=fa6f1a8b7dd24e749a3db2cbc796c178:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000031/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000032
+[RUN_STORAGE] run_id=e8d633665b2a4fe683c030a1d4da5032:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000032/
+ROUND 7 simultaneous measured pipeline [26.5, 11.6] capture [137.8, 122.0] both_eval 180.0 full 203.4
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000033
+[RUN_STORAGE] run_id=de5a0e7b54904d0e95422fd94cd4f908:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000033/
+ROUND 8 solo_1 measured pipeline [34.8] capture [122.1] both_eval 165.2 full 195.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000034
+[RUN_STORAGE] run_id=2db8554a64cf4dd4807cfad9d98ff9d7:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000034/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000035
+[RUN_STORAGE] run_id=6db6c75b23f54efe857bfddbcca7386c:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000035/
+ROUND 8 simultaneous measured pipeline [27.2, 11.5] capture [142.9, 123.8] both_eval 185.5 full 206.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000036
+[RUN_STORAGE] run_id=f7b6efe427b4473abab9385708fe1fef:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000036/
+ROUND 8 solo_2 measured pipeline [10.6] capture [121.7] both_eval 140.6 full 164.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000037
+[RUN_STORAGE] run_id=57d18ca044ec4f2994d807ae6eddc694:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000037/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000038
+[RUN_STORAGE] run_id=f2d3da7b8bb24ef99b518143a3262a6d:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000038/
+ROUND 9 simultaneous measured pipeline [26.9, 11.5] capture [143.7, 123.2] both_eval 182.6 full 205.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000039
+[RUN_STORAGE] run_id=5488e929bbc64b26a60888498efc729d:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000039/
+ROUND 9 solo_2 measured pipeline [10.5] capture [121.7] both_eval 140.5 full 164.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000040
+[RUN_STORAGE] run_id=c5a57add2dcd485da670fd783cd715a1:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000040/
+ROUND 9 solo_1 measured pipeline [24.6] capture [121.8] both_eval 154.4 full 177.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000041
+[RUN_STORAGE] run_id=9917f6a5208049f9995cedb2c307d7a4:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000041/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000042
+[RUN_STORAGE] run_id=484a871f57944a7f88016aea65e6fc68:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000042/
+ROUND 10 simultaneous measured pipeline [30.6, 13.0] capture [122.8, 135.4] both_eval 164.5 full 197.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000043
+[RUN_STORAGE] run_id=6551e9365172490392ccfc97d5198ca2:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000043/
+ROUND 10 solo_2 measured pipeline [10.5] capture [121.9] both_eval 140.8 full 166.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000044
+[RUN_STORAGE] run_id=4d188c389b8748f3bee7e6af4636008d:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000044/
+ROUND 10 solo_1 measured pipeline [24.4] capture [121.8] both_eval 154.3 full 179.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000045
+[RUN_STORAGE] run_id=c4e18d5e3889445ab5b9fd633088298c:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000045/
+ROUND 11 solo_2 measured pipeline [10.5] capture [121.8] both_eval 140.2 full 167.6
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000046
+[RUN_STORAGE] run_id=c7b64d37a8c3463986251d0caab2a36d:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000046/
+ROUND 11 solo_1 measured pipeline [24.3] capture [127.1] both_eval 159.7 full 183.8
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000047
+[RUN_STORAGE] run_id=ebc0c07e946149189ed1002ca1cff69c:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000047/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000048
+[RUN_STORAGE] run_id=00fab2a6a3894855a2ce49002aa77782:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000048/
+ROUND 11 simultaneous measured pipeline [26.1, 11.3] capture [138.3, 122.9] both_eval 178.2 full 203.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000049
+[RUN_STORAGE] run_id=573101acef9d46b9bce1a069c937e911:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000049/
+ROUND 12 solo_2 measured pipeline [10.5] capture [121.5] both_eval 140.2 full 163.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000050
+[RUN_STORAGE] run_id=4c0c3417e09b478291555790d1e9c4ef:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000050/
+ROUND 12 solo_1 measured pipeline [24.3] capture [121.9] both_eval 154.7 full 181.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000051
+[RUN_STORAGE] run_id=a92592d9b3e04e1796c4d46c17b5e087:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000051/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000052
+[RUN_STORAGE] run_id=7b094e17da264e768d035d241d971b46:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000052/
+ROUND 12 simultaneous measured pipeline [26.4, 11.6] capture [142.1, 123.0] both_eval 180.5 full 202.7
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000053
+[RUN_STORAGE] run_id=32c02bc214a644abb8b2036e8def32a6:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000053/
+ROUND 13 solo_2 measured pipeline [10.6] capture [121.4] both_eval 140.3 full 167.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000054
+[RUN_STORAGE] run_id=11e9772cfd044a1d9fdc295954913d00:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000054/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000055
+[RUN_STORAGE] run_id=766d838d2bf74e32a7d8c2a6972e7371:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000055/
+ROUND 13 simultaneous measured pipeline [26.3, 11.5] capture [138.2, 122.7] both_eval 177.9 full 198.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000056
+[RUN_STORAGE] run_id=ad97b3a0b6524ba9a235892d7c9c47c3:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000056/
+ROUND 13 solo_1 measured pipeline [31.7] capture [121.6] both_eval 161.9 full 188.8
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000057
+[RUN_STORAGE] run_id=f2b61c6cab824faf984a3174c052972d:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000057/
+ROUND 14 solo_1 measured pipeline [24.6] capture [121.7] both_eval 154.5 full 179.2
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000058
+[RUN_STORAGE] run_id=6e40d2ec743e4d12bbe21c8f1085a13d:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000058/
+ROUND 14 solo_2 measured pipeline [10.6] capture [121.6] both_eval 140.4 full 166.8
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000059
+[RUN_STORAGE] run_id=16068e0084db45a4a215b74e2a28dde3:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000059/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000060
+[RUN_STORAGE] run_id=bb05b6ebb6dc4dcc80884248cd885975:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000060/
+ROUND 14 simultaneous measured pipeline [26.2, 11.4] capture [139.2, 122.6] both_eval 179.7 full 205.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000061
+[RUN_STORAGE] run_id=bfa9fcb797634e0789a9c16e6e8e264b:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000061/
+ROUND 15 solo_2 measured pipeline [10.7] capture [124.2] both_eval 143.2 full 168.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000062
+[RUN_STORAGE] run_id=a9a8685101bd4bcb8507eba4f0936249:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000062/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000063
+[RUN_STORAGE] run_id=541f70d4b0924735b538580df337c01b:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000063/
+ROUND 15 simultaneous measured pipeline [27.2, 11.5] capture [142.2, 123.0] both_eval 180.6 full 205.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000064
+[RUN_STORAGE] run_id=c25ad131761d4f7c8cbc4a69c7b6b1ca:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000064/
+ROUND 15 solo_1 measured pipeline [31.9] capture [121.4] both_eval 161.8 full 190.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000065
+[RUN_STORAGE] run_id=54337bf7fe19453aaaa2a59054470643:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000065/
+ROUND 16 solo_2 measured pipeline [10.6] capture [121.8] both_eval 140.7 full 167.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000066
+[RUN_STORAGE] run_id=ea15fcb0406e411dbf63625750185735:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000066/
+ROUND 16 solo_1 measured pipeline [24.8] capture [121.8] both_eval 155.0 full 182.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000067
+[RUN_STORAGE] run_id=cb194cd3a08f4ccaaab0a1f0c0e89a48:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000067/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000068
+[RUN_STORAGE] run_id=5a4a38302a794022be745b9d5abceaef:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000068/
+ROUND 16 simultaneous measured pipeline [27.2, 11.4] capture [138.4, 122.9] both_eval 179.9 full 205.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000069
+[RUN_STORAGE] run_id=f7a0ebb525f347c18e16661ebc77835f:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000069/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000070
+[RUN_STORAGE] run_id=af371c14e4854033a727809d525578ec:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000070/
+ROUND 17 simultaneous measured pipeline [26.4, 11.6] capture [140.1, 122.6] both_eval 179.9 full 202.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000071
+[RUN_STORAGE] run_id=23d9356b6ba04ba58902f01cac752b14:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000071/
+ROUND 17 solo_1 measured pipeline [34.7] capture [121.8] both_eval 164.7 full 198.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000072
+[RUN_STORAGE] run_id=63913c0092894d7ab882413c4a212052:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000072/
+ROUND 17 solo_2 measured pipeline [10.4] capture [121.2] both_eval 139.7 full 163.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000073
+[RUN_STORAGE] run_id=d2f46c6f5bdb4623b3e156b40831c390:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000073/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000074
+[RUN_STORAGE] run_id=44da656fe9984895977d04093fbafe93:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000074/
+ROUND 18 simultaneous measured pipeline [33.1, 12.8] capture [122.9, 135.4] both_eval 169.8 full 201.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000075
+[RUN_STORAGE] run_id=18610960a0ca4cd5af84e780a2e6ac8d:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000075/
+ROUND 18 solo_2 measured pipeline [10.4] capture [121.5] both_eval 140.1 full 164.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000076
+[RUN_STORAGE] run_id=d26cfe56abcf48008f634d2f184c324c:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000076/
+ROUND 18 solo_1 measured pipeline [24.4] capture [121.5] both_eval 154.1 full 180.4
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000077
+[RUN_STORAGE] run_id=a3cccaec7e7e422090a96ae10e9bac1a:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000077/
+ROUND 19 solo_2 measured pipeline [10.5] capture [121.5] both_eval 140.1 full 163.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000078
+[RUN_STORAGE] run_id=fd8ce168ba614ef5baf6fc64a639702c:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000078/
+ROUND 19 solo_1 measured pipeline [24.3] capture [122.1] both_eval 154.6 full 180.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000079
+[RUN_STORAGE] run_id=806771cf3ceb4bbaa868b9ea5411168b:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000079/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000080
+[RUN_STORAGE] run_id=af96dd8a280d438cbbe08e5d30730b5c:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000080/
+ROUND 19 simultaneous measured pipeline [25.8, 11.5] capture [139.8, 122.0] both_eval 179.4 full 205.4
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000081
+[RUN_STORAGE] run_id=d902ae27084348b4b0c925126a549184:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000081/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000082
+[RUN_STORAGE] run_id=7888ac6f6b81445faf9b0aba0198767e:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000082/
+ROUND 20 simultaneous measured pipeline [29.3, 15.4] capture [122.7, 134.4] both_eval 162.6 full 192.1
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000083
+[RUN_STORAGE] run_id=537fe481fa2b45bc8a2f104657325b29:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000083/
+ROUND 20 solo_2 measured pipeline [10.4] capture [121.8] both_eval 140.6 full 164.3
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000084
+[RUN_STORAGE] run_id=4c96fe0add3942cd99394843248576cb:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000084/
+ROUND 20 solo_1 measured pipeline [24.6] capture [121.5] both_eval 154.3 full 179.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000085
+[RUN_STORAGE] run_id=001fe964eb354ab88914b47cf6036d3e:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000085/
+ROUND 21 solo_2 measured pipeline [10.5] capture [121.6] both_eval 140.4 full 167.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000086
+[RUN_STORAGE] run_id=337e35a9a36042b28cc3cc91e498330e:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000086/
+ROUND 21 solo_1 measured pipeline [24.3] capture [122.2] both_eval 154.8 full 182.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000087
+[RUN_STORAGE] run_id=6d3979b2b6514c73a11967cb1c8b38f9:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000087/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000088
+[RUN_STORAGE] run_id=4a29d07a898b41f2917aab7d68d8b497:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000088/
+ROUND 21 simultaneous measured pipeline [26.3, 11.2] capture [139.5, 122.9] both_eval 179.8 full 202.9
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000089
+[RUN_STORAGE] run_id=7c218264be13420e846cd5b3a4c387d5:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000089/
+ROUND 22 solo_1 measured pipeline [28.6] capture [117.9] both_eval 153.0 full 188.0
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000090
+[RUN_STORAGE] run_id=ab541e8e5a074859998abc58ae8c5b00:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000090/
+ROUND 22 solo_2 measured pipeline [10.7] capture [122.1] both_eval 141.7 full 169.5
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000091
+[RUN_STORAGE] run_id=1cf33a997e9d40bbb58bd44d234334b4:group_2
+[RUN_STORAGE] path=/out/data/runs/20261112/000091/
+[RUN_STORAGE] date=20261112
+[RUN_STORAGE] next_run_index=000092
+[RUN_STORAGE] run_id=d57bbf6ab8ab47f5a4f7892d16fa6ef5:group_1
+[RUN_STORAGE] path=/out/data/runs/20261112/000092/
+ROUND 22 simultaneous measured pipeline [31.0, 13.0] capture [122.6, 132.4] both_eval 166.3 full 200.7
+FINAL passed None []

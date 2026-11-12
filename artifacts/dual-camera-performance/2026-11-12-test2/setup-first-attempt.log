@@ -1,0 +1,7 @@
+(Argus) Error FileOperationFailed: Connecting to nvargus-daemon failed: No such file or directory (in src/rpc/socket/client/SocketClientDispatch.cpp, function openSocketConnection(), line 205)
+(Argus) Error FileOperationFailed: Cannot create camera provider (in src/rpc/socket/client/SocketClientDispatch.cpp, function createCameraProvider(), line 107)
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+ERROR RuntimeError('Invalid HID command echo: 0x00')
+FINAL failed RuntimeError('Invalid HID command echo: 0x00') []

@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "windows": {
+    "0x1c00003": "_NET_WM_NAME(UTF8_STRING) = \"@!0,0;BDHF\"",
+    "0x2200008": "_NET_WM_NAME(UTF8_STRING) = \"ui\"",
+    "0x2a00007": "_NET_WM_NAME(UTF8_STRING) = \"HDF Vision — kamerové stanice\""
+  },
+  "ready": true,
+  "bounded_background_log": true
+}

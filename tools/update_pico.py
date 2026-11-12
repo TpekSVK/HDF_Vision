@@ -132,7 +132,7 @@ class Pico:
         self.serial.reset_input_buffer()
         self.serial.write(b'\r\x01')
         self.until(b'raw REPL; CTRL-B to exit\r\n>')
-        self.execute('from machine import Pin\nPin(17, Pin.OUT).value(0)\nPin(16, Pin.OUT).value(0)')
+        self.execute('from machine import Pin\nfor gpio in (16, 17, 18, 19):\n Pin(gpio, Pin.OUT).value(0)')
 
     def execute(self, source):
         data = source.encode()

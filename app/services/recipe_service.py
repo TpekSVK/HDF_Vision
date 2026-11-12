@@ -173,6 +173,10 @@ class RecipeService:
         branch_enabled: bool | None = None,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
+        camera_id: str = "camera_1",
+        output_group: str | None = None,
+        output_mode: str = "independent",
+        and_timeout_ms: int = 1000,
     ) -> RecipeView:
         import shutil
 
@@ -322,6 +326,8 @@ class RecipeService:
         )
 
         new_view = RecipeView(
+            camera_id=camera_id, output_group=output_group,
+            output_mode=output_mode, and_timeout_ms=and_timeout_ms,
             id=new_id,
             name=new_name,
             golden_path=golden_filename,
@@ -343,6 +349,15 @@ class RecipeService:
             branch_targets=target_branch_targets,
             branch_default_view_id=target_branch_default,
         )
+        if source_view_id:
+            source_view = recipe.get_view(source_view_id)
+            if source_view.camera_id == camera_id:
+                new_view.golden_camera = dict(source_view.golden_camera) if source_view.golden_camera else None
+            else:
+                # A new role needs its own image and learned assets. Do not
+                # clone references or a golden from the other physical camera.
+                source_golden, source_tools = None, []
+                new_view.frame_source_view_id = None
         if source_tools:
             new_view.set_tools(source_tools)
 
@@ -389,6 +404,10 @@ class RecipeService:
         branch_enabled: bool = False,
         branch_targets: dict[str, str] | None = None,
         branch_default_view_id: str | None = None,
+        camera_id: str = "camera_1",
+        output_group: str | None = None,
+        output_mode: str = "independent",
+        and_timeout_ms: int = 1000,
     ) -> RecipeView:
         recipe = self._load_recipe_config(name)
         view = recipe.get_view(view_id)
@@ -412,6 +431,9 @@ class RecipeService:
         normalized_trigger_gap = self._normalize_trigger_gap(trigger_gap_ms)
 
         updated_view = RecipeView(
+            golden_camera=dict(view.golden_camera) if view.golden_camera else None,
+            camera_id=camera_id, output_group=output_group,
+            output_mode=output_mode, and_timeout_ms=and_timeout_ms,
             id=view.id,
             name=normalized_name,
             golden_path=view.golden_path,
@@ -441,6 +463,10 @@ class RecipeService:
             else:
                 replaced.append(existing.copy())
         recipe.views = replaced
+        if output_mode == "AND" and output_group:
+            for member in recipe.views:
+                if member.output_group == output_group and member.output_mode == "AND":
+                    member.and_timeout_ms = and_timeout_ms
         self._validate_explicit_external_mappings(recipe.views)
         normalized = self._save_recipe_config(name, recipe)
         updated = normalized.get_view(view.id)
@@ -459,7 +485,7 @@ class RecipeService:
                 continue
             if view.external_source is None or view.external_request_input is None:
                 raise ValueError("Explicitný externý režim vyžaduje zdroj aj vstup")
-            key = (view.external_source, view.external_request_input)
+            key = (view.external_source, view.external_request_input, view.camera_id)
             if key in used:
                 prefix = "IN" if key[0] == "pico" else "DI"
                 raise ValueError(
@@ -467,6 +493,14 @@ class RecipeService:
                     f" view {used[key]}"
                 )
             used[key] = view.name or view.id
+
+    def set_golden_camera(self, name, view_id, camera_id, camera_serial):
+        recipe = self._load_recipe_config(name)
+        view = recipe.get_view(view_id)
+        if view.camera_id != camera_id:
+            raise ValueError('Golden snímka pochádza z inej kamery ako pohľad.')
+        view.golden_camera = {'camera_id': camera_id, 'camera_serial': camera_serial}
+        self._save_recipe_config(name, recipe)
 
     def remove_view(self, name: str, view_id: str) -> List[RecipeView]:
         recipe = self._load_recipe_config(name)
@@ -533,6 +567,8 @@ class RecipeService:
         self, name: str, *, view_id: str | None = None
     ) -> tuple[List[Tool], bool]:
         recipe = self._load_recipe_config(name)
+        from app.services.dual_camera_rules import validate_view_routing
+        validate_view_routing(recipe.views, complete=True)
         publish_copy = recipe.copy()
         autosorted_any = False
         for view in publish_copy.views:
@@ -733,6 +769,8 @@ class RecipeService:
     def _save_recipe_config(self, name: str, recipe: RecipeV2) -> RecipeV2:
         path = self.base / "recipes" / name / "recipe.json"
         old_data = load_recipe_config(name, base_dir=self.base).to_dict() if path.exists() else {}
+        from app.services.dual_camera_rules import validate_view_routing
+        validate_view_routing(recipe.views)
         recipe_copy = recipe.copy()
         for view in recipe_copy.views:
             normalized_tools, autosorted = self._normalize_tools(view.tools)
@@ -759,5 +797,9 @@ class RecipeService:
         validate_recipe_document(recipe.to_dict())
         path = self._published_recipe_path(name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
+        from app.services.recipe_format import backup_previous_recipe
+        backup_previous_recipe(path)
+        temporary = path.with_suffix('.json.tmp')
+        with open(temporary, "w", encoding="utf-8") as f:
             json.dump(recipe.to_dict(), f, ensure_ascii=False, indent=2)
+        temporary.replace(path)

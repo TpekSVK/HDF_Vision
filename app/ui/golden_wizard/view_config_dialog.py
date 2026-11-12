@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QScrollArea,
+    QSpinBox,
     QWidget,
     QVBoxLayout,
 )
@@ -65,6 +66,11 @@ class ViewConfigDialog(QDialog):
         branch_targets: Optional[dict[str, str]] = None,
         branch_default_view_id: Optional[str] = None,
         image_rotation: int = 0,
+        available_cameras=None,
+        camera_id: str = 'camera_1',
+        output_group: str | None = None,
+        output_mode: str = 'independent',
+        and_timeout_ms: int = 1000,
     ) -> None:
         super().__init__(parent)
         self._mode = mode
@@ -137,6 +143,14 @@ class ViewConfigDialog(QDialog):
         camera_group = QGroupBox("Nastavenia kamery pre tento pohľad", content_widget)
         camera_form = QFormLayout(camera_group)
         self._setup_compact_form(camera_form)
+        self._camera_combo = QComboBox(camera_group)
+        self._camera_combo.setMinimumHeight(44)
+        for ident, label in available_cameras or [('camera_1', 'Kamera 1')]:
+            self._camera_combo.addItem(label, ident)
+        if self._camera_combo.findData(camera_id) < 0:
+            self._camera_combo.addItem(f'{camera_id} — nepriradená', camera_id)
+        self._camera_combo.setCurrentIndex(self._camera_combo.findData(camera_id))
+        self._add_form_row(camera_form, 'Kamera:', self._camera_combo)
 
         self._resolution_combo = QComboBox(camera_group)
         self._populate_resolution_combo(current_camera, camera_profile)
@@ -290,9 +304,33 @@ class ViewConfigDialog(QDialog):
         timing_form.addRow(self._trigger_warning_label)
         content_layout.addWidget(timing_group)
 
-        branching_group = QGroupBox("Vetvenie snímky", content_widget)
+        branching_group = QGroupBox("Správanie pohľadu", content_widget)
         branching_form = QFormLayout(branching_group)
         self._setup_compact_form(branching_form)
+        self._output_group_combo = QComboBox(branching_group)
+        self._output_group_combo.addItem('Bez samostatnej skupiny (jedna kamera)', None)
+        self._output_group_combo.addItem('Skupina 1 — relé 1 až 3', 'group_1')
+        self._output_group_combo.addItem('Skupina 2 — relé 4 až 6', 'group_2')
+        self._output_group_combo.setCurrentIndex(max(0, self._output_group_combo.findData(output_group)))
+        self._output_mode_combo = QComboBox(branching_group)
+        self._output_mode_combo.addItem('Samostatné vyhodnotenie', 'independent')
+        self._output_mode_combo.addItem('Spoločné AND', 'AND')
+        self._output_mode_combo.setCurrentIndex(max(0, self._output_mode_combo.findData(output_mode)))
+        self._and_timeout = QSpinBox(branching_group)
+        self._and_timeout.setRange(10, 120000)
+        self._and_timeout.setSingleStep(50)
+        self._and_timeout.setSuffix(' ms')
+        self._and_timeout.setValue(and_timeout_ms)
+        self._and_label = QLabel('Limit AND:', branching_group)
+        self._add_form_row(branching_form, 'Výstupná skupina:', self._output_group_combo)
+        self._add_form_row(branching_form, 'Vyhodnotenie:', self._output_mode_combo)
+        branching_form.addRow(self._and_label, self._and_timeout)
+        self._and_hint = QLabel('AND čaká na všetky pohľady priradené k tejto skupine. '
+            'Limit je spoločný a počíta sa od prvej požiadavky po dokončenie vyhodnotení.', branching_group)
+        self._and_hint.setWordWrap(True)
+        branching_form.addRow(self._and_hint)
+        for control in (self._output_group_combo, self._output_mode_combo, self._and_timeout):
+            control.setMinimumHeight(44)
 
         self._branch_enabled_checkbox = QCheckBox(
             "Povoliť presmerovanie na iný pohľad podľa výsledku", branching_group
@@ -317,6 +355,8 @@ class ViewConfigDialog(QDialog):
             self._on_branch_enabled_changed
         )
         content_layout.addWidget(branching_group)
+        self._output_mode_combo.currentIndexChanged.connect(self._output_behavior_changed)
+        self._output_behavior_changed()
         content_layout.addStretch(1)
 
         button_box = QDialogButtonBox(QDialogButtonBox.Cancel, self)
@@ -325,6 +365,8 @@ class ViewConfigDialog(QDialog):
         self._accept_button = button_box.addButton(
             action_text, QDialogButtonBox.AcceptRole
         )
+        for button in button_box.buttons():
+            button.setMinimumHeight(44)
         button_box.accepted.connect(self.accept)
         button_box.rejected.connect(self.reject)
         layout.addWidget(button_box)
@@ -377,6 +419,13 @@ class ViewConfigDialog(QDialog):
         return dict(self._result or {})
 
     def accept(self) -> None:  # noqa: N802 - Qt API
+        if self._output_mode_combo.currentData() == 'AND':
+            if self._output_group_combo.currentData() is None:
+                QMessageBox.warning(self, 'AND', 'Vyberte spoločnú výstupnú skupinu.')
+                return
+            if self._branch_enabled_checkbox.isChecked():
+                QMessageBox.warning(self, 'AND', 'AND nemožno kombinovať s vetvením snímky.')
+                return
         name = self._name_edit.text().strip()
         if not name:
             QMessageBox.critical(self, "Invalid input", "Name is required.")
@@ -450,6 +499,10 @@ class ViewConfigDialog(QDialog):
         profile = self._build_camera_profile(exposure_us, gain_db, gamma, brightness, sharpness)
         self._result = {
             "name": name,
+            'camera_id': self._camera_combo.currentData(),
+            'output_group': self._output_group_combo.currentData(),
+            'output_mode': self._output_mode_combo.currentData(),
+            'and_timeout_ms': self._and_timeout.value(),
             "camera_profile": profile,
             "settle_ms": None,
             "pico_profile": str(self._pico_profile_combo.currentData() or "V1"),
@@ -466,6 +519,12 @@ class ViewConfigDialog(QDialog):
             "branch_default_view_id": self._branch_default_combo.currentData(),
         }
         super().accept()
+
+    def _output_behavior_changed(self):
+        enabled = self._output_mode_combo.currentData() == 'AND'
+        for widget in (self._and_label, self._and_timeout, self._and_hint):
+            widget.setVisible(enabled)
+        self._branch_enabled_checkbox.setEnabled(not enabled)
 
     def _create_branch_combo(self, parent: QWidget) -> QComboBox:
         combo = QComboBox(parent)

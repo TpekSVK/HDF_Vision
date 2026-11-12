@@ -1,0 +1,98 @@
+{
+  "status": "failed",
+  "recipe": "test2",
+  "modbus": "disabled; no physical PLC writes",
+  "rows": [],
+  "cleanup_errors": [],
+  "opencv_threads": 6,
+  "load_before": [
+    0.21044921875,
+    0.4248046875,
+    0.376953125
+  ],
+  "cameras_before": {
+    "camera_1": {
+      "device": "/dev/video0",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 5
+    },
+    "camera_2": {
+      "device": "/dev/video2",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 10
+    }
+  },
+  "recipe_sha256": "faf728218bcc117d4be299b715171b27438a5d72f7dda3f8e30c68339fe46660",
+  "views": [
+    {
+      "id": "view_1",
+      "name": "celust",
+      "camera_id": "camera_1",
+      "camera_profile": {
+        "width": 2592,
+        "height": 1944,
+        "fps": 30,
+        "pixel_format": "Y8",
+        "exposure_us": 500
+      },
+      "tools": [
+        {
+          "type": "ssim",
+          "name": "Podobnosť vzhľadu (SSIM)",
+          "roi": {
+            "x": 1202,
+            "y": 424,
+            "w": 845,
+            "h": 1016
+          }
+        }
+      ]
+    },
+    {
+      "id": "view_2",
+      "name": "diel",
+      "camera_id": "camera_2",
+      "camera_profile": {
+        "width": 2592,
+        "height": 1944,
+        "fps": 30,
+        "pixel_format": "Y8",
+        "exposure_us": 1000
+      },
+      "tools": [
+        {
+          "type": "ssim",
+          "name": "Podobnosť vzhľadu (SSIM)",
+          "roi": {
+            "x": 1567,
+            "y": 307,
+            "w": 525,
+            "h": 352
+          }
+        }
+      ]
+    }
+  ],
+  "capture_mode": "trigger",
+  "logging_enabled": true,
+  "export_artifacts": false,
+  "error": "RuntimeError('Invalid HID command echo: 0x00')",
+  "status_after_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_after_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  }
+}

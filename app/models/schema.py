@@ -708,6 +708,11 @@ class RecipeView:
     id: str = ""
     name: str = ""
     golden_path: str = "golden.png"
+    camera_id: str = "camera_1"
+    output_group: Optional[str] = None
+    output_mode: str = "independent"
+    and_timeout_ms: int = 1000
+    golden_camera: Optional[dict[str, str]] = None
     frame_source_view_id: Optional[str] = None
     camera_profile: Optional[ViewCameraProfile | str] = None
     settle_ms: Optional[int] = None
@@ -870,6 +875,11 @@ class RecipeView:
             "id": self.id,
             "name": self.name,
             "golden_path": self.golden_path,
+            "camera_id": self.camera_id,
+            "output_group": self.output_group,
+            "output_mode": self.output_mode,
+            "and_timeout_ms": self.and_timeout_ms,
+            "golden_camera": dict(self.golden_camera) if self.golden_camera else None,
             "frame_source_view_id": self.frame_source_view_id,
             "camera_profile": camera_profile,
             "settle_ms": self.settle_ms,
@@ -902,6 +912,11 @@ class RecipeView:
             id=data.get("id", ""),
             name=data.get("name", ""),
             golden_path=data.get("golden_path", "golden.png"),
+            camera_id=data.get("camera_id", "camera_1"),
+            output_group=data.get("output_group"),
+            output_mode=data.get("output_mode", "independent"),
+            and_timeout_ms=data.get("and_timeout_ms", 1000),
+            golden_camera=dict(data['golden_camera']) if data.get('golden_camera') else None,
             frame_source_view_id=data.get("frame_source_view_id"),
             camera_profile=data.get("camera_profile"),
             settle_ms=data.get("settle_ms"),
@@ -929,6 +944,11 @@ class RecipeView:
             id=self.id,
             name=self.name,
             golden_path=self.golden_path,
+            camera_id=self.camera_id,
+            output_group=self.output_group,
+            output_mode=self.output_mode,
+            and_timeout_ms=self.and_timeout_ms,
+            golden_camera=dict(self.golden_camera) if self.golden_camera else None,
             frame_source_view_id=self.frame_source_view_id,
             camera_profile=camera_profile,
             settle_ms=self.settle_ms,

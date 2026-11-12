@@ -26,7 +26,7 @@ def window(mode='RUN', capture_mode='trigger'):
     calls = []
     box = SimpleNamespace(Yes=1, No=2, question=lambda *args: 2)
     class History:
-        def __init__(self, *args): pass
+        def __init__(self, *args, **kwargs): pass
         def set_production_active(self, value): self.active = value
         def activate(self): calls.append('history')
     # Replace only dialog/page constructors; exercised methods are normal imports.
@@ -35,9 +35,14 @@ def window(mode='RUN', capture_mode='trigger'):
     patches.setattr(module, 'ResultsPage', History)
     _patches.append(patches)
     w = SimpleNamespace(mode=mode, capture_mode=capture_mode)
+    w.camera_id, w.station_name = 'camera_1', 'Kamera 1'
+    w.panel_troubleshooting = None
+    w.top_bar = SimpleNamespace(setVisible=lambda visible: None)
     from threading import Event
     w._recovery_cancel = Event()
-    for name in ('_stop_live_and_light', '_set_manual_light_ui', '_request_mode', '_sync_mode_chrome', 'toggle_mode', '_handle_external_trigger',
+    w.station_title = SimpleNamespace(setText=lambda text: None, setVisible=lambda visible: None)
+    w._views_by_id = {}
+    for name in ('_stop_live_and_light', '_set_manual_light_ui', '_request_mode', '_sync_mode_chrome', '_sync_view_title', 'toggle_mode', '_handle_external_trigger',
                  '_start_production', '_request_runtime_stop', '_dispatch_runtime_stop', '_runtime_completed'):
         setattr(w, name, MethodType(getattr(MainWindow, name), w))
     w.inspection = InspectionController()

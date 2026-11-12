@@ -117,13 +117,31 @@ class MainWindow(QMainWindow):
         self.pico_config = PicoConfigService(self.data_root / "pico_config.json")
         self.runtime = InspectionRuntime(self.cam, self.pico, self.pico_config, self.modbus, self.db.db_path,
             data_root=self.data_root, camera_id=camera_id, pico_id=pico_id, session_settings=self.session_settings)
+        self.workcell = None
+        from app.services.camera_registry import CameraRouter
+        if isinstance(self.cam, CameraRouter):
+            from app.services.workcell_runtime import WorkcellRuntime
+            from app.ui.workcell_session import WorkcellSession
+            self.runtime = WorkcellRuntime(self.cam.registry, self.pico_config, self.modbus,
+                self.db.db_path, data_root=self.data_root, session_settings=self.session_settings)
+            self.workcell = WorkcellSession(self.runtime, self)
+            self.workcell.result.connect(self._display_inspection_result)
+            self.workcell.rejected.connect(self._show_trigger_rejection)
+            self.workcell.outcome.connect(self._workcell_outcome)
+            self.workcell.idle.connect(self._workcell_idle)
+            self.workcell.started.connect(self._workcell_started)
+            self.workcell.recovery.connect(self._workcell_recovery)
+            self.workcell.board_fault.connect(self._workcell_board_fault)
         self.runtime_worker = InspectionWorker(self)
         self.runtime_worker.completed.connect(self._runtime_completed)
         self._pending_runtime_action = None
         self._active_inspection_request = None
         self._runtime_was_live = False
         self._close_ready = False
-        self.pico.register_trigger_callback(self._handle_pico_trigger)
+        if self.workcell is not None:
+            self.pico.register_camera_trigger_callback(self._handle_pico_trigger)
+        else:
+            self.pico.register_trigger_callback(self._handle_pico_trigger)
         self.modbus.register_trigger_callback(self._handle_modbus_trigger)
         self.external_triggered.connect(self.manual_trigger)
         self.trigger_rejected.connect(self._show_trigger_rejection)
@@ -279,7 +297,7 @@ class MainWindow(QMainWindow):
         actions = QHBoxLayout(actions_container)
         actions.setContentsMargins(10, 6, 10, 6)
         actions.setSpacing(8)
-        self.btn_trigger = QPushButton(f"TRIGGER · {station_name}")
+        self.btn_trigger = QPushButton("Trigger")
         self.btn_trigger.setProperty("role", "primary")
         self.btn_trigger.setMinimumWidth(132)
         self.btn_trigger.clicked.connect(self._request_software_trigger)
@@ -721,6 +739,7 @@ class MainWindow(QMainWindow):
         is_results = self.panel_results is not None and self.stack.currentWidget() is self.panel_results
         is_diagnostic = self.panel_troubleshooting is not None and self.stack.currentWidget() is self.panel_troubleshooting
         self.top_bar.setVisible(not (getattr(self, '_shared_navigation', False) and (is_results or is_diagnostic)))
+        self._sync_view_title(is_run)
         self.btn_mode_run.setChecked(is_run)
         self.mode_btn.setChecked(self.stack.currentWidget() is self.panel_setup)
         self.btn_results.setChecked(self.panel_results is not None and self.stack.currentWidget() is self.panel_results)
@@ -728,6 +747,13 @@ class MainWindow(QMainWindow):
             page = getattr(self, 'panel_troubleshooting', None)
             home = getattr(self, 'panel_troubleshooting_home', None)
             self.btn_troubleshooting.setChecked(self.stack.currentWidget() in (page, home))
+
+    def _sync_view_title(self, is_run=None):
+        if is_run is None:
+            is_run = self.stack.currentWidget() is self.panel_run
+        view = self._views_by_id.get(self._active_view_id)
+        self.station_title.setText(view.name if is_run and view is not None else '')
+        self.station_title.setVisible(bool(is_run and view is not None))
 
     def _open_troubleshooting(self):
         from app.ui.troubleshooting_home import TroubleshootingHome
@@ -794,6 +820,50 @@ class MainWindow(QMainWindow):
         rejected = sum(value for key, value in counts.items() if key.startswith("rejected_"))
         self.lbl_status.setText(f"Požiadavka neprijatá: {reason}. Odmietnuté: {rejected}")
 
+    def _workcell_outcome(self, outcome):
+        view = self._views_by_id.get(self._active_view_id)
+        if view is not None and view.output_group != outcome.group_id:
+            return
+        self._apply_run_status_style(outcome.status)
+        if outcome.reason:
+            self._run_status_message.setText(outcome.reason)
+
+    def _workcell_idle(self):
+        if self.runtime_worker.busy:
+            return
+        self.btn_live.setEnabled(True)
+        self.btn_manual_light.setEnabled(True)
+        if self._pending_runtime_action and not self.runtime.processing:
+            self._dispatch_runtime_stop()
+        elif not self.runtime.processing:
+            self._refresh_manual_light()
+
+    def _workcell_started(self):
+        # Workers stop channel-local LIVE before acquisition. Do not send a
+        # competing serial command from Qt while a physical CAPTURE is pending.
+        self.live_enabled = False
+        self._run_timer.stop()
+        self.btn_live.setChecked(False)
+        self.btn_live.setText('Live vypnuté')
+        self.btn_live.setEnabled(False)
+        self.btn_manual_light.setEnabled(False)
+        self.chk_filtered_roi.setEnabled(True)
+
+    def _workcell_recovery(self, record):
+        if record['event'] == 'attempt_started':
+            self.recovery_notice.setVisible(True)
+            self.recovery_notice.setText(f'{record["camera_id"]}: obnova {record["attempt"]}/2. Predchádzajúca kontrola zostáva NOK.')
+        elif record['event'] == 'recovery_finished':
+            self.recovery_notice.setVisible(True)
+            message = 'Kamera bola obnovená.' if record['ok'] else f'Obnova zlyhala: {record["error"]}'
+            self.recovery_notice.setText(f'{record["camera_id"]}: {message} Predchádzajúca kontrola zostáva NOK.')
+
+    def _workcell_board_fault(self, reason):
+        self._capture_mode_ready = False
+        self._apply_run_status_style('nok')
+        self._request_runtime_stop()
+        self.lbl_status.setText(f'Kontroly pozastavené: {reason}')
+
     def _set_runtime_controls(self, busy):
         self.panel_setup.setEnabled(not busy)
         self.view_strip.setEnabled(not busy)
@@ -831,6 +901,8 @@ class MainWindow(QMainWindow):
             self._troubleshooting_requested = False
             self._diagnostic_target = None
         self._recovery_cancel.set()
+        if getattr(self, 'workcell', None) is not None:
+            self.runtime.cancel_recovery()
         self._pending_runtime_action = "close" if close else "pause"
         self.live_enabled = False
         self.btn_live.setChecked(False)
@@ -839,7 +911,8 @@ class MainWindow(QMainWindow):
         self.mode = "SETUP"
         self._set_runtime_controls(True)
         self.lbl_status.setText("Dokončujem kontrolu a zastavujem Pico…")
-        if not self.runtime_worker.busy and self.inspection.state != InspectionState.BUSY:
+        if (not self.runtime_worker.busy and self.inspection.state != InspectionState.BUSY
+                and not (getattr(self, 'workcell', None) and self.runtime.processing)):
             self._dispatch_runtime_stop()
 
     def _dispatch_runtime_stop(self):
@@ -1023,6 +1096,16 @@ class MainWindow(QMainWindow):
         self.modbus.signal_result(status)
 
     def _publish_recipe_flash_to_pico(self, recipe_name: str) -> tuple[bool, str]:
+        if getattr(self, 'workcell', None) is not None:
+            config = self.recipes._load_published_recipe_config(recipe_name)
+            for view in config.views:
+                pico = self.cam.registry.picos.get(view.camera_id)
+                if pico is None:
+                    return False, f'{view.name}: kamera nie je priradená.'
+                if not pico.configure_view_flash(view.pico_profile or 'V1', view.flash_delay_ms, view.flash_pulse_ms):
+                    return False, pico.last_error
+            # SAVE persists both channel configurations in the new firmware.
+            return (True, '') if self.pico.save() else (False, self.pico.last_error)
         mapping = self.recipes.build_pico_flash_mapping(recipe_name, published=True)
         if not self.pico.is_available() and not self.pico.connect():
             return False, self.pico.last_error or "Pico nie je dostupné"
@@ -1158,6 +1241,8 @@ class MainWindow(QMainWindow):
         capture_request_source: str = "manual", frame_request=None,
     ):
         view = view if view is not None else self._resolve_active_capture_view(requested_view_id=view_id)
+        if getattr(self, 'workcell', None) is not None:
+            self.cam.select_view(view)
         capture = ViewCapture(self.cam, self.pico, self.pico_config,
                               self.get_capture_mode(), self._active_view_id)
         return capture.capture(
@@ -1177,6 +1262,8 @@ class MainWindow(QMainWindow):
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
         if restore_master:
             self.pico.prepare_master(self.cam)
+        elif getattr(self, 'workcell', None) is not None:
+            self.pico.quiesce()
         else:
             if self.pico.supports_pio():
                 self.pico.set_session_mode("IDLE")
@@ -1302,6 +1389,14 @@ class MainWindow(QMainWindow):
         return self.cam.last_frame(caller="run_manual_trigger_master")
 
     def manual_trigger(self, trigger_source=None, trigger_context=None):
+        if getattr(self, 'workcell', None) is not None:
+            if self.mode != 'RUN' or self._pending_runtime_action:
+                return
+            options = dict(trigger_context) if isinstance(trigger_context, Mapping) else {}
+            options.update(active_view_id=self._active_view_id,
+                           capture_filtered_roi=self.chk_filtered_roi.isChecked())
+            self.workcell.request(str(trigger_source or 'manual').lower(), options)
+            return
         context = dict(trigger_context) if isinstance(trigger_context, Mapping) else {}
         source = str(trigger_source or "manual").strip().lower()
         request = context.get("inspection_request")
@@ -1394,8 +1489,10 @@ class MainWindow(QMainWindow):
 
     def _finalize_run_trigger(self, trigger_state: dict[str, Any]) -> None:
         aggregated_status = trigger_state['status']
-        self._apply_run_status_style(aggregated_status)
-        self._update_operator_status_message(aggregated_status, trigger_state['relevant_reports'])
+        active_result = any(record['view_id'] == self._active_view_id for record in trigger_state['records'])
+        if getattr(self, 'workcell', None) is None or active_result:
+            self._apply_run_status_style(aggregated_status)
+            self._update_operator_status_message(aggregated_status, trigger_state['relevant_reports'])
 
         for overlay_view_id, overlay_source in trigger_state.get("pending_overlays", {}).items():
             frame, view, result = overlay_source
@@ -1425,8 +1522,9 @@ class MainWindow(QMainWindow):
 
     def open_wizard(self):
         self._stop_live_and_light()
-        # Manual light requires an active MASTER/TRIGGER session, not IDLE.
-        if not self._apply_capture_mode(ensure_runtime_ready=True):
+        # In the shared workcell GoldenWizard applies the selected view's profile
+        # and prepares its channel itself; preparing here repeats that transition.
+        if getattr(self, 'workcell', None) is None and not self._apply_capture_mode(ensure_runtime_ready=True):
             return
         dlg = GoldenWizard(
             self.cam,
@@ -1441,7 +1539,8 @@ class MainWindow(QMainWindow):
             authorize_write=lambda: authorize_recipe_write(self, self.security),
         )
         dlg.exec()
-        self._apply_capture_mode(ensure_runtime_ready=True)
+        if getattr(self, 'workcell', None) is None:
+            self._apply_capture_mode(ensure_runtime_ready=True)
         self._refresh_manual_light()
         self._refresh_views()
         self._reload_results_strip()
@@ -1451,7 +1550,7 @@ class MainWindow(QMainWindow):
     def open_modbus_wizard(self):
         self._exit_run_trigger_session(restore_master=False)
         dlg = ModbusWizard(self.modbus, self,
-            peer_configs=getattr(self, "modbus_peer_configs", None))
+            peer_configs=getattr(self, "modbus_peer_configs", None), grouped=self.workcell is not None)
         dlg.resize(760, 640)
         dlg.exec()
         self._apply_capture_mode(ensure_runtime_ready=True)
@@ -1506,6 +1605,11 @@ class MainWindow(QMainWindow):
         )
 
     def _stop_live_and_light(self):
+        if getattr(self, 'workcell', None) is not None and self.runtime.processing:
+            self.live_enabled = False
+            self._run_timer.stop()
+            self.btn_live.setChecked(False)
+            return
         if self.live_enabled:
             if self.capture_mode == "trigger":
                 self.pico.set_live_preview(False, self.cam)
@@ -1518,6 +1622,9 @@ class MainWindow(QMainWindow):
         self._set_manual_light_ui(False)
 
     def _toggle_live(self):
+        if getattr(self, 'workcell', None) is not None and self.runtime.processing:
+            self.btn_live.setChecked(False)
+            return
         if self.runtime_worker.busy:
             return
         if self.capture_mode == "trigger":
@@ -1553,6 +1660,9 @@ class MainWindow(QMainWindow):
         self._set_manual_light_ui(self.pico.manual_light_status())
 
     def _toggle_manual_light(self, checked: bool) -> None:
+        if getattr(self, 'workcell', None) is not None and self.runtime.processing:
+            self._set_manual_light_ui(not checked)
+            return
         previous = not checked
         if self.pico.set_manual_light(checked):
             self._set_manual_light_ui(checked)
@@ -1565,7 +1675,7 @@ class MainWindow(QMainWindow):
     def _handle_modbus_trigger(self, input_index: int | None = None):
         self._handle_external_trigger("Modbus", input_index=input_index)
 
-    def _handle_pico_trigger(self, capture_source: str) -> None:
+    def _handle_pico_trigger(self, capture_source: str, *, camera_id=None) -> None:
         if self.mode != "RUN":
             return
         source = str(capture_source or "").upper().strip()
@@ -1593,7 +1703,7 @@ class MainWindow(QMainWindow):
             )
             return
         self._logger.info("[PICO] physical capture event input=%s", input_index)
-        self._handle_external_trigger("Pico", input_index=input_index)
+        self._handle_external_trigger("Pico", input_index=input_index, camera_id=camera_id)
 
     def _handle_external_trigger(
         self,
@@ -1601,7 +1711,14 @@ class MainWindow(QMainWindow):
         *,
         input_index: int | None = None,
         requested_spec: dict[str, Any] | None = None,
+        camera_id: str | None = None,
     ) -> None:
+        if getattr(self, 'workcell', None) is not None:
+            if self.mode == 'RUN' and not self._pending_runtime_action:
+                self.workcell.request(str(source).lower(), dict(input_index=input_index,
+                    spec=requested_spec, camera_id=camera_id, active_view_id=self._active_view_id,
+                    capture_filtered_roi=False))
+            return
         self._logger.info("[RUN] %s trigger received input=%s mode=%s", source, input_index, self.mode)
         if self.mode != "RUN":
             return
@@ -2407,9 +2524,13 @@ class MainWindow(QMainWindow):
         default_view = entries[0] if entries else None
         default_view_id = getattr(default_view, "id", None) if default_view is not None else None
         self._active_view_id = default_view_id
+        if getattr(self, 'workcell', None) is not None and default_view is not None:
+            if default_view.camera_id in self.cam.registry.cameras:
+                self.cam.select_view(default_view)
 
         self.view_strip.set_views(entries, thumbnail_loader=self._load_view_thumbnail)
         self.view_strip.set_active(self._active_view_id)
+        self._sync_view_title()
 
     def _load_view_thumbnail(self, view: object) -> QPixmap | None:
         try:
@@ -2489,6 +2610,17 @@ class MainWindow(QMainWindow):
             return
         self._active_view_id = view_id
         self.view_strip.set_active(view_id)
+        self._sync_view_title()
+        if getattr(self, 'workcell', None) is not None:
+            view = self._views_by_id.get(view_id)
+            if view is not None:
+                self._stop_live_and_light()
+                self.cam.select_view(view)
+                if not self.runtime.processing:
+                    self._refresh_manual_light()
+                outcome = self.runtime.latest_groups.get(view.output_group)
+                if outcome is not None:
+                    self._workcell_outcome(outcome)
         self._refresh_tool_selector()
         self._update_sidebar(view_id=view_id)
         self._reload_results_strip()
@@ -2670,6 +2802,8 @@ class MainWindow(QMainWindow):
             self._request_runtime_stop(close=True)
             return
         self.runtime_worker.shutdown()
+        if self.workcell is not None:
+            self.workcell.shutdown()
         self._jetson_stats_service.stop()
         self.db.close()
         self.station_closed.emit(self.camera_id)

@@ -100,6 +100,7 @@ class GoldenWizard(QDialog):
         self._publish_flash_to_pico = publish_flash_to_pico
         self._authorize_write = authorize_write or (lambda: True)
         self.current_img = None
+        self._camera_capture_error = ''
 
         self._saved_snapshots: dict[str, dict[str, list[dict[str, Any]]]] = {}
         self._dirty_views: dict[str, dict[str, bool]] = {}
@@ -202,6 +203,7 @@ class GoldenWizard(QDialog):
 
         # ---- Ovládacie tlačidlá ----
         btn_cap_golden   = QPushButton("Získať GOLDEN z kamery")
+        self.btn_capture_golden = btn_cap_golden
         btn_load_golden  = QPushButton("Načítať GOLDEN z disku")
         self.btn_save_tool = QPushButton("Uložiť nástroj")
         self.btn_test_tool = QPushButton("Otestovať")
@@ -434,6 +436,8 @@ class GoldenWizard(QDialog):
             self._stop_preview_session()
 
     def _start_preview_session(self) -> None:
+        if self._camera_capture_error:
+            raise RuntimeError(self._camera_capture_error)
         # Zapnúť live: zobraz label, skryť DrawView (žiadne kreslenie počas live)
         self.view.hide()
         self.roi_editor.hide()
@@ -494,7 +498,7 @@ class GoldenWizard(QDialog):
         return True
 
     def _sync_live_policy_ui(self) -> None:
-        allowed = self._is_live_allowed_by_capture_mode()
+        allowed = self._is_live_allowed_by_capture_mode() and not self._camera_capture_error
         if not allowed and self._live_on:
             self.btn_live.blockSignals(True)
             self.btn_live.setChecked(False)
@@ -506,7 +510,7 @@ class GoldenWizard(QDialog):
             self.btn_live.setToolTip("")
         else:
             self.btn_live.setText("Live")
-            self.btn_live.setToolTip("Live preview je v TRIGGER režime blokovaný.")
+            self.btn_live.setToolTip(self._camera_capture_error or 'Kamera nie je pripravená.')
 
     # ---------- UI util ----------
     def _set_pixmap(self, img_u8):
@@ -642,6 +646,9 @@ class GoldenWizard(QDialog):
                 self._view_states.setdefault(self._active_view_id, {})[
                     "golden_image"
                 ] = np.asarray(frame).copy()
+                self._view_states[self._active_view_id]['golden_camera'] = self._golden_camera_identity()
+                if active_view is not None and self._golden_camera_identity():
+                    active_view.golden_camera = self._golden_camera_identity()
                 self._logger.info("[GOLDEN_CAPTURE] stored state golden_image")
             if self._live_on:
                 self.btn_live.setChecked(False)
@@ -670,7 +677,18 @@ class GoldenWizard(QDialog):
             self._view_states.setdefault(self._active_view_id, {})[
                 "golden_image"
             ] = np.asarray(img).copy()
+            self._view_states[self._active_view_id]['golden_camera'] = self._golden_camera_identity()
+            active_view = self._view_by_id(self._active_view_id)
+            if active_view is not None and self._golden_camera_identity():
+                active_view.golden_camera = self._golden_camera_identity()
         self._info("Golden načítaný z disku.")
+
+    def _golden_camera_identity(self):
+        from app.services.camera_registry import CameraRouter
+        if isinstance(self.cam, CameraRouter):
+            registry = self.cam.registry
+            return {'camera_id': registry.selected, 'camera_serial': registry.serials.get(registry.selected, '')}
+        return None
 
     def _persist_recipe_assets(self) -> tuple[bool, str]:
         if self.current_img is None:
@@ -697,6 +715,13 @@ class GoldenWizard(QDialog):
         name = self.recipe_name.text().strip() or "default"
         view = self._view_by_id(self._active_view_id)
         golden_filename = view.golden_path if view else "golden.png"
+        identity = self._golden_camera_identity()
+        if identity and view is not None:
+            saved_identity = self._view_states.get(view.id, {}).get('golden_camera') or view.golden_camera or {'camera_id': 'camera_1'}
+            if (saved_identity.get('camera_id') != view.camera_id or
+                    (saved_identity.get('camera_serial') and saved_identity['camera_serial'] != identity['camera_serial'])):
+                self._err('Golden pochádza z inej kamery. Najprv zachyťte alebo načítajte nový GOLDEN.')
+                return False, ''
         import hashlib
         existing_golden = self.recipes.base / "recipes" / name / golden_filename
         old_sha256 = hashlib.sha256(existing_golden.read_bytes()).hexdigest() if existing_golden.exists() else None
@@ -710,6 +735,10 @@ class GoldenWizard(QDialog):
         self.recipes.record_golden_replaced(
             name, self._active_view_id, golden_filename, old_sha256, new_sha256
         )
+        if identity and view is not None:
+            self.recipes.set_golden_camera(name, view.id, identity['camera_id'], identity['camera_serial'])
+            view.golden_camera = dict(identity)
+            self._view_states.setdefault(view.id, {})['golden_camera'] = dict(identity)
         if self._active_view_id:
             self._view_states.setdefault(self._active_view_id, {})["golden_image"] = (
                 np.asarray(self.current_img).copy()
@@ -1018,13 +1047,27 @@ class GoldenWizard(QDialog):
         apply_camera_state(self.cam, state, warn=warn)
 
     def _apply_view_camera_profile(self, view: Optional[RecipeView]) -> None:
+        from app.services.camera_registry import CameraRouter
+        if isinstance(self.cam, CameraRouter) and view is not None:
+            if self.cam.registry.selected != view.camera_id:
+                if self._live_on:
+                    self._stop_preview_session()
+                    self.btn_live.setChecked(False)
+                self.pico.set_manual_light(False)
+                self.cam.select_view(view)
         profile = getattr(view, "camera_profile", None) if view else None
         apply_view_camera_profile(
             self.cam,
             {},
             profile,
-            warn=self._warn,
+            warn=None if isinstance(self.cam, CameraRouter) else self._warn,
         )
+        if isinstance(self.cam, CameraRouter) and view is not None:
+            camera = self.cam.registry.cameras[view.camera_id]
+            if self._runtime_capture_mode() == 'trigger':
+                self.pico.prepare_trigger(camera)
+            else:
+                self.pico.prepare_master(camera)
 
     @staticmethod
     def _suggest_view_id(existing: Sequence[RecipeView]):

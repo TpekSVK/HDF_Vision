@@ -1,0 +1,3498 @@
+{
+  "status": "passed",
+  "recipe": "test2",
+  "modbus": "disabled; no physical PLC writes",
+  "rows": [
+    {
+      "condition": "solo_1",
+      "iteration": 0,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24638.409680196,
+          "pipeline": {
+            "start": 24638.649058304,
+            "end": 24638.806941384,
+            "tool_ms": [
+              151.3858469988918
+            ]
+          },
+          "capture": {
+            "start": 24638.527093293,
+            "end": 24638.646143571
+          },
+          "pipeline_ms": 157.88307999901008,
+          "displayed_pipeline_ms": 155.96454499973333,
+          "processing_ms": 160.03378499954124,
+          "capture_ms": 120.53103699872736,
+          "displayed_total_ms": 394.3442479976511,
+          "worker_ms": 418.67308799919556,
+          "complete_ms": 431.85514499782585,
+          "evaluation_done": 24638.806941384,
+          "completed": 24638.841535341
+        }
+      ],
+      "both_evaluated_ms": 397.2941819993139,
+      "both_complete_ms": 431.88813899905654,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 157.88307999901008
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 0,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24638.919929902,
+          "pipeline": {
+            "start": 24639.051194618,
+            "end": 24639.077346149,
+            "tool_ms": [
+              23.48343300036504
+            ]
+          },
+          "capture": {
+            "start": 24638.929231111,
+            "end": 24639.048591833
+          },
+          "pipeline_ms": 26.15153099759482,
+          "displayed_pipeline_ms": 24.04780600045342,
+          "processing_ms": 27.92666899767937,
+          "capture_ms": 120.84228100138716,
+          "displayed_total_ms": 152.88087899898528,
+          "worker_ms": 169.45023000153014,
+          "complete_ms": 176.04679500072962,
+          "evaluation_done": 24639.077346149,
+          "completed": 24639.095976697
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24638.919445404,
+          "pipeline": {
+            "start": 24639.135830274,
+            "end": 24639.145596364,
+            "tool_ms": [
+              7.551801001682179
+            ]
+          },
+          "capture": {
+            "start": 24639.013755083,
+            "end": 24639.133121725
+          },
+          "pipeline_ms": 9.766089999175165,
+          "displayed_pipeline_ms": 8.088685000984697,
+          "processing_ms": 11.587629996938631,
+          "capture_ms": 120.92055600078311,
+          "displayed_total_ms": 221.46656299810275,
+          "worker_ms": 240.95685399879585,
+          "complete_ms": 249.06509200081928,
+          "evaluation_done": 24639.145596364,
+          "completed": 24639.168510496
+        }
+      ],
+      "both_evaluated_ms": 226.1689449987898,
+      "both_complete_ms": 249.08307700025034,
+      "start_skew_ms": 0.4844979994231835,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 0,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24639.220683186,
+          "pipeline": {
+            "start": 24639.352414703,
+            "end": 24639.362209275,
+            "tool_ms": [
+              7.5996740015398245
+            ]
+          },
+          "capture": {
+            "start": 24639.227237509,
+            "end": 24639.349233689
+          },
+          "pipeline_ms": 9.794572000828339,
+          "displayed_pipeline_ms": 8.161134999681963,
+          "processing_ms": 12.155362997873453,
+          "capture_ms": 123.32102900109021,
+          "displayed_total_ms": 138.57055499829585,
+          "worker_ms": 158.98974599986104,
+          "complete_ms": 168.43662400060566,
+          "evaluation_done": 24639.362209275,
+          "completed": 24639.38911981
+        }
+      ],
+      "both_evaluated_ms": 141.54644200243638,
+      "both_complete_ms": 168.45697700046003,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 9.794572000828339
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 1,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24639.442210327,
+          "pipeline": {
+            "start": 24639.573340414,
+            "end": 24639.598550374,
+            "tool_ms": [
+              22.863313999550883
+            ]
+          },
+          "capture": {
+            "start": 24639.449239324,
+            "end": 24639.570223498
+          },
+          "pipeline_ms": 25.20996000021114,
+          "displayed_pipeline_ms": 23.488232000090647,
+          "processing_ms": 27.422971001215046,
+          "capture_ms": 122.51955900137546,
+          "displayed_total_ms": 153.27903800061904,
+          "worker_ms": 172.11042499911855,
+          "complete_ms": 180.55166599879158,
+          "evaluation_done": 24639.598550374,
+          "completed": 24639.622761993
+        }
+      ],
+      "both_evaluated_ms": 156.36350400018273,
+      "both_complete_ms": 180.5751229985617,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 25.20996000021114
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 1,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24639.675590868,
+          "pipeline": {
+            "start": 24639.830038493,
+            "end": 24639.854862551,
+            "tool_ms": [
+              22.52403600141406
+            ]
+          },
+          "capture": {
+            "start": 24639.686969883,
+            "end": 24639.826797189
+          },
+          "pipeline_ms": 24.82405800037668,
+          "displayed_pipeline_ms": 23.120027002732968,
+          "processing_ms": 27.083598000899656,
+          "capture_ms": 141.2413430007291,
+          "displayed_total_ms": 174.58965300102136,
+          "worker_ms": 191.2236150019453,
+          "complete_ms": 202.75889200274833,
+          "evaluation_done": 24639.854862551,
+          "completed": 24639.87834976
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24639.675322346,
+          "pipeline": {
+            "start": 24639.807937192,
+            "end": 24639.818941505,
+            "tool_ms": [
+              8.222738000768004
+            ]
+          },
+          "capture": {
+            "start": 24639.683766916,
+            "end": 24639.804683343
+          },
+          "pipeline_ms": 11.004313000739785,
+          "displayed_pipeline_ms": 8.825223998428555,
+          "processing_ms": 13.27543699881062,
+          "capture_ms": 122.419491999608,
+          "displayed_total_ms": 139.16836999851512,
+          "worker_ms": 159.109462001652,
+          "complete_ms": 164.61126699869055,
+          "evaluation_done": 24639.818941505,
+          "completed": 24639.839933613
+        }
+      ],
+      "both_evaluated_ms": 179.56750200028182,
+      "both_complete_ms": 203.0547110007319,
+      "start_skew_ms": 0.26852199880522676,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 1,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24639.931127464,
+          "pipeline": {
+            "start": 24640.060868796,
+            "end": 24640.070751979,
+            "tool_ms": [
+              7.68079800036503
+            ]
+          },
+          "capture": {
+            "start": 24639.937761279,
+            "end": 24640.057710054
+          },
+          "pipeline_ms": 9.883183000056306,
+          "displayed_pipeline_ms": 8.23195399789256,
+          "processing_ms": 12.149668000347447,
+          "capture_ms": 121.35065099937492,
+          "displayed_total_ms": 136.59352200193098,
+          "worker_ms": 153.34336100204382,
+          "complete_ms": 161.02483000213397,
+          "evaluation_done": 24640.070751979,
+          "completed": 24640.092152294
+        }
+      ],
+      "both_evaluated_ms": 139.64659600242157,
+      "both_complete_ms": 161.04691100190394,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 9.883183000056306
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 2,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24640.145319101,
+          "pipeline": {
+            "start": 24640.299142383,
+            "end": 24640.323402836,
+            "tool_ms": [
+              22.14603899847134
+            ]
+          },
+          "capture": {
+            "start": 24640.156244083,
+            "end": 24640.295745233
+          },
+          "pipeline_ms": 24.26045299944235,
+          "displayed_pipeline_ms": 22.71399500023108,
+          "processing_ms": 26.456951000000117,
+          "capture_ms": 141.13717900181655,
+          "displayed_total_ms": 173.39962500045658,
+          "worker_ms": 189.97150499853888,
+          "complete_ms": 200.99601000038092,
+          "evaluation_done": 24640.323402836,
+          "completed": 24640.346315111
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24640.145016242,
+          "pipeline": {
+            "start": 24640.277339141,
+            "end": 24640.288632968,
+            "tool_ms": [
+              8.549981001124252
+            ]
+          },
+          "capture": {
+            "start": 24640.153156736,
+            "end": 24640.273472661
+          },
+          "pipeline_ms": 11.293826999462908,
+          "displayed_pipeline_ms": 9.095762001379626,
+          "processing_ms": 14.222223999240668,
+          "capture_ms": 121.7797880017315,
+          "displayed_total_ms": 139.11921600083588,
+          "worker_ms": 158.15153799849213,
+          "complete_ms": 164.0153400003328,
+          "evaluation_done": 24640.288632968,
+          "completed": 24640.309031582
+        }
+      ],
+      "both_evaluated_ms": 178.42349199781893,
+      "both_complete_ms": 201.33576700027334,
+      "start_skew_ms": 0.30285899993032217,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 2,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24640.400657354,
+          "pipeline": {
+            "start": 24640.53084635,
+            "end": 24640.56013531,
+            "tool_ms": [
+              26.931431999400957
+            ]
+          },
+          "capture": {
+            "start": 24640.407272992,
+            "end": 24640.527669784
+          },
+          "pipeline_ms": 29.28895999866654,
+          "displayed_pipeline_ms": 27.548767000553198,
+          "processing_ms": 31.53195499908179,
+          "capture_ms": 121.840494000935,
+          "displayed_total_ms": 156.47109299970907,
+          "worker_ms": 180.86803100231919,
+          "complete_ms": 190.33126200156403,
+          "evaluation_done": 24640.56013531,
+          "completed": 24640.590988616
+        }
+      ],
+      "both_evaluated_ms": 159.49856500083115,
+      "both_complete_ms": 190.35187100234907,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 29.28895999866654
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 2,
+      "warmup": true,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24640.645124643,
+          "pipeline": {
+            "start": 24640.775672853,
+            "end": 24640.785629574,
+            "tool_ms": [
+              7.804673998180078
+            ]
+          },
+          "capture": {
+            "start": 24640.651785882,
+            "end": 24640.772635844
+          },
+          "pipeline_ms": 9.956720998161472,
+          "displayed_pipeline_ms": 8.393078998778947,
+          "processing_ms": 12.108513998100534,
+          "capture_ms": 122.24351700206171,
+          "displayed_total_ms": 137.37940699866158,
+          "worker_ms": 157.46424899771228,
+          "complete_ms": 166.2624960008543,
+          "evaluation_done": 24640.785629574,
+          "completed": 24640.811387139
+        }
+      ],
+      "both_evaluated_ms": 140.53382799829706,
+      "both_complete_ms": 166.2913930013019,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 9.956720998161472
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 3,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24640.865384089,
+          "pipeline": {
+            "start": 24641.020889962,
+            "end": 24641.048942972,
+            "tool_ms": [
+              25.5731420002121
+            ]
+          },
+          "capture": {
+            "start": 24640.877475226,
+            "end": 24641.017364903
+          },
+          "pipeline_ms": 28.053009998984635,
+          "displayed_pipeline_ms": 26.14842700131703,
+          "processing_ms": 30.444138999882853,
+          "capture_ms": 142.54279899978428,
+          "displayed_total_ms": 177.33554799997364,
+          "worker_ms": 195.31010300124763,
+          "complete_ms": 206.33163299862645,
+          "evaluation_done": 24641.048942972,
+          "completed": 24641.071715722
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24640.865104559,
+          "pipeline": {
+            "start": 24640.999592146,
+            "end": 24641.010433861,
+            "tool_ms": [
+              8.269266996649094
+            ]
+          },
+          "capture": {
+            "start": 24640.875295337,
+            "end": 24640.996386075
+          },
+          "pipeline_ms": 10.841715000424301,
+          "displayed_pipeline_ms": 8.817766996799037,
+          "processing_ms": 13.073702000838239,
+          "capture_ms": 122.65620399921318,
+          "displayed_total_ms": 139.30306299880613,
+          "worker_ms": 160.98473199963337,
+          "complete_ms": 167.26451700014877,
+          "evaluation_done": 24641.010433861,
+          "completed": 24641.032369076
+        }
+      ],
+      "both_evaluated_ms": 183.87412700030836,
+      "both_complete_ms": 206.64687699900242,
+      "start_skew_ms": 0.27952999880653806,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 3,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24641.126781575,
+          "pipeline": {
+            "start": 24641.256516378,
+            "end": 24641.267098884,
+            "tool_ms": [
+              8.476955001242459
+            ]
+          },
+          "capture": {
+            "start": 24641.133304058,
+            "end": 24641.253374822
+          },
+          "pipeline_ms": 10.582506001810543,
+          "displayed_pipeline_ms": 9.01345400052378,
+          "processing_ms": 12.840860999858705,
+          "capture_ms": 121.45667099684943,
+          "displayed_total_ms": 137.26077799947234,
+          "worker_ms": 156.9358779997856,
+          "complete_ms": 166.64980700079468,
+          "evaluation_done": 24641.267098884,
+          "completed": 24641.293431382
+        }
+      ],
+      "both_evaluated_ms": 140.33983799890848,
+      "both_complete_ms": 166.67233599946485,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.582506001810543
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 3,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24641.348276395,
+          "pipeline": {
+            "start": 24641.478839037,
+            "end": 24641.503456944,
+            "tool_ms": [
+              22.278011998423608
+            ]
+          },
+          "capture": {
+            "start": 24641.354813246,
+            "end": 24641.475660839
+          },
+          "pipeline_ms": 24.617906998173567,
+          "displayed_pipeline_ms": 22.89317100076005,
+          "processing_ms": 26.84349400078645,
+          "capture_ms": 122.31481499838992,
+          "displayed_total_ms": 152.10523499990813,
+          "worker_ms": 170.9843680000631,
+          "complete_ms": 178.734639997856,
+          "evaluation_done": 24641.503456944,
+          "completed": 24641.527011035
+        }
+      ],
+      "both_evaluated_ms": 155.20499799822574,
+      "both_complete_ms": 178.75908899804926,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.617906998173567
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 4,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24641.580709317,
+          "pipeline": {
+            "start": 24641.711906991,
+            "end": 24641.722557819,
+            "tool_ms": [
+              8.418552999501117
+            ]
+          },
+          "capture": {
+            "start": 24641.587191894,
+            "end": 24641.708299241
+          },
+          "pipeline_ms": 10.650828000507317,
+          "displayed_pipeline_ms": 9.017807002237532,
+          "processing_ms": 13.379377000092063,
+          "capture_ms": 122.61965899961069,
+          "displayed_total_ms": 138.957481001853,
+          "worker_ms": 156.7709119990468,
+          "complete_ms": 164.58710599908954,
+          "evaluation_done": 24641.722557819,
+          "completed": 24641.745296423
+        }
+      ],
+      "both_evaluated_ms": 141.87179900181945,
+      "both_complete_ms": 164.61040300055174,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.650828000507317
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 4,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24641.799309598,
+          "pipeline": {
+            "start": 24641.933869316,
+            "end": 24641.963024767,
+            "tool_ms": [
+              24.53876700019464
+            ]
+          },
+          "capture": {
+            "start": 24641.808710523,
+            "end": 24641.930760337
+          },
+          "pipeline_ms": 29.155451000406174,
+          "displayed_pipeline_ms": 25.14935100043658,
+          "processing_ms": 31.32157900108723,
+          "capture_ms": 123.59710400050972,
+          "displayed_total_ms": 159.07304500069586,
+          "worker_ms": 178.5802020021947,
+          "complete_ms": 185.36963800215744,
+          "evaluation_done": 24641.963024767,
+          "completed": 24641.984679236
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24641.798963409,
+          "pipeline": {
+            "start": 24641.947112272,
+            "end": 24641.965059531,
+            "tool_ms": [
+              14.939819000574062
+            ]
+          },
+          "capture": {
+            "start": 24641.808349934,
+            "end": 24641.943584109
+          },
+          "pipeline_ms": 17.947259002539795,
+          "displayed_pipeline_ms": 15.467391000129282,
+          "processing_ms": 20.448888000828447,
+          "capture_ms": 136.75775199953932,
+          "displayed_total_ms": 161.6076360005536,
+          "worker_ms": 181.22749999747612,
+          "complete_ms": 192.22128399997018,
+          "evaluation_done": 24641.965059531,
+          "completed": 24641.991184693
+        }
+      ],
+      "both_evaluated_ms": 166.1307790018327,
+      "both_complete_ms": 192.25594100134913,
+      "start_skew_ms": 0.3461889973550569,
+      "evaluation_overlap_ms": 15.912495000520721
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 4,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24642.046792391,
+          "pipeline": {
+            "start": 24642.177050542,
+            "end": 24642.201593022,
+            "tool_ms": [
+              22.17487199959578
+            ]
+          },
+          "capture": {
+            "start": 24642.053581731,
+            "end": 24642.173923802
+          },
+          "pipeline_ms": 24.54248000140069,
+          "displayed_pipeline_ms": 22.79003100193222,
+          "processing_ms": 26.771746001031715,
+          "capture_ms": 121.75156300145318,
+          "displayed_total_ms": 151.72154000174487,
+          "worker_ms": 170.57372799899895,
+          "complete_ms": 178.47175000133575,
+          "evaluation_done": 24642.201593022,
+          "completed": 24642.225264141
+        }
+      ],
+      "both_evaluated_ms": 154.82242399957613,
+      "both_complete_ms": 178.49354300051345,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.54248000140069
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 5,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24642.27876456,
+          "pipeline": {
+            "start": 24642.408929044,
+            "end": 24642.440366595,
+            "tool_ms": [
+              29.065432001516456
+            ]
+          },
+          "capture": {
+            "start": 24642.285343717,
+            "end": 24642.40575843
+          },
+          "pipeline_ms": 31.43755100245471,
+          "displayed_pipeline_ms": 29.675662000954617,
+          "processing_ms": 33.72736500023166,
+          "capture_ms": 121.93108899737126,
+          "displayed_total_ms": 158.62685200045235,
+          "worker_ms": 179.18659299903084,
+          "complete_ms": 187.73391799913952,
+          "evaluation_done": 24642.440366595,
+          "completed": 24642.466498478
+        }
+      ],
+      "both_evaluated_ms": 161.62376400097855,
+      "both_complete_ms": 187.75564699899405,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 31.43755100245471
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 5,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24642.521118395,
+          "pipeline": {
+            "start": 24642.673611836,
+            "end": 24642.699376793,
+            "tool_ms": [
+              23.55277899914654
+            ]
+          },
+          "capture": {
+            "start": 24642.532327835,
+            "end": 24642.669976405
+          },
+          "pipeline_ms": 25.76495700122905,
+          "displayed_pipeline_ms": 24.126079999405192,
+          "processing_ms": 28.49709099973552,
+          "capture_ms": 138.98292299927562,
+          "displayed_total_ms": 173.64360300052795,
+          "worker_ms": 190.95922199994675,
+          "complete_ms": 201.87655499830726,
+          "evaluation_done": 24642.699376793,
+          "completed": 24642.72299495
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24642.520845585,
+          "pipeline": {
+            "start": 24642.653485264,
+            "end": 24642.665237861,
+            "tool_ms": [
+              8.999405999929877
+            ]
+          },
+          "capture": {
+            "start": 24642.529242217,
+            "end": 24642.650190326
+          },
+          "pipeline_ms": 11.752597001759568,
+          "displayed_pipeline_ms": 9.548515001370106,
+          "processing_ms": 14.09047500055749,
+          "capture_ms": 122.41744299899437,
+          "displayed_total_ms": 139.96411100015393,
+          "worker_ms": 163.02269600055297,
+          "complete_ms": 169.45928700079094,
+          "evaluation_done": 24642.665237861,
+          "completed": 24642.690304872
+        }
+      ],
+      "both_evaluated_ms": 178.56237700107158,
+      "both_complete_ms": 202.18053400094504,
+      "start_skew_ms": 0.2728100007516332,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 5,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24642.779187694,
+          "pipeline": {
+            "start": 24642.909145545,
+            "end": 24642.919657744,
+            "tool_ms": [
+              8.408631998463534
+            ]
+          },
+          "capture": {
+            "start": 24642.785869318,
+            "end": 24642.90604575
+          },
+          "pipeline_ms": 10.51219900182332,
+          "displayed_pipeline_ms": 8.943243999965489,
+          "processing_ms": 12.72044100187486,
+          "capture_ms": 121.57418000060716,
+          "displayed_total_ms": 137.25053899906925,
+          "worker_ms": 155.7357370002137,
+          "complete_ms": 165.65581699978793,
+          "evaluation_done": 24642.919657744,
+          "completed": 24642.944843511
+        }
+      ],
+      "both_evaluated_ms": 140.49053100097808,
+      "both_complete_ms": 165.67629799828865,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.51219900182332
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 6,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24643.001786843,
+          "pipeline": {
+            "start": 24643.156080926,
+            "end": 24643.18213063,
+            "tool_ms": [
+              23.86002200000803
+            ]
+          },
+          "capture": {
+            "start": 24643.012869398,
+            "end": 24643.152790052
+          },
+          "pipeline_ms": 26.049703999888152,
+          "displayed_pipeline_ms": 24.428747998172184,
+          "processing_ms": 28.370654003083473,
+          "capture_ms": 142.92054099860252,
+          "displayed_total_ms": 175.67446199973347,
+          "worker_ms": 192.40916299895616,
+          "complete_ms": 201.57340799778467,
+          "evaluation_done": 24643.18213063,
+          "completed": 24643.203360251
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24643.001517649,
+          "pipeline": {
+            "start": 24643.135530755,
+            "end": 24643.147271703,
+            "tool_ms": [
+              9.071856999071315
+            ]
+          },
+          "capture": {
+            "start": 24643.010260917,
+            "end": 24643.132301195
+          },
+          "pipeline_ms": 11.740948000806384,
+          "displayed_pipeline_ms": 9.621380999305984,
+          "processing_ms": 14.000647999637295,
+          "capture_ms": 123.61131199941156,
+          "displayed_total_ms": 141.3223380004638,
+          "worker_ms": 163.6299499987217,
+          "complete_ms": 169.740704997821,
+          "evaluation_done": 24643.147271703,
+          "completed": 24643.171258354
+        }
+      ],
+      "both_evaluated_ms": 180.64325399973313,
+      "both_complete_ms": 201.87287499720696,
+      "start_skew_ms": 0.2691939989745151,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 6,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24643.256974722,
+          "pipeline": {
+            "start": 24643.384637193,
+            "end": 24643.415926355,
+            "tool_ms": [
+              29.082807999657234
+            ]
+          },
+          "capture": {
+            "start": 24643.263509109,
+            "end": 24643.381574647
+          },
+          "pipeline_ms": 31.28916199784726,
+          "displayed_pipeline_ms": 29.685454999707872,
+          "processing_ms": 33.623841001826804,
+          "capture_ms": 119.30430400025216,
+          "displayed_total_ms": 156.00608300155727,
+          "worker_ms": 175.631357000384,
+          "complete_ms": 184.69351699968684,
+          "evaluation_done": 24643.415926355,
+          "completed": 24643.441668239
+        }
+      ],
+      "both_evaluated_ms": 158.9732020001975,
+      "both_complete_ms": 184.71508600123343,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 31.28916199784726
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 6,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24643.49876156,
+          "pipeline": {
+            "start": 24643.629102818,
+            "end": 24643.639687211,
+            "tool_ms": [
+              8.41381700229249
+            ]
+          },
+          "capture": {
+            "start": 24643.505388846,
+            "end": 24643.626014383
+          },
+          "pipeline_ms": 10.584393003227888,
+          "displayed_pipeline_ms": 8.943307999288663,
+          "processing_ms": 12.786138999217656,
+          "capture_ms": 122.0276690000901,
+          "displayed_total_ms": 137.88806600132375,
+          "worker_ms": 157.1703189983964,
+          "complete_ms": 165.09803699955228,
+          "evaluation_done": 24643.639687211,
+          "completed": 24643.663859597
+        }
+      ],
+      "both_evaluated_ms": 140.9477320012229,
+      "both_complete_ms": 165.12011799932225,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.584393003227888
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 7,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24643.718036266,
+          "pipeline": {
+            "start": 24643.848213133,
+            "end": 24643.872602615,
+            "tool_ms": [
+              22.07941199958441
+            ]
+          },
+          "capture": {
+            "start": 24643.724530427,
+            "end": 24643.845144571
+          },
+          "pipeline_ms": 24.389482001424767,
+          "displayed_pipeline_ms": 22.67655499963439,
+          "processing_ms": 26.56690699950559,
+          "capture_ms": 121.9918909991975,
+          "displayed_total_ms": 151.53817299869843,
+          "worker_ms": 170.4064900004596,
+          "complete_ms": 179.2426259999047,
+          "evaluation_done": 24643.872602615,
+          "completed": 24643.897278892
+        }
+      ],
+      "both_evaluated_ms": 154.58865400069044,
+      "both_complete_ms": 179.26493100094376,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.389482001424767
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 7,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24643.954520154,
+          "pipeline": {
+            "start": 24644.0840874,
+            "end": 24644.094522283,
+            "tool_ms": [
+              8.322710000356892
+            ]
+          },
+          "capture": {
+            "start": 24643.960904456,
+            "end": 24644.081015189
+          },
+          "pipeline_ms": 10.434883002744755,
+          "displayed_pipeline_ms": 8.861129001161316,
+          "processing_ms": 12.614900999324163,
+          "capture_ms": 121.51488200106542,
+          "displayed_total_ms": 136.96083199829445,
+          "worker_ms": 156.2104430013278,
+          "complete_ms": 163.61990299992613,
+          "evaluation_done": 24644.094522283,
+          "completed": 24644.118140057
+        }
+      ],
+      "both_evaluated_ms": 140.02372899994953,
+      "both_complete_ms": 163.64150299705216,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.434883002744755
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 7,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24644.17620519,
+          "pipeline": {
+            "start": 24644.329305565,
+            "end": 24644.355801141,
+            "tool_ms": [
+              24.443916001473553
+            ]
+          },
+          "capture": {
+            "start": 24644.189794238,
+            "end": 24644.325944832
+          },
+          "pipeline_ms": 26.49557599943364,
+          "displayed_pipeline_ms": 24.99827199790161,
+          "processing_ms": 28.92395500020939,
+          "capture_ms": 137.8344320000906,
+          "displayed_total_ms": 174.05120200055535,
+          "worker_ms": 192.50631899922155,
+          "complete_ms": 203.03355799842393,
+          "evaluation_done": 24644.355801141,
+          "completed": 24644.379238748
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24644.175864633,
+          "pipeline": {
+            "start": 24644.309206098,
+            "end": 24644.320788032,
+            "tool_ms": [
+              8.932939999795053
+            ]
+          },
+          "capture": {
+            "start": 24644.18559213,
+            "end": 24644.306093951
+          },
+          "pipeline_ms": 11.581933998968452,
+          "displayed_pipeline_ms": 9.4626239988429,
+          "processing_ms": 13.767935000942089,
+          "capture_ms": 121.95073800103273,
+          "displayed_total_ms": 139.56179200249608,
+          "worker_ms": 163.0800739985716,
+          "complete_ms": 169.23675099678803,
+          "evaluation_done": 24644.320788032,
+          "completed": 24644.345101384
+        }
+      ],
+      "both_evaluated_ms": 179.97078099870123,
+      "both_complete_ms": 203.4083879989339,
+      "start_skew_ms": 0.34055699870805256,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 8,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24644.437180324,
+          "pipeline": {
+            "start": 24644.567565168,
+            "end": 24644.602371325,
+            "tool_ms": [
+              32.55084199918201
+            ]
+          },
+          "capture": {
+            "start": 24644.443798554,
+            "end": 24644.564532063
+          },
+          "pipeline_ms": 34.80615700027556,
+          "displayed_pipeline_ms": 33.16142400217359,
+          "processing_ms": 36.95865299960133,
+          "capture_ms": 122.13157699807198,
+          "displayed_total_ms": 162.14365599807934,
+          "worker_ms": 187.767839001026,
+          "complete_ms": 195.67187700158684,
+          "evaluation_done": 24644.602371325,
+          "completed": 24644.632852201
+        }
+      ],
+      "both_evaluated_ms": 165.21384999941802,
+      "both_complete_ms": 195.69472600051085,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 34.80615700027556
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 8,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24644.6887017,
+          "pipeline": {
+            "start": 24644.84667864,
+            "end": 24644.873894819,
+            "tool_ms": [
+              24.821721999614965
+            ]
+          },
+          "capture": {
+            "start": 24644.702569607,
+            "end": 24644.843463801
+          },
+          "pipeline_ms": 27.216179001698038,
+          "displayed_pipeline_ms": 25.463858000875916,
+          "processing_ms": 29.476423002051888,
+          "capture_ms": 142.89669999925536,
+          "displayed_total_ms": 177.86007900213008,
+          "worker_ms": 197.48477599932812,
+          "complete_ms": 206.56655299899285,
+          "evaluation_done": 24644.873894819,
+          "completed": 24644.895268253
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24644.688423609,
+          "pipeline": {
+            "start": 24644.827502024,
+            "end": 24644.838974354,
+            "tool_ms": [
+              8.940780000557425
+            ]
+          },
+          "capture": {
+            "start": 24644.702208633,
+            "end": 24644.824489944
+          },
+          "pipeline_ms": 11.472329999378417,
+          "displayed_pipeline_ms": 9.458814998652088,
+          "processing_ms": 13.514998001483036,
+          "capture_ms": 123.84799299979932,
+          "displayed_total_ms": 143.48241799962125,
+          "worker_ms": 168.5159240005305,
+          "complete_ms": 174.49966699859942,
+          "evaluation_done": 24644.838974354,
+          "completed": 24644.862923276
+        }
+      ],
+      "both_evaluated_ms": 185.50375500126393,
+      "both_complete_ms": 206.87718900080654,
+      "start_skew_ms": 0.27809099992737174,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 8,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24644.95280303,
+          "pipeline": {
+            "start": 24645.082783923,
+            "end": 24645.093383997,
+            "tool_ms": [
+              8.432760998402955
+            ]
+          },
+          "capture": {
+            "start": 24644.959438925,
+            "end": 24645.079563067
+          },
+          "pipeline_ms": 10.600073997920845,
+          "displayed_pipeline_ms": 8.980653998150956,
+          "processing_ms": 12.861725997936446,
+          "capture_ms": 121.7223780004133,
+          "displayed_total_ms": 137.65839400002733,
+          "worker_ms": 156.80144100042526,
+          "complete_ms": 164.29477600104292,
+          "evaluation_done": 24645.093383997,
+          "completed": 24645.117097806
+        }
+      ],
+      "both_evaluated_ms": 140.6039109970152,
+      "both_complete_ms": 164.31771999850753,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.600073997920845
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 9,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24645.17348614,
+          "pipeline": {
+            "start": 24645.32883956,
+            "end": 24645.355731855,
+            "tool_ms": [
+              24.67400499881478
+            ]
+          },
+          "capture": {
+            "start": 24645.183076225,
+            "end": 24645.325101565
+          },
+          "pipeline_ms": 26.89229500174406,
+          "displayed_pipeline_ms": 25.251882001612103,
+          "processing_ms": 29.720495997025864,
+          "capture_ms": 143.69161000286113,
+          "displayed_total_ms": 177.64771899965126,
+          "worker_ms": 194.66451200059964,
+          "complete_ms": 205.60379800008377,
+          "evaluation_done": 24645.355731855,
+          "completed": 24645.379089938
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24645.173186353,
+          "pipeline": {
+            "start": 24645.307608019,
+            "end": 24645.319071261,
+            "tool_ms": [
+              8.841161001328146
+            ]
+          },
+          "capture": {
+            "start": 24645.182733908,
+            "end": 24645.304462174
+          },
+          "pipeline_ms": 11.463242000900209,
+          "displayed_pipeline_ms": 9.38057199891773,
+          "processing_ms": 13.664090998645406,
+          "capture_ms": 123.15740700069,
+          "displayed_total_ms": 141.47184700050275,
+          "worker_ms": 165.23017000145046,
+          "complete_ms": 171.3428129987733,
+          "evaluation_done": 24645.319071261,
+          "completed": 24645.344529166
+        }
+      ],
+      "both_evaluated_ms": 182.58284700277727,
+      "both_complete_ms": 205.940930001816,
+      "start_skew_ms": 0.29978699967614375,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 9,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24645.438156516,
+          "pipeline": {
+            "start": 24645.568142209,
+            "end": 24645.578661352,
+            "tool_ms": [
+              8.312724999996135
+            ]
+          },
+          "capture": {
+            "start": 24645.444709816,
+            "end": 24645.565058319
+          },
+          "pipeline_ms": 10.519143001147313,
+          "displayed_pipeline_ms": 8.877994001522893,
+          "processing_ms": 12.705655997706344,
+          "capture_ms": 121.74500300170621,
+          "displayed_total_ms": 137.54498199705267,
+          "worker_ms": 156.81923399824882,
+          "complete_ms": 164.9115990003338,
+          "evaluation_done": 24645.578661352,
+          "completed": 24645.603068115
+        }
+      ],
+      "both_evaluated_ms": 140.52944400100387,
+      "both_complete_ms": 164.93620700202882,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.519143001147313
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 9,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24645.657812676,
+          "pipeline": {
+            "start": 24645.787628283,
+            "end": 24645.812207884,
+            "tool_ms": [
+              22.30988500014064
+            ]
+          },
+          "capture": {
+            "start": 24645.66422501,
+            "end": 24645.784656396
+          },
+          "pipeline_ms": 24.579600998549722,
+          "displayed_pipeline_ms": 22.876945000462,
+          "processing_ms": 26.665502999094315,
+          "capture_ms": 121.83966199881979,
+          "displayed_total_ms": 151.450522000232,
+          "worker_ms": 170.01022000113153,
+          "complete_ms": 177.69236100139096,
+          "evaluation_done": 24645.812207884,
+          "completed": 24645.835505037
+        }
+      ],
+      "both_evaluated_ms": 154.41952899709577,
+      "both_complete_ms": 177.7166819992999,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.579600998549722
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 10,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24645.891745654,
+          "pipeline": {
+            "start": 24646.025386363,
+            "end": 24646.055969995,
+            "tool_ms": [
+              27.99262299959082
+            ]
+          },
+          "capture": {
+            "start": 24645.900885098,
+            "end": 24646.022213861
+          },
+          "pipeline_ms": 30.58363200034364,
+          "displayed_pipeline_ms": 28.535428002214758,
+          "processing_ms": 32.82163500261959,
+          "capture_ms": 122.77336099941749,
+          "displayed_total_ms": 159.6057370006747,
+          "worker_ms": 185.4813549980463,
+          "complete_ms": 196.9774300014251,
+          "evaluation_done": 24646.055969995,
+          "completed": 24646.088723084
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24645.891465452,
+          "pipeline": {
+            "start": 24646.038173782,
+            "end": 24646.051172729,
+            "tool_ms": [
+              10.486021998076467
+            ]
+          },
+          "capture": {
+            "start": 24645.901231799,
+            "end": 24646.034898812
+          },
+          "pipeline_ms": 12.998947000596672,
+          "displayed_pipeline_ms": 11.05439499951899,
+          "processing_ms": 15.30293699761387,
+          "capture_ms": 135.42631100062863,
+          "displayed_total_ms": 155.33037899876945,
+          "worker_ms": 180.24163999871234,
+          "complete_ms": 190.2108419999422,
+          "evaluation_done": 24646.051172729,
+          "completed": 24646.081676294
+        }
+      ],
+      "both_evaluated_ms": 164.53161599929444,
+      "both_complete_ms": 197.28470500194817,
+      "start_skew_ms": 0.2802019989758264,
+      "evaluation_overlap_ms": 12.998947000596672
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 10,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24646.151109401,
+          "pipeline": {
+            "start": 24646.281431491,
+            "end": 24646.291918664,
+            "tool_ms": [
+              8.315476999996463
+            ]
+          },
+          "capture": {
+            "start": 24646.15786018,
+            "end": 24646.278363921
+          },
+          "pipeline_ms": 10.487173000001349,
+          "displayed_pipeline_ms": 8.857672997692134,
+          "processing_ms": 12.66671099801897,
+          "capture_ms": 121.89870400106884,
+          "displayed_total_ms": 137.63871299670427,
+          "worker_ms": 157.08020400052192,
+          "complete_ms": 166.5977090015076,
+          "evaluation_done": 24646.291918664,
+          "completed": 24646.31770711
+        }
+      ],
+      "both_evaluated_ms": 140.8359519991791,
+      "both_complete_ms": 166.62439799983986,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.487173000001349
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 10,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24646.377569206,
+          "pipeline": {
+            "start": 24646.507498513,
+            "end": 24646.531870266,
+            "tool_ms": [
+              22.19007299936493
+            ]
+          },
+          "capture": {
+            "start": 24646.384128202,
+            "end": 24646.504479552
+          },
+          "pipeline_ms": 24.3717529992864,
+          "displayed_pipeline_ms": 22.762348999094684,
+          "processing_ms": 26.506905000132974,
+          "capture_ms": 121.75725900306134,
+          "displayed_total_ms": 151.33887000047253,
+          "worker_ms": 169.76109000097495,
+          "complete_ms": 178.9675760010141,
+          "evaluation_done": 24646.531870266,
+          "completed": 24646.556536782
+        }
+      ],
+      "both_evaluated_ms": 154.32106099979137,
+      "both_complete_ms": 178.98757700095302,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.3717529992864
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 11,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24646.620116584,
+          "pipeline": {
+            "start": 24646.749861436,
+            "end": 24646.760324289,
+            "tool_ms": [
+              8.290260000649141
+            ]
+          },
+          "capture": {
+            "start": 24646.626630202,
+            "end": 24646.746878637
+          },
+          "pipeline_ms": 10.462852998898597,
+          "displayed_pipeline_ms": 8.833960000629304,
+          "processing_ms": 12.565682001877576,
+          "capture_ms": 121.76429999817628,
+          "displayed_total_ms": 137.2644590010168,
+          "worker_ms": 156.5085980000731,
+          "complete_ms": 167.61169900200912,
+          "evaluation_done": 24646.760324289,
+          "completed": 24646.787728283
+        }
+      ],
+      "both_evaluated_ms": 140.2335300008417,
+      "both_complete_ms": 167.63752400220255,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.462852998898597
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 11,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24646.847807634,
+          "pipeline": {
+            "start": 24646.983120565,
+            "end": 24647.007460605,
+            "tool_ms": [
+              22.103797000454506
+            ]
+          },
+          "capture": {
+            "start": 24646.854403559,
+            "end": 24646.980075396
+          },
+          "pipeline_ms": 24.340039999515284,
+          "displayed_pipeline_ms": 22.704267998051364,
+          "processing_ms": 26.505144000111613,
+          "capture_ms": 127.08321700119996,
+          "displayed_total_ms": 156.6644440026721,
+          "worker_ms": 175.11319400000502,
+          "complete_ms": 183.75479500173242,
+          "evaluation_done": 24647.007460605,
+          "completed": 24647.031562429
+        }
+      ],
+      "both_evaluated_ms": 159.67505099979462,
+      "both_complete_ms": 183.77687500105822,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.340039999515284
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 11,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24647.090744659,
+          "pipeline": {
+            "start": 24647.242551163,
+            "end": 24647.268635844,
+            "tool_ms": [
+              23.717424999631476
+            ]
+          },
+          "capture": {
+            "start": 24647.102497544,
+            "end": 24647.239445575
+          },
+          "pipeline_ms": 26.08468100152095,
+          "displayed_pipeline_ms": 24.315430997376097,
+          "processing_ms": 28.23996100050863,
+          "capture_ms": 138.3252019986685,
+          "displayed_total_ms": 173.2218590004777,
+          "worker_ms": 191.4683610011707,
+          "complete_ms": 203.58938700155704,
+          "evaluation_done": 24647.268635844,
+          "completed": 24647.294334046
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24647.090453544,
+          "pipeline": {
+            "start": 24647.223544344,
+            "end": 24647.234886174,
+            "tool_ms": [
+              8.801862997643184
+            ]
+          },
+          "capture": {
+            "start": 24647.098910979,
+            "end": 24647.220416452
+          },
+          "pipeline_ms": 11.341829998855246,
+          "displayed_pipeline_ms": 9.336122002423508,
+          "processing_ms": 13.540150997869205,
+          "capture_ms": 122.93119100286276,
+          "displayed_total_ms": 139.94347100015148,
+          "worker_ms": 162.22580300018308,
+          "complete_ms": 168.90531500030193,
+          "evaluation_done": 24647.234886174,
+          "completed": 24647.259358859
+        }
+      ],
+      "both_evaluated_ms": 178.21484500018414,
+      "both_complete_ms": 203.91304700024193,
+      "start_skew_ms": 0.29111500043654814,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 12,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24647.355091567,
+          "pipeline": {
+            "start": 24647.48471171,
+            "end": 24647.495225701,
+            "tool_ms": [
+              8.370262999960687
+            ]
+          },
+          "capture": {
+            "start": 24647.361531358,
+            "end": 24647.481631436
+          },
+          "pipeline_ms": 10.513991001062095,
+          "displayed_pipeline_ms": 8.907849998649908,
+          "processing_ms": 12.706808000075398,
+          "capture_ms": 121.50294599996414,
+          "displayed_total_ms": 137.16314399789553,
+          "worker_ms": 156.45906000281684,
+          "complete_ms": 163.86983200209215,
+          "evaluation_done": 24647.495225701,
+          "completed": 24647.518961399
+        }
+      ],
+      "both_evaluated_ms": 140.15829500203836,
+      "both_complete_ms": 163.89399300169316,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.513991001062095
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 12,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24647.574966967,
+          "pipeline": {
+            "start": 24647.705345155,
+            "end": 24647.729631177,
+            "tool_ms": [
+              21.930990998953348
+            ]
+          },
+          "capture": {
+            "start": 24647.581795125,
+            "end": 24647.702289009
+          },
+          "pipeline_ms": 24.28602200234309,
+          "displayed_pipeline_ms": 22.54019700194476,
+          "processing_ms": 26.45602300253813,
+          "capture_ms": 121.8998879994615,
+          "displayed_total_ms": 151.5577900026983,
+          "worker_ms": 172.6400459992874,
+          "complete_ms": 181.1061839980539,
+          "evaluation_done": 24647.729631177,
+          "completed": 24647.756073151
+        }
+      ],
+      "both_evaluated_ms": 154.688819002331,
+      "both_complete_ms": 181.13079300019308,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.28602200234309
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 12,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24647.812280263,
+          "pipeline": {
+            "start": 24647.96606348,
+            "end": 24647.992451212,
+            "tool_ms": [
+              24.051452997809974
+            ]
+          },
+          "capture": {
+            "start": 24647.822783533,
+            "end": 24647.962540213
+          },
+          "pipeline_ms": 26.387732003058773,
+          "displayed_pipeline_ms": 24.638515002152417,
+          "processing_ms": 29.010262001975207,
+          "capture_ms": 142.12233500074944,
+          "displayed_total_ms": 175.51826400085702,
+          "worker_ms": 193.6492420027207,
+          "complete_ms": 202.38063800206874,
+          "evaluation_done": 24647.992451212,
+          "completed": 24648.014660901
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24647.811977884,
+          "pipeline": {
+            "start": 24647.945210609,
+            "end": 24647.956804512,
+            "tool_ms": [
+              9.085937002964783
+            ]
+          },
+          "capture": {
+            "start": 24647.820624765,
+            "end": 24647.942105374
+          },
+          "pipeline_ms": 11.593903000175487,
+          "displayed_pipeline_ms": 9.622342000511708,
+          "processing_ms": 13.771744001132902,
+          "capture_ms": 122.96620000051917,
+          "displayed_total_ms": 140.3520940002636,
+          "worker_ms": 163.74275499765645,
+          "complete_ms": 169.95274500004598,
+          "evaluation_done": 24647.956804512,
+          "completed": 24647.981930629
+        }
+      ],
+      "both_evaluated_ms": 180.5059690013877,
+      "both_complete_ms": 202.71565800067037,
+      "start_skew_ms": 0.3023789977305569,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 13,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24648.072514954,
+          "pipeline": {
+            "start": 24648.202225373,
+            "end": 24648.212804038,
+            "tool_ms": [
+              8.371959000214702
+            ]
+          },
+          "capture": {
+            "start": 24648.079306055,
+            "end": 24648.199114729
+          },
+          "pipeline_ms": 10.578665001958143,
+          "displayed_pipeline_ms": 8.917195002140943,
+          "processing_ms": 12.73288900119951,
+          "capture_ms": 121.3959659980901,
+          "displayed_total_ms": 137.3291980016802,
+          "worker_ms": 157.48607499699574,
+          "complete_ms": 166.98706799797947,
+          "evaluation_done": 24648.212804038,
+          "completed": 24648.239502022
+        }
+      ],
+      "both_evaluated_ms": 140.31106800030102,
+      "both_complete_ms": 167.0090519983205,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.578665001958143
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 13,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24648.301597289,
+          "pipeline": {
+            "start": 24648.452896157,
+            "end": 24648.479205262,
+            "tool_ms": [
+              24.085983000986744
+            ]
+          },
+          "capture": {
+            "start": 24648.313164662,
+            "end": 24648.449930255
+          },
+          "pipeline_ms": 26.30910500010941,
+          "displayed_pipeline_ms": 24.648948001413373,
+          "processing_ms": 28.37126200029161,
+          "capture_ms": 138.22558200263302,
+          "displayed_total_ms": 172.92971999995643,
+          "worker_ms": 190.54816599964397,
+          "complete_ms": 198.22189100159449,
+          "evaluation_done": 24648.479205262,
+          "completed": 24648.49981918
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24648.301321118,
+          "pipeline": {
+            "start": 24648.434067426,
+            "end": 24648.445524747,
+            "tool_ms": [
+              8.934860001318157
+            ]
+          },
+          "capture": {
+            "start": 24648.309712022,
+            "end": 24648.430981743
+          },
+          "pipeline_ms": 11.45732100121677,
+          "displayed_pipeline_ms": 9.485152000706876,
+          "processing_ms": 13.60069699876476,
+          "capture_ms": 122.72103900249931,
+          "displayed_total_ms": 139.77946500017424,
+          "worker_ms": 163.1951189992833,
+          "complete_ms": 169.31572999965283,
+          "evaluation_done": 24648.445524747,
+          "completed": 24648.470636848
+        }
+      ],
+      "both_evaluated_ms": 177.91521699837176,
+      "both_complete_ms": 198.52913499926217,
+      "start_skew_ms": 0.2761709984042682,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 13,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24648.558025471,
+          "pipeline": {
+            "start": 24648.688105951,
+            "end": 24648.71985385,
+            "tool_ms": [
+              29.402309002762195
+            ]
+          },
+          "capture": {
+            "start": 24648.564835676,
+            "end": 24648.685041037
+          },
+          "pipeline_ms": 31.74789900003816,
+          "displayed_pipeline_ms": 30.006554999999935,
+          "processing_ms": 33.929131997865625,
+          "capture_ms": 121.60109400065267,
+          "displayed_total_ms": 158.7511129982886,
+          "worker_ms": 179.65701000139234,
+          "complete_ms": 188.78173299890477,
+          "evaluation_done": 24648.71985385,
+          "completed": 24648.746807204
+        }
+      ],
+      "both_evaluated_ms": 161.8512599998212,
+      "both_complete_ms": 188.80461399749038,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 31.74789900003816
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 14,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24648.809349463,
+          "pipeline": {
+            "start": 24648.939206575,
+            "end": 24648.963815009,
+            "tool_ms": [
+              22.338462000334403
+            ]
+          },
+          "capture": {
+            "start": 24648.815837288,
+            "end": 24648.936105052
+          },
+          "pipeline_ms": 24.608433999674162,
+          "displayed_pipeline_ms": 22.94098000129452,
+          "processing_ms": 26.825348002603278,
+          "capture_ms": 121.67536899869447,
+          "displayed_total_ms": 151.56662200024584,
+          "worker_ms": 171.18635899896617,
+          "complete_ms": 179.18031999943196,
+          "evaluation_done": 24648.963815009,
+          "completed": 24648.988529783
+        }
+      ],
+      "both_evaluated_ms": 154.4891949997691,
+      "both_complete_ms": 179.2039690008096,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.608433999674162
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 14,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24649.045835848,
+          "pipeline": {
+            "start": 24649.175584668,
+            "end": 24649.186210727,
+            "tool_ms": [
+              8.497722999891266
+            ]
+          },
+          "capture": {
+            "start": 24649.052355962,
+            "end": 24649.172587469
+          },
+          "pipeline_ms": 10.626059000060195,
+          "displayed_pipeline_ms": 9.05716900160769,
+          "processing_ms": 12.73989800029085,
+          "capture_ms": 121.62365399854025,
+          "displayed_total_ms": 137.32670199897257,
+          "worker_ms": 157.48581899970304,
+          "complete_ms": 166.82517300068866,
+          "evaluation_done": 24649.186210727,
+          "completed": 24649.212661021
+        }
+      ],
+      "both_evaluated_ms": 140.3980799987039,
+      "both_complete_ms": 166.84837399952812,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.626059000060195
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 14,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24649.275421625,
+          "pipeline": {
+            "start": 24649.428553042,
+            "end": 24649.454768415,
+            "tool_ms": [
+              23.986650998267578
+            ]
+          },
+          "capture": {
+            "start": 24649.287578813,
+            "end": 24649.425298521
+          },
+          "pipeline_ms": 26.215373000013642,
+          "displayed_pipeline_ms": 24.567983997258125,
+          "processing_ms": 28.513795001344988,
+          "capture_ms": 139.22184400144033,
+          "displayed_total_ms": 174.57605299932766,
+          "worker_ms": 192.9537280011573,
+          "complete_ms": 204.98115100053838,
+          "evaluation_done": 24649.454768415,
+          "completed": 24649.480402776
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24649.275149423,
+          "pipeline": {
+            "start": 24649.407834096,
+            "end": 24649.419232535,
+            "tool_ms": [
+              8.890601999155479
+            ]
+          },
+          "capture": {
+            "start": 24649.283631882,
+            "end": 24649.404797887
+          },
+          "pipeline_ms": 11.39843900091364,
+          "displayed_pipeline_ms": 9.466368002904346,
+          "processing_ms": 13.494677001290256,
+          "capture_ms": 122.61799499901826,
+          "displayed_total_ms": 139.63350700214505,
+          "worker_ms": 163.04500100159203,
+          "complete_ms": 169.21364600057132,
+          "evaluation_done": 24649.419232535,
+          "completed": 24649.444363069
+        }
+      ],
+      "both_evaluated_ms": 179.65028899925528,
+      "both_complete_ms": 205.2846500009764,
+      "start_skew_ms": 0.2722019999055192,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 15,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24649.543272727,
+          "pipeline": {
+            "start": 24649.67573336,
+            "end": 24649.686407293,
+            "tool_ms": [
+              8.451577999949222
+            ]
+          },
+          "capture": {
+            "start": 24649.549860332,
+            "end": 24649.672624253
+          },
+          "pipeline_ms": 10.673933000362013,
+          "displayed_pipeline_ms": 9.03390399980708,
+          "processing_ms": 12.888350000139326,
+          "capture_ms": 124.16595700051403,
+          "displayed_total_ms": 140.14059799956158,
+          "worker_ms": 159.83022599903052,
+          "complete_ms": 167.9445109984954,
+          "evaluation_done": 24649.686407293,
+          "completed": 24649.711217238
+        }
+      ],
+      "both_evaluated_ms": 143.1562940015283,
+      "both_complete_ms": 167.96623900154373,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.673933000362013
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 15,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24649.771204459,
+          "pipeline": {
+            "start": 24649.924103451,
+            "end": 24649.951343055,
+            "tool_ms": [
+              25.00550500190002
+            ]
+          },
+          "capture": {
+            "start": 24649.781405606,
+            "end": 24649.921031145
+          },
+          "pipeline_ms": 27.239603998168604,
+          "displayed_pipeline_ms": 25.57183000317309,
+          "processing_ms": 29.408997001155512,
+          "capture_ms": 142.21769899813808,
+          "displayed_total_ms": 175.61647600086872,
+          "worker_ms": 193.3760469983099,
+          "complete_ms": 204.66219499940053,
+          "evaluation_done": 24649.951343055,
+          "completed": 24649.975866654
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24649.770784539,
+          "pipeline": {
+            "start": 24649.903916813,
+            "end": 24649.915457498,
+            "tool_ms": [
+              8.904490001441445
+            ]
+          },
+          "capture": {
+            "start": 24649.77924911,
+            "end": 24649.900732599
+          },
+          "pipeline_ms": 11.54068499818095,
+          "displayed_pipeline_ms": 9.489537002082216,
+          "processing_ms": 13.792672001727624,
+          "capture_ms": 123.030906997883,
+          "displayed_total_ms": 140.23637699938263,
+          "worker_ms": 163.67888099921402,
+          "complete_ms": 169.77872300049057,
+          "evaluation_done": 24649.915457498,
+          "completed": 24649.940563262
+        }
+      ],
+      "both_evaluated_ms": 180.58974900122848,
+      "both_complete_ms": 205.11334800175973,
+      "start_skew_ms": 0.41992000114987604,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 15,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24650.039082986,
+          "pipeline": {
+            "start": 24650.168958851,
+            "end": 24650.200854404,
+            "tool_ms": [
+              29.59434700096608
+            ]
+          },
+          "capture": {
+            "start": 24650.045759138,
+            "end": 24650.165780237
+          },
+          "pipeline_ms": 31.895552998321364,
+          "displayed_pipeline_ms": 30.192993999662576,
+          "processing_ms": 34.18872600013856,
+          "capture_ms": 121.42719899929943,
+          "displayed_total_ms": 158.81476399954408,
+          "worker_ms": 180.3535799990641,
+          "complete_ms": 190.11490299817524,
+          "evaluation_done": 24650.200854404,
+          "completed": 24650.229197889
+        }
+      ],
+      "both_evaluated_ms": 161.79253899827017,
+      "both_complete_ms": 190.13602399718366,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 31.895552998321364
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 16,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24650.292565139,
+          "pipeline": {
+            "start": 24650.422628435,
+            "end": 24650.433198523,
+            "tool_ms": [
+              8.4129530005157
+            ]
+          },
+          "capture": {
+            "start": 24650.299274188,
+            "end": 24650.419511679
+          },
+          "pipeline_ms": 10.570087997621158,
+          "displayed_pipeline_ms": 8.943723998527275,
+          "processing_ms": 12.737305001792265,
+          "capture_ms": 121.82689399924129,
+          "displayed_total_ms": 137.64664900008938,
+          "worker_ms": 157.90989800007083,
+          "complete_ms": 167.32717600098113,
+          "evaluation_done": 24650.433198523,
+          "completed": 24650.459892315
+        }
+      ],
+      "both_evaluated_ms": 140.65463299994008,
+      "both_complete_ms": 167.34842500227387,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.570087997621158
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 16,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24650.523944614,
+          "pipeline": {
+            "start": 24650.654046376,
+            "end": 24650.678885762,
+            "tool_ms": [
+              22.534245003043907
+            ]
+          },
+          "capture": {
+            "start": 24650.530529371,
+            "end": 24650.650926132
+          },
+          "pipeline_ms": 24.839386001985986,
+          "displayed_pipeline_ms": 23.152476001996547,
+          "processing_ms": 27.088430000731023,
+          "capture_ms": 121.78542000037851,
+          "displayed_total_ms": 151.95604499967885,
+          "worker_ms": 172.74113799794577,
+          "complete_ms": 182.0485549978912,
+          "evaluation_done": 24650.678885762,
+          "completed": 24650.705993169
+        }
+      ],
+      "both_evaluated_ms": 154.96489300130634,
+      "both_complete_ms": 182.07229999825358,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.839386001985986
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 16,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24650.770481933,
+          "pipeline": {
+            "start": 24650.922832041,
+            "end": 24650.950040955,
+            "tool_ms": [
+              25.02006599752349
+            ]
+          },
+          "capture": {
+            "start": 24650.78289289,
+            "end": 24650.919831257
+          },
+          "pipeline_ms": 27.208913998038042,
+          "displayed_pipeline_ms": 25.58962200055248,
+          "processing_ms": 29.26604700041935,
+          "capture_ms": 138.42674199986504,
+          "displayed_total_ms": 174.86537600052543,
+          "worker_ms": 192.7557369999704,
+          "complete_ms": 205.13469300203724,
+          "evaluation_done": 24650.950040955,
+          "completed": 24650.975616626
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24650.770189282,
+          "pipeline": {
+            "start": 24650.903333268,
+            "end": 24650.914741948,
+            "tool_ms": [
+              8.950412000558572
+            ]
+          },
+          "capture": {
+            "start": 24650.778811394,
+            "end": 24650.900190208
+          },
+          "pipeline_ms": 11.408679998567095,
+          "displayed_pipeline_ms": 9.479104999627452,
+          "processing_ms": 13.584569001977798,
+          "capture_ms": 122.85739599974477,
+          "displayed_total_ms": 140.03307399980258,
+          "worker_ms": 164.19441999823903,
+          "complete_ms": 170.47721299968543,
+          "evaluation_done": 24650.914741948,
+          "completed": 24650.940666495
+        }
+      ],
+      "both_evaluated_ms": 179.88933800006635,
+      "both_complete_ms": 205.46500900309184,
+      "start_skew_ms": 0.29265099874464795,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 17,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24651.040362327,
+          "pipeline": {
+            "start": 24651.193585491,
+            "end": 24651.219946086,
+            "tool_ms": [
+              24.197249997087056
+            ]
+          },
+          "capture": {
+            "start": 24651.051894627,
+            "end": 24651.190675271
+          },
+          "pipeline_ms": 26.36059499855037,
+          "displayed_pipeline_ms": 24.764311998296762,
+          "processing_ms": 28.380126001138706,
+          "capture_ms": 140.10187699750531,
+          "displayed_total_ms": 174.89961699902778,
+          "worker_ms": 192.82565899993642,
+          "complete_ms": 201.68918800118263,
+          "evaluation_done": 24651.219946086,
+          "completed": 24651.242051515
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24651.040072076,
+          "pipeline": {
+            "start": 24651.173105722,
+            "end": 24651.18468356,
+            "tool_ms": [
+              8.970797000074526
+            ]
+          },
+          "capture": {
+            "start": 24651.048692076,
+            "end": 24651.169910083
+          },
+          "pipeline_ms": 11.577838002267526,
+          "displayed_pipeline_ms": 9.50128100157599,
+          "processing_ms": 13.84656200025347,
+          "capture_ms": 122.61005899927113,
+          "displayed_total_ms": 140.12674200057518,
+          "worker_ms": 163.33537999889813,
+          "complete_ms": 169.91911199875176,
+          "evaluation_done": 24651.18468356,
+          "completed": 24651.209991188
+        }
+      ],
+      "both_evaluated_ms": 179.9079949996667,
+      "both_complete_ms": 202.01342400105204,
+      "start_skew_ms": 0.2902509986597579,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 17,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24651.302923857,
+          "pipeline": {
+            "start": 24651.432935887,
+            "end": 24651.467644504,
+            "tool_ms": [
+              32.49768800014863
+            ]
+          },
+          "capture": {
+            "start": 24651.309558567,
+            "end": 24651.429927871
+          },
+          "pipeline_ms": 34.70861699679517,
+          "displayed_pipeline_ms": 33.0895490005787,
+          "processing_ms": 36.830328001087764,
+          "capture_ms": 121.77089199758484,
+          "displayed_total_ms": 161.68520700011868,
+          "worker_ms": 189.34002599780797,
+          "complete_ms": 198.27414999963366,
+          "evaluation_done": 24651.467644504,
+          "completed": 24651.501198007
+        }
+      ],
+      "both_evaluated_ms": 164.7428239994042,
+      "both_complete_ms": 198.29632700202637,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 34.70861699679517
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 17,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24651.565914395,
+          "pipeline": {
+            "start": 24651.695191613,
+            "end": 24651.705600224,
+            "tool_ms": [
+              8.222930002375506
+            ]
+          },
+          "capture": {
+            "start": 24651.572440749,
+            "end": 24651.692177517
+          },
+          "pipeline_ms": 10.408611000457313,
+          "displayed_pipeline_ms": 8.803335997072281,
+          "processing_ms": 12.523761000920786,
+          "capture_ms": 121.15186099981656,
+          "displayed_total_ms": 136.7581689992221,
+          "worker_ms": 156.57420000206912,
+          "complete_ms": 163.51125800065347,
+          "evaluation_done": 24651.705600224,
+          "completed": 24651.729425653
+        }
+      ],
+      "both_evaluated_ms": 139.70650199917145,
+      "both_complete_ms": 163.5319310007617,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.408611000457313
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 18,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24651.790056642,
+          "pipeline": {
+            "start": 24651.926465901,
+            "end": 24651.959582427,
+            "tool_ms": [
+              30.100702002528124
+            ]
+          },
+          "capture": {
+            "start": 24651.801846808,
+            "end": 24651.923282871
+          },
+          "pipeline_ms": 33.11652599950321,
+          "displayed_pipeline_ms": 30.675699999846984,
+          "processing_ms": 35.31798399853869,
+          "capture_ms": 122.8961810011242,
+          "displayed_total_ms": 162.3982889977924,
+          "worker_ms": 189.87550100064254,
+          "complete_ms": 200.82643600107986,
+          "evaluation_done": 24651.959582427,
+          "completed": 24651.990883078
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24651.789785527,
+          "pipeline": {
+            "start": 24651.939224487,
+            "end": 24651.951979201,
+            "tool_ms": [
+              10.42806699842913
+            ]
+          },
+          "capture": {
+            "start": 24651.802216741,
+            "end": 24651.935987567
+          },
+          "pipeline_ms": 12.754714000038803,
+          "displayed_pipeline_ms": 10.978072001307737,
+          "processing_ms": 15.034447002108209,
+          "capture_ms": 135.3912689992285,
+          "displayed_total_ms": 155.32733800137066,
+          "worker_ms": 184.77953700130456,
+          "complete_ms": 194.94554700213484,
+          "evaluation_done": 24651.951979201,
+          "completed": 24651.984731074
+        }
+      ],
+      "both_evaluated_ms": 169.82755700155394,
+      "both_complete_ms": 201.12820800204645,
+      "start_skew_ms": 0.27111500094179064,
+      "evaluation_overlap_ms": 12.754714000038803
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 18,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24652.055915318,
+          "pipeline": {
+            "start": 24652.185542086,
+            "end": 24652.195963625,
+            "tool_ms": [
+              8.32731799891917
+            ]
+          },
+          "capture": {
+            "start": 24652.062456201,
+            "end": 24652.182623673
+          },
+          "pipeline_ms": 10.421538998343749,
+          "displayed_pipeline_ms": 8.873225000570528,
+          "processing_ms": 12.519441999756964,
+          "capture_ms": 121.50204900171957,
+          "displayed_total_ms": 137.2151780014974,
+          "worker_ms": 156.65356400131714,
+          "complete_ms": 164.3045999990136,
+          "evaluation_done": 24652.195963625,
+          "completed": 24652.220219918
+        }
+      ],
+      "both_evaluated_ms": 140.07115599815734,
+      "both_complete_ms": 164.3274489979376,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.421538998343749
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 18,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24652.281164262,
+          "pipeline": {
+            "start": 24652.410872921,
+            "end": 24652.435229633,
+            "tool_ms": [
+              22.03557000029832
+            ]
+          },
+          "capture": {
+            "start": 24652.287846398,
+            "end": 24652.407744196
+          },
+          "pipeline_ms": 24.356712001463166,
+          "displayed_pipeline_ms": 22.632648000580957,
+          "processing_ms": 26.53541700055939,
+          "capture_ms": 121.4943699997093,
+          "displayed_total_ms": 151.06788399862126,
+          "worker_ms": 171.4304320012161,
+          "complete_ms": 180.40420599936624,
+          "evaluation_done": 24652.435229633,
+          "completed": 24652.461568468
+        }
+      ],
+      "both_evaluated_ms": 154.08940400084248,
+      "both_complete_ms": 180.4282390003209,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.356712001463166
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 19,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24652.527171161,
+          "pipeline": {
+            "start": 24652.656742278,
+            "end": 24652.667256237,
+            "tool_ms": [
+              8.38674399710726
+            ]
+          },
+          "capture": {
+            "start": 24652.533601064,
+            "end": 24652.653680341
+          },
+          "pipeline_ms": 10.513959001400508,
+          "displayed_pipeline_ms": 8.92314699740382,
+          "processing_ms": 12.693048000073759,
+          "capture_ms": 121.47526400076458,
+          "displayed_total_ms": 137.12256600047112,
+          "worker_ms": 156.24014000059105,
+          "complete_ms": 163.1186999984493,
+          "evaluation_done": 24652.667256237,
+          "completed": 24652.690289861
+        }
+      ],
+      "both_evaluated_ms": 140.10853299987502,
+      "both_complete_ms": 163.14215699821943,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.513959001400508
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 19,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24652.753328683,
+          "pipeline": {
+            "start": 24652.883609234,
+            "end": 24652.90793881,
+            "tool_ms": [
+              22.046898997359676
+            ]
+          },
+          "capture": {
+            "start": 24652.75986867,
+            "end": 24652.880561313
+          },
+          "pipeline_ms": 24.329576001036912,
+          "displayed_pipeline_ms": 22.649353002634598,
+          "processing_ms": 26.493367997318273,
+          "capture_ms": 122.0938800033764,
+          "displayed_total_ms": 151.64582499710377,
+          "worker_ms": 171.1543579986028,
+          "complete_ms": 180.0057270011166,
+          "evaluation_done": 24652.90793881,
+          "completed": 24652.93333441
+        }
+      ],
+      "both_evaluated_ms": 154.63393599929987,
+      "both_complete_ms": 180.02953600080218,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.329576001036912
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 19,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24652.999637865,
+          "pipeline": {
+            "start": 24653.15292964,
+            "end": 24653.178686949,
+            "tool_ms": [
+              23.590093001985224
+            ]
+          },
+          "capture": {
+            "start": 24653.01146768,
+            "end": 24653.149713776
+          },
+          "pipeline_ms": 25.7573089984362,
+          "displayed_pipeline_ms": 24.15164899866795,
+          "processing_ms": 28.019664001476485,
+          "capture_ms": 139.75415199820418,
+          "displayed_total_ms": 174.40865500248037,
+          "worker_ms": 192.8540119988611,
+          "complete_ms": 205.06211400061147,
+          "evaluation_done": 24653.178686949,
+          "completed": 24653.204699979
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24652.999368127,
+          "pipeline": {
+            "start": 24653.132723577,
+            "end": 24653.144200579,
+            "tool_ms": [
+              8.925803002057364
+            ]
+          },
+          "capture": {
+            "start": 24653.008135237,
+            "end": 24653.12866333
+          },
+          "pipeline_ms": 11.477002000901848,
+          "displayed_pipeline_ms": 9.442143000342185,
+          "processing_ms": 14.568221002264181,
+          "capture_ms": 121.99889999828883,
+          "displayed_total_ms": 140.4356490020291,
+          "worker_ms": 164.03246200206922,
+          "complete_ms": 170.00785200070823,
+          "evaluation_done": 24653.144200579,
+          "completed": 24653.169375979
+        }
+      ],
+      "both_evaluated_ms": 179.35008699714672,
+      "both_complete_ms": 205.36311699834187,
+      "start_skew_ms": 0.2697380004974548,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 20,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24653.270479191,
+          "pipeline": {
+            "start": 24653.403403681,
+            "end": 24653.432744323,
+            "tool_ms": [
+              25.631961001636228
+            ]
+          },
+          "capture": {
+            "start": 24653.279037333,
+            "end": 24653.400231499
+          },
+          "pipeline_ms": 29.340641998715,
+          "displayed_pipeline_ms": 26.147178999963216,
+          "processing_ms": 31.584661002852954,
+          "capture_ms": 122.72875099733938,
+          "displayed_total_ms": 157.55366099983803,
+          "worker_ms": 181.2108599988278,
+          "complete_ms": 191.78846800059546,
+          "evaluation_done": 24653.432744323,
+          "completed": 24653.462267659
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24653.270177739,
+          "pipeline": {
+            "start": 24653.416426213,
+            "end": 24653.431822016,
+            "tool_ms": [
+              10.164921997784404
+            ]
+          },
+          "capture": {
+            "start": 24653.281520657,
+            "end": 24653.413122666
+          },
+          "pipeline_ms": 15.395802998682484,
+          "displayed_pipeline_ms": 10.70321299994248,
+          "processing_ms": 17.755250999471173,
+          "capture_ms": 134.35091100109275,
+          "displayed_total_ms": 157.10519599815598,
+          "worker_ms": 179.18934499903116,
+          "complete_ms": 186.570963000122,
+          "evaluation_done": 24653.431822016,
+          "completed": 24653.456748702
+        }
+      ],
+      "both_evaluated_ms": 162.5988089981547,
+      "both_complete_ms": 192.1221449993027,
+      "start_skew_ms": 0.30145200071274303,
+      "evaluation_overlap_ms": 15.395802998682484
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 20,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24653.52170606,
+          "pipeline": {
+            "start": 24653.651910289,
+            "end": 24653.662262801,
+            "tool_ms": [
+              8.234193999669515
+            ]
+          },
+          "capture": {
+            "start": 24653.528637997,
+            "end": 24653.648955267
+          },
+          "pipeline_ms": 10.352511999371927,
+          "displayed_pipeline_ms": 8.788486000412377,
+          "processing_ms": 12.427277997630881,
+          "capture_ms": 121.80401300065569,
+          "displayed_total_ms": 137.44708999729482,
+          "worker_ms": 157.12276499834843,
+          "complete_ms": 164.3067439981678,
+          "evaluation_done": 24653.662262801,
+          "completed": 24653.686012804
+        }
+      ],
+      "both_evaluated_ms": 140.57805400079815,
+      "both_complete_ms": 164.32805699878372,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.352511999371927
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 20,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24653.748888259,
+          "pipeline": {
+            "start": 24653.878629463,
+            "end": 24653.903210888,
+            "tool_ms": [
+              22.310781001579016
+            ]
+          },
+          "capture": {
+            "start": 24653.755639806,
+            "end": 24653.875541765
+          },
+          "pipeline_ms": 24.581424997450085,
+          "displayed_pipeline_ms": 22.91685200179927,
+          "processing_ms": 26.685759003157727,
+          "capture_ms": 121.52598699685768,
+          "displayed_total_ms": 151.27192300133174,
+          "worker_ms": 171.9059710012516,
+          "complete_ms": 179.45597899961285,
+          "evaluation_done": 24653.903210888,
+          "completed": 24653.928344238
+        }
+      ],
+      "both_evaluated_ms": 154.34464499776368,
+      "both_complete_ms": 179.47799499961548,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.581424997450085
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 21,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24653.990184872,
+          "pipeline": {
+            "start": 24654.119988894,
+            "end": 24654.130537926,
+            "tool_ms": [
+              8.42168899907847
+            ]
+          },
+          "capture": {
+            "start": 24653.996778621,
+            "end": 24654.116950285
+          },
+          "pipeline_ms": 10.549032002018066,
+          "displayed_pipeline_ms": 8.966317000158597,
+          "processing_ms": 12.704664000921184,
+          "capture_ms": 121.56902899732813,
+          "displayed_total_ms": 137.35220699891215,
+          "worker_ms": 157.60931100157904,
+          "complete_ms": 167.5064779992681,
+          "evaluation_done": 24654.130537926,
+          "completed": 24654.15769135
+        }
+      ],
+      "both_evaluated_ms": 140.37503900181036,
+      "both_complete_ms": 167.5284630000533,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.549032002018066
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 21,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24654.224874486,
+          "pipeline": {
+            "start": 24654.355272483,
+            "end": 24654.379619659,
+            "tool_ms": [
+              22.063828000682406
+            ]
+          },
+          "capture": {
+            "start": 24654.231410377,
+            "end": 24654.352209777
+          },
+          "pipeline_ms": 24.34717600044678,
+          "displayed_pipeline_ms": 22.669193996989634,
+          "processing_ms": 26.51973699903465,
+          "capture_ms": 122.20485999932862,
+          "displayed_total_ms": 151.79603899741778,
+          "worker_ms": 172.56090699811466,
+          "complete_ms": 182.51510099798907,
+          "evaluation_done": 24654.379619659,
+          "completed": 24654.407389587
+        }
+      ],
+      "both_evaluated_ms": 154.76965400011977,
+      "both_complete_ms": 182.53958199784392,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 24.34717600044678
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 21,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24654.473209376,
+          "pipeline": {
+            "start": 24654.626356473,
+            "end": 24654.652659338,
+            "tool_ms": [
+              24.022140001761727
+            ]
+          },
+          "capture": {
+            "start": 24654.485147003,
+            "end": 24654.623134658
+          },
+          "pipeline_ms": 26.302865000616293,
+          "displayed_pipeline_ms": 24.58366599967121,
+          "processing_ms": 28.560933002154343,
+          "capture_ms": 139.4991659981315,
+          "displayed_total_ms": 174.89526500139618,
+          "worker_ms": 193.11437400028808,
+          "complete_ms": 202.5901180022629,
+          "evaluation_done": 24654.652659338,
+          "completed": 24654.675799494
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24654.472936438,
+          "pipeline": {
+            "start": 24654.605825631,
+            "end": 24654.616990813,
+            "tool_ms": [
+              8.677986999828136
+            ]
+          },
+          "capture": {
+            "start": 24654.481194153,
+            "end": 24654.602656457
+          },
+          "pipeline_ms": 11.165182000695495,
+          "displayed_pipeline_ms": 9.200405002047773,
+          "processing_ms": 13.364016002014978,
+          "capture_ms": 122.92936700032442,
+          "displayed_total_ms": 139.70240600247052,
+          "worker_ms": 163.1720139994286,
+          "complete_ms": 168.84566400040057,
+          "evaluation_done": 24654.616990813,
+          "completed": 24654.641782102
+        }
+      ],
+      "both_evaluated_ms": 179.7542929998599,
+      "both_complete_ms": 202.89444900117815,
+      "start_skew_ms": 0.2729379993979819,
+      "evaluation_overlap_ms": 0
+    },
+    {
+      "condition": "solo_1",
+      "iteration": 22,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24654.741342665,
+          "pipeline": {
+            "start": 24654.865735702,
+            "end": 24654.894331517,
+            "tool_ms": [
+              26.53698599897325
+            ]
+          },
+          "capture": {
+            "start": 24654.746660367,
+            "end": 24654.863347678
+          },
+          "pipeline_ms": 28.59581500160857,
+          "displayed_pipeline_ms": 27.078925999376224,
+          "processing_ms": 30.172448998200707,
+          "capture_ms": 117.9143320005096,
+          "displayed_total_ms": 150.54783300001873,
+          "worker_ms": 178.40010000145412,
+          "complete_ms": 187.9521980008576,
+          "evaluation_done": 24654.894331517,
+          "completed": 24654.929294863
+        }
+      ],
+      "both_evaluated_ms": 153.01147699938156,
+      "both_complete_ms": 187.97482299851254,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 28.59581500160857
+    },
+    {
+      "condition": "solo_2",
+      "iteration": 22,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24654.995646288,
+          "pipeline": {
+            "start": 24655.126584849,
+            "end": 24655.137303007,
+            "tool_ms": [
+              8.432761002040934
+            ]
+          },
+          "capture": {
+            "start": 24655.002703991,
+            "end": 24655.123398202
+          },
+          "pipeline_ms": 10.718157998780953,
+          "displayed_pipeline_ms": 8.979758000350557,
+          "processing_ms": 12.953121000464307,
+          "capture_ms": 122.13768999936292,
+          "displayed_total_ms": 138.4221990010701,
+          "worker_ms": 159.96578300109832,
+          "complete_ms": 169.51080999933765,
+          "evaluation_done": 24655.137303007,
+          "completed": 24655.165157098
+        }
+      ],
+      "both_evaluated_ms": 141.68526399953407,
+      "both_complete_ms": 169.53935499986983,
+      "start_skew_ms": 0.0,
+      "evaluation_overlap_ms": 10.718157998780953
+    },
+    {
+      "condition": "simultaneous",
+      "iteration": 22,
+      "warmup": false,
+      "views": [
+        {
+          "camera_id": "camera_1",
+          "view_id": "view_1",
+          "status": "ok",
+          "worker_start": 24655.233500277,
+          "pipeline": {
+            "start": 24655.36848686,
+            "end": 24655.399513676,
+            "tool_ms": [
+              28.39820699955453
+            ]
+          },
+          "capture": {
+            "start": 24655.244213955,
+            "end": 24655.365327222
+          },
+          "pipeline_ms": 31.026815999211976,
+          "displayed_pipeline_ms": 28.95525100029772,
+          "processing_ms": 33.249619002162945,
+          "capture_ms": 122.55741699846112,
+          "displayed_total_ms": 158.85387000162154,
+          "worker_ms": 187.36359999820706,
+          "complete_ms": 200.35189099871786,
+          "evaluation_done": 24655.399513676,
+          "completed": 24655.433852168
+        },
+        {
+          "camera_id": "camera_2",
+          "view_id": "view_2",
+          "status": "ok",
+          "worker_start": 24655.233227243,
+          "pipeline": {
+            "start": 24655.381600051,
+            "end": 24655.394615702,
+            "tool_ms": [
+              10.504710000532214
+            ]
+          },
+          "capture": {
+            "start": 24655.247424954,
+            "end": 24655.378492095
+          },
+          "pipeline_ms": 13.015650998568162,
+          "displayed_pipeline_ms": 11.074394999013748,
+          "processing_ms": 15.183444000285817,
+          "capture_ms": 132.43711199902464,
+          "displayed_total_ms": 154.4278490000579,
+          "worker_ms": 184.0146120011923,
+          "complete_ms": 192.12371300091036,
+          "evaluation_done": 24655.394615702,
+          "completed": 24655.425350956
+        }
+      ],
+      "both_evaluated_ms": 166.3141459976032,
+      "both_complete_ms": 200.65263799915556,
+      "start_skew_ms": 0.27303400202072226,
+      "evaluation_overlap_ms": 13.015650998568162
+    }
+  ],
+  "cleanup_errors": [],
+  "opencv_threads": 6,
+  "load_before": [
+    0.1796875,
+    0.392578125,
+    0.3662109375
+  ],
+  "cameras_before": {
+    "camera_1": {
+      "device": "/dev/video0",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 5
+    },
+    "camera_2": {
+      "device": "/dev/video2",
+      "width": 2592,
+      "height": 1944,
+      "fps": 30.0,
+      "mode": 1,
+      "exposure": 10
+    }
+  },
+  "recipe_sha256": "faf728218bcc117d4be299b715171b27438a5d72f7dda3f8e30c68339fe46660",
+  "views": [
+    {
+      "id": "view_1",
+      "name": "celust",
+      "camera_id": "camera_1",
+      "camera_profile": {
+        "width": 2592,
+        "height": 1944,
+        "fps": 30,
+        "pixel_format": "Y8",
+        "exposure_us": 500
+      },
+      "tools": [
+        {
+          "type": "ssim",
+          "name": "Podobnosť vzhľadu (SSIM)",
+          "roi": {
+            "x": 1202,
+            "y": 424,
+            "w": 845,
+            "h": 1016
+          }
+        }
+      ]
+    },
+    {
+      "id": "view_2",
+      "name": "diel",
+      "camera_id": "camera_2",
+      "camera_profile": {
+        "width": 2592,
+        "height": 1944,
+        "fps": 30,
+        "pixel_format": "Y8",
+        "exposure_us": 1000
+      },
+      "tools": [
+        {
+          "type": "ssim",
+          "name": "Podobnosť vzhľadu (SSIM)",
+          "roi": {
+            "x": 1567,
+            "y": 307,
+            "w": 525,
+            "h": 352
+          }
+        }
+      ]
+    }
+  ],
+  "capture_mode": "trigger",
+  "logging_enabled": true,
+  "export_artifacts": false,
+  "setup_retries": [],
+  "starts_after_prepare": {
+    "camera_1": 2,
+    "camera_2": 2
+  },
+  "summary": {
+    "solo_1": {
+      "n": 20,
+      "both_evaluated_ms": {
+        "mean": 157.11105894970387,
+        "median": 154.79603899984795,
+        "p95": 164.7663752994049,
+        "min": 153.01147699938156,
+        "max": 165.21384999941802
+      },
+      "both_complete_ms": {
+        "mean": 183.76291789973038,
+        "median": 181.60154649922333,
+        "p95": 195.82480605058663,
+        "min": 177.7166819992999,
+        "max": 198.29632700202637
+      },
+      "views": {
+        "view_1": {
+          "pipeline_ms": {
+            "mean": 27.13353740000457,
+            "median": 24.594929498562124,
+            "p95": 34.71349399696919,
+            "min": 24.28602200234309,
+            "max": 34.80615700027556
+          },
+          "displayed_pipeline_ms": {
+            "mean": 25.454779200481426,
+            "median": 22.90501150127966,
+            "p95": 33.093142750658444,
+            "min": 22.54019700194476,
+            "max": 33.16142400217359
+          },
+          "processing_ms": {
+            "mean": 29.29471375027788,
+            "median": 26.798547001817496,
+            "p95": 36.83674425101344,
+            "min": 26.45602300253813,
+            "max": 36.95865299960133
+          },
+          "capture_ms": {
+            "mean": 121.7749333996835,
+            "median": 121.77815599898167,
+            "p95": 122.55323509853042,
+            "min": 117.9143320005096,
+            "max": 127.08321700119996
+          },
+          "displayed_total_ms": {
+            "mean": 154.11282099994423,
+            "median": 151.75878949958133,
+            "p95": 161.7081294500167,
+            "min": 150.54783300001873,
+            "max": 162.14365599807934
+          },
+          "complete_ms": {
+            "mean": 183.740105799734,
+            "median": 181.57736949797254,
+            "p95": 195.80199065148918,
+            "min": 177.69236100139096,
+            "max": 198.27414999963366
+          }
+        }
+      }
+    },
+    "solo_2": {
+      "n": 20,
+      "both_evaluated_ms": {
+        "mean": 140.65396920013882,
+        "median": 140.444305499841,
+        "p95": 141.9360237518049,
+        "min": 139.70650199917145,
+        "max": 143.1562940015283
+      },
+      "both_complete_ms": {
+        "mean": 165.73500009981217,
+        "median": 165.39820799880545,
+        "p95": 168.04489480146003,
+        "min": 163.14215699821943,
+        "max": 169.53935499986983
+      },
+      "views": {
+        "view_2": {
+          "pipeline_ms": {
+            "mean": 10.538029950475902,
+            "median": 10.53408750158269,
+            "p95": 10.67614425028296,
+            "min": 10.352511999371927,
+            "max": 10.718157998780953
+          },
+          "displayed_pipeline_ms": {
+            "mean": 8.926166699893656,
+            "median": 8.933195498684654,
+            "p95": 9.03506724989711,
+            "min": 8.788486000412377,
+            "max": 9.05716900160769
+          },
+          "processing_ms": {
+            "mean": 12.7384028999586,
+            "median": 12.71362450097513,
+            "p95": 12.974433800445695,
+            "min": 12.427277997630881,
+            "max": 13.379377000092063
+          },
+          "capture_ms": {
+            "mean": 121.82393844977923,
+            "median": 121.67301599947677,
+            "p95": 122.69697389965586,
+            "min": 121.15186099981656,
+            "max": 124.16595700051403
+          },
+          "displayed_total_ms": {
+            "mean": 137.61739719957404,
+            "median": 137.34070250029617,
+            "p95": 139.01663685173844,
+            "min": 136.7581689992221,
+            "max": 140.14059799956158
+          },
+          "complete_ms": {
+            "mean": 165.71194014995854,
+            "median": 165.3769269996701,
+            "p95": 168.0228259485375,
+            "min": 163.1186999984493,
+            "max": 169.51080999933765
+          }
+        }
+      }
+    },
+    "simultaneous": {
+      "n": 20,
+      "both_evaluated_ms": {
+        "mean": 176.81589149997308,
+        "median": 179.7022909995576,
+        "p95": 183.95560840035614,
+        "min": 162.5988089981547,
+        "max": 185.50375500126393
+      },
+      "both_complete_ms": {
+        "mean": 202.08311335045437,
+        "median": 202.80505350092426,
+        "p95": 206.65839259909262,
+        "min": 192.1221449993027,
+        "max": 206.87718900080654
+      },
+      "views": {
+        "view_1": {
+          "pipeline_ms": {
+            "mean": 27.578048299983493,
+            "median": 26.69393550058885,
+            "p95": 31.131301499226538,
+            "min": 25.7573089984362,
+            "max": 33.11652599950321
+          },
+          "displayed_pipeline_ms": {
+            "mean": 25.63560665003024,
+            "median": 25.073811499169096,
+            "p95": 29.041273450275185,
+            "min": 24.126079999405192,
+            "max": 30.675699999846984
+          },
+          "processing_ms": {
+            "mean": 29.87496415098576,
+            "median": 29.138154501197278,
+            "p95": 33.35303725198173,
+            "min": 28.019664001476485,
+            "max": 35.31798399853869
+          },
+          "capture_ms": {
+            "mean": 136.06582089960284,
+            "median": 139.10238350035797,
+            "p95": 142.95909444881545,
+            "min": 122.55741699846112,
+            "max": 143.69161000286113
+          },
+          "displayed_total_ms": {
+            "mean": 171.23142500040558,
+            "median": 174.49235400090402,
+            "p95": 177.6583369997752,
+            "min": 157.55366099983803,
+            "max": 177.86007900213008
+          },
+          "complete_ms": {
+            "mean": 201.4305371503724,
+            "median": 202.48537800216582,
+            "p95": 206.34337899864477,
+            "min": 185.36963800215744,
+            "max": 206.56655299899285
+          }
+        },
+        "view_2": {
+          "pipeline_ms": {
+            "mean": 12.196301000221865,
+            "median": 11.559261500224238,
+            "p95": 15.523375798875351,
+            "min": 10.841715000424301,
+            "max": 17.947259002539795
+          },
+          "displayed_pipeline_ms": {
+            "mean": 10.029479750301107,
+            "median": 9.487344501394546,
+            "p95": 11.294044799069528,
+            "min": 8.817766996799037,
+            "max": 15.467391000129282
+          },
+          "processing_ms": {
+            "mean": 14.470006250485312,
+            "median": 13.782208001430263,
+            "p95": 17.88993284953904,
+            "min": 13.073702000838239,
+            "max": 20.448888000828447
+          },
+          "capture_ms": {
+            "mean": 125.83337529995333,
+            "median": 122.94869550169096,
+            "p95": 135.49288305057416,
+            "min": 121.95073800103273,
+            "max": 136.75775199953932
+          },
+          "displayed_total_ms": {
+            "mean": 144.4573376003973,
+            "median": 140.29423549982312,
+            "p95": 157.33031799827586,
+            "min": 139.30306299880613,
+            "max": 161.6076360005536
+          },
+          "complete_ms": {
+            "mean": 175.20160444983048,
+            "median": 169.93592849939887,
+            "p95": 192.35749715007842,
+            "min": 167.26451700014877,
+            "max": 194.94554700213484
+          }
+        }
+      }
+    }
+  },
+  "starts_after_measurement": {
+    "camera_1": 2,
+    "camera_2": 2
+  },
+  "load_after": [
+    0.6650390625,
+    0.49072265625,
+    0.3994140625
+  ],
+  "status_after_1": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 1\nPINS LED=GP17 TRIG=GP16\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  },
+  "status_after_2": {
+    "connected": true,
+    "port": "/dev/ttyACM0",
+    "last_error": "",
+    "device_status": "FIRMWARE pico_hdf_controller 4.3.1-dual-channel\nCAPABILITIES PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1 DUAL_CHANNEL_V1 HOST_INPUT_V1\nCHANNEL 2\nPINS LED=GP19 TRIG=GP18\nSESSION IDLE\nSESSION_MODE IDLE\nLIVE OFF\nMANUAL_LIGHT OFF\nV2_GAP 300\nIN5 OFF\nV2_TRIG 10\nV1_GAP 300\nLOCKOUT_MS 100\nV2_COUNT 2\nV2_CAPTURE 5\nIN8 OFF\nV1_DELAY 0\nV1_MODE TRIGGER\nV1_TRIG 10\nIN6 OFF\nDEBOUNCE_MS 30\nV1_CAPTURE 5\nV2_PULSE 200\nV1_PULSE 200\nV2_MODE TRIGGER\nV1_COUNT 2\nV2_DELAY 0\nIN2 V1\nIN3 OFF\nIN1 V1\nIN7 OFF\nIN4 OFF\nINPUT_MAP IN2=V1 IN3=OFF IN8=OFF IN1=V1 IN6=OFF IN7=OFF IN4=OFF IN5=OFF\nEND"
+  }
+}

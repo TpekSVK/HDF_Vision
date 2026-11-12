@@ -34,7 +34,7 @@ Pomoc: `bash docker/update-pico.sh --help`.
 ## Čo znamená aktuálna verzia
 
 Cieľom je `firmware/pico/main.py` **v lokálnej kópii projektu**. Aktuálne je to
-`4.2.1-pio-pair`. Skript automaticky nesťahuje zdroje z internetu. Ak chcete novší
+`4.3.1-dual-channel` v experimentálnej vetve pre dve kamery. Skript automaticky nesťahuje zdroje z internetu. Ak chcete novší
 firmvér z projektu, najprv aktualizujte príslušnú lokálnu vetvu projektu.
 
 Číselné verzie porovnáva ako čísla (napr. 4.10 je novšia než 4.9). Rovnakú

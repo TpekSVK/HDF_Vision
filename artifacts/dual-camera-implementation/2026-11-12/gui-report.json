@@ -1,0 +1,12 @@
+{
+  "status": "passed",
+  "steps": [
+    "shared application prepared RUN",
+    "touch Trigger processed both cameras without switching selected view",
+    "Results displays real images filtered by each camera",
+    "camera_1: Trigger LIVE, independent light and Golden capture",
+    "camera_2: Trigger LIVE, independent light and Golden capture",
+    "Golden wizard closed without disconnecting peer camera"
+  ],
+  "cleanup_errors": []
+}

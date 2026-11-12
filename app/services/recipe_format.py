@@ -19,3 +19,18 @@ def read_recipe_document(path: str | Path) -> dict:
     except (OSError, ValueError) as exc:
         raise RecipeFormatError(f"Recept sa nedá načítať ({Path(path).name}): {exc}") from exc
     return validate_recipe_document(data)
+
+
+def backup_previous_recipe(path):
+    """Preserve exact v3 bytes once, immediately before the first v4 write."""
+    path = Path(path)
+    if not path.exists():
+        return
+    raw = path.read_bytes()
+    if json.loads(raw).get('format_version') == 3:
+        backup = path.with_name(path.stem + '.pre-dual-v3.json')
+        try:
+            with backup.open('xb') as stream:
+                stream.write(raw)
+        except FileExistsError:
+            pass

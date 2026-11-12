@@ -70,7 +70,8 @@ class InspectionRuntime:
 
     def quiesce(self):
         self.pico.quiesce()
-        if getattr(self, 'capture_mode', 'master') == 'trigger':
+        if (getattr(self, 'capture_mode', 'master') == 'trigger'
+                and not getattr(self, 'keep_camera_ready_on_pause', False)):
             self.cam.exit_trigger_session(restore_master=False)
         self.reset()
 
@@ -98,7 +99,7 @@ class InspectionRuntime:
                 selected = next((view for view in config.views if view.id == self._active_view_id
                     and view.trigger_mode == 'external' and view.external_source == 'pico'
                     and view.external_trigger_mode == 'explicit'), None)
-                if selected is not None:
+                if selected is not None and not (options.get('spec') or {}).get('view_ids'):
                     options = dict(options, spec={'view_id': selected.id})
             if self.capture_mode == 'trigger':
                 self.cam.begin_trigger_capture()
@@ -106,7 +107,14 @@ class InspectionRuntime:
                 trigger_input_index=options.get('input_index'), requested_spec=options.get('spec'))
             if state is None:
                 raise ValueError('Požiadavka nemá platný cieľový pohľad.')
+            if options.get('cycle_id'):
+                state['cycle_id'] = state['run_id'] = options['cycle_id']
+            state['captured_frames'].update(options.get('seed_frames', {}))
+            state['frame_ids'].update(options.get('seed_frame_ids', {}))
+            if options.get('require_all_views'):
+                state['fail_fast'] = False
             state['frame_request'] = options.get('frame_request')
+            state['capture_request_source'] = options.get('capture_request_source', request.source)
             if state['logging_enabled']:
                 self.db = DbService(self.db_path)
             controller.run_sequence(request, state, self._execute_view_trigger, self._finalize_run_trigger)
@@ -655,11 +663,21 @@ class InspectionRuntime:
 
         view_specs: list[dict[str, Any]] = [
             self._build_runtime_view_spec(view, index)
-            for index, view in enumerate(recipe_cfg.views)
+            for index, view in enumerate(view for view in recipe_cfg.views
+                if not getattr(self, 'allowed_camera_id', None) or view.camera_id == self.allowed_camera_id)
         ]
 
         manual_specs = [spec for spec in view_specs if spec["trigger_mode"] == "manual"]
         all_manual = bool(manual_specs) and len(manual_specs) == len(view_specs)
+        forced_ids = requested_spec.get('view_ids') if isinstance(requested_spec, Mapping) else None
+        forced_specs = None
+        if forced_ids is not None:
+            if not isinstance(forced_ids, list) or not forced_ids:
+                raise ValueError('Chýba zoznam pohľadov kamerovej požiadavky.')
+            lookup = {spec['view'].id: spec for spec in view_specs}
+            if any(ident not in lookup for ident in forced_ids):
+                raise ValueError('Pohľad nepatrí kamere tejto požiadavky.')
+            forced_specs = [lookup[ident] for ident in dict.fromkeys(forced_ids)]
         external_spec = None
         requested_view_id = ""
         if isinstance(requested_spec, Mapping):
@@ -677,13 +695,13 @@ class InspectionRuntime:
                     all_manual = True
                     break
         is_routed_external = trigger_source in {"pico", "modbus"}
-        if external_spec is None and is_routed_external and isinstance(trigger_input_index, Integral):
+        if forced_specs is None and external_spec is None and is_routed_external and isinstance(trigger_input_index, Integral):
             external_spec = self._resolve_external_trigger_view(
                 view_specs=view_specs,
                 source=trigger_source,
                 input_index=int(trigger_input_index),
             )
-        elif external_spec is None and trigger_source == "manual":
+        elif forced_specs is None and external_spec is None and trigger_source == "manual":
             external_spec = self._resolve_manual_sequence_view(
                 recipe_name=recipe_name,
                 view_specs=view_specs,
@@ -691,16 +709,21 @@ class InspectionRuntime:
             if external_spec is not None:
                 all_manual = True
 
-        if isinstance(requested_spec, Mapping) and external_spec is None:
+        if forced_specs is None and isinstance(requested_spec, Mapping) and external_spec is None:
             self._logger.warning(
                 "[RUN] software Pico trigger ignored reason=requested_view_not_found view=%s",
                 requested_view_id or "unknown",
             )
             return None
 
-        if is_routed_external and external_spec is None:
+        if forced_specs is None and is_routed_external and external_spec is None:
             return None
-        if external_spec is not None:
+        if forced_specs is not None:
+            self._reset_view_sequence_state()
+            per_view_statuses = {}
+            views_to_process = forced_specs
+            all_manual = False
+        elif external_spec is not None:
             sequence_key = str(external_spec.get("sequence_key") or "")
             sequence_position = int(external_spec.get("sequence_position", 0))
             if sequence_position == 0:
@@ -833,7 +856,7 @@ class InspectionRuntime:
                 base_camera_state=base_camera_state,
                 settle_ms=settle_ms,
                 transform_stage="inspection",
-                capture_request_source=trigger_state.get("trigger_source", "manual"),
+                capture_request_source=trigger_state.get("capture_request_source", trigger_state.get("trigger_source", "manual")),
                 frame_request=trigger_state.pop("frame_request", None),
             )
             if view_frame is None:
@@ -951,6 +974,9 @@ class InspectionRuntime:
                 "stored_frame_space": "original_rotated",
             }
         meta_payload.update(camera_id=self.camera_id, pico_id=self.pico_id)
+        meta_payload.update(camera_serial=getattr(self, 'camera_serial', None),
+                            camera_name=getattr(self, 'camera_name', None),
+                            output_group=view.output_group, output_mode=view.output_mode)
         if policy_applied:
             meta_payload["policy_applied"] = policy_applied
 

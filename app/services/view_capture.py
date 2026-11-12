@@ -38,6 +38,13 @@ class ViewCapture:
                 target = self.pico._normalize_target(view_id)
             if target not in {"V1", "V2"}:
                 raise RuntimeError("Pohľad nemá platný Pico profil V1/V2.")
+        from app.services.dual_pico_service import PicoChannel
+        if isinstance(self.pico, PicoChannel):
+            profile = str(getattr(view, 'pico_profile', None) or 'V1').upper()
+            if profile not in ('V1', 'V2'):
+                raise ValueError('Pohľad nemá platný časovací profil.')
+            if not self.pico.configure_view_flash(profile, view.flash_delay_ms, view.flash_pulse_ms):
+                raise RuntimeError(self.pico.last_error or 'Nastavenie blesku pre pohľad zlyhalo.')
         self.cam.prepare_master_capture()
         return self.pico.capture_master(target, self.cam)
 
@@ -61,6 +68,12 @@ class ViewCapture:
             raise ValueError("Neznámy režim snímania.")
         if view is None:
             raise ValueError("Snímanie vyžaduje konkrétny pohľad.")
+        from app.services.camera_registry import CameraRouter
+        if isinstance(self.cam, CameraRouter):
+            registry = self.cam.registry
+            if view.camera_id not in registry.cameras:
+                raise ValueError('Kamera pohľadu nie je priradená.')
+            self.cam, self.pico = registry.cameras[view.camera_id], registry.picos[view.camera_id]
         active_view = view
         active_view_id = getattr(active_view, "id", None) if active_view is not None else (view_id or self._active_view_id)
         self._logger.info("[VIEW_CAPTURE] active_view=%s", active_view_id)

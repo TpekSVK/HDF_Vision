@@ -174,10 +174,13 @@ class PicoService:
         """Disable v4 input requests before the application releases the camera."""
         if not self.is_available() or self._pio_capable is not True:
             return
+        if self._live_camera is not None:
+            self.set_live_preview(False, self._live_camera)
         if not self._capture_request_lock.acquire(timeout=2.0):
             raise RuntimeError("Pico ešte dokončuje cyklus pri ukončení aplikácie.")
         try:
             self.set_session_mode("IDLE")
+            self._manual_light = False
         finally:
             self._capture_request_lock.release()
 
@@ -194,6 +197,7 @@ class PicoService:
             raise
         ready = threading.Event()
         result = {}
+        self._last_master_result = result
         command = f"TRIGGER {source}" if source.startswith("IN") else f"FIRE {source}"
 
         def receive():

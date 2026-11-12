@@ -45,8 +45,18 @@ echo "[diag] /dev/hidraw* na hostovi:"; ls -l /dev/hidraw* 2>/dev/null || true
 # Zariadenia sa priraďujú v aplikácii podľa USB serial, nie podľa videoN.
 
 # Spustenie (GUI + UVC)
+DOCKER_TERMINAL_ARGS=()
+if [[ -t 0 && -t 1 ]]; then
+  DOCKER_TERMINAL_ARGS=(-it)
+fi
+STARTUP_ARGS=()
+if [[ -n "${HDF_STARTUP_DIR:-}" ]]; then
+  [[ -d "$HDF_STARTUP_DIR" ]] || { echo "[err] Startup directory does not exist." >&2; exit 1; }
+  STARTUP_ARGS=(--mount "type=bind,source=${HDF_STARTUP_DIR},target=/run/hdf-vision-startup"
+    --env HDF_STARTUP_READY_FILE=/run/hdf-vision-startup/ready)
+fi
 set +e
-docker run --rm -it \
+docker run --rm "${DOCKER_TERMINAL_ARGS[@]}" "${STARTUP_ARGS[@]}" \
   --privileged \
   --runtime nvidia \
   --network host \

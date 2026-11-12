@@ -71,8 +71,13 @@ class GoldenPreview:
 
         view = self.dialog._view_by_id(view_id)
         state = self.dialog._view_states.setdefault(view_id, {})
+        if 'golden_camera' not in state:
+            state['golden_camera'] = getattr(view, 'golden_camera', None) or {'camera_id': 'camera_1'}
         cached = state.get("golden_image")
         if cached is not None:
+            identity = state.get('golden_camera')
+            if view is not None and identity and identity.get('camera_id') == view.camera_id:
+                view.golden_camera = dict(identity)
             self.dialog.current_img = np.asarray(cached).copy()
             self.dialog._set_pixmap(self.dialog.current_img)
             self.dialog._set_selected_tool_overlay()

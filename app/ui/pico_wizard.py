@@ -41,6 +41,11 @@ class PicoWizard(QDialog):
         super().__init__(parent)
         self.setWindowTitle("Sprievodca Raspberry Pi Pico")
         self._pico = pico
+        from app.services.camera_registry import PicoRouter
+        self._original_camera = pico.registry.selected if isinstance(pico, PicoRouter) else None
+        self._editing_camera = self._original_camera
+        self._channel_drafts = {}
+        self._channel_baselines = {}
         self._pico_config = pico_config
         self._callback_registered = False
         self._input_states: dict[int, QLabel] = {}
@@ -56,6 +61,8 @@ class PicoWizard(QDialog):
         self._timer.timeout.connect(self.refresh_inputs)
         self._timer.start()
         self.refresh_device()
+        if self._original_camera:
+            self._channel_baselines[self._original_camera] = self._channel_values()
 
     def _build_ui(self) -> None:
         outer = QVBoxLayout(self)
@@ -65,6 +72,19 @@ class PicoWizard(QDialog):
         layout = QVBoxLayout(content)
         scroll.setWidget(content)
         outer.addWidget(scroll, 1)
+        from app.services.camera_registry import PicoRouter
+        if isinstance(self._pico, PicoRouter):
+            channel_row = QHBoxLayout()
+            channel_row.addWidget(QLabel('Kamera / kanál dosky:'))
+            self.camera_channel = QComboBox(self)
+            self.camera_channel.setMinimumHeight(44)
+            for ident, name in self._pico.registry.choices():
+                channel = self._pico.registry.picos[ident].channel
+                self.camera_channel.addItem(f'{name} — kanál {channel}', ident)
+            self.camera_channel.setCurrentIndex(self.camera_channel.findData(self._pico.registry.selected))
+            self.camera_channel.currentIndexChanged.connect(self._channel_changed)
+            channel_row.addWidget(self.camera_channel)
+            layout.addLayout(channel_row)
         device = QGroupBox("Stav zariadenia", self)
         device_grid = QGridLayout(device)
         self.lbl_connection = QLabel("Odpojené", device)
@@ -84,9 +104,8 @@ class PicoWizard(QDialog):
         self.cmb_v1_mode = QComboBox(modes)
         self.cmb_v2_mode = QComboBox(modes)
         mode_tooltip = (
-            "MASTER (odporúčané pre HDF_Vision): kamera streamuje kontinuálne a Pico pri externom "
-            "vstupe odošle CAPTURE INx.\nTRIGGER: legacy/test režim; Pico generuje hardvérové "
-            "trigger pulzy pre kameru."
+            "MASTER: kamera streamuje kontinuálne a Pico pri externom vstupe odošle CAPTURE INx.\n"
+            "TRIGGER: aplikácia pripraví kameru a Pico vytvorí presné PIO impulzy PRIME + CAPTURE."
         )
         self._profile_widgets: dict[str, dict[str, object]] = {}
         for profile, combo in (("V1", self.cmb_v1_mode), ("V2", self.cmb_v2_mode)):
@@ -110,7 +129,7 @@ class PicoWizard(QDialog):
                 widgets[key] = spin
             self._profile_widgets[profile] = widgets
         explanation = QLabel(
-            "MASTER je odporúčaný produkčný režim. TRIGGER je legacy/test režim pre hardvérové pulzy.",
+            "Režim MASTER/TRIGGER určuje aplikácia. Časovacie profily V1/V2 patria vybranému kamerovému kanálu.",
             modes,
         )
         explanation.setWordWrap(True)
@@ -164,6 +183,52 @@ class PicoWizard(QDialog):
         actions.addWidget(buttons)
         outer.addLayout(actions)
         self.setSizeGripEnabled(True)
+
+    def _channel_changed(self):
+        if self._editing_camera is not None:
+            values = self._channel_values()
+            if values != self._channel_baselines.get(self._editing_camera):
+                self._channel_drafts[self._editing_camera] = values
+        self._pico.registry.select(self.camera_channel.currentData())
+        self._editing_camera = self._pico.registry.selected
+        self.refresh_device()
+        self._channel_baselines[self._editing_camera] = self._channel_values()
+        if self._editing_camera in self._channel_drafts:
+            draft = self._channel_drafts[self._editing_camera]
+            for profile, values in draft['profiles'].items():
+                for key, value in values.items():
+                    widget = self._profile_widgets[profile][key]
+                    widget.setCurrentText(value) if key == 'mode' else widget.setValue(value)
+            for index, target in draft['mappings'].items():
+                self._mapping_combos[index].setCurrentText(target)
+        self.refresh_inputs()
+
+    def _channel_values(self):
+        return dict(profiles={profile: {key: widget.currentText() if key == 'mode' else widget.value()
+                    for key, widget in fields.items()} for profile, fields in self._profile_widgets.items()},
+                    mappings={index: combo.currentText() for index, combo in self._mapping_combos.items()})
+
+    def _save_channels(self, enabled):
+        self._channel_drafts[self._editing_camera] = self._channel_values()
+        try:
+            for ident, draft in self._channel_drafts.items():
+                pico = self._pico.registry.picos[ident]
+                for profile, values in draft['profiles'].items():
+                    for field, method in [('delay_ms', pico.set_profile_delay),
+                                          ('pulse_ms', pico.set_profile_pulse),
+                                          ('capture_ms', pico.set_profile_capture)]:
+                        if not method(profile, values[field]):
+                            raise RuntimeError(f'{self._pico.registry.names[ident]}: {pico.last_error}')
+                for index, target in draft['mappings'].items():
+                    if not pico.map_input(index, target):
+                        raise RuntimeError(f'{ident}: {pico.last_error}')
+            if not self._pico.save_config():
+                raise RuntimeError(self._pico.last_error)
+            self._pico_config.set_enabled_inputs(enabled)
+        except (OSError, RuntimeError, ValueError) as exc:
+            QMessageBox.critical(self, 'Pico konfigurácia', str(exc))
+            return
+        self.accept()
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
@@ -271,6 +336,9 @@ class PicoWizard(QDialog):
             )
             return
         try:
+            if self._original_camera is not None:
+                self._save_channels(enabled)
+                return
             for view, widgets in self._profile_widgets.items():
                 commands = (() if self._mode_managed else (
                     (self._pico.set_view_mode, widgets["mode"].currentText(), "MODE"),
@@ -311,6 +379,8 @@ class PicoWizard(QDialog):
         if self._callback_registered:
             self._pico.unregister_trigger_callback(self._on_capture)
             self._callback_registered = False
+        if self._original_camera is not None:
+            self._pico.registry.select(self._original_camera)
         super().done(result)
 
 

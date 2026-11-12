@@ -58,6 +58,7 @@ class StationBinding:
     name: str
     camera_serial: str
     pico_serial: str
+    pico_channel: int | None = None
 
     def data_root(self, root):
         # Preserve the first station's existing recipes and history in place.
@@ -79,10 +80,22 @@ class WorkstationDevices:
                 raise ValueError('Neplatná identita kamerovej stanice.')
             if not binding.camera_serial.strip() or not binding.pico_serial.strip():
                 raise ValueError('Každá stanica potrebuje kameru a Pico.')
-        for field in ('id', 'camera_serial', 'pico_serial'):
+            if binding.pico_channel is not None and (type(binding.pico_channel) is not int or binding.pico_channel not in (1, 2)):
+                raise ValueError('Kamerový kanál Pica musí byť 1 alebo 2.')
+        for field in ('id', 'camera_serial'):
             if len({getattr(b, field) for b in bindings}) != len(bindings):
                 raise ValueError('Jedno zariadenie nemožno priradiť dvom nezávislým staniciam.')
-        if bindings[0].id != 'camera_1':
+        for serial in {binding.pico_serial for binding in bindings}:
+            members = [binding for binding in bindings if binding.pico_serial == serial]
+            channels = [binding.pico_channel for binding in members]
+            if len(members) > 1 and (None in channels or len(set(channels)) != len(channels)):
+                raise ValueError('Jedno zariadenie nemožno priradiť dvom nezávislým staniciam. Pri spoločnom Picu vyberte rôzne kanály.')
+        shared = [binding for binding in bindings if binding.pico_channel is not None]
+        if shared and (len(shared) != len(bindings) or len(bindings) > 2 or len({b.pico_serial for b in bindings}) != 1):
+            raise ValueError('Dvojkanálová zostava používa jedno spoločné Pico a najviac dve kamery.')
+        if any(binding.id != f'camera_{binding.pico_channel}' for binding in shared):
+            raise ValueError('Kamera 1 patrí ku kanálu GP16/17 a kamera 2 ku kanálu GP18/19.')
+        if not shared and bindings[0].id != 'camera_1':
             raise ValueError('Prvá stanica musí byť Kamera 1.')
 
     def load(self):
@@ -90,7 +103,7 @@ class WorkstationDevices:
             return []
         try:
             data = json.loads(self.path.read_text())
-            if not isinstance(data, dict) or type(data.get('version')) is not int or data['version'] != 1:
+            if not isinstance(data, dict) or type(data.get('version')) is not int or data['version'] not in (1, 2):
                 raise ValueError('Nepodporovaný formát priradenia zariadení.')
             if not isinstance(data.get('stations'), list):
                 raise ValueError('Chýba zoznam kamerových staníc.')
@@ -103,7 +116,24 @@ class WorkstationDevices:
     def save(self, bindings):
         self.validate(bindings)
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        shared = any(b.pico_channel is not None for b in bindings)
+        if shared and self.path.exists():
+            original = self.path.read_bytes()
+            if json.loads(original).get('version') == 1:
+                backup = self.path.with_name(self.path.stem + '.pre-dual-v1.json')
+                try:
+                    with backup.open('xb') as stream:
+                        stream.write(original)
+                except FileExistsError:
+                    pass
+        stations = []
+        for binding in bindings:
+            payload = asdict(binding)
+            if binding.pico_channel is None:
+                payload.pop('pico_channel')
+            stations.append(payload)
         temporary = self.path.with_suffix('.tmp')
-        temporary.write_text(json.dumps({'version': 1, 'stations': [asdict(b) for b in bindings]},
+        temporary.write_text(json.dumps({'version': 2 if shared else 1,
+                                        'stations': stations},
                                         ensure_ascii=False, indent=2) + '\n')
         temporary.replace(self.path)

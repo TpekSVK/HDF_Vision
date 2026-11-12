@@ -24,11 +24,12 @@ from app.services.modbus_service import ModbusConfig, ModbusService
 class ModbusWizard(QDialog):
     """Modal dialog used to configure Modbus TCP mapping for the relay module."""
 
-    def __init__(self, modbus: ModbusService, parent: QWidget | None = None, *, peer_configs=None) -> None:
+    def __init__(self, modbus: ModbusService, parent: QWidget | None = None, *, peer_configs=None, grouped=False) -> None:
         super().__init__(parent)
         self.setWindowTitle("Sprievodca Modbus")
         self._peer_configs = peer_configs or (lambda: [])
         self._modbus = modbus
+        self.grouped = grouped
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(200)
         self._poll_timer.timeout.connect(self._refresh_inputs_status)
@@ -119,6 +120,8 @@ class ModbusWizard(QDialog):
         return box
 
     def _build_outputs_group(self) -> QGroupBox:
+        if self.grouped:
+            return self._build_grouped_outputs()
         box = QGroupBox("Mapovanie výstupov (Coils)", self)
         grid = QGridLayout(box)
         grid.setContentsMargins(8, 8, 8, 8)
@@ -168,6 +171,59 @@ class ModbusWizard(QDialog):
         grid.addWidget(self.lbl_output_warning, len(rows) + 2, 0, 1, 2)
         return box
 
+    def _build_grouped_outputs(self):
+        from PySide6.QtWidgets import QComboBox
+        box = QGroupBox('Výstupné skupiny — OK / NOK / heartbeat', self)
+        grid = QGridLayout(box)
+        self.group_outputs = {}
+        for index in range(2):
+            group_id = f'group_{index + 1}'
+            grid.addWidget(QLabel(f'Skupina {index + 1} — relé {index * 3 + 1} až {index * 3 + 3}'), index * 4, 0, 1, 2)
+            self.group_outputs[group_id] = {}
+            for row, (role, label) in enumerate([('ok', 'OK'), ('nok', 'NOK'), ('heartbeat', 'Heartbeat')], 1):
+                combo = QComboBox(box)
+                combo.setMinimumHeight(44)
+                combo.addItem('Vypnuté', -1)
+                for address in range(index * 3, index * 3 + 3):
+                    combo.addItem(f'Relé {address + 1} — adresa {address}', address)
+                self.group_outputs[group_id][role] = combo
+                grid.addWidget(QLabel(label), index * 4 + row, 0)
+                grid.addWidget(combo, index * 4 + row, 1)
+        # Keep the established interval controls and test actions in this panel.
+        self.spin_ok, self.spin_nok, self.spin_heartbeat = [self._coil_spin(box, default=i) for i in range(3)]
+        for spin in (self.spin_ok, self.spin_nok, self.spin_heartbeat): spin.hide()
+        self.spin_pulse_len = QSpinBox(box); self.spin_pulse_len.setRange(10, 10000)
+        self.spin_heartbeat_period = QSpinBox(box); self.spin_heartbeat_period.setRange(100, 10000)
+        grid.addWidget(QLabel('Dĺžka impulzu OK/NOK [ms]:'), 8, 0); grid.addWidget(self.spin_pulse_len, 8, 1)
+        grid.addWidget(QLabel('Rozostup heartbeat [ms]:'), 9, 0); grid.addWidget(self.spin_heartbeat_period, 9, 1)
+        for index in range(2):
+            actions = QHBoxLayout()
+            for role, label in [('ok', 'Test OK'), ('nok', 'Test NOK'), ('heartbeat', 'Test heartbeat')]:
+                button = QPushButton(label, box)
+                button.setMinimumHeight(44)
+                button.clicked.connect(lambda checked=False, g=f'group_{index + 1}', r=role: self._test_group_output(g, r))
+                actions.addWidget(button)
+            grid.addWidget(QLabel(f'Test skupiny {index + 1}:'), 10 + index * 2, 0, 1, 2)
+            grid.addLayout(actions, 11 + index * 2, 0, 1, 2)
+        hint = QLabel('Relé 7 a 8 zostávajú voľné. Skupinu priraďte v správaní pohľadu. Heartbeat je voliteľný.', box)
+        hint.setWordWrap(True); grid.addWidget(hint, 14, 0, 1, 2)
+        self.lbl_output_warning = QLabel(box); self.lbl_output_warning.setWordWrap(True)
+        grid.addWidget(self.lbl_output_warning, 15, 0, 1, 2)
+        return box
+
+    def _test_group_output(self, group, role):
+        try:
+            cfg = self._collect_config().group_config(group)
+            address = getattr(cfg, {'ok': 'ok_coil', 'nok': 'nok_coil', 'heartbeat': 'heartbeat_coil'}[role])
+            if address < 0:
+                self._set_status(self.lbl_conn_status, 'Výstup je vypnutý.', ok=False)
+                return
+            ok = (self._modbus.heartbeat_pulse(address, count=3, period_ms=cfg.heartbeat_period_ms, config=cfg)
+                  if role == 'heartbeat' else self._modbus.pulse_coil(address, pulse_ms=cfg.pulse_length_ms, config=cfg))
+            self._set_status(self.lbl_conn_status, 'Impulz odoslaný.' if ok else self._modbus.last_error, ok=ok)
+        except ValueError as exc:
+            self._set_status(self.lbl_conn_status, str(exc), ok=False)
+
     def _build_inputs_group(self) -> QGroupBox:
         box = QGroupBox("Mapovanie vstupov (Discrete Inputs)", self)
         layout = QVBoxLayout(box)
@@ -208,6 +264,15 @@ class ModbusWizard(QDialog):
 
     # ------------------------------------------------------------------
     def _load_from_config(self, config: ModbusConfig) -> None:
+        if self.grouped:
+            for group_id, combos in self.group_outputs.items():
+                try:
+                    mapped = config.group_config(group_id)
+                    values = {'ok': mapped.ok_coil, 'nok': mapped.nok_coil, 'heartbeat': mapped.heartbeat_coil}
+                except ValueError:
+                    values = {role: -1 for role in combos}
+                for role, combo in combos.items():
+                    combo.setCurrentIndex(max(0, combo.findData(values[role])))
         self.txt_host.setText(config.host)
         self.spin_port.setValue(int(config.port))
         self.spin_unit.setValue(int(config.unit_id))
@@ -241,6 +306,9 @@ class ModbusWizard(QDialog):
             heartbeat_period_ms=int(self.spin_heartbeat_period.value()),
             request_di_addresses=[int(spin.value()) for spin in self.spin_request_inputs],
         )
+        if self.grouped:
+            cfg.output_groups = {group: {role: combo.currentData() for role, combo in combos.items()}
+                                 for group, combos in self.group_outputs.items()}
         return cfg
 
     # ------------------------------------------------------------------
@@ -322,6 +390,16 @@ class ModbusWizard(QDialog):
 
     def _on_accept(self) -> None:
         cfg = self._collect_config()
+        if self.grouped:
+            try:
+                for group in self.group_outputs:
+                    cfg.group_config(group)
+            except ValueError as exc:
+                QMessageBox.warning(self, 'Neplatné výstupy', str(exc))
+                return
+            self._modbus.set_config(cfg, persist=True)
+            self.accept()
+            return
         conflicts = self._output_conflicts()
         if conflicts:
             QMessageBox.warning(self, "Spoločné použitie výstupu",

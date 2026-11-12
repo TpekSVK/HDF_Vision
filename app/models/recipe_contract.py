@@ -1,5 +1,5 @@
 """Small, dependency-free rules shared by models, file validation and runners."""
-RECIPE_FORMAT_VERSION = 3
+RECIPE_FORMAT_VERSION = 4
 REMOVED_TOOL_TYPES = frozenset({'ssd', 'absdiff', 'light_presence', 'template_match'})
 LEGACY_LOCATOR_PARAMS = frozenset({
     'rotation_enabled', 'angle_enabled', 'angle_roi', 'angle_method',

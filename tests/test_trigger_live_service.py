@@ -77,3 +77,20 @@ def test_light_transition_holds_last_good_live_frame(monkeypatch):
     assert ring[-1] is good
     next_good=object();camera.pio._publish_pio_frame(next_good,5)
     assert ring[-1] is next_good
+
+
+def test_pause_stops_and_drains_live_before_disabling_inputs(monkeypatch):
+    service = PicoService()
+    service._pio_capable = True
+    service._live_camera = camera = object()
+    events = []
+    monkeypatch.setattr(service, 'is_available', lambda: True)
+    def stop(enabled, actual):
+        assert enabled is False and actual is camera
+        events.append('live_off_and_drained')
+        service._live_camera = None
+    monkeypatch.setattr(service, 'set_live_preview', stop)
+    monkeypatch.setattr(service, 'set_session_mode', lambda mode: events.append(mode))
+    service.quiesce()
+    assert events == ['live_off_and_drained', 'IDLE']
+    assert service._manual_light is False
