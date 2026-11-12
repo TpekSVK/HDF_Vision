@@ -7,10 +7,13 @@ from app.utils.tool_labels import tool_display_name
 # app/ui/golden_wizard.py
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QPixmap, QImage, QColor, QKeySequence, QShortcut
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QCheckBox, QTableWidgetItem, QWidget, QHeaderView, QAbstractItemView, QSizePolicy, QFileDialog, QToolButton, QScrollArea, QSplitter, QFrame
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QMessageBox, QCheckBox, QTableWidgetItem, QWidget, QHeaderView, QAbstractItemView, QSizePolicy, QFileDialog, QToolButton
 
 import os
-from app.ui.responsive import WrapLayout
+import re
+import shutil
+from uuid import uuid4
+from PySide6.QtWidgets import QMenu
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
@@ -26,13 +29,13 @@ from app.ui.roi_mask_editor import MASK_WARN_PIXELS, MAX_MASK_PIXELS, MAX_ROI_PI
 from app.services.storage_service import save_golden
 from app.models.regions import Region, validate_cardinality
 from app.models.learning_contract import SAMPLE_PREPARATION_VERSION
-from app.services.learning_context import learning_signature, samples_match, bind_samples
+from app.services.learning_context import learning_signature, samples_match
 from app.models.schema import RecipeData, RecipeV2, Tool, RecipeView, ToolMask, ToolParams, ToolRoi, ToolThresholds
 from app.services.recipe_service import RecipeService
 from app.services.roi_geometry import roi_local_exclusion_mask
-from app.services.tool_pipeline import run_tool_test
+from app.services.tool_pipeline import ToolTestBlockedError, run_tool_test
 from app.services.tools.edge_profile_deviation import detect_guided_reference_edge
-from app.services.presence_absence_v2_service import compute_roi_hash, ensure_assets_dirs, evaluate_dataset, load_samples, optimize_sensitivity, reset_learning_assets, resolve_assets_dir, save_sample, sensitivity_to_score_threshold
+from app.services.presence_absence_v2_service import compute_roi_hash, ensure_assets_dirs, evaluate_dataset, load_samples, optimize_sensitivity, reset_learning_assets, resolve_assets_dir, sensitivity_to_score_threshold
 from app.utils.tool_identity import compute_tool_identity
 from app.services.view_images import apply_view_image_transform, view_image_rotation
 from app.services.camera_profiles import apply_camera_state, apply_view_camera_profile, snapshot_camera_state
@@ -86,6 +89,7 @@ class GoldenWizard(QDialog):
         self._base_title = "Golden WIZARD"
         self.setWindowTitle(self._base_title)
         self.setModal(True)
+        self.setObjectName("goldenWizard")
         self.cam = camera
         self.recipes = recipes
         self.modbus = modbus
@@ -109,7 +113,7 @@ class GoldenWizard(QDialog):
         # --- Live infra (len video label, bez kreslenia) ---
 
         self._live_timer = QTimer(self)
-        self._live_timer.setInterval(50)  # ~20 FPS
+        self._live_timer.setInterval(33)  # UI refresh ~30 FPS; camera timing belongs to Pico PIO.
         self._live_timer.timeout.connect(self._live_tick)
         self._live_on = False
 
@@ -157,11 +161,11 @@ class GoldenWizard(QDialog):
         self.btn_add_tool.clicked.connect(self._open_tool_catalog)
 
         # Toggle Live
-        self.btn_live = QPushButton("Live vypnuté")
+        self.btn_live = QPushButton("Live")
         self.btn_live.setCheckable(True)
         self.btn_live.clicked.connect(self._toggle_live)
 
-        self.btn_manual_light = QPushButton("Svetlo: neznámy stav")
+        self.btn_manual_light = QPushButton("Svetlo")
         self.btn_manual_light.setCheckable(True)
         self.btn_manual_light.clicked.connect(self._toggle_manual_light)
 
@@ -171,33 +175,9 @@ class GoldenWizard(QDialog):
         self._session_settings_button.setAutoRaise(True)
         self._session_settings_button.clicked.connect(self._open_session_settings)
 
-        top_primary = WrapLayout()
-        top_primary.setContentsMargins(0, 0, 0, 0)
-        top_primary.setSpacing(8)
-        top_primary.addWidget(QLabel("Recept:"))
-        top_primary.addWidget(self.recipe_name)
-        top_primary.addWidget(QLabel("Pohľad:", self))
-        top_primary.addWidget(self._view_selector)
-        top_primary.addWidget(self.btn_add_view)
-        top_primary.addWidget(self.btn_edit_view)
-        top_primary.addWidget(self.btn_remove_view)
-        top_primary.addWidget(self.btn_live)
-        top_primary.addWidget(self.btn_manual_light)
-
-        top_secondary = WrapLayout()
-        top_secondary.setContentsMargins(0, 0, 0, 0)
-        top_secondary.setSpacing(8)
-        top_secondary.addWidget(self.chk_pose)
-        top_secondary.addWidget(self.chk_logging)
-        top_secondary.addWidget(QLabel("Zlyhanie locatora:", self))
-        top_secondary.addWidget(self.failure_policy_combo)
-        top_secondary.addWidget(self._session_settings_button)
-
         self.chk_filtered_roi = QCheckBox("Zobraziť filtrované ROI", self)
         self.lbl_filtered_roi = QLabel("", self)
         self.lbl_filtered_roi.setWordWrap(True)
-        top_secondary.addWidget(self.chk_filtered_roi)
-        top_secondary.addWidget(self.lbl_filtered_roi)
         self._filtered_roi_timer = QTimer(self)
         self._filtered_roi_timer.setSingleShot(True)
         self._filtered_roi_timer.setInterval(180)
@@ -231,21 +211,11 @@ class GoldenWizard(QDialog):
         self.btn_close_wizard = QPushButton("Zavrieť Golden Wizard")
         self.btn_close_wizard.setProperty("role", "destructive")
 
-        buttons = WrapLayout()
-        buttons.setContentsMargins(0, 0, 0, 0)
-        buttons.setSpacing(8)
-        buttons.addWidget(btn_cap_golden)
-        buttons.addWidget(btn_load_golden)
-        buttons.addWidget(self.btn_save_tool)
-        buttons.addWidget(self.btn_test_tool)
         self._publish_state_label = QLabel("", self)
         self._publish_state_label.setStyleSheet("color: #999; font-style: italic;")
         self._publish_state_label.setMinimumWidth(100)
         self._publish_state_label.setMaximumWidth(160)
         self._publish_state_label.setAlignment(Qt.AlignCenter)
-        buttons.addWidget(self._publish_state_label)
-        buttons.addWidget(self.btn_publish_recipe)
-        buttons.addWidget(self.btn_close_wizard)
 
         # ---- Layout ----
         self._tool_panel = ToolConfigPanel(self)
@@ -260,13 +230,15 @@ class GoldenWizard(QDialog):
         header = self.tools_table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.Stretch)
-        header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.Stretch)
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.tools_table.verticalHeader().setVisible(False)
         self.tools_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.tools_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tools_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tools_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.tools_table.customContextMenuRequested.connect(self._show_tool_context_menu)
         self.tools_table.setDragEnabled(True)
         self.tools_table.setAcceptDrops(True)
         self.tools_table.setDropIndicatorShown(True)
@@ -276,7 +248,6 @@ class GoldenWizard(QDialog):
         self.tools_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.tools_table.setColumnHidden(0, True)
         self.tools_table.setColumnHidden(4, True)
-        tools_label = QLabel("Nástroje v recepte:", self)
         header_item = self.tools_table.horizontalHeaderItem(2)
         if header_item:
             header_item.setToolTip("Locator nástroje musia bežať pred analyzátormi.")
@@ -296,102 +267,8 @@ class GoldenWizard(QDialog):
         )
         self.locator_policy_banner.setVisible(False)
 
-        left_panel = QFrame(self)
-        left_panel.setObjectName("workspacePanel")
-        left_panel.setMinimumWidth(220)
-        left_panel.setMaximumWidth(420)
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(10, 10, 10, 10)
-        left_layout.setSpacing(8)
-        tools_label.setText("NÁSTROJE")
-        tools_label.setProperty("role", "panelHeader")
-        self.btn_add_tool.setText("+ Pridať nástroj")
-        left_layout.addWidget(tools_label)
-        left_layout.addWidget(self.btn_add_tool)
-        left_layout.addWidget(self.tools_table, 1)
-        selected_actions = QHBoxLayout()
-        self._btn_delete_selected = QToolButton(left_panel)
-        self._btn_delete_selected.setText("×")
-        self._btn_delete_selected.setToolTip("Odstrániť vybraný nástroj")
-        self._btn_delete_selected.clicked.connect(
-            lambda: self._delete_tool(self.tools_table.currentRow())
-        )
-        selected_actions.addStretch(1)
-        selected_actions.addWidget(self._btn_delete_selected)
-        left_layout.addLayout(selected_actions)
-        left_layout.addWidget(self.locator_hint_label)
-        left_layout.addWidget(self.locator_policy_banner)
-
-        center_panel = QFrame(self)
-        center_panel.setObjectName("workspacePanel")
-        center_layout = QVBoxLayout(center_panel)
-        center_layout.setContentsMargins(10, 10, 10, 10)
-        center_layout.setSpacing(8)
-        self._canvas_title = QLabel("HLAVNÝ OBRAZ", center_panel)
-        self._canvas_title.setProperty("role", "panelHeader")
-        self._canvas_empty = QLabel(
-            "Nie je dostupný GOLDEN obraz\nNajprv ho získajte alebo načítajte", center_panel
-        )
-        self._canvas_empty.setAlignment(Qt.AlignCenter)
-        self._canvas_empty.setStyleSheet(
-            "color: #8d96a0; background: #111417; border: 1px dashed #414851; padding: 20px;"
-        )
-        self._canvas_empty.setAttribute(Qt.WA_TransparentForMouseEvents)
-        center_layout.addWidget(self._canvas_title)
-        center_layout.addWidget(self._canvas_empty)
-        center_layout.addWidget(self.live_lbl, 1)
-        center_layout.addWidget(self.roi_editor, 1)
-
-        properties_scroll = QScrollArea(self)
-        properties_scroll.setObjectName("propertiesScroll")
-        properties_scroll.setWidgetResizable(True)
-        properties_scroll.setFrameShape(QScrollArea.NoFrame)
-        properties_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        properties_scroll.setMinimumWidth(300)
-        properties_scroll.setMaximumWidth(480)
-        properties_scroll.setWidget(self._tool_panel)
-
-        self._workspace_splitter = QSplitter(Qt.Horizontal, self)
-        self._workspace_splitter.setChildrenCollapsible(False)
-        self._workspace_splitter.setHandleWidth(5)
-        self._workspace_splitter.addWidget(left_panel)
-        self._workspace_splitter.addWidget(center_panel)
-        self._workspace_splitter.addWidget(properties_scroll)
-        self._workspace_splitter.setStretchFactor(0, 0)
-        self._workspace_splitter.setStretchFactor(1, 1)
-        self._workspace_splitter.setStretchFactor(2, 0)
-        self._workspace_splitter.setSizes([250, 800, 340])
-
-        top_controls = QVBoxLayout()
-        top_controls.setContentsMargins(10, 8, 10, 8)
-        top_controls.setSpacing(6)
-        top_controls.addLayout(top_primary)
-        top_controls.addLayout(top_secondary)
-        top_bar = QFrame(self)
-        top_bar.setObjectName("goldenTopBar")
-        top_bar.setLayout(top_controls)
-
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(8)
-        # Keep all controls reachable even when the editor's own toolbar has
-        # a larger minimum width than the available logical screen width.
-        workspace = QWidget(self)
-        workspace_layout = QVBoxLayout(workspace)
-        workspace_layout.setContentsMargins(0, 0, 0, 0)
-        workspace_layout.addWidget(top_bar)
-        workspace_layout.addWidget(self._workspace_splitter, 1)
-        workspace_scroll = QScrollArea(self)
-        workspace_scroll.setWidgetResizable(True)
-        workspace_scroll.setWidget(workspace)
-        layout.addWidget(workspace_scroll, 1)
-        layout.addLayout(buttons)
-        self._status_bar = QLabel("Pripravené", self)
-        self._status_bar.setWordWrap(True)
-        self._status_bar.setStyleSheet(
-            "color: #aab2bc; background: #20242a; border-top: 1px solid #3b4149; padding: 5px 8px;"
-        )
-        layout.addWidget(self._status_bar)
+        from app.ui.golden_wizard.touch_widgets import build_touch_workspace
+        build_touch_workspace(self, btn_cap_golden, btn_load_golden)
 
         self.setStyleSheet(GOLDEN_WIZARD_STYLE)
 
@@ -457,16 +334,69 @@ class GoldenWizard(QDialog):
         self.setSizeGripEnabled(True)
         available = self.screen().availableGeometry()
         self.resize(min(1400, available.width()-40), min(900, available.height()-80))
-        self.setWindowState(self.windowState() | Qt.WindowMaximized)
+        self.setWindowState(self.windowState() | Qt.WindowFullScreen)
+
+    def _show_touch_panel(self, index):
+        self._touch_stack.setCurrentIndex(index)
+        self._tools_tab.setChecked(index == 0)
+        self._parameters_tab.setChecked(index == 1)
+        if index == 1:
+            self._touch_inspector.refresh()
+
+    def _mark_touch_tool(self, row):
+        self.tools_table.selectRow(row)
+        self._tool_pages.refresh()
+
+    def _select_touch_tool(self, row):
+        self._mark_touch_tool(row)
+        self._show_touch_panel(1)
+
+    def _sync_touch_tools(self):
+        row = self.tools_table.currentRow()
+        tools = self.recipes.get_draft_tools(self._current_recipe_name(), self._active_view_id) if self._active_view_id else []
+        valid = 0 <= row < len(tools)
+        for button in (self._btn_copy_selected, self._btn_delete_selected, self._btn_tool_enabled):
+            button.setEnabled(valid)
+        self._btn_tool_up.setEnabled(valid and row > 0)
+        self._btn_tool_down.setEnabled(valid and row + 1 < len(tools))
+        self._btn_tool_enabled.setChecked(valid and bool(tools[row].enabled))
+        self._tools_tab.setText(f"Nástroje ({len(tools)})")
+        self._tool_pages.refresh()
+
+    def _move_touch_tool(self, delta):
+        row = self.tools_table.currentRow()
+        count = self.tools_table.rowCount()
+        target = row + delta
+        if 0 <= row < count and 0 <= target < count:
+            order = list(range(count))
+            order[row], order[target] = order[target], order[row]
+            self._on_tools_reordered(order)
+
+    def _confirm_delete_touch_tool(self):
+        row = self.tools_table.currentRow()
+        item = self.tools_table.item(row, 1)
+        if item and QMessageBox.question(self, "Odstrániť nástroj", f"Odstrániť nástroj {item.text()}?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No) == QMessageBox.Yes:
+            self._delete_tool(row)
+
+    def keyPressEvent(self, event):  # noqa: N802
+        # Editors handle Enter first. Do not let an unhandled Enter activate
+        # QDialog's default button (for example, Add view).
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ---------- Live ----------
     def _set_manual_light_ui(self, enabled: bool | None) -> None:
         self.btn_manual_light.blockSignals(True)
         if enabled is None:
-            self.btn_manual_light.setText("Svetlo: neznámy stav")
+            self.btn_manual_light.setText("Svetlo")
+            self.btn_manual_light.setToolTip("Stav svetla nie je dostupný")
         else:
             self.btn_manual_light.setChecked(enabled)
-            self.btn_manual_light.setText("Svetlo zapnuté" if enabled else "Svetlo vypnuté")
+            self.btn_manual_light.setText("Svetlo")
+            self.btn_manual_light.setToolTip("Manuálne svetlo")
         self.btn_manual_light.blockSignals(False)
 
     def _refresh_manual_light(self) -> None:
@@ -508,10 +438,13 @@ class GoldenWizard(QDialog):
         self.view.hide()
         self.roi_editor.hide()
         self.live_lbl.show()
-        self.cam.start(caller="golden_preview")
+        if self._runtime_capture_mode() == "trigger":
+            self.pico.set_live_preview(True, self.cam)
+        else:
+            self.cam.start(caller="golden_preview")
         self._live_timer.start()
         self._live_on = True
-        self.btn_live.setText("Live zapnuté")
+        self.btn_live.setText("Live")
         self._logger.info("wizard_preview state=started")
 
     def _stop_preview_session(
@@ -520,11 +453,13 @@ class GoldenWizard(QDialog):
         clear_label: bool = False,
     ) -> None:
         # Vypnúť live: skryť label, ukázať DrawView
+        if self._live_on and self._runtime_capture_mode() == "trigger":
+            self.pico.set_live_preview(False, self.cam)
         self._live_timer.stop()
         if self._live_on:
             self._logger.info("wizard_preview state=stopped")
         self._live_on = False
-        self.btn_live.setText("Live vypnuté")
+        self.btn_live.setText("Live")
         self.live_lbl.hide()
         if self.current_img is not None:
             self._canvas_empty.hide()
@@ -556,7 +491,7 @@ class GoldenWizard(QDialog):
         return mode if mode in {"master", "trigger"} else "master"
 
     def _is_live_allowed_by_capture_mode(self) -> bool:
-        return self._runtime_capture_mode() == "master"
+        return True
 
     def _sync_live_policy_ui(self) -> None:
         allowed = self._is_live_allowed_by_capture_mode()
@@ -567,10 +502,10 @@ class GoldenWizard(QDialog):
             self._stop_preview_session()
         self.btn_live.setEnabled(allowed)
         if allowed:
-            self.btn_live.setText("Live zapnuté" if self._live_on else "Live vypnuté")
+            self.btn_live.setText("Live")
             self.btn_live.setToolTip("")
         else:
-            self.btn_live.setText("Live nedostupné v TRIGGER režime")
+            self.btn_live.setText("Live")
             self.btn_live.setToolTip("Live preview je v TRIGGER režime blokovaný.")
 
     # ---------- UI util ----------
@@ -649,6 +584,8 @@ class GoldenWizard(QDialog):
             ),
             activate=is_edge_profile,
         )
+        if hasattr(self.roi_editor, "_touch"):
+            self.roi_editor._touch.sync()
 
     @staticmethod
     def _parse_edge_point(value: object) -> Optional[tuple[float, float]]:
@@ -663,6 +600,9 @@ class GoldenWizard(QDialog):
 
     # ---------- Akcie ----------
     def _capture_golden(self):
+        if self._live_on:
+            self.btn_live.setChecked(False)
+            self._toggle_live(False)
         try:
             runtime_capture_mode = self._runtime_capture_mode()
             self._logger.info("[GOLDEN_CAPTURE] capture_mode=%s", runtime_capture_mode)
@@ -1172,6 +1112,7 @@ class GoldenWizard(QDialog):
             order_flags |= Qt.ItemIsDragEnabled | Qt.ItemIsDropEnabled
             order_item.setFlags(order_flags)
             name_item = QTableWidgetItem(tool_display_name(tool))
+            name_item.setToolTip(tool_display_name(tool))
             try:
                 tool_meta = self.recipes.tool.get_tool_meta(tool.type)
                 secondary = getattr(tool_meta, "category", "") or getattr(tool_meta, "name", "")
@@ -1194,6 +1135,7 @@ class GoldenWizard(QDialog):
                 type_item.setToolTip("Locator nástroje vždy bežia pred analyzátormi.")
             else:
                 type_item.setToolTip("Analyzátory bežia po locator nástrojoch.")
+            type_item.setToolTip(f"{type_item.text()}\n{tool.type}\n{type_item.toolTip()}")
             self.tools_table.setItem(row, 0, order_item)
             self.tools_table.setItem(row, 1, name_item)
             self.tools_table.setItem(row, 2, type_item)
@@ -1242,8 +1184,9 @@ class GoldenWizard(QDialog):
             self.tools_table.setCellWidget(row, 4, actions_widget)
 
         self.tools_table.resizeRowsToContents()
-        self.tools_table.blockSignals(False)
 
+        # Selecting the same row does not emit a selection change. Refresh
+        # explicitly once, after the table and selection are both complete.
         if tools:
             if previous_row < 0:
                 target_row = 0
@@ -1256,11 +1199,62 @@ class GoldenWizard(QDialog):
         else:
             self.tools_table.clearSelection()
             self._selected_tool_row = -1
-            self._on_tool_selection_changed()
+        self.tools_table.blockSignals(False)
+        self._on_tool_selection_changed()
 
         self._set_selected_tool_overlay(tools)
+        if hasattr(self, "_tool_pages"):
+            self._tool_pages.follow_selection()
 
         self._update_dirty_state(recipe, view_id)
+
+    def _show_tool_context_menu(self, position):
+        index = self.tools_table.indexAt(position)
+        if not index.isValid():
+            return
+        row = index.row()
+        menu = QMenu(self)
+        copy_action = menu.addAction("Kopírovať nástroj")
+        if menu.exec(self.tools_table.viewport().mapToGlobal(position)) == copy_action:
+            self._copy_tool(row)
+
+    def _copy_tool(self, index: int):
+        recipe = self._current_recipe_name()
+        view_id = self._active_view_id
+        if not view_id:
+            return
+        try:
+            tools = self.recipes.get_draft_tools(recipe, view_id)
+            if not 0 <= index < len(tools):
+                return
+            tool = tools[index].copy()
+            source_name = tool_display_name(tool).rstrip()
+            numbered = re.fullmatch(r"(.*?)(\d+)", source_name)
+            base_name = numbered.group(1) if numbered else f"{source_name} "
+            suffix = int(numbered.group(2)) + 1 if numbered else 2
+            names = {entry.name for entry in tools}
+            tool.name = f"{base_name}{suffix}"
+            while tool.name in names:
+                suffix += 1
+                tool.name = f"{base_name}{suffix}"
+            # Learned data must be independent: retraining the copy must not
+            # overwrite the source tool's model or samples.
+            if tool.type in _STATISTICAL_PRESENCE_TYPES:
+                identity, _, _ = compute_tool_identity(tools[index])
+                source = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                stored = str(tool.params.values.get("reference_assets_dir", "") or "")
+                if stored and Path(stored).resolve().is_relative_to(source.parents[1].resolve()):
+                    source = Path(stored)
+                target = resolve_assets_dir(self.recipes.base, recipe, view_id, f"copy-{uuid4().hex}")
+                if source.is_dir():
+                    shutil.copytree(source, target)
+                tool.params.values["reference_assets_dir"] = str(target)
+            self.recipes.add_tool(recipe, tool, view_id=view_id)
+            self._selected_tool_row = len(tools)
+            self._refresh_tools_table()
+            self._update_dirty_state(recipe, view_id)
+        except Exception as exc:
+            self._err(f"Kopírovanie nástroja zlyhalo: {exc}")
 
     def _delete_tool(self, index: int):
         recipe = self._current_recipe_name()
@@ -1349,6 +1343,9 @@ class GoldenWizard(QDialog):
     def _on_tool_selection_changed(self) -> None:
         # Tool editing lifecycle: panel/overlay refresh podľa aktuálneho výberu nástroja.
         self._refresh_tool_panel_for_selection()
+        if hasattr(self, "_touch_inspector"):
+            self._touch_inspector.refresh()
+            self._sync_touch_tools()
 
     def _refresh_tool_panel_for_selection(self) -> None:
         recipe = self._current_recipe_name()
@@ -1369,6 +1366,8 @@ class GoldenWizard(QDialog):
                 self._selected_tool_row = -1
                 self.view.set_tool_overlay(None)
                 return
+            if hasattr(self, "_touch_inspector"):
+                self._touch_inspector.prepare_tool_change()
             self._tool_panel.set_tool(tool, meta, schema)
             supports_roi = bool(getattr(getattr(meta, "meta", meta), "supports_roi", False))
             supports_mask = bool(
@@ -1709,6 +1708,14 @@ class GoldenWizard(QDialog):
             self.recipes.get_draft_tools(self._current_recipe_name(), view_id),
         )
 
+    def _shared_mold_ok_store(self, view_id):
+        from app.services.learning_context import shared_capture_signature
+        from app.services.shared_mold_ok import SharedMoldOK
+        recipe = self._current_recipe_name()
+        signature = shared_capture_signature(self._current_golden_image(), self._view_by_id(view_id),
+            self.recipes.get_draft_tools(recipe, view_id))
+        return SharedMoldOK(self.recipes.base, recipe, view_id, signature)
+
     def _presence_v2_expected_shape(self, tool: Tool) -> Optional[tuple[int, int]]:
         rect = tool.roi.rect()
         if rect is None:
@@ -1741,6 +1748,77 @@ class GoldenWizard(QDialog):
             self._warn(str(exc))
             return None
 
+    def _apply_mold_learning(self, action, context):
+        recipe, view_id, row, tool, assets = context
+        title = "Použiť spoločné OK snímky" if action == "shared_ok" else "Prepočítať model"
+        confirmation = QMessageBox(self)
+        confirmation.setWindowTitle(title)
+        confirmation.setIcon(QMessageBox.Question)
+        confirmation.setText(
+            "Použiť spoločné OK snímky? Každý nástroj použije vlastnú ROI a masku. Modely potom treba prepočítať."
+            if action == "shared_ok" else
+            "Prepočítať model z OK vzoriek? Každý nástroj bude mať vlastný model."
+        )
+        confirmation.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        confirmation.setDefaultButton(QMessageBox.No)
+        apply_all = QCheckBox("Použiť pre všetky nástroje Kontrola prázdnej formy v aktuálnom pohľade aktuálneho receptu", confirmation)
+        apply_all.setChecked(True)
+        confirmation.setCheckBox(apply_all)
+        if confirmation.exec() != QMessageBox.Yes:
+            return
+        targets = [(row, tool)]
+        if apply_all.isChecked():
+            targets = [(i, entry) for i, entry in enumerate(self.recipes.get_draft_tools(recipe, view_id))
+                       if entry.type == "mold.protection_v1"]
+        completed = 0
+        unchanged = 0
+        failures = []
+        for target_row, target in targets:
+            try:
+                identity, _, _ = compute_tool_identity(target)
+                target_assets = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                stored = str(target.params.values.get("reference_assets_dir", "") or "")
+                if stored and Path(stored).resolve().is_relative_to(target_assets.parents[1].resolve()):
+                    target_assets = Path(stored)
+                signature = self._presence_learning_signature(target, view_id)
+                if action == "shared_ok":
+                    count = self._shared_mold_ok_store(view_id).import_into(
+                        target_assets, signature,
+                        lambda frame: self._prepare_presence_learning_sample(frame, target, view_id),
+                    )
+                    if not count:
+                        unchanged += 1
+                        continue
+                    params = dict(target.params.values or {})
+                    params.update(sample_preparation_version=SAMPLE_PREPARATION_VERSION,
+                                  reference_model_ready=False, reference_model_needs_rebuild=True,
+                                  reference_model_invalidated=False)
+                    target.params = ToolParams(params)
+                else:
+                    LearningDataset().rebuild(target, ensure_assets_dirs(target_assets), view_id, signature)
+                target.params.values["reference_assets_dir"] = str(target_assets)
+                self._presence_tuning_results.pop((view_id, int(target.order), target.type), None)
+                self.recipes.update_tool(recipe, target_row, target, view_id=view_id)
+                completed += 1
+            except (ValueError, OSError) as exc:
+                if isinstance(exc, OSError):
+                    target.params.values.update(reference_model_ready=False, reference_model_needs_rebuild=True)
+                    self._presence_tuning_results.pop((view_id, int(target.order), target.type), None)
+                    self.recipes.update_tool(recipe, target_row, target, view_id=view_id)
+                failures.append(f"{tool_display_name(target)}: {exc}")
+        self._refresh_tools_table()
+        self._update_dirty_state(recipe, view_id)
+        summary = f"{title}: dokončené pre {completed} z {len(targets)} nástrojov."
+        if action == "shared_ok":
+            if unchanged:
+                summary += f" Bez nových spoločných OK snímok: {unchanged}."
+            if completed:
+                summary += " Prepočítajte modely aktualizovaných nástrojov."
+        if failures:
+            self._warn(summary + "\n\n" + "\n".join(failures))
+        else:
+            self._info(summary)
+
     def _on_presence_v2_learning(self, action: str) -> None:
         context = self._presence_v2_context()
         if context is None:
@@ -1748,6 +1826,9 @@ class GoldenWizard(QDialog):
         if action != "validate" and not self._authorize_write():
             return
         recipe, view_id, row, tool, assets = context
+        if tool.type == "mold.protection_v1" and action in {"shared_ok", "rebuild"}:
+            self._apply_mold_learning(action, context)
+            return
         dirs = ensure_assets_dirs(assets)
         if action != "reset":
             try:
@@ -1778,6 +1859,19 @@ class GoldenWizard(QDialog):
                               sample_count_ok=0, sample_count_nok=0)
                 tool.params = ToolParams(params)
                 self.recipes.update_tool(recipe, row, tool, view_id=view_id)
+            from app.services.capture_batch import CaptureBatch
+            shared = self._shared_mold_ok_store(view_id) if tool.type == 'mold.protection_v1' and mode == 'ok' else None
+
+            def validate_commit():
+                if self._presence_learning_signature(tool, view_id) != signature:
+                    raise ValueError("Počas zberu sa zmenilo nastavenie. Snímky neboli pridané.")
+
+            try:
+                batch = CaptureBatch(assets, mode, signature,
+                                     shared.directory if shared is not None else None)
+            except OSError as exc:
+                self._warn(f"Príprava ukladania snímok zlyhala: {exc}")
+                return
             dialog = PresenceV2SampleCaptureDialog(
                 title=(
                     "Zber prázdnej formy" if mode == "ok"
@@ -1788,43 +1882,79 @@ class GoldenWizard(QDialog):
                 capture_fn=lambda: self._capture_presence_learning_frame(view_id),
                 crop_fn=lambda frame: self._prepare_presence_learning_sample(frame, tool, view_id),
                 default_mode=str((tool.params.values or {}).get("capture_mode_default", "manual")),
+                retain_frames=(tool.type == 'mold.protection_v1' and mode == 'ok'),
+                batch=batch,
+                validate_commit=validate_commit,
                 parent=self,
             )
-            if dialog.exec() == QDialog.Accepted:
-                samples = dialog.samples()
-                if samples:
-                    if self._presence_learning_signature(tool, view_id) != signature:
-                        self._warn("Počas zberu sa zmenilo nastavenie. Snímky neboli pridané.")
-                        return
-                    bind_samples(assets, signature)
-                    self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-                    for sample in samples:
-                        save_sample(sample, dirs[mode])
-                    params = dict(tool.params.values or {})
-                    params["sample_preparation_version"] = SAMPLE_PREPARATION_VERSION
-                    params["reference_model_ready"] = False
-                    params["reference_model_needs_rebuild"] = True
-                    params["reference_model_invalidated"] = False
-                    tool.params = ToolParams(params)
+            try:
+                accepted = dialog.exec() == QDialog.Accepted
+                if not accepted or not dialog.saved_count:
+                    return
+                self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
+                params = dict(tool.params.values or {})
+                params["sample_preparation_version"] = SAMPLE_PREPARATION_VERSION
+                params["reference_model_ready"] = False
+                params["reference_model_needs_rebuild"] = True
+                params["reference_model_invalidated"] = False
+                tool.params = ToolParams(params)
+            finally:
+                batch.discard()
+                dialog.deleteLater()
         elif action == "reset":
-            reply = QMessageBox.question(
-                self, "Resetovať učenie?",
-                "Vymažú sa všetky OK/NOK vzorky a prepočítaný model.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if reply != QMessageBox.Yes:
+            confirmation = QMessageBox(self)
+            confirmation.setWindowTitle("Resetovať učenie?")
+            confirmation.setIcon(QMessageBox.Question)
+            confirmation.setText("Vymažú sa OK/NOK vzorky a prepočítané modely.")
+            confirmation.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            confirmation.setDefaultButton(QMessageBox.No)
+            reset_all = None
+            if tool.type == "mold.protection_v1":
+                confirmation.setText("Vymažú sa OK/NOK vzorky a prepočítané modely. Pri resete všetkých nástrojov sa vymažú aj spoločné OK snímky aktuálneho pohľadu vrátane starších zberov. Pri resete iba tohto nástroja zostanú spoločné OK snímky zachované.")
+                reset_all = QCheckBox("Resetovať učenie všetkých nástrojov Kontrola prázdnej formy v aktuálnom pohľade aktuálneho receptu", confirmation)
+                reset_all.setChecked(True)
+                confirmation.setCheckBox(reset_all)
+            if confirmation.exec() != QMessageBox.Yes:
                 return
-            ok, error = reset_learning_assets(assets)
-            if not ok:
-                self._warn(f"Reset učenia zlyhal: {error or 'neznáma chyba'}")
-                return
-            params = dict(tool.params.values or {})
-            params.update(reference_model_ready=False, reference_model_invalidated=False,
-                          sample_count_ok=0, sample_count_nok=0)
-            self._presence_tuning_results.pop((view_id, int(tool.order), tool.type), None)
-            params.pop("model_stats", None)
-            params.pop("model_warnings", None)
-            tool.params = ToolParams(params)
+            targets = [(view_id, row, tool, assets)]
+            if reset_all is not None and reset_all.isChecked():
+                targets = []
+                for target_row, target_tool in enumerate(self.recipes.get_draft_tools(recipe, view_id)):
+                    if target_tool.type != "mold.protection_v1":
+                        continue
+                    identity, _, _ = compute_tool_identity(target_tool)
+                    target_assets = resolve_assets_dir(self.recipes.base, recipe, view_id, identity)
+                    stored = str(target_tool.params.values.get("reference_assets_dir", "") or "")
+                    if stored and Path(stored).resolve().is_relative_to(target_assets.parents[1].resolve()):
+                        target_assets = Path(stored)
+                    targets.append((view_id, target_row, target_tool, target_assets))
+            failures = []
+            if reset_all is not None and reset_all.isChecked():
+                from app.services.shared_mold_ok import SharedMoldOK
+                try:
+                    SharedMoldOK.clear_view(self.recipes.base, recipe, view_id)
+                except OSError as exc:
+                    failures.append(f"{view_id} / spoločné OK snímky: {exc}")
+            for target_view, target_row, target_tool, target_assets in targets:
+                ok, error = reset_learning_assets(target_assets)
+                params = dict(target_tool.params.values or {})
+                # A partially failed deletion must not leave a model marked ready.
+                params.update(reference_model_ready=False, reference_model_invalidated=not ok,
+                              reference_model_needs_rebuild=False)
+                if ok:
+                    params.update(sample_count_ok=0, sample_count_nok=0)
+                else:
+                    failures.append(f"{target_view} / {tool_display_name(target_tool)}: {error or 'neznáma chyba'}")
+                params.pop("model_stats", None)
+                params.pop("model_warnings", None)
+                target_tool.params = ToolParams(params)
+                self._presence_tuning_results.pop((target_view, int(target_tool.order), target_tool.type), None)
+                self.recipes.update_tool(recipe, target_row, target_tool, view_id=target_view)
+                self._update_dirty_state(recipe, target_view)
+            self._refresh_tools_table()
+            if failures:
+                self._warn("Reset učenia nebol úplný:\n" + "\n".join(failures))
+            return
         elif action == "rebuild":
             if self._rebuild_presence_v2_model(tool, dirs, view_id) is None:
                 return
@@ -2058,6 +2188,11 @@ class GoldenWizard(QDialog):
         tool = tools[row]
         thresholds = dict(getattr(tool.thresholds, "values", {}) or {})
         thresholds[name] = value
+        if tool.type == 'mold.protection_v1' and name == 'max_largest_blob_area':
+            largest = float(value or 0)
+            total = float(thresholds.get('total_area_threshold', 50.0))
+            if largest > 0 and total < largest:
+                thresholds['total_area_threshold'] = largest
         tool.thresholds = ToolThresholds(thresholds)
         try:
             self.recipes.update_tool(recipe, row, tool, view_id=view_id)
@@ -2280,6 +2415,35 @@ class GoldenWizard(QDialog):
             self._last_tool_results[cache_key] = (
                 result, test_run.elapsed_ms, perf_breakdown, status_message, result_rect
             )
+        except ToolTestBlockedError as exc:
+            self._last_tool_results.pop((view_id, int(target_tool.order), target_tool.type), None)
+            failure = exc.failure
+            reason = str(failure.get("locator_failure_reason", ""))
+            reason_text = {"not_found": "nenašiel pozíciu", "low_corr": "nízka zhoda",
+                           "status_nok": "vyhodnotil NOK"}.get(reason, reason)
+            failed_tool = exc.reports[-1].tool
+            locator_params = failed_tool.params.values
+            template = ToolRoi.from_obj(locator_params.get("template_roi"))
+            if (not locator_params.get("use_golden_crop", False)
+                    and template.rect() is None and failed_tool.template_roi.rect() is None):
+                reason_text = "chýba oblasť šablóny; nastav ju tlačidlom Šablóna"
+            else:
+                edge = failure.get("reference_edge") or {}
+                edge_reason = edge.get("failure") if isinstance(edge, dict) else None
+                reason_text = {
+                    "missing_reference_edge": "chýbajú body referenčnej hrany A–B",
+                    "reference_edge_not_found": "referenčná hrana A–B nebola nájdená",
+                    "low_reference_coverage": "nedostatočné pokrytie referenčnej hrany",
+                    "reference_angle_out_of_range": "otočenie referenčnej hrany je mimo limitu",
+                }.get(edge_reason, reason_text)
+            locator_name = failure.get("tool") or failed_tool.name
+            message = (f"Nástroj nebol otestovaný.\nLocator „{locator_name}“: {reason_text}.\n"
+                       "Recept zastavuje test pri zlyhaní locatora. Najprv otestuj locator.")
+            breakdown = [{"tool": report.tool.name or report.tool.type,
+                          "latency_ms": report.latency_ms,
+                          "timings": report.diagnostics.get("timings_ms")}
+                         for report in exc.reports]
+            self._tool_panel.show_test_blocked(message, exc.elapsed_ms, breakdown)
         except Exception as exc:
             self._tool_panel.show_test_error(f"Test zlyhal: {exc}")
         finally:
@@ -2331,6 +2495,12 @@ class GoldenWizard(QDialog):
         return True, autosorted
 
     # ---------- Shutdown ----------
+    def done(self, result):
+        self._stop_preview_session()
+        if self.pico is not None:
+            self.pico.set_manual_light(False)
+        super().done(result)
+
     def closeEvent(self, e):
         if self._has_unsaved_changes():
             result = QMessageBox.question(
@@ -2344,4 +2514,6 @@ class GoldenWizard(QDialog):
                 e.ignore()
                 return
         self._stop_preview_session()
+        if self.pico is not None:
+            self.pico.set_manual_light(False)
         e.accept()

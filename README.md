@@ -2,6 +2,8 @@
 
 HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný stack je JetPack, Docker, Python, PySide6, OpenCV, GStreamer/V4L2, kamera See3CAM_CU55M, Raspberry Pi Pico a SQLite. Windows sa používa iba na vývoj a editáciu; runtime, testovanie s hardvérom aj produkcia sú Jetson-only a bežia v Dockeri.
 
+Príkazy na spustenie, nastavenie a servis nájdete v [prehľade príkazov](docs/PRIKAZY_SK.md).
+
 ## Aktuálne implementované
 
 - Nezávislé kamerové stanice s vlastným Pico, receptmi a výsledkami; explicitné USB párovanie vrátane overenia snímkou. [Ovládanie a stav overenia](docs/architecture/MULTI_CAMERA_SK.md).
@@ -17,21 +19,41 @@ HDF_Vision je QC vision aplikácia pre **NVIDIA Jetson Orin Nano**. Produkčný 
 Tab **TROUBLESHOOTING → Overenie polohy kamery** porovnáva RAW golden aktívneho
 View s novou RAW snímkou bez produkčnej alignment kompenzácie. Používa uložené
 tolerancie receptu, zobrazuje fyzické korekcie a podporuje ručné/automatické
-snímkovanie aj prepínanie Golden/Current. Diagnostika pozastaví RUN danej stanice
+snímkovanie aj automatické prepínanie Golden/Current každých 400 ms.
+Dotykové rozloženie má veľké snímky, merania pod obrazom a tolerancie aj pokyny
+v prekrytí **Podrobnosti**. Tlačidlo Späť sa nezobrazuje; na odchod slúži horná
+navigácia. Toggle **Automatické snímanie** sprístupní výber **Rozostup**
+(0,5 / 1 / 2 / 5 s), ktorý možno meniť aj počas snímania. Odstup sa počíta od
+ukončenia predchádzajúcej kontroly; požiadavky sa neprekrývajú.
+Diagnostika pozastaví RUN danej stanice
 a nemení recept, produkčné výsledky ani Modbus OK/NOK.
 [Implementácia, obmedzenia tolerancií a Jetson testy](docs/CAMERA_POSITION_VERIFICATION_SK.md).
 
 ## Výsledky kontrol
 
-Stránka **VÝSLEDKY** zobrazuje uložené kontroly po 50 záznamoch, od najnovších.
-Filtre dátumu (vrátane koncového dňa), receptu, pohľadu a OK/NOK sa použijú tlačidlom
-**Vyhľadať**. Výber kontroly načíta jej snímku, výsledky nástrojov a voliteľný detail
-metrík a prahov. **Export CSV** exportuje všetky záznamy zodpovedajúce aktuálnym
-filtrom do nového súboru. Čítanie SQLite, obrázkov a export bežia na pozadí.
+Stránka **VÝSLEDKY** má dotykové karty histórie vľavo a veľkú snímku vpravo.
+Počet kariet na strane sa prispôsobí dostupnej výške (najviac 8), bez posuvného
+zoznamu. Prepínač **Všetky / NOK / OK** filtruje okamžite. **Filtre** otvoria prekrytie
+s receptom, pohľadom a dátumami **Od / Do**: dátum možno napísať alebo zvoliť deň
+v slovenskom kalendári; koncový deň je zahrnutý. **Použiť filtre** potvrdí výber,
+**Zrušiť**, Zavrieť alebo kliknutie mimo obnoví pôvodné hodnoty.
+
+Prepínač kamery prehliada históriu jednej stanice alebo **Všetkých kamier**;
+záznamy obsahujú názov kamery a pri spoločnom zozname sa radia podľa času.
+ROI a Chyby sú toggle tlačidlá. Snímka podporuje priblíženie a posun dvoma prstami,
+myšou aj tlačidlami. Pod snímkou je výsledok, zaokrúhlený čas a nástroje po trojiciach.
+**Podrobnosti** alebo tlačidlo konkrétneho nástroja otvorí metriky a uložené prahy
+v prekrytí. Akcie kandidátov False OK/NOK nie sú v operátorskej histórii zobrazené.
+**Export CSV** exportuje všetky záznamy zodpovedajúce potvrdeným filtrom a zvoleným
+kamerám do nového súboru vrátane názvu kamery. Čítanie SQLite, obrázkov a export
+bežia na pozadí; otvorenie histórie nemení recepty ani riadenie kamier.
 
 Nové záznamy obsahujú historickú geometriu a prahy; pri starších záznamoch sa
 chýbajúca geometria nedopĺňa z aktuálneho receptu. Presná lokalizácia chyby sa
-zobrazuje len ak ju nástroj uložil. Ak plná snímka chýba, použije sa uložený JPEG;
+zobrazuje len ak ju nástroj uložil. Pri NOK bez lokalizovanej chyby (napríklad
+nevyhovujúci SSIM alebo nepripravený model) **Chyby** červeno zvýraznia uloženú
+kontrolovanú ROI a uvedú dôvod NOK; ide o oblasť kontroly, nie presnú polohu defektu.
+Pri SSIM sa použije historická hodnota a uložený prah. Ak plná snímka chýba, použije sa uložený JPEG;
 po odstránení oboch obrázkov zostanú dostupné metriky. Pravidlá uchovávania a
 zapnutie/vypnutie ukladania kontrol zostávajú platné. Otvorenie stránky Výsledky z RUN ponechá kontroly a externé vstupy aktívne;
 návrat do RUN nepripravuje kameru znovu. SETUP po potvrdení operátorom kontroly
@@ -39,7 +61,7 @@ pozastaví. Výsledky otvorené zo SETUP ich samy neobnovia.
 
 ## Produkčná architektúra kamery
 
-Aplikácia podporuje **MASTER** s kontinuálnym streamom aj nový **Pico PIO TRIGGER** s dvojicou PRIME + produkcia. Stav integračného overenia uvádza [checkpoint](docs/PIO_IMPLEMENTATION_CHECKPOINT.md); nový firmvér a protokol sú v [firmware/pico](firmware/pico/README.md).
+Aplikácia podporuje **MASTER** s kontinuálnym streamom aj nový **Pico PIO TRIGGER** s dvojicou PRIME + produkcia. Firmvér a protokol sú v [firmware/pico](firmware/pico/README.md).
 
 ```text
 physical external input INx
@@ -286,6 +308,59 @@ Pri `Sekvenčný` vyberá HDF_Vision View podľa poradia sekvencie osobitne pre 
 
 Golden Wizard má vedľa Live samostatné tlačidlo Manual light. Live ON/OFF nemení Manual light a Manual light ON/OFF nemení Live preview.
 
+### Dotykové ovládanie Golden Wizardu
+
+Wizard využíva celú obrazovku. Horný riadok obsahuje výber pohľadu, **+ Pohľad**,
+**Upraviť pohľad**, prepínače **Live** a **Svetlo** a tlačidlo **Ďalšie**.
+Aktívne prepínače sú farebne zvýraznené. Ďalšie možnosti a získanie GOLDEN
+sa otvárajú ako prekrytie nad obrazom bez posúvania pracovnej plochy.
+
+Pravý panel prepína medzi **Nástroje** a **Parametre**. Na jednej stránke je
+najviac päť nástrojov; ďalšie nástroje aj dlhšie formuláre sa stránkujú šípkami.
+Jeden klik nástroj iba označí. Parametre sa otvoria dvojklikom na nástroj alebo
+tlačidlom **Parametre**.
+Výsledok testu zobrazuje stav, čas a metriky spolu na jednej stránke. Náhľady
+a podrobné časovanie sa otvárajú v prekrytí nad obrazom.
+Ak test zastaví predchádzajúci locator podľa politiky receptu, vybraný analyzátor
+sa označí **NEOTESTOVANÉ** s dôvodom zlyhania locatora. Nejde o NOK meranie SSIM
+ani iného vybraného analyzátora. Najprv skontrolujte šablónu, oblasť hľadania
+a prípadnú referenčnú hranu A–B a otestujte samotný locator.
+Na karte Nástroje sú priamo dostupné kopírovanie,
+odstránenie s potvrdením, zapnutie/vypnutie a zmena poradia. Pôvodné pravidlo,
+že locator musí predchádzať analyzátorom, zostáva zachované.
+
+- **Jeden prst:** výber a úprava geometrie; po voľbe kresliaceho nástroja kreslenie.
+- **Dva prsty:** roztiahnutím/stiahnutím priblíženie a pohybom oboch prstov posun snímky.
+  Gesto nemení rotáciu ani uloženú ROI, masku či hranu. Po zdvihnutí jedného prsta
+  sa kreslenie obnoví až po ukončení celého gesta a novom dotyku.
+- **Celý obraz / − / +:** zostávajú dostupné aj bez gest; funguje aj pôvodné ovládanie myšou.
+- **Upravovaná oblasť:** podľa nástroja ROI, hľadanie/šablóna, Ignore mask alebo hrana A–B.
+  Referenčná hrana locatora je dostupná v príslušnom režime zarovnania.
+  **Hľadanie** a **Šablóna** sa vyberajú výhradne tlačidlami; kliknutie alebo
+  dotyk obrazu aktívnu oblasť nemení ani pri minutí úchopu.
+- **Zarovnanie locatora:** bežné režimy majú jednu stránku. Pri referenčnej hrane A–B
+  sú nastavenia zoskupené do troch stránok: režim a otočenie, hľadanie hrany a presnosť hrany.
+  **Prijatie výsledku** zobrazuje minimálnu zhodu a maximálne posuny X/Y spolu na jednej stránke.
+- **ROI:** osem úchopov obdĺžnika a odsadený úchop rotácie majú väčšiu dotykovú plochu.
+  Rozmery sú zobrazené pod snímkou.
+- **Polygón ROI aj masky:** dotyky pridávajú vrcholy; **Dokončiť polygón** je dostupné
+  od troch bodov. **Späť o bod** opraví posledný bod a **Zrušiť** zruší rozkreslený tvar.
+  Dvojklik myšou alebo Enter zostávajú funkčné.
+- **Ignore mask:** štetec, guma, obdĺžnik, kruh a polygón; veľkosť štetca,
+  priehľadnosť a zobrazenie masky sú pod **Maska ▴**.
+
+Učené nástroje zachovávajú zber OK/NOK vzoriek, model a validáciu. Kontrola prázdnej
+formy V2 má samostatný vstup **V2: Kavity, vzorky a model**.
+Karta **Učenie** zobrazuje stav, počty vzoriek, zber a prepočet modelu na jednej
+stránke. Odhad modelu a reset učenia sú v prekrytí **Podrobnosti modelu ▴**.
+Pri kontrole prázdnej formy má **Citlivosť** dve stránky: základné nastavenia
+detekcie a limity zvyškov; stručný výsledok posledného testu zostáva na oboch.
+**Pokročilé** má dve stránky: zber a validácia vzoriek, potom profil modelu.
+Karta **Validácia** má jednu stránku s testovaním vzoriek, návrhom nastavení,
+stručným výsledkom a použitím odporúčania. Upozornenia na chýbajúce NOK vzorky,
+malý dataset a prekrývanie zostávajú priamo v prehľade. Úplné reporty sú
+v prekrytí **Podrobnosti validácie ▴**, kde sa prepína overenie vzoriek a návrh nastavení.
+
 ## RUN UI
 
 - **Recept:** výber aktívneho receptu; View strip zobrazuje a umožňuje aktivovať jeho Views.
@@ -295,6 +370,69 @@ Golden Wizard má vedľa Live samostatné tlačidlo Manual light. Live ON/OFF ne
 - **Manual light:** samostatné tlačidlo `Svetlo zapnuté/vypnuté`, ktoré používa Pico `LIGHT ON/OFF`.
 
 `Live ON/OFF` nikdy implicitne nemení `Light ON/OFF` a opačne. Stav svetla sa číta z Pico cez `STATUS`; pri staršom firmware sa zobrazí neznámy stav alebo chyba commandu.
+
+## Nastavenia a napájanie
+
+**NASTAVENIA** zobrazujú kompaktné karty Recept, Kamera, Komunikácia a Systém
+bez posúvania. Golden Setup sa otvára samostatne. Režim snímania aj tlačidlá
+majú dotykovú veľkosť; servisný overlay sa zapína prepínacím tlačidlom.
+
+V karte **Systém → Napájanie** sú tri akcie:
+
+- **Zavrieť aplikáciu · pracovná plocha** bezpečne ukončí všetky kamerové
+  stanice a aplikáciu; počítač zostane zapnutý.
+- **Reštartovať počítač** ukončí stanice a po skončení aplikácie reštartuje hosta.
+- **Vypnúť počítač** ukončí stanice a po skončení aplikácie vypne hosta.
+
+Pred ukončením sa dokončí prijatá kontrola a uvoľnia zariadenia všetkých staníc.
+Každá akcia vyžaduje záverečné potvrdenie. Ak je nastavené spoločné heslo ochrany
+receptov, najprv sa heslom odomkne ponuka Napájanie. Odomknutie platí iba pre
+aktuálne otvorenú ponuku; nemení oprávnenia na zápis receptov. Bez nastaveného
+hesla je ponuka prístupná priamo. Heslo sa zadáva systémovou klávesnicou GNOME, ktorá sa vyvolá dotykom
+textového poľa. Aplikácia nepoužíva druhú vlastnú klávesnicu.
+
+Automatické vyvolávanie systémovej klávesnice platí aj pre ostatné upraviteľné
+textové polia aplikácie. `docker/run.sh` z grafického terminálu načíta adresu
+hostiteľského IBus a identitu používateľa pracovnej plochy. Pomocný proces sa
+pripája ako tento používateľ; dostáva iba informáciu o zameraní poľa
+a polohe kurzora, nikdy text hesla. Nenastavuje nové heslo ani nemení nastavenia
+klávesnice GNOME. Pri ručnom spustení mimo `run.sh` treba odovzdať `IBUS_ADDRESS`,
+`HDF_DESKTOP_UID` a `HDF_DESKTOP_GID`; samotné `QT_IM_MODULE=ibus` nestačí pre
+aplikáciu bežiacu v kontajneri ako root. Použitá grafická relácia je GNOME/X11.
+
+Heslo sa spravuje výhradne cez terminál, pozri [Recipe security](#recipe-security).
+Ak už je heslo na ochranu receptov nastavené, automaticky platí aj pre Napájanie;
+netreba nastavovať druhé heslo.
+
+## Tichá pracovná plocha Jetsonu
+
+Jednorazovo spustite **v termináli pracovnej plochy Jetsonu, bez sudo a mimo Dockeru**:
+
+```bash
+bash tools/setup-desktop.sh
+```
+
+Skript zapne režim **Nerušiť**, vypne oznámenia aktualizácií Ubuntu a GNOME
+Software a zakáže automatické spustenie Ubuntu Update Notifier pre aktuálneho
+používateľa. Nerušiť potlačí aj bežné oznámenia ostatných aplikácií; nejde o blokovanie
+všetkých systémových dialógov. Samotné sťahovanie/inštalovanie aktualizácií,
+APT služby a ručné otvorenie správcu aktualizácií zostávajú nezmenené.
+
+Nerušiť sa zapne ihneď. **Po spustení sa odhláste a znova prihláste alebo
+reštartujte**, aby prestal bežať aj pôvodný oznamovač. Už otvorené okná skript
+nezatvára. Nastavenia pretrvajú reštart a skript možno spustiť opakovane;
+prvú zálohu neprepíše. Iných používateľov neovplyvní.
+
+Obnova pôvodného stavu (potom sa opäť odhláste/prihláste):
+
+```bash
+bash tools/setup-desktop.sh --restore
+```
+
+Záloha je v `${XDG_STATE_HOME:-~/.local/state}/hdf-vision/desktop/original`.
+Obnova vráti iba zmenené nastavenia a pôvodný súbor automatického spúšťania;
+úspešne obnovenú zálohu odstráni. Následné nové nastavenie uloží novú zálohu.
+Skript zatiaľ nenastavuje automatické spúšťanie HDF Vision ani štartovacie logo.
 
 ## Docker / Jetson
 
@@ -322,8 +460,8 @@ sudo udevadm control --reload-rules && sudo udevadm trigger
 
 ## Recipe security
 
-Ochrana zápisu receptov sa spravuje výhradne z terminálu v jednorazovom Docker
-kontajneri (aplikácia pritom nemusí bežať):
+Spoločné heslo pre zápis receptov a ponuku Napájanie sa spravuje výhradne
+z terminálu v jednorazovom Docker kontajneri (aplikácia pritom nemusí bežať):
 
 ```bash
 bash docker/security.sh status
@@ -335,13 +473,17 @@ sudo bash docker/security.sh reset-password
 ```
 
 Normálny režim spustíte cez `bash docker/run.sh`. Ak je ochrana zapnutá, zápisy
-receptu vyžiadajú heslo. Servisný runtime režim sa spúšťa výhradne ako root:
+receptu aj otvorenie ponuky Napájanie vyžiadajú rovnaké heslo.
+`set-password` ho nastaví, `change-password` zmení po overení pôvodného hesla
+a `remove-password` po overení a potvrdení odstráni ochranu oboch oblastí. Heslo
+sa pri písaní v termináli nezobrazuje a nezadáva sa ako argument príkazu.
+Servisný runtime režim sa spúšťa výhradne ako root:
 
 ```bash
 sudo bash docker/run.sh --admin
 ```
 
-ADMIN iba obíde password prompt; nemení ani neodstraňuje heslo a audit zmien
+ADMIN obíde password prompt pre recepty aj Napájanie; nemení ani neodstraňuje heslo a audit zmien
 receptu zostáva aktívny. Po ukončení procesu ADMIN režim zanikne. Heslo sa nikdy
 neukladá ako plaintext: persistentný `/data/security.json` obsahuje náhodný salt
 a PBKDF2-HMAC-SHA256 hash a má oprávnenia `0600`. Pico Wizard a runtime akcie
@@ -349,13 +491,20 @@ a PBKDF2-HMAC-SHA256 hash a má oprávnenia `0600`. Pico Wizard a runtime akcie
 
 ## Raspberry Pi Pico firmware update
 
-Repozitárový firmware je v `firmware/pico/main_v3.3.py`. Nahrajte ho na Pico pod presným názvom `main.py`, Pico reštartujte a cez serial odošlite:
+Po zastavení výroby a zatvorení HDF Vision spustite na Jetson hoste:
 
-```text
-STATUS
+```bash
+bash docker/update-pico.sh
 ```
 
-Pred produkciou musí prvý riadok potvrdiť `FIRMWARE pico_hdf_controller 3.3-master-production-capture`.
+Skript porovná bežiaci HDF firmvér s `firmware/pico/main.py` v lokálnom projekte
+(aktuálne **4.1-pio-pair**). Staršiu verziu zálohuje a aktualizuje, rovnakú alebo
+novšiu nemení. Pri viacerých Pico vyberte `--port /dev/ttyACM0`; samotnú kontrolu
+bez nahrávania spustíte s `--check`. Uložená konfigurácia zostáva zachovaná.
+
+[Použitie, zálohy a obnova](docs/PICO_UPDATE_SK.md),
+[prehľad príkazov](docs/PRIKAZY_SK.md#aktualizácia-firmvéru-pico),
+[aktuálny Pico protokol](firmware/pico/README.md).
 
 ## Troubleshooting
 
@@ -397,3 +546,13 @@ AI/TensorRT a ďalšie PLC/I/O rozšírenia nie sú prezentované ako aktuálny 
 Aplikácia načítava recepty s `format_version: 3`. Staré recepty bez verzie sa
 odmietajú bez automatického prevodu alebo vymazania. Nový recept vytvorte pod
 novým názvom. Podrobnosti: [formát receptov](docs/architecture/RECIPE_FORMAT_SK.md).
+
+## Archív meraní a pracovných plánov
+
+Historické hardvérové testy, diagnostické záznamy, reporty a pracovné plány boli
+31.10.2026 presunuté mimo aplikácie do lokálneho priečinka
+`/home/hdf-jetson1/HDF_Vision_test_archive/20261031/`. Rozdelenie a spôsob čítania
+komprimovaných záznamov uvádza jeho `README_SK.md`. Testovacie obrázky z pôvodného
+`artifacts/` boli odstránené. Nové hardvérové merania ukladajte mimo aplikačného
+priečinka. Automatizované regresné testy v `tests/` a servisné Pico zálohy zostávajú
+súčasťou pracovného prostredia.

@@ -20,6 +20,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.ui.golden_wizard.style import GOLDEN_WIZARD_STYLE
+from app.ui.theme import COLOR_PANEL
+
 
 class PresenceV2SampleCaptureDialog(QDialog):
     def __init__(
@@ -29,14 +32,33 @@ class PresenceV2SampleCaptureDialog(QDialog):
         capture_fn: Callable[[], np.ndarray | None],
         crop_fn: Callable[[np.ndarray], np.ndarray | None],
         default_mode: str = "manual",
+        retain_frames: bool = False,
+        batch=None,
+        validate_commit: Callable[[], None] | None = None,
         parent=None,
     ) -> None:
         super().__init__(parent)
+        # A distinct scope prevents the parent wizard's transparent-descendant
+        # rule from matching this top-level dialog itself.
+        self.setObjectName("sampleCaptureDialog")
+        capture_style = GOLDEN_WIZARD_STYLE.replace("#goldenWizard", "#sampleCaptureDialog")
+        self.setStyleSheet(capture_style +
+                          f"\nQDialog#sampleCaptureDialog {{ background-color: {COLOR_PANEL}; }}")
         self.setWindowTitle(title)
         self.resize(1000, 640)
         self._capture_fn = capture_fn
         self._crop_fn = crop_fn
         self._samples: list[np.ndarray] = []
+        self._retain_frames = retain_frames
+        self._frames: list[np.ndarray] = []
+        self._batch = batch
+        self._validate_commit = validate_commit
+        self._sample_ids = []
+        self._commit_future = None
+        self.saved_count = 0
+        self._save_timer = QTimer(self)
+        self._save_timer.setInterval(25)
+        self._save_timer.timeout.connect(self._check_save)
         self._auto_timer = QTimer(self)
         self._auto_timer.timeout.connect(self._capture_once)
 
@@ -81,7 +103,7 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._preview = QLabel("Náhľad vzorky", self)
         self._preview.setMinimumSize(580, 420)
         self._preview.setAlignment(Qt.AlignCenter)
-        self._preview.setStyleSheet("background:#111;color:#999;border:1px solid #444;")
+        self._preview.setStyleSheet(f"background:{COLOR_PANEL};color:#9aa4af;border:1px solid #343c46;")
         body.addWidget(self._preview, 2)
 
         self._thumbs = QListWidget(self)
@@ -100,6 +122,9 @@ class PresenceV2SampleCaptureDialog(QDialog):
     def samples(self) -> list[np.ndarray]:
         return [np.asarray(s).copy() for s in self._samples]
 
+    def frames(self) -> list[np.ndarray]:
+        return [frame.copy() for frame in self._frames]
+
     def _start_auto(self) -> None:
         self._auto_timer.start(int(self._interval.value()))
 
@@ -107,6 +132,8 @@ class PresenceV2SampleCaptureDialog(QDialog):
         self._auto_timer.stop()
 
     def _capture_once(self) -> None:
+        if self._commit_future is not None:
+            return
         try:
             frame = self._capture_fn()
             if frame is None:
@@ -122,6 +149,11 @@ class PresenceV2SampleCaptureDialog(QDialog):
             QMessageBox.warning(self, "Capture", "Veľkosť vzorky sa nezhoduje s existujúcimi vzorkami.")
             return
         self._samples.append(np.asarray(cropped).copy())
+        if self._retain_frames:
+            self._frames.append(np.asarray(frame).copy())
+        if self._batch is not None:
+            self._sample_ids.append(self._batch.add(
+                self._samples[-1], self._frames[-1] if self._retain_frames else None))
         item = QListWidgetItem(f"#{len(self._samples)}")
         self._thumbs.addItem(item)
         self._thumbs.setCurrentRow(self._thumbs.count() - 1)
@@ -135,6 +167,10 @@ class PresenceV2SampleCaptureDialog(QDialog):
             return
         self._thumbs.takeItem(row)
         self._samples.pop(row)
+        if self._batch is not None:
+            self._sample_ids.pop(row)
+        if self._retain_frames:
+            self._frames.pop(row)
         self._counter.setText(f"Počet snímok: {len(self._samples)}")
         if self._thumbs.count() > 0:
             self._thumbs.setCurrentRow(max(0, min(row, self._thumbs.count() - 1)))
@@ -152,6 +188,56 @@ class PresenceV2SampleCaptureDialog(QDialog):
         pix = QPixmap.fromImage(qimg.copy())
         self._preview.setPixmap(pix.scaled(self._preview.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
+    def accept(self) -> None:
+        self._stop_auto()
+        if self._batch is None:
+            super().accept()
+            return
+        if self._commit_future is not None:
+            return
+        try:
+            if self._sample_ids and self._validate_commit is not None:
+                self._validate_commit()
+        except ValueError as exc:
+            QMessageBox.warning(self, "Zber vzoriek", str(exc))
+            return
+        self._commit_future = self._batch.commit(self._sample_ids)
+        self._set_saving(True)
+        self._save_timer.start()
+
+    def _set_saving(self, saving):
+        for widget in (self._btn_capture, self._btn_start, self._btn_delete,
+                       self._buttons, self._mode, self._target, self._interval):
+            widget.setEnabled(not saving)
+        self._counter.setText("Dokončujem uloženie snímok…" if saving
+                              else f"Počet snímok: {len(self._samples)}")
+
+    def _check_save(self):
+        if not self._commit_future.done():
+            return
+        self._save_timer.stop()
+        try:
+            self.saved_count = self._commit_future.result()
+        except Exception as exc:
+            self._commit_future = None
+            self._set_saving(False)
+            QMessageBox.warning(self, "Uloženie snímok zlyhalo", str(exc))
+            return
+        self._commit_future = None
+        super().accept()
+
+    def done(self, result):
+        self._stop_auto()
+        if self._commit_future is not None:
+            return
+        self._save_timer.stop()
+        if self._batch is not None:
+            self._batch.discard()
+        super().done(result)
+
     def closeEvent(self, event) -> None:  # noqa: N802
         self._stop_auto()
+        if self._commit_future is not None:
+            event.ignore()
+            return
         super().closeEvent(event)

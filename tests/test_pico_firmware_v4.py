@@ -8,7 +8,7 @@ import pytest
 
 
 @pytest.fixture
-def fw(monkeypatch):
+def fw(monkeypatch, request):
     class Pin:
         OUT=1; IN=0; PULL_UP=2
         def __init__(self,pin,*args,**kwargs):
@@ -35,7 +35,7 @@ def fw(monkeypatch):
               asm_pio=lambda **kwargs:lambda f:f,StateMachine=SM),
     }
     for name,module in modules.items():monkeypatch.setitem(sys.modules,name,module)
-    source=Path('firmware/pico/main_v4.0.py').read_text()
+    source=Path('firmware/pico/main_v' + getattr(request, 'param', '4.0') + '.py').read_text()
     tree=ast.parse(source);tree.body.pop()  # do not enter the firmware main loop
     ns={};exec(compile(tree,'firmware/pico/main_v4.0.py','exec'),ns)
     ns['config']=ns['DEFAULT_CONFIG'].copy()

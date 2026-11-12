@@ -1,9 +1,13 @@
-# Raspberry Pi Pico – HDF_Vision 4.0
+# Raspberry Pi Pico – HDF_Vision 4.2.1
 
-Nový firmvér je **main_v4.0.py**, identifikácia `pico_hdf_controller 4.0-pio-pair`.
+Nový firmvér je **main_v4.2.1.py**, identifikácia `pico_hdf_controller 4.2.1-pio-pair`.
 `main.py` je jeho identická nasadzovacia kópia. Na Pico s MicroPython pre RP2040
-sa kopíruje ako `main.py`. Verzia `main_v3.3.py` zostáva ako predchádzajúca verzia.
-Stav overenia a nasadenia uvádza `docs/PIO_IMPLEMENTATION_CHECKPOINT.md` v aplikácii.
+sa kopíruje ako `main.py`. Predchádzajúce kópie `main_v4.1.py`, `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
+Historické výsledky overenia sú v externom archíve uvedenom v hlavnom README projektu.
+
+Na Jetson hoste možno starší HDF firmvér aktualizovať príkazom
+`bash docker/update-pico.sh` po zatvorení aplikácie a zastavení výroby.
+[Návod na aktualizáciu a zálohy](../../docs/PICO_UPDATE_SK.md).
 
 ## Zapojenie
 
@@ -25,7 +29,12 @@ Aplikácia rezervuje čerstvý frame pri udalosti CAPTURE.
 V TRIGGER fyzický vstup odošle iba `REQUEST INx`. Aplikácia vyberie pohľad,
 pripraví kameru, rezervuje prijímač dvojice a až potom odošle `PIO FIRE`.
 Samotný vstup negeneruje impulzy ani svetlo. Takto sa rámce nestratia pred rezerváciou.
-Manuálne svetlo ON je dostupné iba v MASTER; v TRIGGER ho vlastní PIO sekvencia.
+Od v4.1 je manuálne svetlo ON dostupné v MASTER aj TRIGGER, iba mimo aktívneho cyklu.
+Prijatý FIRE/TRIGGER vstup alebo PIO FIRE automaticky zruší manuálne zapnutie.
+Svetlo potom riadi snímací cyklus a po skončení zostáva vypnuté; manuálny režim
+sa neobnoví ani po chybe PIO. LIGHT STATUS aj STATUS vracajú MANUAL_LIGHT OFF.
+V IDLE sa LIGHT ON odmietne. Odmietnutý príkaz snímania (nesprávny režim,
+parametre alebo obsadený radič) manuálne svetlo nemení.
 
 ## Protokol PIO_PAIR_V1 / SESSION_V1
 
@@ -60,3 +69,10 @@ starý firmvér v MASTER, pre TRIGGER vyžaduje v4.0.
 
 Pred trvalým nasadením zálohovať pôvodný `main.py` aj konfiguráciu. Nahratie do RAM
 pri vývoji nie je trvalé nasadenie; po reštarte sa spustí verzia uložená na flash.
+
+## Trigger Live 4.2.1
+
+`LIVE ON <period_us> <pulse_us>` spúšťa hardvérové PIO na GP16; GP17
+(svetlo) zostáva nezmenené. Aplikácia posiela periódu kamerového profilu,
+zahadzuje prvú PRIME snímku a po LIVE OFF vyčká na dobehnutie náhľadu.
+STATUS obsahuje `LIVE_PIO_V1`. Podrobnosti: [Trigger Live](../../docs/TRIGGER_LIVE_SK.md).

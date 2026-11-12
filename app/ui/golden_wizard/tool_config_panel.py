@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.utils.tool_labels import tool_display_name
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPixmap, QImage
-from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QTableWidget, QTableWidgetItem, QWidget, QAbstractItemView, QFormLayout, QLayout, QSpinBox, QDoubleSpinBox, QGroupBox, QSizePolicy, QButtonGroup, QToolButton
+from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox, QLineEdit, QCheckBox, QTableWidget, QTableWidgetItem, QWidget, QAbstractItemView, QFormLayout, QLayout, QSpinBox, QDoubleSpinBox, QGroupBox, QSizePolicy, QButtonGroup, QToolButton, QScrollArea
 import math
 from typing import Any, Dict, Optional
 import numpy as np
@@ -58,6 +58,7 @@ class ToolConfigPanel(QWidget):
     locatorFitSearchRequested = Signal()
     presenceLearningRequested = Signal(str)
     emptyMoldV2Requested = Signal()
+    presenceValidationChanged = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
 
@@ -66,6 +67,10 @@ class ToolConfigPanel(QWidget):
 
         self._current_tool: Optional[Tool] = None
         self._presence_is_mold = False
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
+        self._validation_weak = False
+        self._tuning_weak = False
         self._param_specs: dict[str, dict[str, Any]] = {}
         self._threshold_specs: dict[str, dict[str, Any]] = {}
         self._current_metrics_spec: list[ToolMetricSpec] = []
@@ -88,10 +93,16 @@ class ToolConfigPanel(QWidget):
         self._active_preview_key: Optional[str] = None
         self._locator_failure_policy: str = "continue_without_alignment"
 
-        layout = QVBoxLayout(self)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        root_layout = QVBoxLayout(self)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        root_layout.setContentsMargins(12, 0, 12, 12)
+        root_layout.setSpacing(10)
+        self._properties_header = QWidget(self)
+        self._properties_header.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        layout = QVBoxLayout(self._properties_header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        root_layout.addWidget(self._properties_header)
 
         title = QLabel("VLASTNOSTI", self)
         title.setProperty("role", "panelHeader")
@@ -112,6 +123,20 @@ class ToolConfigPanel(QWidget):
         self._description_label.setStyleSheet("color: #666;")
         self._description_label.setWordWrap(True)
         layout.addWidget(self._description_label)
+        self._settings_scroll = QScrollArea(self)
+        self._settings_scroll.setObjectName("propertiesScroll")
+        self._settings_scroll.setWidgetResizable(True)
+        self._settings_scroll.setFrameShape(QScrollArea.NoFrame)
+        self._settings_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._settings_scroll.setMinimumHeight(60)
+        self._settings_content = QWidget()
+        layout = QVBoxLayout(self._settings_content)
+        layout.setContentsMargins(0, 0, 4, 0)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignTop)
+        self._settings_scroll.setWidget(self._settings_content)
+        root_layout.addWidget(self._settings_scroll, 1)
+
         self._empty_mold_v2_button = QPushButton("V2: Kavity, vzorky a model", self)
         self._empty_mold_v2_button.clicked.connect(self.emptyMoldV2Requested.emit)
         self._empty_mold_v2_button.hide()
@@ -153,8 +178,8 @@ class ToolConfigPanel(QWidget):
         self._locator_fit_button = fit_search
         geometry_layout.addWidget(self._locator_geometry_actions)
         self._locator_geometry_actions.hide()
-        self._geometry_section = CollapsibleSection("Geometria", geometry_content, parent=self)
-        self._detection_section = CollapsibleSection("Detekcia", self._form_container, parent=self)
+        self._geometry_section = CollapsibleSection("Geometria", geometry_content, expanded=False, parent=self)
+        self._detection_section = CollapsibleSection("Detekcia", self._form_container, expanded=False, parent=self)
         self._threshold_section = CollapsibleSection("Prahy", self._threshold_container, parent=self)
         layout.addWidget(self._geometry_section)
 
@@ -187,6 +212,10 @@ class ToolConfigPanel(QWidget):
             self._presence_capture_labels[action] = caption
             self._presence_capture_buttons[action] = button
         learning_layout.addLayout(capture_row)
+        self._shared_mold_ok = QPushButton("Použiť spoločné OK snímky", learning_content)
+        self._shared_mold_ok.setToolTip("Použiť OK snímky zozbierané pri inom nástroji Kontrola prázdnej formy v tomto pohľade. ROI a model ostávajú samostatné.")
+        self._shared_mold_ok.clicked.connect(lambda: self.presenceLearningRequested.emit('shared_ok'))
+        learning_layout.addWidget(self._shared_mold_ok)
         self._presence_rebuild = QPushButton("Prepočítať model", learning_content)
         self._presence_rebuild.clicked.connect(
             lambda: self.presenceLearningRequested.emit("rebuild")
@@ -196,6 +225,7 @@ class ToolConfigPanel(QWidget):
         self._presence_recommended.setWordWrap(True)
         learning_layout.addWidget(self._presence_recommended)
         reset_learning = QPushButton("Resetovať učenie", learning_content)
+        self._presence_reset = reset_learning
         reset_learning.setProperty("role", "destructive")
         reset_learning.clicked.connect(lambda: self.presenceLearningRequested.emit("reset"))
         learning_layout.addWidget(reset_learning)
@@ -211,8 +241,10 @@ class ToolConfigPanel(QWidget):
         validation_layout.setContentsMargins(0, 0, 0, 0)
         validation_layout.setSpacing(6)
         validate_samples = QPushButton("Otestovať vzorky", validation_content)
+        self._presence_validate_button = validate_samples
         validate_samples.clicked.connect(lambda: self.presenceLearningRequested.emit("validate"))
         auto_settings = QPushButton("Automaticky navrhnúť nastavenia", validation_content)
+        self._presence_auto_settings_button = auto_settings
         auto_settings.clicked.connect(
             lambda: self.presenceLearningRequested.emit("auto_settings")
         )
@@ -232,7 +264,7 @@ class ToolConfigPanel(QWidget):
         validation_layout.addWidget(self._presence_tuning_result)
         validation_layout.addWidget(self._presence_apply_tuned)
         self._presence_validation_section = CollapsibleSection(
-            "Validácia", validation_content, parent=self
+            "Validácia", validation_content, expanded=False, parent=self
         )
         self._presence_validation_section.hide()
         layout.addWidget(self._presence_validation_section)
@@ -265,22 +297,19 @@ class ToolConfigPanel(QWidget):
         self._placeholder_label.setAlignment(Qt.AlignTop)
         layout.addWidget(self._placeholder_label, 1)
 
-        layout.addStretch(1)
-
         controls_layout = QHBoxLayout()
         controls_layout.setContentsMargins(0, 0, 0, 0)
         controls_layout.setSpacing(6)
 
-        self._btn_test = QPushButton("Otestovať", self)
-        self._btn_test.clicked.connect(self._on_test_clicked)
+        self._test_enabled = False
 
         self._btn_defaults = QPushButton("Obnoviť predvolené", self)
         self._btn_defaults.clicked.connect(self._on_restore_defaults)
 
-        controls_layout.addWidget(self._btn_test)
         controls_layout.addWidget(self._btn_defaults)
         controls_layout.addStretch(1)
         layout.addLayout(controls_layout)
+        layout.addStretch(1)
 
         self._diagnostics_group = QGroupBox("Diagnostika", self)
         diag_layout = QVBoxLayout(self._diagnostics_group)
@@ -387,19 +416,22 @@ class ToolConfigPanel(QWidget):
 
         diag_layout.addWidget(self._preview_widget)
 
-        layout.addWidget(CollapsibleSection("Výsledok", self._diagnostics_group, parent=self))
+        self._result_section = CollapsibleSection(
+            "Výsledok", self._diagnostics_group, expanded=False, parent=self)
+        self._result_section.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Maximum)
+        root_layout.addWidget(self._result_section)
 
         self._update_visibility()
         self._reset_diagnostics()
-        self.testButtonEnabledChanged.emit(self._btn_test.isEnabled())
+        self.testButtonEnabledChanged.emit(self._test_enabled)
 
     def is_test_enabled(self) -> bool:
-        return self._btn_test.isEnabled()
+        return self._test_enabled
 
     def _set_test_button_enabled(self, enabled: bool) -> None:
-        if self._btn_test.isEnabled() == enabled:
+        if self._test_enabled == enabled:
             return
-        self._btn_test.setEnabled(enabled)
+        self._test_enabled = bool(enabled)
         self.testButtonEnabledChanged.emit(enabled)
 
     def _on_name_edited(self) -> None:
@@ -414,6 +446,8 @@ class ToolConfigPanel(QWidget):
 
     def clear(self) -> None:
         self._current_tool = None
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
         self._empty_mold_v2_button.hide()
         self._name_input.clear()
         self._name_input.setEnabled(False)
@@ -443,6 +477,9 @@ class ToolConfigPanel(QWidget):
         schema: dict[str, dict[str, dict[str, Any]]],
     ) -> None:
         self._current_tool = tool
+        self._compact_validation_summary = None
+        self._compact_tuning_summary = None
+        self._presence_validation_result.setText("Zatiaľ bez výsledku")
         self._empty_mold_v2_button.setVisible(tool.type == "mold.protection_v2")
         self._name_input.setText(tool_display_name(tool))
         self._name_input.setEnabled(True)
@@ -461,6 +498,7 @@ class ToolConfigPanel(QWidget):
         is_locator = tool.type == "locator.template_match"
         is_presence_v2 = tool.type in STATISTICAL_TYPES
         self._presence_is_mold = tool.type == "mold.protection_v1"
+        self._shared_mold_ok.setVisible(self._presence_is_mold)
         self._presence_capture_labels["capture_ok"].setText(
             "Prázdna forma (OK)" if self._presence_is_mold else "Vzorky OK"
         )
@@ -537,6 +575,7 @@ class ToolConfigPanel(QWidget):
                 f"OK vzorky: {ok_count} / {target}\nNOK vzorky: {nok_value}"
             )
         self._presence_warning.setText(warning)
+        self._presence_warning.setVisible(bool(warning))
         self._presence_rebuild.setEnabled(tool.roi.rect() is not None and ok_count >= minimum)
         values = dict(recommended or {})
         if values:
@@ -550,8 +589,11 @@ class ToolConfigPanel(QWidget):
             self._presence_recommended.setText("Základný odhad modelu nie je dostupný.")
         self._presence_tuning_result.hide()
         self._presence_apply_tuned.hide()
+        self._compact_tuning_summary = None
         if validation_text is not None:
             self._presence_validation_result.setText(validation_text)
+            self._compact_validation_summary = None
+        self.presenceValidationChanged.emit()
 
     def show_presence_validation(
         self, summary: dict[str, Any], *, weak_dataset: bool = False
@@ -592,6 +634,9 @@ class ToolConfigPanel(QWidget):
         color = "#22c55e" if good else "#d29922"
         self._presence_validation_result.setText(f"{quality}\n\n{text}")
         self._presence_validation_result.setStyleSheet(f"color: {color};")
+        self._compact_validation_summary = dict(summary)
+        self._validation_weak = weak_dataset
+        self.presenceValidationChanged.emit()
 
     def show_presence_tuning(self, tuning: dict[str, Any], *, weak_dataset: bool) -> None:
         current = tuning["current_validation_summary"]
@@ -631,6 +676,9 @@ class ToolConfigPanel(QWidget):
         self._presence_tuning_result.setText(text)
         self._presence_tuning_result.show()
         self._presence_apply_tuned.show()
+        self._compact_tuning_summary = dict(tuning)
+        self._tuning_weak = weak_dataset
+        self.presenceValidationChanged.emit()
 
     def refresh_geometry(self, tool: Tool) -> None:
         rect = tool.roi.rect()
@@ -758,6 +806,8 @@ class ToolConfigPanel(QWidget):
                      and name in {"coarse_cap", "apply_alignment"})
                     or self._current_tool.type in STATISTICAL_TYPES
                 ) else self._form_layout
+                if self._current_tool.type == 'mold.protection_v1' and name == 'polarity':
+                    target_layout = self._threshold_layout
                 self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
 
@@ -793,8 +843,18 @@ class ToolConfigPanel(QWidget):
                     self._current_tool.type in STATISTICAL_TYPES
                     and name in {"score_threshold", "total_area_threshold", "min_blob_area"}
                 ) else self._threshold_layout
+                if self._current_tool.type == 'mold.protection_v1':
+                    target_layout = self._threshold_layout if name in {
+                        'sensitivity', 'max_largest_blob_area', 'max_blob_count',
+                        'total_area_threshold', 'min_blob_area',
+                    } else self._advanced_layout
                 self._add_stacked_field(target_layout, label, container, widget)
                 added_fields = True
+
+        if self._current_tool.type == 'mold.protection_v1' and 'polarity' in self._param_wrappers:
+            polarity = self._param_wrappers['polarity']
+            self._threshold_layout.takeRow(polarity)
+            self._threshold_layout.insertRow(1, polarity)
 
         if self._current_tool.type in STATISTICAL_TYPES:
             self._presence_live_values = QLabel("Zatiaľ bez výsledku", self._threshold_container)
@@ -963,6 +1023,12 @@ class ToolConfigPanel(QWidget):
         self._set_perf_overlay(None)
         self.locatorPolicyWarningChanged.emit("")
 
+    def show_test_blocked(self, message: str, elapsed_ms: float, breakdown: list) -> None:
+        self._update_diagnostics("warn", {}, None, elapsed_ms=elapsed_ms, message=message)
+        self._status_value_label.setText("NEOTESTOVANÉ")
+        self._set_perf_overlay(breakdown)
+        self.locatorPolicyWarningChanged.emit(message)
+
     def _set_perf_overlay(self, breakdown: Optional[list[dict[str, Any]]]) -> None:
         if not breakdown:
             self._perf_overlay_label.clear()
@@ -1099,6 +1165,11 @@ class ToolConfigPanel(QWidget):
             )
             for spec in spec_entries:
                 key = getattr(spec, "key", "")
+                if (self._current_tool is not None
+                        and self._current_tool.type == "mold.protection_v1"
+                        and key not in {"residual_detected", "residual_count",
+                                        "anomaly_area", "largest_blob_area", "smallest_blob_area"}):
+                    continue
                 if key not in remaining:
                     continue
                 description = getattr(spec, "description", "")
@@ -1377,7 +1448,7 @@ class ToolConfigPanel(QWidget):
         self.testRequested.emit(params, thresholds)
 
     def trigger_test(self) -> None:
-        if not self._btn_test.isEnabled():
+        if not self._test_enabled:
             return
         self._on_test_clicked()
 
@@ -1444,8 +1515,10 @@ class ToolConfigPanel(QWidget):
         ok, errors, normalized = _validate_params_and_thresholds(
             params,
             thresholds,
-            self._param_specs,
-            self._threshold_specs,
+            # Only editable fields belong to this form. Defaults for hidden
+            # model metadata would overwrite the learned state in test payloads.
+            {name: self._param_specs[name] for name in self._param_widgets},
+            {name: self._threshold_specs[name] for name in self._threshold_widgets},
         )
 
         self._validation_ok = ok
@@ -1600,9 +1673,9 @@ class ToolConfigPanel(QWidget):
 
     def _update_visibility(self) -> None:
         has_tool = self._current_tool is not None
-        self._form_container.setVisible(has_tool)
+        self._form_container.setVisible(has_tool and self._detection_section._header.isChecked())
         self._placeholder_label.setVisible(not has_tool)
         enabled_controls = has_tool and bool(self._param_widgets or self._threshold_widgets)
         self._btn_defaults.setEnabled(enabled_controls)
         self._set_test_button_enabled(has_tool and not self._updating)
-        self._diagnostics_group.setVisible(has_tool)
+        self._diagnostics_group.setVisible(has_tool and self._result_section._header.isChecked())

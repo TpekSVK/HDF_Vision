@@ -67,6 +67,13 @@ def pipeline_learning_signatures(golden, recipe):
     return result
 
 
+def shared_capture_signature(golden, view, tools):
+    """Full-frame provenance excludes each analyzer's ROI and ignore mask."""
+    from app.models.schema import Tool, ToolRoi
+    target = Tool(type='mold.protection_v1', name='shared', roi=ToolRoi())
+    return learning_signature(golden, view, target, tools)
+
+
 def samples_match(base_dir, signature):
     try:
         manifest = json.loads((Path(base_dir) / MANIFEST_NAME).read_text(encoding='utf-8'))

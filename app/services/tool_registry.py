@@ -770,6 +770,7 @@ def _register_default_tools() -> None:
                 {"key": "residual_width", "unit": "px", "priority": 9, "description": "Šírka zvyšku"},
                 {"key": "residual_height", "unit": "px", "priority": 9, "description": "Výška zvyšku"},
                 {"key": "largest_blob_area", "unit": "px", "priority": 9, "description": "Najväčší zvyšok"},
+                {"key": "smallest_blob_area", "unit": "px", "priority": 9, "description": "Najmenší zvyšok"},
                 {"key": "anomaly_area", "unit": "px", "priority": 9, "description": "Celková zmenená plocha"},
                 {"key": "anomaly_area_percent", "unit": "%", "priority": 8, "description": "Zmenená plocha"},
                 {"key": "decision_reason", "priority": 8, "description": "Dôvod blokovania"},

@@ -1,13 +1,36 @@
 """Reorderable table of recipe tools."""
 from __future__ import annotations
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QTableWidget, QAbstractItemView
+from PySide6.QtCore import Qt, Signal, QTimer
+from PySide6.QtWidgets import QTableWidget, QAbstractItemView, QStyledItemDelegate
+
+
+class ThreeLineToolDelegate(QStyledItemDelegate):
+    """Let Qt wrap/elide text, but reserve at most three lines per cell."""
+
+    def sizeHint(self, option, index):  # noqa: N802
+        size = super().sizeHint(option, index)
+        size.setHeight(min(size.height(), option.fontMetrics.lineSpacing() * 3 + 6))
+        return size
 
 
 class ToolsTableWidget(QTableWidget):
     """Table with internal drag & drop row reordering support."""
 
     rowsReordered = Signal(list)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setWordWrap(True)
+        self.setTextElideMode(Qt.ElideRight)
+        delegate = ThreeLineToolDelegate(self)
+        self.setItemDelegateForColumn(1, delegate)
+        self.setItemDelegateForColumn(2, delegate)
+        self._resize_rows_timer = QTimer(self)
+        self._resize_rows_timer.setSingleShot(True)
+        self._resize_rows_timer.timeout.connect(self.resizeRowsToContents)
+        self.horizontalHeader().sectionResized.connect(
+            lambda *_: self._resize_rows_timer.start(0)
+        )
 
     def dropEvent(self, event):  # type: ignore[override]
         if event.source() is not self or self.dragDropMode() != QAbstractItemView.InternalMove:
@@ -47,7 +70,11 @@ class ToolsTableWidget(QTableWidget):
 
         if remaining_ids != current_order:
             self.rowsReordered.emit(remaining_ids)
-        event.acceptProposedAction()
+        # The receiver already rebuilt the table from the reordered recipe.
+        # Reporting MoveAction would make QAbstractItemView.startDrag remove
+        # the selected row again when the drag finishes (also after rejection).
+        event.setDropAction(Qt.IgnoreAction)
+        event.accept()
 
     def _collect_row_ids(self) -> list[int]:
         ids: list[int] = []

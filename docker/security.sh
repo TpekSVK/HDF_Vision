@@ -7,6 +7,8 @@ COMMAND="${1:---help}"
 case "${COMMAND}" in
   --help|-h|help)
     cat <<'EOF'
+Spoločné heslo pre ochranu receptov a ponuku Napájanie.
+
 Použitie:
   bash docker/security.sh set-password
   bash docker/security.sh change-password

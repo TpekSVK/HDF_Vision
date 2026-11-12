@@ -225,6 +225,17 @@ class _ShapeROIView(_ROIView):
         if hasattr(self, "_shape"):
             self._render_shape()
 
+    def touch_edit_snapshot(self):
+        return self._snapshot(), list(self._history.past), list(self._history.future)
+
+    def cancel_touch_edit(self, snapshot):
+        self.cancel_drawing()
+        if snapshot is not None:
+            geometry, past, future = snapshot
+            if self._snapshot() != geometry:
+                self._restore_snapshot(geometry)
+            self._history.past, self._history.future = past, future
+
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self.is_pan_gesture(event):
             super().mousePressEvent(event)
@@ -419,6 +430,16 @@ class _ShapeROIView(_ROIView):
             event.accept(); return
         super().keyPressEvent(event)
 
+    def finish_polygon(self) -> None:
+        if len(self._draft_points) >= 3:
+            self._finish_polygon()
+
+    def remove_polygon_point(self) -> None:
+        if self._draft_points:
+            self._draft_points.pop()
+            self._draft_cursor = self._draft_points[-1] if self._draft_points else None
+            self._render_shape()
+
     def _rotation_corners(self) -> List[Tuple[float, float]]:
         if self._shape == "polygon" and self._rotated_rect and len(self._points) == 4:
             return [(float(x), float(y)) for x, y in self._points]
@@ -461,14 +482,15 @@ class _ShapeROIView(_ROIView):
         }
 
     def _hit_rotated_rect_handle(self, view_pos) -> Optional[RoiHandle]:
+        candidates = []
         for handle, center in self._rotated_rect_handle_centers().items():
             mapped = self.mapFromScene(center)
             if (
                 abs(mapped.x() - view_pos.x()) <= self.HANDLE_HIT_RADIUS
                 and abs(mapped.y() - view_pos.y()) <= self.HANDLE_HIT_RADIUS
             ):
-                return handle
-        return None
+                candidates.append(((mapped - view_pos).manhattanLength(), handle))
+        return min(candidates, key=lambda item: item[0])[1] if candidates else None
 
     def _begin_rotated_rect_resize(self, handle: RoiHandle) -> None:
         if len(self._points) != 4:

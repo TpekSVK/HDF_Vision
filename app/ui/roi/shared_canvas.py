@@ -310,6 +310,9 @@ class _SharedCanvasView(_ShapeROIView):
                 point[0] - 5, point[1] - 5, 10, 10,
                 marker_pen, QBrush(QColor(17, 24, 39, 210)),
             )
+            marker.setFlag(QGraphicsItem.ItemIgnoresTransformations, True)
+            marker.setRect(-7, -7, 14, 14)
+            marker.setPos(*point)
             marker.setZValue(118)
             marker.setAcceptedMouseButtons(Qt.NoButton)
             label = scene.addSimpleText(label_text)
@@ -322,7 +325,7 @@ class _SharedCanvasView(_ShapeROIView):
 
     def _edge_hit_target(self, viewport_pos) -> Optional[str]:
         scene_pos = self.mapToScene(viewport_pos)
-        radius = 11.0 / max(0.01, self.zoom())
+        radius = max(11.0, self.HANDLE_HIT_RADIUS) / max(0.01, self.zoom())
         candidates = []
         for target, point in (("a", self._edge_point_a), ("b", self._edge_point_b)):
             if point is not None:
@@ -450,6 +453,19 @@ class _SharedCanvasView(_ShapeROIView):
         self._mask_polygon.clear()
         self._remove_mask_preview()
         super().cancel_drawing()
+
+    def touch_edit_snapshot(self):
+        return super().touch_edit_snapshot(), self._edge_snapshot(), list(self._edge_undo), list(self._edge_redo)
+
+    def cancel_touch_edit(self, snapshot):
+        if snapshot is not None:
+            geometry, points, undo, redo = snapshot
+            super().cancel_touch_edit(geometry)
+            if self._edge_snapshot() != points:
+                self._restore_edge_snapshot(points)
+            self._edge_undo, self._edge_redo = undo, redo
+        else:
+            self.cancel_drawing()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if self._edge_editing and not self.is_pan_gesture(event):
@@ -620,6 +636,23 @@ class _SharedCanvasView(_ShapeROIView):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def finish_polygon(self) -> None:
+        if self._mask_editing:
+            if len(self._mask_polygon) >= 3:
+                self._commit_mask_polygon()
+        else:
+            super().finish_polygon()
+
+    def remove_polygon_point(self) -> None:
+        if self._mask_editing:
+            if self._mask_polygon:
+                self._mask_polygon.pop()
+                self._remove_mask_preview()
+                if self._mask_polygon:
+                    self._update_mask_preview(self._mask_polygon[-1])
+        else:
+            super().remove_polygon_point()
 
     def _paint_mask(self, point: QPointF) -> None:
         if self._mask is None:

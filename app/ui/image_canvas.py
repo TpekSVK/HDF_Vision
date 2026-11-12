@@ -6,8 +6,8 @@ import math
 from enum import Enum
 from typing import Callable, Optional
 
-from PySide6.QtCore import QEvent, QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QPainter, QPixmap, QTransform
+from PySide6.QtCore import QEvent, QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtGui import QMouseEvent, QPainter, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QGraphicsPixmapItem, QGraphicsScene, QGraphicsView,
     QHBoxLayout, QLabel, QToolButton, QWidget,
@@ -73,6 +73,97 @@ class ImageView(QGraphicsView):
         self._pending_fit_to_view = False
         self._fit_schedule_queued = False
         self._fit_on_resize = True
+        self.viewport().setAttribute(Qt.WA_AcceptTouchEvents, True)
+        self._touch_start = None
+        self._touch_mouse_down = False
+        self._touch_navigation = False
+        self._touch_pair = None
+        self._touch_edit_state = None
+
+    def touch_edit_snapshot(self):
+        """Editor hook for data which commits on mouse press (edge anchors)."""
+        return None
+
+    def cancel_touch_edit(self, snapshot):
+        self.cancel_drawing()
+
+    def _touch_mouse(self, kind, position):
+        from PySide6.QtWidgets import QApplication
+        position = QPointF(position)
+        button = Qt.NoButton if kind == QEvent.MouseMove else Qt.LeftButton
+        buttons = Qt.NoButton if kind == QEvent.MouseButtonRelease else Qt.LeftButton
+        mouse = QMouseEvent(kind, position, QPointF(self.viewport().mapToGlobal(position.toPoint())),
+                            button, buttons, Qt.NoModifier)
+        QApplication.sendEvent(self.viewport(), mouse)
+
+    def viewportEvent(self, event):  # noqa: N802
+        if event.type() in (QEvent.TouchBegin, QEvent.TouchUpdate, QEvent.TouchEnd, QEvent.TouchCancel):
+            return self._handle_touch(event)
+        return super().viewportEvent(event)
+
+    def _handle_touch(self, event):
+        kind = event.type()
+        points = event.points()
+        active = [p for p in points if p.state() != Qt.TouchPointReleased]
+        if kind == QEvent.TouchBegin:
+            self._touch_start = QPointF(points[0].position()) if points else None
+            self._touch_mouse_down = False
+            self._touch_navigation = False
+            self._touch_pair = None
+            self._touch_edit_state = self.touch_edit_snapshot()
+            self.setFocus(Qt.MouseFocusReason)
+        if kind == QEvent.TouchCancel:
+            self.cancel_touch_edit(self._touch_edit_state)
+            self._end_pan()
+        elif len(active) >= 2:
+            # Once navigation begins, no remaining finger may resume drawing.
+            if not self._touch_navigation:
+                self.cancel_touch_edit(self._touch_edit_state)
+                self._end_pan()
+                self._touch_navigation = True
+                self._touch_mouse_down = False
+            pair = sorted(active, key=lambda p: p.id())[:2]
+            first, second = (QPointF(p.position()) for p in pair)
+            center = (first + second) / 2
+            distance = math.hypot(first.x() - second.x(), first.y() - second.y())
+            ids = tuple(p.id() for p in pair)
+            if self._touch_pair is not None and self._touch_pair[0] == ids:
+                _, previous_center, previous_distance = self._touch_pair
+                if previous_distance > 1 and distance > 1:
+                    self.set_zoom(self.zoom() * distance / previous_distance, anchor=previous_center.toPoint())
+                # Translate the view so the scene follows the centroid. Rotation
+                # is intentionally ignored; recipe geometry never rotates here.
+                old_scene = self.mapToScene(previous_center.toPoint())
+                new_scene = self.mapToScene(center.toPoint())
+                delta = new_scene - old_scene
+                self.translate(delta.x(), delta.y())
+                self._fit_on_resize = False
+                self._pending_fit_to_view = False
+            self._touch_pair = (ids, center, distance)
+        elif not self._touch_navigation and self._touch_start is not None:
+            position = QPointF(points[0].position()) if points else self._touch_start
+            if kind == QEvent.TouchUpdate:
+                if not self._touch_mouse_down and (position - self._touch_start).manhattanLength() > 4:
+                    self._touch_mouse(QEvent.MouseButtonPress, self._touch_start)
+                    self._touch_mouse_down = True
+                if self._touch_mouse_down:
+                    self._touch_mouse(QEvent.MouseMove, position)
+            elif kind == QEvent.TouchEnd:
+                # Defer a tap until release so a second finger cannot accidentally
+                # place a polygon vertex or a reference edge anchor.
+                if not self._touch_mouse_down:
+                    self._touch_mouse(QEvent.MouseButtonPress, position)
+                self._touch_mouse(QEvent.MouseButtonRelease, position)
+        if kind in (QEvent.TouchEnd, QEvent.TouchCancel):
+            self._touch_start = None
+            self._touch_pair = None
+            self._touch_mouse_down = False
+            self._touch_navigation = False
+            self._touch_edit_state = None
+        elif self._touch_navigation and len(active) < 2:
+            self._touch_pair = None
+        event.accept()
+        return True
 
     def update_display_pixmap(self, pixmap: QPixmap) -> None:
         """Replace display pixels only, preserving ROI items, undo and zoom."""
@@ -93,10 +184,12 @@ class ImageView(QGraphicsView):
             self.scene().setSceneRect(self._pixmap_item.boundingRect())
         else:
             self.scene().setSceneRect(QRectF())
-        self.resetTransform()
         self._pending_fit_to_view = self._pixmap_item is not None
         self._fit_on_resize = True
-        self.zoomChanged.emit(self.zoom())
+        # Replacing/clearing a result must not publish a temporary 100% zoom.
+        # Visible views already have a viewport: fit before pixels can paint.
+        # Hidden views retain their transform until layout/show permits a fit.
+        self.fit_image_to_view(force=False)
         self.imageChanged.emit(self._pixmap_item is not None)
         self.schedule_fit_to_view(source="set_pixmap")
 
@@ -170,6 +263,11 @@ class ImageView(QGraphicsView):
             self.cancel_drawing()
             self._end_pan()
             self._interaction_mode = mode
+            if mode != InteractionMode.SELECT and self._pixmap_item is not None:
+                # Revealing a polygon/context toolbar resizes the viewport.
+                # An automatic Fit at that point would cancel the new draft.
+                self._fit_on_resize = False
+                self._pending_fit_to_view = False
             self.interactionModeChanged.emit(mode)
         self._update_cursor()
 
@@ -298,6 +396,12 @@ class ImageView(QGraphicsView):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self.schedule_fit_to_view(source="showEvent")
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        # A paint can precede the queued fit after show/layout/resize.
+        if self._pending_fit_to_view:
+            self.fit_image_to_view(force=False)
+        super().paintEvent(event)
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)

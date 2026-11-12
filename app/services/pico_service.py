@@ -60,6 +60,7 @@ class PicoService:
         self._pending_command: str | None = None
         self._trigger_callbacks: list[Callable[[str], None]] = []
         self._manual_light: bool | None = None
+        self._live_camera = None
         self.last_error: str = ""
         self._capture_request_lock = threading.Lock()
         self._capture_receiver = None
@@ -108,6 +109,46 @@ class PicoService:
                 or result.get("count") != count or f"OK PIO {request_id}" not in response.splitlines()):
             raise RuntimeError(response or self.last_error or "Neúplná PIO odpoveď.")
         return result
+
+    def set_live_preview(self, enabled: bool, camera=None) -> None:
+        with self._capture_request_lock:
+            if enabled:
+                if camera is None:
+                    raise ValueError("Trigger Live vyžaduje aktuálny kamerový profil.")
+                ok, capabilities = self._send_command("STATUS")
+                if not ok or "LIVE_PIO_V1" not in capabilities.split():
+                    raise RuntimeError("Trigger Live vyžaduje Pico firmvér 4.2.1 alebo novší; aktualizujte Pico.")
+                preserve_light = "MANUAL_LIGHT ON" in capabilities.splitlines()
+                # Already hold the capture lock; do not call prepare_trigger recursively.
+                profile = camera.prepare_pio_trigger(self)
+                if preserve_light and not self.set_manual_light(True):
+                    raise RuntimeError("Nepodarilo sa obnoviť svetlo pred Trigger Live.")
+                command = f"LIVE ON {profile.period_us} {profile.pulse_us}"
+                camera.pio.begin_live_preview()
+                self._live_camera = camera
+            else:
+                command = "LIVE OFF"
+            try:
+                ok, response = self._send_command(command)
+                if not ok or response != "OK " + command:
+                    raise RuntimeError(response or self.last_error or "Pico Live zlyhalo.")
+                if camera is not None:
+                    if enabled:
+                        camera.pio.wait_live_preview()
+                    else:
+                        camera.pio.end_live_preview()
+                        self._live_camera = None
+            except Exception:
+                if camera is not None:
+                    camera.pio._pio_ready = None
+                if enabled:
+                    # A timed-out ON may still have started the train. Confirm OFF
+                    # before draining preview and allowing production to re-arm.
+                    stopped, reply = self._send_command("LIVE OFF")
+                    if stopped and reply == "OK LIVE OFF":
+                        camera.pio.end_live_preview()
+                        self._live_camera = None
+                raise
 
     def prepare_trigger(self, camera):
         with self._capture_request_lock:
@@ -290,6 +331,12 @@ class PicoService:
     def set_manual_light(self, enabled: bool) -> bool:
         """Enable or release the firmware's persistent manual light override."""
         requested = bool(enabled)
+        camera = self._live_camera
+        if camera is not None and self._manual_light != requested:
+            with camera.pio._pio_condition:
+                # A light transition can bisect a rolling-shutter exposure.
+                # Hold the last good preview while the next two frames settle.
+                camera.pio._live_drop_remaining = max(camera.pio._live_drop_remaining, 2)
         ok, _ = self._send_command(f"LIGHT {'ON' if requested else 'OFF'}")
         if ok:
             self._manual_light = requested

@@ -18,11 +18,13 @@ def qt_app():
     return QApplication.instance() or QApplication([])
 
 
-def test_v2_separate_catalog_and_panel(qt_app):
+def test_hidden_v2_catalog_keeps_existing_recipe_panel(qt_app):
     catalog = ToolCatalogDialog(SimpleNamespace(list_tool_types=ToolRegistry.list_tool_types,
                                                 get_tool_meta=ToolRegistry.get_tool_definition))
     entries = {entry.type_id: entry for entry in catalog._entries}
-    assert 'mold.protection_v1' in entries and 'mold.protection_v2' in entries
+    assert 'mold.protection_v1' in entries
+    assert 'mold.protection_v2' not in entries
+    assert 'presence.absence_v2' not in entries
     panel = ToolConfigPanel()
     for kind, visible in [('mold.protection_v2', True), ('mold.protection_v1', False)]:
         tool = ToolRegistry.make_default_tool(kind)

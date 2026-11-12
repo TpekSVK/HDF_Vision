@@ -1,2 +1,8 @@
 .docker-cache/
 contact.json
+artifacts/pico-backups/
+
+# Local Python/test caches
+__pycache__/
+*.py[cod]
+.pytest_cache/

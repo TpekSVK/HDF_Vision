@@ -47,6 +47,26 @@ QDialog#goldenWizard QLineEdit:focus,
 QDialog#goldenWizard QComboBox:focus,
 QDialog#goldenWizard QSpinBox:focus,
 QDialog#goldenWizard QDoubleSpinBox:focus { border-color: #2f80c9; }
+QDialog#goldenWizard QComboBox { combobox-popup: 0; }
+QDialog#goldenWizard QComboBox QFrame {
+    background-color: #181d23; border: 1px solid #343c46;
+}
+QDialog#goldenWizard QComboBox QAbstractItemView,
+QDialog#goldenWizard QComboBox QAbstractItemView QWidget {
+    background-color: #181d23; color: #e6e8eb;
+    selection-background-color: #1f5f91; selection-color: #ffffff;
+    border: 1px solid #343c46; outline: none;
+}
+QDialog#goldenWizard QComboBox QAbstractItemView {
+    min-width: 240px; font-size: 16px;
+}
+QDialog#goldenWizard QComboBox QAbstractItemView QWidget { border: none; }
+QDialog#goldenWizard QComboBox QAbstractItemView::item {
+    min-height: 44px; padding: 6px 12px;
+}
+QDialog#goldenWizard QComboBox QAbstractItemView::item:selected {
+    background-color: #1f5f91; color: #ffffff;
+}
 QDialog#goldenWizard QCheckBox { color: #d7dde4; spacing: 7px; }
 QDialog#goldenWizard QCheckBox::indicator {
     width: 15px; height: 15px; background: #11161b;
@@ -70,11 +90,40 @@ QDialog#goldenWizard QHeaderView::section {
     border-bottom: 1px solid #2a313a; padding: 6px;
 }
 QDialog#goldenWizard QTableWidget::item:hover { background: #232b34; }
+QDialog#goldenWizard QListWidget,
+QDialog#goldenWizard QListWidget QWidget {
+    background-color: #15191e; color: #e6e8eb;
+    border: 1px solid #2a313a;
+    selection-background-color: #1f5f91; selection-color: #ffffff;
+}
+QDialog#goldenWizard QListWidget::item { padding: 6px; }
+QDialog#goldenWizard QListWidget::item:selected {
+    background-color: #1f5f91; color: #ffffff;
+}
 QDialog#goldenWizard QGroupBox { background: transparent; border: none; margin-top: 4px; }
 QDialog#goldenWizard QScrollArea, QDialog#goldenWizard QScrollArea > QWidget > QWidget {
     background: #181d23;
 }
 QDialog#goldenWizard QSplitter::handle { background: #2a313a; }
+QDialog#goldenWizard QPushButton, QDialog#goldenWizard QToolButton,
+QDialog#goldenWizard QComboBox, QDialog#goldenWizard QLineEdit,
+QDialog#goldenWizard QSpinBox, QDialog#goldenWizard QDoubleSpinBox {
+    min-height: 32px; font-size: 14px;
+}
+QDialog#goldenWizard QPushButton:checked, QDialog#goldenWizard QToolButton:checked {
+    background: #173f61; border-color: #2f80c9; color: #ffffff;
+}
+QDialog#goldenWizard QPushButton[role="toolCard"] {
+    min-height: 34px; padding: 4px 8px;
+}
+QDialog#goldenWizard QLabel[role="wizardTitle"] { font-size: 17px; font-weight: 600; }
+QDialog#goldenWizard QLabel[role="wizardStatus"] {
+    color: #aab2bc; background: #20242a; border-top: 1px solid #3b4149; padding: 5px 8px;
+}
+QDialog#goldenWizard QFrame#goldenOverlay {
+    background: #181d23; border: 1px solid #46515e; border-radius: 8px;
+}
+
 """
 
 
@@ -99,6 +148,7 @@ FIELD_LABELS_SK = {
 }
 
 METRIC_LABELS_SK = {
+    "mold_empty": "Prázdna forma",
     "changed_area_pct": "Zmenená plocha",
     "largest_change_px": "Najväčšia súvislá chyba",
     "mse": "Stredná štvorcová chyba (MSE)",
@@ -157,6 +207,8 @@ QDialog#toolCatalog QLineEdit {
 }
 QDialog#toolCatalog QLineEdit:focus { border-color: #2f80c9; }
 QDialog#toolCatalog QListWidget { background: transparent; border: none; outline: none; }
+/* Override the parent wizard's list descendant frames inside catalog cards. */
+QDialog#toolCatalog QListWidget QWidget { background: transparent; border: none; }
 QDialog#toolCatalog QListWidget#categoryList::item {
     border-radius: 4px; padding: 9px 10px; margin: 1px 0;
 }
@@ -192,4 +244,12 @@ QDialog#toolCatalog QPushButton[role="primary"] {
     background: #2f80c9; border-color: #3b91dc; color: white; font-weight: 600;
 }
 QDialog#toolCatalog QSplitter::handle { background: #2a313a; }
+QDialog#toolCatalog QCheckBox { spacing: 8px; }
+QDialog#toolCatalog QCheckBox::indicator {
+    width: 16px; height: 16px; border: 1px solid #8b98a8;
+    border-radius: 3px; background: #11161b;
+}
+QDialog#toolCatalog QCheckBox::indicator:checked {
+    background: #2f80c9; border: 2px solid #b6dcff;
+}
 """

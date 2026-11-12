@@ -90,8 +90,13 @@ class CU55HID:
 
         packet = bytearray(HID_TX_PACKET_SIZE)
         packet[0] = REPORT_ID
-        packet[1] = COMMAND_GROUP
-        packet[2] = command & 0xFF
+        if command in {READ_FIRMWARE_VERSION, READ_UNIQUE_ID}:
+            # Global information reports use the command as the report number
+            # (QtCAM uvccamera.cpp), without the CU55 control group prefix.
+            packet[1] = command & 0xFF
+        else:
+            packet[1] = COMMAND_GROUP
+            packet[2] = command & 0xFF
         if payload is not None:
             packet[3] = payload & 0xFF
 
@@ -165,7 +170,7 @@ class CU55HID:
         return (
             int(reply[2]),
             int(reply[3]),
-            int(reply[5]),
+            int(reply[4] << 8 | reply[5]),
             int(reply[6] << 8 | reply[7]),
         )
 
