@@ -465,6 +465,7 @@ class ResultsPage(QWidget):
         if not 0 <= row < len(self.rows):
             return
         record = dict(self.rows[row])
+        self.selected_record = record
         self.meta = metadata(record)
         self.tool.addItem('Všetky nástroje', -1)
         reports = self.meta.get('per_tool', [])
@@ -495,7 +496,13 @@ class ResultsPage(QWidget):
         reports = getattr(self, 'reports', [])
         index = self.tool.currentData()
         selected = reports if index in (None, -1) else reports[index:index+1]
-        self.summary.setText('\n'.join(f"{r.get('name', 'Nástroj')}: {str(r.get('status') or '—').upper()}" for r in selected))
+        text = '\n'.join(f"{r.get('name', 'Nástroj')}: {str(r.get('status') or '—').upper()}" for r in selected)
+        record = getattr(self, 'selected_record', None)
+        if record and record.get('group_status'):
+            text = f"Skupina: {record['group_status'].upper()} · {record.get('group_reason') or ''}\n" + text
+        if getattr(self, 'meta', {}).get('capture_error'):
+            text = f"Chyba snímania: {self.meta['capture_error']}\n" + text
+        self.summary.setText(text)
         values = []
         for report in selected:
             for section, title in [('metrics', 'Metrika'), ('thresholds', 'Prah')]:

@@ -1,0 +1,36 @@
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-8.4.2, pluggy-1.7.0 -- /usr/bin/python3
+rootdir: /workspace
+configfile: pyproject.toml
+collecting ... collected 28 items
+
+tests/test_golden_touch.py::test_full_workspace_and_all_tool_forms_fit_without_scroll PASSED [  3%]
+tests/test_golden_touch.py::test_copy_reorder_and_confirmed_delete_keep_draft PASSED [  7%]
+tests/test_golden_touch.py::test_polygon_buttons_commit_roi_and_ignore_mask PASSED [ 10%]
+tests/test_golden_touch.py::test_two_finger_zoom_pan_preserves_roi_mask_and_edge[roi] PASSED [ 14%]
+tests/test_golden_touch.py::test_two_finger_zoom_pan_preserves_roi_mask_and_edge[mask] PASSED [ 17%]
+tests/test_golden_touch.py::test_two_finger_zoom_pan_preserves_roi_mask_and_edge[edge] PASSED [ 21%]
+tests/test_golden_touch.py::test_second_finger_rolls_back_vertex_drag_and_does_not_commit_when_one_finger_remains PASSED [ 25%]
+tests/test_golden_touch.py::test_locator_selection_changes_only_through_area_buttons PASSED [ 28%]
+tests/test_golden_touch.py::test_five_tools_fit_and_last_page_keeps_selection PASSED [ 32%]
+tests/test_golden_touch.py::test_result_is_one_compact_page_with_metrics PASSED [ 35%]
+tests/test_golden_touch.py::test_combo_popup_has_dark_background PASSED  [ 39%]
+tests/test_golden_touch.py::test_learning_actions_fit_on_one_page_and_keep_signals[mold.protection_v1-False] PASSED [ 42%]
+tests/test_golden_touch.py::test_learning_actions_fit_on_one_page_and_keep_signals[mold.protection_v1-True] PASSED [ 46%]
+tests/test_golden_touch.py::test_learning_actions_fit_on_one_page_and_keep_signals[presence.absence_v2-False] PASSED [ 50%]
+tests/test_golden_touch.py::test_validation_actions_and_reports_share_one_page[good] PASSED [ 53%]
+tests/test_golden_touch.py::test_validation_actions_and_reports_share_one_page[weak] PASSED [ 57%]
+tests/test_golden_touch.py::test_validation_actions_and_reports_share_one_page[missing_nok] PASSED [ 60%]
+tests/test_golden_touch.py::test_validation_actions_and_reports_share_one_page[tuning] PASSED [ 64%]
+tests/test_golden_touch.py::test_validation_actions_and_reports_share_one_page[overlap] PASSED [ 67%]
+tests/test_golden_touch.py::test_tool_single_click_selects_and_double_click_or_tab_opens_parameters PASSED [ 71%]
+tests/test_golden_touch.py::test_locator_alignment_groups_related_fields_and_keeps_values[translation-1] PASSED [ 75%]
+tests/test_golden_touch.py::test_locator_alignment_groups_related_fields_and_keeps_values[template_rotation-1] PASSED [ 78%]
+tests/test_golden_touch.py::test_locator_alignment_groups_related_fields_and_keeps_values[guided_edge-3] PASSED [ 82%]
+tests/test_golden_touch.py::test_mold_sensitivity_has_two_groups_and_keeps_last_result[False] PASSED [ 85%]
+tests/test_golden_touch.py::test_mold_sensitivity_has_two_groups_and_keeps_last_result[True] PASSED [ 89%]
+tests/test_golden_touch.py::test_mold_advanced_groups_capture_and_model_without_losing_settings PASSED [ 92%]
+tests/test_golden_touch.py::test_wizard_reports_unexecuted_ssim_and_actual_failed_locator_separately PASSED [ 96%]
+tests/test_golden_touch.py::test_locator_acceptance_limits_fit_together_and_persist PASSED [100%]
+
+======================== 28 passed in 318.42s (0:05:18) ========================

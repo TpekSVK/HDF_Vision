@@ -32,6 +32,9 @@ na vypnutie alebo reštart hostiteľského Jetsonu.
 Podrobnosti: [Docker / Jetson](../README.md#docker--jetson),
 [ochrana receptov](../README.md#recipe-security), [skript run.sh](../docker/run.sh).
 
+Pre experimentálnu zostavu s dvoma kamerami a jedným Picom platí rovnaký
+spúšťací príkaz. [Priradenie kanálov, recepty a AND skupiny](DUAL_CAMERA_SK.md).
+
 ## Zostavenie Docker obrazu
 
 | Príkaz | Význam |

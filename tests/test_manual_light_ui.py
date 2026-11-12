@@ -64,13 +64,19 @@ def test_run_manual_light_toggle_failure_rolls_back(monkeypatch):
     assert host.btn_manual_light.text == "Svetlo vypnuté"
 
 
-def test_golden_manual_light_uses_injected_service_and_close_does_not_switch_it_off():
+def test_golden_manual_light_uses_injected_service_and_close_quiesces_channel():
     source = Path("app/ui/golden_wizard/golden_wizard.py").read_text(encoding="utf-8")
     constructor = source[source.index("class GoldenWizard"):source.index("# ---------- Live ----------")]
-    close = source[source.index("def closeEvent", source.index("class GoldenWizard")):]
-
     assert "PicoService()" not in constructor
-    assert "set_manual_light(False)" not in close
+    calls = []
+    host = SimpleNamespace(
+        _has_unsaved_changes=lambda: False,
+        _stop_preview_session=lambda: calls.append('stop'),
+        pico=SimpleNamespace(set_manual_light=lambda enabled: calls.append(('light', enabled))),
+    )
+    event = SimpleNamespace(accept=lambda: calls.append('accept'))
+    GoldenWizard.closeEvent(host, event)
+    assert calls == ['stop', ('light', False), 'accept']
 
 
 def test_golden_manual_light_status_and_toggle_are_independent():

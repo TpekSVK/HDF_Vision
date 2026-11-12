@@ -116,10 +116,13 @@ class CameraPositionService:
         """Prepare once on entry; a different camera profile needs a transition."""
         if mode not in {'master', 'trigger'}:
             raise ValueError('Neznámy režim snímania.')
-        key = (mode, reference.view.to_dict()['camera_profile'])
+        key = (mode, reference.view.camera_id, reference.view.to_dict()['camera_profile'])
         if self._session_key == key:
             return
         self.close_session()
+        from app.services.camera_registry import CameraRouter
+        if isinstance(self.camera, CameraRouter):
+            self.camera.select_view(reference.view)
         if not self.pico.is_available() and not self.pico.connect():
             raise RuntimeError('Pico nie je dostupné.')
         self._session_mode = mode

@@ -134,14 +134,34 @@ class WorkstationWindow(QMainWindow):
             self.refresh_status()
 
     def _open_workspaces(self, bindings):
+        shared_registry = None
+        if bindings and all(binding.pico_channel is not None for binding in bindings):
+            from app.services.camera_registry import CameraRegistry
+            from app.services.dual_pico_service import DualPicoTransport
+            transport = DualPicoTransport(port_resolver=lambda serial=bindings[0].pico_serial:
+                                          resolve_serial(serial, 'pico'))
+            transport.usb_serial = bindings[0].pico_serial
+            shared_registry = CameraRegistry(
+                {binding.id: CameraService(device=f'/dev/unavailable-{binding.id}',
+                    width=1280, height=720, fps=60,
+                    device_resolver=lambda serial=binding.camera_serial: resolve_serial(serial, 'camera'))
+                 for binding in bindings},
+                {binding.id: transport.channels[binding.pico_channel] for binding in bindings},
+                names={binding.id: binding.name for binding in bindings},
+                serials={binding.id: binding.camera_serial for binding in bindings}, transport=transport)
+            camera_bindings = bindings
+            bindings = bindings[:1]
         for binding in bindings:
             # Only explicit pairing creates a station. Missing hardware cannot
             # cause the serial services to choose another station's device.
             camera = CameraService(device=f'/dev/unavailable-{binding.id}',
                 device_resolver=lambda serial=binding.camera_serial: resolve_serial(serial, 'camera'))
             pico = PicoService(port_resolver=lambda serial=binding.pico_serial: resolve_serial(serial, 'pico'))
+            if shared_registry is not None:
+                from app.services.camera_registry import CameraRouter, PicoRouter
+                camera, pico = CameraRouter(shared_registry), PicoRouter(shared_registry)
             workspace = self.workspace_factory(camera=camera, pico=pico,
-                data_root=binding.data_root(self.data_root), camera_id=binding.id,
+                data_root=self.data_root if shared_registry is not None else binding.data_root(self.data_root), camera_id=binding.id,
                 pico_id=binding.pico_serial, station_name=binding.name, host_power_action=self.request_power_action)
             workspace.modbus_peer_configs = lambda current=workspace: [
                 (peer.station_name, peer.modbus.get_config())
@@ -149,6 +169,11 @@ class WorkstationWindow(QMainWindow):
             workspace.results_sources = lambda: [
                 dict(id=peer.camera_id, name=peer.station_name, db_path=peer.db.db_path,
                      active=peer.mode == 'RUN') for peer in self.workspaces]
+            if shared_registry is not None:
+                workspace.station_name = 'Kamerová zostava'
+                workspace.results_sources = lambda current=workspace, registry=shared_registry: [
+                    dict(id=ident, name=registry.names[ident], db_path=current.db.db_path,
+                         camera_id=ident, active=current.mode == 'RUN') for ident in registry.cameras]
             workspace.setWindowFlags(Qt.Widget)
             if hasattr(workspace, 'use_shared_navigation'):
                 workspace.use_shared_navigation()
@@ -216,7 +241,9 @@ class WorkstationWindow(QMainWindow):
         if statuses:
             self.summary.setText('   |   '.join(statuses))
         self.summary.setVisible(not self.workspaces)
-        self.overview_button.setText(f'Všetky kamery ({len(self.workspaces)})')
+        camera_count = sum(len(w.cam.registry.cameras) if hasattr(getattr(w, 'cam', None), 'registry') else 1
+                           for w in self.workspaces)
+        self.overview_button.setText(f'Všetky kamery ({camera_count})')
         self.overview_button.setChecked(overview_visible)
         for key, button in self.navigation.items():
             workspace = self.tabs.currentWidget()
@@ -243,7 +270,11 @@ class WorkstationWindow(QMainWindow):
             old = []
         # All lanes are paused; release exclusive USB handles for operator verification.
         for workspace in self.workspaces:
-            workspace.cam.stop(caller="device_pairing")
+            if getattr(workspace, 'workcell', None) is not None:
+                for camera in workspace.cam.registry.cameras.values():
+                    camera.stop(caller='device_pairing')
+            else:
+                workspace.cam.stop(caller="device_pairing")
             workspace.pico.close()
         dialog = WorkstationDevicesDialog(old, self)
         if dialog.exec() != QDialog.Accepted:

@@ -126,7 +126,19 @@ class GoldenViews:
             self.dialog._active_view_id = view_id
 
         view = self.dialog._view_by_id(view_id)
-        self.dialog._apply_view_camera_profile(view)
+        try:
+            self.dialog._apply_view_camera_profile(view)
+            self.dialog._camera_capture_error = ''
+        except (ValueError, RuntimeError, OSError) as exc:
+            self.dialog._camera_capture_error = str(exc)
+            self.dialog._logger.warning('Kamera pohľadu %s nie je pripravená: %s', view_id, exc)
+        for name in ('btn_live', 'btn_manual_light', 'btn_capture_golden'):
+            button = getattr(self.dialog, name, None)
+            if button is not None:
+                button.setEnabled(not self.dialog._camera_capture_error)
+                button.setToolTip(self.dialog._camera_capture_error)
+        if not self.dialog._camera_capture_error:
+            self.dialog._refresh_manual_light()
 
         recipe = self.dialog._current_recipe_name()
         try:
@@ -185,6 +197,11 @@ class GoldenViews:
             available_resolutions=self.dialog._available_camera_resolutions(),
             current_camera=self.dialog._current_camera_config(),
             capture_mode=self.dialog._runtime_capture_mode(),
+            available_cameras=(self.dialog.cam.registry.choices() if hasattr(type(self.dialog.cam), 'select_view') else None),
+            camera_id=source_view.camera_id if source_view else 'camera_1',
+            output_group=None,
+            output_mode='independent',
+            and_timeout_ms=source_view.and_timeout_ms if source_view else 1000,
             camera_profile=source_view.camera_profile if source_view else None,
             camera_model=self.dialog._camera_model(),
             supported_v4l2_controls=self.dialog._camera_v4l2_controls(),
@@ -251,6 +268,10 @@ class GoldenViews:
                 view_id=dialog.view_id(),
                 view_name=data.get("name"),
                 frame_source_view_id=data.get("frame_source_view_id"),
+                camera_id=data.get('camera_id', 'camera_1'),
+                output_group=data.get('output_group'),
+                output_mode=data.get('output_mode', 'independent'),
+                and_timeout_ms=data.get('and_timeout_ms', 1000),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 flash_delay_ms=data.get("flash_delay_ms"),
@@ -292,6 +313,9 @@ class GoldenViews:
             available_resolutions=self.dialog._available_camera_resolutions(),
             current_camera=self.dialog._current_camera_config(),
             capture_mode=self.dialog._runtime_capture_mode(),
+            available_cameras=(self.dialog.cam.registry.choices() if hasattr(type(self.dialog.cam), 'select_view') else None),
+            camera_id=view.camera_id, output_group=view.output_group,
+            output_mode=view.output_mode, and_timeout_ms=view.and_timeout_ms,
             camera_profile=view.camera_profile,
             camera_model=self.dialog._camera_model(),
             supported_v4l2_controls=self.dialog._camera_v4l2_controls(),
@@ -335,6 +359,10 @@ class GoldenViews:
                 view.id,
                 view_name=data.get("name"),
                 frame_source_view_id=data.get("frame_source_view_id"),
+                camera_id=data.get('camera_id', 'camera_1'),
+                output_group=data.get('output_group'),
+                output_mode=data.get('output_mode', 'independent'),
+                and_timeout_ms=data.get('and_timeout_ms', 1000),
                 camera_profile=data.get("camera_profile"),
                 settle_ms=data.get("settle_ms"),
                 flash_delay_ms=data.get("flash_delay_ms"),

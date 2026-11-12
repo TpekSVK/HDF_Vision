@@ -52,6 +52,16 @@ CREATE TABLE IF NOT EXISTS recipe_change_log (
   details_json TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_results_ts_id ON results(ts_ms DESC, id DESC);
+CREATE TABLE IF NOT EXISTS inspection_cycles (
+  cycle_id TEXT PRIMARY KEY,
+  recipe_name TEXT NOT NULL,
+  group_id TEXT,
+  status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  missing_views_json TEXT NOT NULL,
+  view_statuses_json TEXT NOT NULL,
+  finished_ts_ms INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_ts ON recipe_change_log(ts_ms);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_recipe ON recipe_change_log(recipe_name);
 CREATE INDEX IF NOT EXISTS idx_recipe_change_log_view ON recipe_change_log(view_id);
@@ -72,6 +82,15 @@ class DbService:
     def close(self):
         """Close the connection on the thread which created this service."""
         self._conn.close()
+
+    def insert_group_result(self, recipe_name, outcome):
+        import time
+        self._conn.execute('''INSERT OR IGNORE INTO inspection_cycles
+            (cycle_id, recipe_name, group_id, status, reason, missing_views_json,
+             view_statuses_json, finished_ts_ms) VALUES (?,?,?,?,?,?,?,?)''',
+            (outcome.cycle_id, recipe_name, outcome.group_id, outcome.status, outcome.reason,
+             json.dumps(outcome.missing_views), json.dumps(outcome.view_statuses), int(time.time() * 1000)))
+        self._conn.commit()
 
     def _init_schema(self):
         cur = self._conn.cursor()

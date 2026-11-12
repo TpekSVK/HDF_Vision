@@ -44,14 +44,15 @@ def test_three_tabs_do_not_pause_background_station(tmp_path):
     assert all(w._close_ready for w in window.workspaces)
 
 
-def test_empty_config_opens_no_camera_and_pairing_can_add_third(tmp_path, monkeypatch):
+def test_empty_config_opens_no_camera_and_shared_board_has_at_most_two_channels(tmp_path, monkeypatch):
     app = QApplication.instance() or QApplication([])
     window = WorkstationWindow(tmp_path, workspace_factory=lambda **kw: (_ for _ in ()).throw(AssertionError('guessed pair')))
     assert not window.workspaces
     monkeypatch.setattr('app.ui.workstation_devices_dialog.discover_devices', lambda: ([], []))
     dialog = WorkstationDevicesDialog([])
     dialog.add_station(); dialog.add_station()
-    assert [b.id for b in dialog.bindings()] == ['camera_1', 'camera_2', 'camera_3']
+    assert [b.id for b in dialog.bindings()] == ['camera_1', 'camera_2']
+    assert [b.pico_channel for b in dialog.bindings()] == [1, 2]
     dialog.reject(); window.close()
 
 

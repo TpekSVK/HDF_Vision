@@ -194,6 +194,7 @@ class PicoService:
             raise
         ready = threading.Event()
         result = {}
+        self._last_master_result = result
         command = f"TRIGGER {source}" if source.startswith("IN") else f"FIRE {source}"
 
         def receive():

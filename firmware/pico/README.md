@@ -1,8 +1,8 @@
-# Raspberry Pi Pico – HDF_Vision 4.2.1
+# Raspberry Pi Pico – HDF_Vision 4.3.1
 
-Nový firmvér je **main_v4.2.1.py**, identifikácia `pico_hdf_controller 4.2.1-pio-pair`.
+Nový firmvér je **main_v4.3.1.py**, identifikácia `pico_hdf_controller 4.3.1-dual-channel`.
 `main.py` je jeho identická nasadzovacia kópia. Na Pico s MicroPython pre RP2040
-sa kopíruje ako `main.py`. Predchádzajúce kópie `main_v4.1.py`, `main_v4.0.py` a `main_v3.3.py` zostávajú zachované.
+alebo RP2350/Pico2 sa kopíruje ako `main.py`. Predchádzajúce kópie vrátane `main_v4.2.1.py` zostávajú zachované.
 Historické výsledky overenia sú v externom archíve uvedenom v hlavnom README projektu.
 
 Na Jetson hoste možno starší HDF firmvér aktualizovať príkazom
@@ -13,8 +13,38 @@ Na Jetson hoste možno starší HDF firmvér aktualizovať príkazom
 
 - GP16: TRIG kamery, aktívny HIGH, cez existujúci prevodník úrovní.
 - GP17: svetlo, aktívne HIGH.
+- GP18: TRIG kamery 2, GP19: svetlo kamery 2, aktívne HIGH.
 - GP1–GP8: IN1–IN8, active LOW s pull-up.
 - Jediný prijímač USB serial v aplikácii je PicoService. Súbežný terminál port nesmie otvoriť.
+
+## Dva kamerové kanály
+
+Nová schopnosť `DUAL_CHANNEL_V1 HOST_INPUT_V1` dopĺňa existujúce `PIO_PAIR_V1 SESSION_V1 LIVE_PIO_V1`.
+Príkaz `CH 1 STATUS` smeruje na GP16/17, `CH 2 STATUS` na GP18/19. Všetky odpovede
+a udalosti sú potom označené rovnakým prefixom, napr. `CH 2 CAPTURE IN3` alebo
+`CH 1 OK PIO 123`. Hostiteľ používa jedno exkluzívne USB spojenie, ale samostatné
+odpovede, rezervácie, LIVE, svetlo, SESSION, profily V1/V2 a mapovanie vstupov pre každý kanál.
+
+Fyzický vstup v kanálovom protokole odošle `REQUEST INx` **v MASTER aj TRIGGER**.
+Aplikácia najprv vyberie pohľad a pripraví jeho profil. V MASTER potom pošle
+`CH n TRIGGER INx`/`FIRE V1`, pri udalosti CAPTURE rezervuje čerstvú snímku a pri
+ukončení svetla uzavrie rezerváciu. V TRIGGER rezervuje PRIME/CAPTURE a pošle
+`CH n PIO FIRE ...`. Tým sa nespustí osvetlenie proti starému kamerovému profilu.
+Vstup bez pripravenej SESSION nesníma. Spoločný fyzický vstup možno namapovať na oba kanály.
+
+PIO používa dva nezávislé state machines. Počas čakania na dokončenie jedného
+kanála môže druhý prijať príkaz a snímať. MASTER okná sa tiež obsluhujú bez
+blokujúceho čakania na celé trvanie blesku. Každé svetlo a LIVE majú vlastný stav;
+IDLE jedného kanála nesmie vypnúť druhý. Pri ukončení programu sa vypnú všetky štyri GPIO.
+
+SAVE ukladá konfiguráciu verzie 2 s oddelenými sekciami `channels.1` a `channels.2`.
+Starý plochý konfiguračný súbor sa načíta ako nastavenia kanála 1; druhý má predvolené hodnoty.
+Načítanie samo nič neprepisuje. Pre návrat na 4.2.1 obnovte aj pôvodnú konfiguráciu zo zálohy,
+ak už bola uložená nová dvojkanálová konfigurácia.
+
+Neoznačené príkazy zostávajú kompatibilné s kamerou 1. Ich MASTER fyzické vstupy
+zachovávajú pôvodné správanie popísané nižšie. Pri kanálovom klientovi platí vyššie
+uvedená hostiteľom riadená požiadavka v oboch režimoch.
 
 ## Riadenie režimov
 

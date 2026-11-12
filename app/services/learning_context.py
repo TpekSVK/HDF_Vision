@@ -36,6 +36,12 @@ def learning_signature(golden, view, target, tools, *, golden_digest=None):
                     'flash_delay_ms', 'flash_pulse_ms', 'trigger_gap_ms',
                     'frame_source_view_id')
     capture = {key: getattr(view, key, None) for key in capture_keys}
+    # Preserve legacy camera-1 signatures; a second camera must never silently
+    # reuse the first camera's training provenance.
+    if getattr(view, 'camera_id', 'camera_1') != 'camera_1':
+        capture['camera_id'] = view.camera_id
+    if getattr(view, 'camera_id', 'camera_1') != 'camera_1' and getattr(view, 'golden_camera', None):
+        capture['golden_camera'] = view.golden_camera
     profile = capture["camera_profile"]
     if hasattr(profile, "to_dict"):
         capture["camera_profile"] = profile.to_dict()

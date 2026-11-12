@@ -10,6 +10,13 @@ def validate_recipe_document(data: object, *, supported_tool_types=None) -> dict
     if not isinstance(data, dict):
         reject("koreň súboru musí byť objekt.")
     version = data.get('format_version')
+    if type(version) is int and version == 3:
+        # Version 3 has the same tool contracts. Camera 1 and ungrouped outputs
+        # are the explicit legacy defaults; older unsupported tools stay rejected.
+        from copy import deepcopy
+        data = deepcopy(data)
+        data['format_version'] = RECIPE_FORMAT_VERSION
+        version = RECIPE_FORMAT_VERSION
     if type(version) is not int or version != RECIPE_FORMAT_VERSION:
         reject(f"nepodporovaná verzia {version!r}; požadovaná je {RECIPE_FORMAT_VERSION}. "
                "Staré recepty sa neprevádzajú automaticky. Vytvorte nový recept.")
@@ -36,6 +43,20 @@ def validate_recipe_document(data: object, *, supported_tool_types=None) -> dict
         if not isinstance(ident, str) or not ident.strip() or ident in ids:
             reject("pohľady musia mať jedinečné neprázdne ID.")
         ids.add(ident)
+        if view.get('camera_id', 'camera_1') not in ('camera_1', 'camera_2'):
+            reject(f"pohľad {ident}: neplatná kamera.")
+        if view.get('output_group') not in (None, 'group_1', 'group_2'):
+            reject(f"pohľad {ident}: neplatná výstupná skupina.")
+        if view.get('output_mode', 'independent') not in ('independent', 'AND'):
+            reject(f"pohľad {ident}: neplatné správanie výstupu.")
+        limit = view.get('and_timeout_ms', 1000)
+        if type(limit) is not int or not 10 <= limit <= 120000:
+            reject(f"pohľad {ident}: neplatný limit AND.")
+        golden_camera = view.get('golden_camera')
+        if golden_camera is not None and (not isinstance(golden_camera, dict)
+                or golden_camera.get('camera_id') not in ('camera_1', 'camera_2')
+                or not isinstance(golden_camera.get('camera_serial', ''), str)):
+            reject(f"pohľad {ident}: neplatná identita kamery GOLDEN.")
         if not isinstance(view.get('tools'), list):
             reject(f"pohľad {ident}: chýba zoznam nástrojov.")
         for key, allowed in {

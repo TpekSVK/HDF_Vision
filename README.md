@@ -6,6 +6,8 @@ Príkazy na spustenie, nastavenie a servis nájdete v [prehľade príkazov](docs
 
 ## Aktuálne implementované
 
+- Experimentálna zostava dvoch kamier s jedným Picom vo vetve `codex/experimental-dual-camera`: kamera pri pohľade, samostatné/AND výstupné skupiny, súbežný MASTER/TRIGGER a filtrované výsledky. [Spustenie a vytvorenie receptu](docs/DUAL_CAMERA_SK.md).
+
 - Nezávislé kamerové stanice s vlastným Pico, receptmi a výsledkami; explicitné USB párovanie vrátane overenia snímkou. [Ovládanie a stav overenia](docs/architecture/MULTI_CAMERA_SK.md).
 
 - RUN obrazovka s výberom receptu, manuálnym `TRIGGER`, Live preview, pásom View, OK/NOK výsledkom, metrikami a dennými štatistikami.

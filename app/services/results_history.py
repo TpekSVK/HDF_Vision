@@ -15,6 +15,9 @@ def query_history(sources, filters, before=None, limit=9):
     for source in sources:
         where = ['r.ts_ms >= ?', 'r.ts_ms < ?']
         args = [filters['start'], filters['end']]
+        if source.get('camera_id'):
+            where.append("COALESCE(CASE WHEN json_valid(r.meta_json) THEN json_extract(r.meta_json, '$.camera_id') END, 'camera_1') = ?")
+            args.append(source['camera_id'])
         for key, column in [('recipe', 'p.name'), ('view', 'r.view_id'), ('ok', 'r.ok')]:
             if filters.get(key) not in (None, ''):
                 where.append(column + ' = ?')
@@ -30,8 +33,13 @@ def query_history(sources, filters, before=None, limit=9):
                 args.append(timestamp)
         connection = _connect(source['db_path'])
         try:
+            has_cycles = connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='inspection_cycles'").fetchone()
+            extra = (', c.status AS group_status, c.reason AS group_reason, c.group_id AS output_group'
+                     if has_cycles else ', NULL AS group_status, NULL AS group_reason, NULL AS output_group')
+            join = ' LEFT JOIN inspection_cycles c ON c.cycle_id=r.run_id' if has_cycles else ''
             found = connection.execute(
-                'SELECT r.*, p.name AS recipe FROM results r LEFT JOIN recipes p ON p.id=r.recipe_id '
+                'SELECT r.*, p.name AS recipe' + extra + ' FROM results r LEFT JOIN recipes p ON p.id=r.recipe_id '
+                + join + ' '
                 'WHERE ' + ' AND '.join(where) + ' ORDER BY r.ts_ms DESC, r.id DESC LIMIT ?',
                 args + [limit]).fetchall()
             rows.extend(dict(row, station_id=source['id'], station_name=source['name']) for row in found)
@@ -53,7 +61,7 @@ def export_history(sources, filters, destination):
     count, before = 0, None
     with open(destination, 'x', encoding='utf-8-sig', newline='') as output:
         writer = csv.writer(output, delimiter=';')
-        writer.writerow(['Kamera', 'ID', 'Čas', 'Recept', 'Pohľad', 'Stav', 'Cyklus ms', 'Run ID', 'Metriky nástrojov'])
+        writer.writerow(['Kamera', 'ID', 'Čas', 'Recept', 'Pohľad', 'Stav', 'Cyklus ms', 'Run ID', 'Metriky nástrojov', 'Skupina', 'Výsledok skupiny', 'Dôvod skupiny'])
         while True:
             rows = query_history(sources, filters, before, 200)
             if not rows:
@@ -64,7 +72,8 @@ def export_history(sources, filters, destination):
                           datetime.fromtimestamp(row['ts_ms']/1000).isoformat(' ', timespec='seconds'),
                           row['recipe'], meta.get('view_name') or row['view_id'], 'OK' if row['ok'] else 'NOK',
                           meta.get('cycle_time_ms'), row['run_id'],
-                          json.dumps(meta.get('per_tool', []), ensure_ascii=False)]
+                          json.dumps(meta.get('per_tool', []), ensure_ascii=False),
+                          row.get('output_group'), row.get('group_status'), row.get('group_reason')]
                 writer.writerow(["'" + value if isinstance(value, str) and value.startswith(('=', '+', '-', '@', '\t', '\r'))
                                  else value for value in values])
                 count += 1

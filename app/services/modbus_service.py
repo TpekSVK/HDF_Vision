@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -43,6 +43,7 @@ class ModbusConfig:
     heartbeat_coil: int = 2
     pulse_length_ms: int = 200
     heartbeat_period_ms: int = 1000
+    output_groups: dict[str, dict[str, int]] = field(default_factory=dict)
 
     request_di_addresses: list[int] = field(
         default_factory=lambda: list(_DEFAULT_REQUEST_DI_ADDRESSES)
@@ -87,11 +88,32 @@ class ModbusConfig:
                 data.get("heartbeat_period_ms", cls.heartbeat_period_ms),
                 cls.heartbeat_period_ms,
             ),
+            output_groups=data.get('output_groups') if isinstance(data.get('output_groups'), dict) else {},
             request_di_addresses=request_di_addresses,
         )
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
+
+    def group_config(self, group_id):
+        if group_id not in ('group_1', 'group_2'):
+            raise ValueError('Neplatná Modbus skupina.')
+        index = 0 if group_id == 'group_1' else 1
+        defaults = ({'ok': self.ok_coil, 'nok': self.nok_coil, 'heartbeat': self.heartbeat_coil}
+                    if index == 0 else {'ok': 3, 'nok': 4, 'heartbeat': -1})
+        raw = self.output_groups.get(group_id, defaults)
+        if not isinstance(raw, dict):
+            raise ValueError('Neplatné mapovanie Modbus skupiny.')
+        roles = {}
+        for role in ('ok', 'nok', 'heartbeat'):
+            value = raw.get(role, -1)
+            if type(value) is not int or value not in (-1, *range(index * 3, index * 3 + 3)):
+                raise ValueError(f'{group_id}: {role} musí patriť do trojice výstupov skupiny.')
+            roles[role] = value
+        active = [value for value in roles.values() if value >= 0]
+        if len(active) != len(set(active)):
+            raise ValueError(f'{group_id}: výstup nemôže mať dve rôzne úlohy.')
+        return replace(self, ok_coil=roles['ok'], nok_coil=roles['nok'], heartbeat_coil=roles['heartbeat'])
 
     @property
     def trigger_di(self) -> int:
@@ -116,6 +138,8 @@ class ModbusService:
         self._config_path = Path(config_path)
         self._lock = threading.Lock()
         self._client_io_lock = threading.Lock()
+        self._pulse_lock = threading.RLock()
+        self._pulse_generations = {}
         self._config = self._load_config()
         self._client: Optional[ModbusTcpClient] = None
         self._client_config_key: Optional[Tuple[str, int, float, int]] = None
@@ -225,14 +249,20 @@ class ModbusService:
         return True, "Connected"
 
     # High-level helpers for inspection pipeline events -----------------
-    def emit_heartbeat(self) -> None:
+    def emit_heartbeat(self, *, group_id=None) -> None:
         cfg = self.get_config()
+        if group_id is not None:
+            cfg = cfg.group_config(group_id)
         if not cfg.enabled:
+            return
+        if cfg.heartbeat_coil < 0:
             return
         self.pulse_coil(cfg.heartbeat_coil, pulse_ms=cfg.pulse_length_ms, config=cfg)
 
-    def signal_result(self, status: str, *, pulse_ms: Optional[int] = None) -> None:
+    def signal_result(self, status: str, *, pulse_ms: Optional[int] = None, group_id=None) -> None:
         cfg = self.get_config()
+        if group_id is not None:
+            cfg = cfg.group_config(group_id)
         if not cfg.enabled:
             return
         normalized = (status or "").strip().lower()
@@ -243,8 +273,11 @@ class ModbusService:
 
         duration = pulse_ms if pulse_ms is not None else cfg.pulse_length_ms
         if other is not None and int(other) >= 0:
-            self._write_coil(other, False, cfg)
-        self.pulse_coil(target, pulse_ms=duration, config=cfg)
+            with self._pulse_lock:
+                self._pulse_generations[other] = self._pulse_generations.get(other, 0) + 1
+                self._write_coil(other, False, cfg)
+        if target is not None and int(target) >= 0:
+            self.pulse_coil(target, pulse_ms=duration, config=cfg)
 
     def _write_coil(self, address: int, value: bool, config: ModbusConfig) -> bool:
         client = self._ensure_client(config)
@@ -282,14 +315,20 @@ class ModbusService:
         cfg = config or self.get_config()
         delay = max(0, int(delay_ms)) / 1000.0
         duration = max(1, int(pulse_ms if pulse_ms is not None else cfg.pulse_length_ms)) / 1000.0
+        with self._pulse_lock:
+            generation = self._pulse_generations.get(address, 0) + 1
+            self._pulse_generations[address] = generation
 
         def _job() -> None:
             if delay > 0:
                 time.sleep(delay)
-            if not self._write_coil(address, True, cfg):
-                return
+            with self._pulse_lock:
+                if self._pulse_generations.get(address) != generation or not self._write_coil(address, True, cfg):
+                    return
             time.sleep(duration)
-            self._write_coil(address, False, cfg)
+            with self._pulse_lock:
+                if self._pulse_generations.get(address) == generation:
+                    self._write_coil(address, False, cfg)
 
         threading.Thread(target=_job, daemon=True).start()
         return True

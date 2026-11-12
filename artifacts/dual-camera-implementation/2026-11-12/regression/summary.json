@@ -1,0 +1,206 @@
+[
+  {
+    "batch": "unit",
+    "status": 0,
+    "elapsed": 16.6,
+    "summary": "630 passed, 1 warning in 15.48s"
+  },
+  {
+    "batch": "test_capture_batch",
+    "status": 0,
+    "elapsed": 1.83,
+    "summary": "13 passed in 1.14s"
+  },
+  {
+    "batch": "test_catalog_learning_update",
+    "status": 0,
+    "elapsed": 1.66,
+    "summary": "9 passed in 0.94s"
+  },
+  {
+    "batch": "test_diagnostic_test_controls",
+    "status": 0,
+    "elapsed": 1.68,
+    "summary": "2 passed in 0.98s"
+  },
+  {
+    "batch": "test_dual_camera_ui",
+    "status": 0,
+    "elapsed": 2.8,
+    "summary": "5 passed in 1.93s"
+  },
+  {
+    "batch": "test_dual_golden_workflow",
+    "status": 0,
+    "elapsed": 2.53,
+    "summary": "1 passed in 1.84s"
+  },
+  {
+    "batch": "test_empty_mold_v2_ui",
+    "status": 0,
+    "elapsed": 1.77,
+    "summary": "5 passed in 1.09s"
+  },
+  {
+    "batch": "test_filtered_roi_canvas",
+    "status": 0,
+    "elapsed": 1.7,
+    "summary": "2 passed in 0.96s"
+  },
+  {
+    "batch": "test_golden_touch",
+    "status": 124,
+    "elapsed": 240.19,
+    "summary": "no summary"
+  },
+  {
+    "batch": "test_image_canvas",
+    "status": 0,
+    "elapsed": 3.09,
+    "summary": "29 passed in 2.26s"
+  },
+  {
+    "batch": "test_inspection_window_lifecycle",
+    "status": 0,
+    "elapsed": 0.7,
+    "summary": "2 passed in 0.23s"
+  },
+  {
+    "batch": "test_inspector_layout",
+    "status": 0,
+    "elapsed": 1.71,
+    "summary": "2 passed in 1.01s"
+  },
+  {
+    "batch": "test_learning_panel_refresh",
+    "status": 0,
+    "elapsed": 2.89,
+    "summary": "1 passed in 2.11s"
+  },
+  {
+    "batch": "test_manual_light_ui",
+    "status": 0,
+    "elapsed": 1.88,
+    "summary": "5 passed in 1.10s"
+  },
+  {
+    "batch": "test_modbus_wizard_outputs",
+    "status": 0,
+    "elapsed": 0.89,
+    "summary": "2 passed in 0.38s"
+  },
+  {
+    "batch": "test_mold_diagnostic_metrics",
+    "status": 0,
+    "elapsed": 1.66,
+    "summary": "2 passed in 0.95s"
+  },
+  {
+    "batch": "test_mold_threshold_controls",
+    "status": 0,
+    "elapsed": 2.36,
+    "summary": "7 passed in 1.59s"
+  },
+  {
+    "batch": "test_nok_comparison",
+    "status": 0,
+    "elapsed": 1.83,
+    "summary": "6 passed in 1.06s"
+  },
+  {
+    "batch": "test_pico_wizard",
+    "status": 0,
+    "elapsed": 0.93,
+    "summary": "12 passed in 0.44s"
+  },
+  {
+    "batch": "test_recipe_delete_ui",
+    "status": 0,
+    "elapsed": 2.2,
+    "summary": "6 passed in 1.40s"
+  },
+  {
+    "batch": "test_results_touch",
+    "status": 0,
+    "elapsed": 11.43,
+    "summary": "8 passed in 10.48s"
+  },
+  {
+    "batch": "test_run_touch_layout",
+    "status": 0,
+    "elapsed": 8.57,
+    "summary": "4 passed in 7.62s"
+  },
+  {
+    "batch": "test_run_view_grid",
+    "status": 0,
+    "elapsed": 0.74,
+    "summary": "1 passed in 0.26s"
+  },
+  {
+    "batch": "test_setup_power",
+    "status": 0,
+    "elapsed": 7.54,
+    "summary": "13 passed in 6.48s"
+  },
+  {
+    "batch": "test_shared_mold_ok",
+    "status": 0,
+    "elapsed": 1.89,
+    "summary": "13 passed in 1.17s"
+  },
+  {
+    "batch": "test_single_tool_editor",
+    "status": 0,
+    "elapsed": 1.62,
+    "summary": "7 passed in 0.91s"
+  },
+  {
+    "batch": "test_statistical_learning",
+    "status": 0,
+    "elapsed": 1.95,
+    "summary": "13 passed in 1.19s"
+  },
+  {
+    "batch": "test_system_keyboard",
+    "status": 0,
+    "elapsed": 0.79,
+    "summary": "2 passed in 0.30s"
+  },
+  {
+    "batch": "test_tool_catalog_favorites",
+    "status": 0,
+    "elapsed": 1.71,
+    "summary": "2 passed in 1.00s"
+  },
+  {
+    "batch": "test_tools_table_reorder",
+    "status": 0,
+    "elapsed": 1.48,
+    "summary": "4 passed in 0.81s"
+  },
+  {
+    "batch": "test_troubleshooting_page",
+    "status": 0,
+    "elapsed": 31.24,
+    "summary": "14 passed in 29.75s"
+  },
+  {
+    "batch": "test_view_config_pio",
+    "status": 0,
+    "elapsed": 1.87,
+    "summary": "15 passed in 1.14s"
+  },
+  {
+    "batch": "test_workcell_session",
+    "status": 0,
+    "elapsed": 1.83,
+    "summary": "1 passed in 1.04s"
+  },
+  {
+    "batch": "test_workstation_window",
+    "status": 0,
+    "elapsed": 3.0,
+    "summary": "5 passed in 2.05s"
+  }
+]

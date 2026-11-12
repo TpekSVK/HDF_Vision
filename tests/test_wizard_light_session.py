@@ -22,6 +22,7 @@ def test_wizard_prepares_session_before_light_and_refreshes_after_restore(monkey
             events.append('wizard')
     monkeypatch.setattr('app.ui.main_window.GoldenWizard',Wizard)
     host=SimpleNamespace(capture_mode=mode,cam=object(),recipes=object(),modbus=None,pico=pico,
+        _stop_live_and_light=Mock(),
         get_capture_mode=lambda:mode,capture_frame_for_golden=Mock(),session_settings=None,
         _apply_capture_mode=prepare,_active_view_id='view_1',
         _refresh_manual_light=lambda:events.append(('light',pico.light)),
@@ -33,5 +34,5 @@ def test_wizard_prepares_session_before_light_and_refreshes_after_restore(monkey
 def test_wizard_not_opened_if_session_preparation_fails(monkeypatch):
     wizard=Mock()
     monkeypatch.setattr('app.ui.main_window.GoldenWizard',wizard)
-    MainWindow.open_wizard(SimpleNamespace(_apply_capture_mode=lambda **kwargs:False))
+    MainWindow.open_wizard(SimpleNamespace(_stop_live_and_light=Mock(), _apply_capture_mode=lambda **kwargs:False))
     wizard.assert_not_called()

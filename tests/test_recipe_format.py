@@ -6,7 +6,7 @@ from app.services.recipe_format import RecipeFormatError, validate_recipe_docume
 from app.services.recipe_service import RecipeService
 from app.services.storage_service import load_recipe_config
 
-@pytest.mark.parametrize('version', [None, 1, 2, 4, True, '3'])
+@pytest.mark.parametrize('version', [None, 1, 2, 5, True, '3'])
 def test_unsupported_versions(version):
     data = RecipeV2().to_dict()
     data['format_version'] = version
@@ -50,7 +50,7 @@ def test_new_and_published_recipe_roundtrip(tmp_path):
     draft = service._load_recipe_config('new')
     published = service._load_published_recipe_config('new')
     assert draft.to_dict() == published.to_dict()
-    assert draft.to_dict()['format_version'] == 3
+    assert draft.to_dict()['format_version'] == 4
     path = tmp_path / 'recipes' / 'new' / 'recipe.published.json'
     path.write_text('{broken')
     with pytest.raises(RecipeFormatError): service._load_published_recipe_config('new')

@@ -172,8 +172,12 @@ def save_recipe_config(recipe: str, data: RecipeV2, *, base_dir: str | Path = "/
     validate_recipe_document(data.to_dict())
     path = _recipe_json_path(recipe, base_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    from app.services.recipe_format import backup_previous_recipe
+    backup_previous_recipe(path)
+    temporary = path.with_suffix('.json.tmp')
+    with open(temporary, "w", encoding="utf-8") as f:
         json.dump(data.to_dict(), f, ensure_ascii=False, indent=2)
+    temporary.replace(path)
     return path
 
 # --- Public API (zachovávame signatúry) ---
