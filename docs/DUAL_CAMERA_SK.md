@@ -88,8 +88,8 @@ sa považujú za ten istý diel/formu. Nastavte preto čas podľa skutočného p
 ## RUN a vstupy
 
 Recept používa spoločný režim **MASTER** alebo **TRIGGER**. Aplikácia pripraví
-obe potrebné kamery súbežne. Súbežne ich aj zastaví pri odchode do nastavení;
-pred zastavením naďalej počká na prijaté kontroly a publikovanie výsledkov.
+obe potrebné kamery súbežne. Pri odchode do nastavení súbežne pozastaví oba
+kanály; najskôr počká na prijaté kontroly a publikovanie výsledkov.
 Golden Wizard pripravuje kameru vybraného pohľadu a pri otvorení neopakuje
 predbežnú prípravu z hlavného okna.
 Každá kamera má vlastné snímanie a spracovanie, pričom snímky
@@ -99,6 +99,21 @@ Po kontrole zostane vybraný pohľad zobrazený.
 Nad obrazom sa zobrazuje názov vybraného pohľadu nastavený v Golden Wizarde;
 v nastaveniach je toto miesto prázdne. Tlačidlo sa volá **Trigger**.
 Hlavný výsledok zobrazuje **OK/NOK**, bez interného označenia skupiny.
+
+**Pripravenosť kamier sa pri bežnej navigácii zachováva.** Prechod do nastavení
+pozastaví kontroly, vypne externé vstupy, Live a svetlo, ale nezatvorí kamerové
+spojenia. Návrat do RUN alebo otvorenie Golden Wizardu pri rovnakom profile
+vykoná iba overenie pripravenosti a opätovné povolenie potrebného režimu.
+Plná príprava sa vykoná pri spustení, zmene režimu MASTER/TRIGGER či relevantného
+kamerového profilu alebo po strate pripravenosti/chybe. Nový recept ju potrebuje
+len vtedy, keď mení takéto nastavenia. Zmena názvu, ROI alebo rozhodovacích
+prahov sama osebe kameru znovu nepripravuje.
+
+Vypnutie TRIGGER Live zastaví impulzy, nechá dobehnúť snímky a vyčistí zásobník
+náhľadu. Pri úspešnom dobehnutí zostane pripravenosť zachovaná; následná kontrola
+stále vyžaduje vlastnú úplnú dvojicu PRIME + CAPTURE. Chyba dobehnutia alebo
+neočakávaná snímka pripravenosť zruší. Pri ukončení aplikácie alebo uvoľnení
+kamier na overenie priradenia sa spojenia riadne zatvoria.
 
 Manuálne tlačidlo **TRIGGER** spustí pri samostatnom vyhodnotení vybranú kameru;
 pri vybranej AND skupine vyžiada oba kamerové príspevky. Fyzické vstupy nastavte

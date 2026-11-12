@@ -85,12 +85,20 @@ class PioCapture:
 
     def end_live_preview(self):
         # Keep publishing late frames as preview until the stopped train drains.
-        self._pio_quiet(quiet_s=0.1)
-        with self._pio_condition:
-            self._live_preview = False
-            self._live_drop_remaining = 0
+        try:
+            self._pio_quiet(quiet_s=0.1)
+        except Exception:
             self._pio_ready = None
-            self._pio_condition.notify_all()
+            self._pio_recovery_required = True
+            raise
+        finally:
+            with self._pio_condition:
+                self._live_preview = False
+                self._live_drop_remaining = 0
+                self.camera.stream._clear_ring()
+                self._pio_condition.notify_all()
+        # The stream, mode and profile are unchanged. The next normal capture
+        # still uses its strict PRIME + CAPTURE pair; no full re-arm is needed.
 
     def _pio_signature(self):
         return (self.camera.device, self.camera.width, self.camera.height, self.camera.fps, self.camera.pixel_format,

@@ -80,3 +80,15 @@ Cielená regresia669 passed. Opakovaný fyzický test10 MASTER +10 TRIGGER
 bez chyby snímania; príprava TRIGGER oboch kamier2262ms oproti súčtu
 samostatných intervalov4514ms. Dôkazy v podpriečinku artefaktov
 `run-labels-parallel/`. Aplikácia znovu spustená s pôvodným receptom test2.
+
+## Zachovanie pripravenosti
+
+Bežná pauza, navigácia, diagnostika a úspešné vypnutie Live nezatvárajú kamerové
+spojenie zdieľanej zostavy. V SETUP zostávajú vstupy a osvetlenie vypnuté.
+Zmena profilu/režimu, chýbajúca platná príprava alebo chyba vyvolá potrebnú
+obnovu. Zatvorenie aplikácie naďalej uvoľní všetky zariadenia.
+
+Regresia672 passed. Opakované fyzické prechody Live/pauza → kontrola pri720p
+bez reštartu oboch spojení a bez chyby snímania. Návrat TRIGGER RUN15–19ms.
+Skutočný MainWindow.open_wizard aj návrat do RUN overené bez nových štartov
+GStreamer. Dôkazy v `warm-camera-lifecycle/`.

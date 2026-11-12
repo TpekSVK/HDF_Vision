@@ -144,7 +144,8 @@ class CameraPositionService:
         try:
             self.pico.quiesce()
         finally:
-            if self._session_mode == 'trigger':
+            from app.services.camera_registry import CameraRouter
+            if self._session_mode == 'trigger' and not isinstance(self.camera, CameraRouter):
                 self.camera.exit_trigger_session(restore_master=False)
         # Keep ownership on cleanup failure so the pause/close path can retry.
         self._session_mode = None

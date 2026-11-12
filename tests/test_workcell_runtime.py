@@ -93,6 +93,24 @@ def test_camera_preparation_and_stop_overlap_on_separate_threads(tmp_path, monke
     assert all(controller.state.value == 'paused' for controller in runtime.controllers.values())
 
 
+def test_setup_pause_keeps_camera_streams_and_diagnostic_close_preserves_them(tmp_path, monkeypatch):
+    from app.services.camera_registry import CameraRouter, PicoRouter
+    from app.services.camera_position import CameraPositionService
+    runtime, _, _ = workcell(tmp_path, monkeypatch)
+    for camera in runtime.registry.cameras.values():
+        monkeypatch.setattr(camera, 'exit_trigger_session', lambda **kw: pytest.fail('normal pause closed stream'))
+    runtime.capture_mode = 'trigger'
+    for lane in runtime.runtimes.values():
+        lane.capture_mode = 'trigger'
+    runtime.quiesce()
+    diagnostic = CameraPositionService(None, CameraRouter(runtime.registry), PicoRouter(runtime.registry), None)
+    diagnostic._session_mode, diagnostic._session_key = 'trigger', ('trigger',)
+    diagnostic.close_session()
+    assert diagnostic._session_mode is None
+    runtime.prepare('test', 'trigger', 'view_1')
+    assert all(controller.state.value == 'ready' for controller in runtime.controllers.values())
+
+
 def test_failed_preparation_waits_for_peer_before_global_cleanup(tmp_path, monkeypatch):
     runtime, _, _ = workcell(tmp_path, monkeypatch)
     runtime.quiesce()

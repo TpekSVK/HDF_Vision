@@ -70,7 +70,8 @@ class InspectionRuntime:
 
     def quiesce(self):
         self.pico.quiesce()
-        if getattr(self, 'capture_mode', 'master') == 'trigger':
+        if (getattr(self, 'capture_mode', 'master') == 'trigger'
+                and not getattr(self, 'keep_camera_ready_on_pause', False)):
             self.cam.exit_trigger_session(restore_master=False)
         self.reset()
 
