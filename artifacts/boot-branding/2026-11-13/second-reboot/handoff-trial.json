@@ -1,0 +1,119 @@
+{
+  "status": "handoff_completed",
+  "steps": [
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "gdm.service"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "quit"
+      ],
+      "status": 1,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "plymouth-start.service"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "modprobe",
+        "-r",
+        "nvidia_drm"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "modprobe",
+        "nvidia_drm"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "start",
+        "plymouth-start.service"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "show-splash"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "quit",
+        "--retain-splash"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "plymouth-start.service"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "modprobe",
+        "-r",
+        "nvidia_drm"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "quit"
+      ],
+      "status": 1,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "plymouth-start.service"
+      ],
+      "status": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "start",
+        "gdm.service"
+      ],
+      "status": 0,
+      "output": ""
+    }
+  ],
+  "persistent_boot_changes": false
+}

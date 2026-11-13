@@ -19,6 +19,8 @@ RELEASE = Path('/etc/nv_tegra_release')
 BIOS = Path('/sys/class/dmi/id/bios_version')
 EARLY_MODULES = Path('/etc/modules-load.d/hdf-boot-display.conf')
 PLYMOUTH_DROPIN = Path('/etc/systemd/system/plymouth-start.service.d/hdf-display.conf')
+GDM_DROPIN = Path('/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf')
+HANDOFF_HELPER = Path('/usr/local/libexec/hdf-vision-display-handoff')
 LABEL = 'HDF_VISION_BRANDED'
 FILES = ('brand.png', 'hdf-vision.plymouth', 'hdf-vision.script')
 
@@ -151,7 +153,7 @@ def restore():
         PLYMOUTH.unlink(missing_ok=True)
     for name in FILES:
         (THEME / name).unlink(missing_ok=True)
-    for filename in metadata.get('additional_created', []):
+    for filename in reversed(metadata.get('additional_created', [])):
         Path(filename).unlink(missing_ok=True)
     if THEME.exists():
         THEME.rmdir()
@@ -163,38 +165,51 @@ def restore():
 
 
 def early_display():
-    """Load the existing display driver before Plymouth instead of at X startup."""
+    # Hardware validation on this Jetson exposed a DRM ownership conflict with
+    # GDM. Do not let the experimental configuration be installed again.
+    raise RuntimeError('Skoré načítanie grafiky je vypnuté: na tejto zostave spôsobovalo zlyhanie grafického prihlásenia. Použite bežný štart.')
+
+
+def display_handoff(*, experimental=False):
+    if not experimental:
+        raise RuntimeError('Postup vyžaduje --experimental; skúška celého štartu ešte nie je dokončená.')
     require_root()
     metadata = json.loads((STATE / 'state.json').read_text())
     if metadata['release'] != RELEASE.read_text() or metadata['bios'] != BIOS.read_text().strip():
         raise RuntimeError('Zmenila sa verzia systému alebo bootloadera.')
+    owned = metadata.get('additional_created', [])
     for filename, checksum in metadata['destinations'].items():
         path = Path(filename)
-        if not path.exists() and filename in metadata.get('additional_created', []):
-            continue  # Resume a partially written early-display configuration.
+        if not path.exists() and filename in owned:
+            continue
         if not path.exists() or digest(path.read_bytes()) != checksum:
             raise RuntimeError('Zmenil sa nainštalovaný súbor: ' + filename)
     module = subprocess.check_output(['modinfo', '-F', 'filename', 'nvidia_drm'], text=True).strip()
     if not module:
         raise RuntimeError('Grafický modul nvidia_drm nie je dostupný.')
     contents = {
-        EARLY_MODULES: b'# HDF Vision: existing driver, loaded before Plymouth\nnvidia_drm\n',
-        PLYMOUTH_DROPIN: b'[Unit]\nAfter=systemd-modules-load.service\n\n[Service]\nExecStart=\nExecStart=/usr/sbin/plymouthd --mode=boot --pid-file=/run/plymouth/pid --attach-to-session --debug --debug-file=/var/log/hdf-boot-plymouth.log\n',
+        # Install the executable and its hook before enabling early loading.
+        HANDOFF_HELPER: (ROOT / 'tools/boot_branding/display-handoff.sh').read_bytes(),
+        # "zz" sorts after the existing NVIDIA override which clears ExecStartPre.
+        GDM_DROPIN: b'[Service]\nExecStartPre=/usr/local/libexec/hdf-vision-display-handoff\n',
+        PLYMOUTH_DROPIN: b'[Unit]\nAfter=systemd-modules-load.service\n',
+        EARLY_MODULES: b'# HDF experimental boot cover, paired with GDM handoff\nnvidia_drm\n',
     }
     for path in contents:
-        if path.exists() and str(path) not in metadata.get('additional_created', []):
+        if path.exists() and str(path) not in owned:
             raise RuntimeError('Cieľový súbor už existuje: ' + str(path))
-    metadata['additional_created'] = [str(path) for path in contents]
-    metadata['early_display_module'] = module
+    metadata['additional_created'] = list(dict.fromkeys([*(str(p) for p in contents), *owned]))
+    metadata['display_handoff'] = 'experimental; transient hardware test passed; full boot pending'
     metadata['destinations'].update({str(path): digest(data) for path, data in contents.items()})
-    # Record cleanup ownership before writing any new system file.
     write_atomic(STATE / 'state.json', json.dumps(metadata, indent=2).encode())
     for path, data in contents.items():
         write_atomic(path, data)
+        if path == HANDOFF_HELPER:
+            path.chmod(0o755)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     os.sync()
-    print('Skoršie načítanie existujúceho grafického modulu pripravené pre ďalší štart.')
-    print('Jadro, initrd a firmvér sa nemenili. Reštart nebol vykonaný.')
+    print('Experimentálne odovzdanie displeja pripravené. Reštart nebol vykonaný.')
+    print('Plymouth sa pred spustením X ukončí a uvoľní nvidia_drm; nepoužíva sa násilné odobratie modulu.')
 
 
 def main():
@@ -204,11 +219,13 @@ def main():
     commands.add_parser('install').add_argument('--staged', type=Path, required=True)
     commands.add_parser('restore')
     commands.add_parser('early-display')
+    commands.add_parser('display-handoff').add_argument('--experimental', action='store_true')
     args = parser.parse_args()
     try:
         if args.command == 'stage': stage(args.output)
         elif args.command == 'install': install(args.staged)
         elif args.command == 'early-display': early_display()
+        elif args.command == 'display-handoff': display_handoff(experimental=args.experimental)
         else: restore()
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
         parser.exit(1, str(exc) + '\n')

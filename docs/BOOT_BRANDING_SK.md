@@ -98,22 +98,44 @@ sa inicializoval až v čase 16,33 s pri spúšťaní X servera. Úvodné okno
 aplikácie sa vo videu objavilo až približne na 36. sekunde.
 Tieto časy videa sa nepočítajú od rovnakého okamihu ako časy jadra.
 
-Pre ďalšiu skúšku sa doplnilo skoré načítanie už používaného modulu:
+Druhá skúška pridala skoré načítanie grafiky. Ukázala konflikt pri prevzatí
+riadenia displeja: GDM/X server hlásil `Failed to acquire modesetting permission`
+a grafické prihlásenie sa opakovalo. Skoré načítanie aj diagnostický režim sa
+odstránili, ovládač sa uvoľnil a GDM sa obnovil bez ďalšieho reštartu Jetsonu.
+Aplikácia sa potom úspešne pripravila do RUN. Pôvodný príkaz `early-display`
+je v inštalátore vypnutý a odmietne meniť systém.
+
+## Experimentálne odovzdanie displeja
+
+Krátka samostatná hardvérová skúška bez reštartu overila túto sekvenciu:
+Plymouth zobrazil naše logo (potvrdené používateľom), ukončil sa cez
+`quit --retain-splash`, modul `nvidia_drm` sa bez násilia odobral a následne
+sa spustilo grafické prihlásenie aj aplikácia. Celý štart od zapnutia ešte
+čaká na overenie. Dĺžka viditeľnosti loga nebola používateľom meraná.
+
+Na tomto testovacom Jetsone je pre ďalšiu skúšku pripravená nová voľba:
 
 ```bash
-sudo python3 tools/setup-boot-branding.py early-display
+sudo python3 tools/setup-boot-branding.py display-handoff --experimental
 ```
 
-Príkaz vyžaduje existujúcu inštaláciu vyššie. Vytvorí iba
-`/etc/modules-load.d/hdf-boot-display.conf` a
-`/etc/systemd/system/plymouth-start.service.d/hdf-display.conf`.
-Plymouth počká na službu načítania modulov; modul sa teda nebude prvýkrát
-načítavať až pri spustení X servera. Žiadny modul ani jeho parametre
-sa nenahrádzajú. Pre túto skúšku sa zapisuje diagnostický log
-`/var/log/hdf-boot-plymouth.log`. Načasovanie nového postupu čaká na overenie
-ďalším reštartom. `restore` odstráni aj tieto dva vlastnené konfiguračné súbory.
+Použiť iba na overovanej zostave, po inštalácii základnej Linux témy a so
+zálohou. Vytvorí štyri vlastnené súbory:
 
-Launcher zároveň pred importom GTK vyfarbí koreňové X okno farbou aplikácie
+- `/etc/modules-load.d/hdf-boot-display.conf`
+- `/etc/systemd/system/plymouth-start.service.d/hdf-display.conf`
+- `/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf`
+- `/usr/local/libexec/hdf-vision-display-handoff`
+
+Plymouth počká na načítanie existujúceho grafického modulu. Pred spustením
+GDM/X sa cez jeho `ExecStartPre` ukončí Plymouth a uvoľní `nvidia_drm`.
+X server potom načíta ovládač svojou bežnou cestou. Pomocník používa časové
+limity, modul neodoberá násilím a nemení jeho binárny súbor ani parametre.
+Samostatné skoré načítanie bez tohto odovzdania sa nepoužíva.
+`restore` odstráni aj všetky tieto vlastnené súbory; po reštarte sa obnoví
+pôvodné poradie načítania. UEFI, jadro, initrd aj GPIO overlay sa nemenia.
+
+Launcher pred importom GTK vyfarbí koreňové X okno farbou aplikácie
 pomocou dostupného `xsetroot`, aby sa pri prechode do grafickej relácie
 nepresvital starý framebuffer s NVIDIA obrázkom. Ak nástroj nie je dostupný,
 launcher pokračuje cez GTK bez prerušenia spúšťania aplikácie.

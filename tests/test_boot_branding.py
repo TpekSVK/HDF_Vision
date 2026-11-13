@@ -55,6 +55,8 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(boot.os, 'sync', lambda: None)
     monkeypatch.setattr(boot, 'EARLY_MODULES', tmp_path / 'modules-load.d/hdf.conf')
     monkeypatch.setattr(boot, 'PLYMOUTH_DROPIN', tmp_path / 'systemd/plymouth-start.service.d/hdf.conf')
+    monkeypatch.setattr(boot, 'GDM_DROPIN', tmp_path / 'systemd/gdm.service.d/zz-hdf.conf')
+    monkeypatch.setattr(boot, 'HANDOFF_HELPER', tmp_path / 'libexec/hdf-handoff')
     monkeypatch.setattr(boot.subprocess, 'check_output', lambda *a, **kw: '/lib/modules/nvidia-drm.ko\n')
     monkeypatch.setattr(boot.subprocess, 'run', lambda *a, **kw: None)
     stage = tmp_path / 'staged'
@@ -105,37 +107,49 @@ def test_partial_installation_never_changes_default_and_can_restore(paths, monke
     assert boot.PLYMOUTH.read_bytes() == original_plymouth
 
 
-def test_early_display_is_idempotent_and_full_restore_removes_owned_configs(paths):
+def test_unsafe_early_display_stays_disabled_without_changing_boot_files(paths):
     boot.install(paths)
-    installed_config = boot.EXTLINUX.read_bytes()
-    boot.early_display()
-    boot.early_display()
-    assert 'nvidia_drm' in boot.EARLY_MODULES.read_text()
-    assert 'After=systemd-modules-load.service' in boot.PLYMOUTH_DROPIN.read_text()
-    assert boot.EXTLINUX.read_bytes() == installed_config
+    before = {p: p.read_bytes() for p in boot.STATE.parent.rglob('*') if p.is_file()}
+    with pytest.raises(RuntimeError, match='vypnuté'): boot.early_display()
+    assert before == {p: p.read_bytes() for p in boot.STATE.parent.rglob('*') if p.is_file()}
     boot.restore()
-    assert not boot.EARLY_MODULES.exists() and not boot.PLYMOUTH_DROPIN.exists()
     assert boot.EXTLINUX.read_text() == CONFIG
 
 
-def test_early_display_refuses_existing_unowned_config(paths):
+def test_display_handoff_requires_explicit_experimental_flag(paths):
     boot.install(paths)
-    boot.EARLY_MODULES.parent.mkdir(parents=True)
-    boot.EARLY_MODULES.write_text('operator setting\n')
-    with pytest.raises(RuntimeError, match='už existuje'): boot.early_display()
-    assert boot.EARLY_MODULES.read_text() == 'operator setting\n'
+    with pytest.raises(RuntimeError, match='experimental'): boot.display_handoff()
+    assert not boot.EARLY_MODULES.exists()
 
 
-def test_partial_early_display_can_resume_and_restore(paths, monkeypatch):
+def test_display_handoff_installs_release_before_gdm_and_restores_all_files(paths):
+    boot.install(paths)
+    config = boot.EXTLINUX.read_bytes()
+    boot.display_handoff(experimental=True)
+    boot.display_handoff(experimental=True)
+    assert boot.EXTLINUX.read_bytes() == config
+    assert 'After=systemd-modules-load.service' in boot.PLYMOUTH_DROPIN.read_text()
+    assert '--debug' not in boot.PLYMOUTH_DROPIN.read_text()
+    assert 'ExecStartPre=/usr/local/libexec/hdf-vision-display-handoff' in boot.GDM_DROPIN.read_text()
+    helper = boot.HANDOFF_HELPER.read_text()
+    assert helper.index('plymouth quit --retain-splash') < helper.index('modprobe -r nvidia_drm')
+    assert boot.HANDOFF_HELPER.stat().st_mode & 0o111
+    boot.restore()
+    assert all(not p.exists() for p in (boot.EARLY_MODULES, boot.PLYMOUTH_DROPIN, boot.GDM_DROPIN, boot.HANDOFF_HELPER))
+    assert boot.EXTLINUX.read_text() == CONFIG
+
+
+def test_partial_display_handoff_is_recoverable(paths, monkeypatch):
     boot.install(paths)
     write = boot.write_atomic
     def fail(path, content):
-        if path == boot.PLYMOUTH_DROPIN: raise OSError('disk failure')
+        if path == boot.GDM_DROPIN: raise OSError('simulated disk failure')
         write(path, content)
     monkeypatch.setattr(boot, 'write_atomic', fail)
-    with pytest.raises(OSError): boot.early_display()
-    assert boot.EARLY_MODULES.exists() and not boot.PLYMOUTH_DROPIN.exists()
+    with pytest.raises(OSError): boot.display_handoff(experimental=True)
+    assert not boot.EARLY_MODULES.exists() and not boot.GDM_DROPIN.exists()
+    assert boot.HANDOFF_HELPER.stat().st_mode & 0o111
     monkeypatch.setattr(boot, 'write_atomic', write)
-    boot.early_display()
+    boot.display_handoff(experimental=True)
     boot.restore()
-    assert not boot.EARLY_MODULES.exists() and not boot.PLYMOUTH_DROPIN.exists()
+    assert not boot.EARLY_MODULES.exists() and not boot.HANDOFF_HELPER.exists()

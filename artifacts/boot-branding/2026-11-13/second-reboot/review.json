@@ -1,0 +1,42 @@
+{
+  "observed_failure": "GDM/X repeated login attempts, NVIDIA Failed to acquire modesetting permission",
+  "recovery": "Removed isolated early-display and debug configs; quit Plymouth; unloaded nvidia_drm without force; restarted GDM without OS reboot",
+  "application_after_recovery": "RUN prepared, both cameras prepared; first preparation attempt retried automatically",
+  "transient_trial": "Plymouth show-splash -> quit --retain-splash -> stop Plymouth service -> unload nvidia_drm -> start GDM; all checked steps passed",
+  "operator_feedback": "Logo visible; duration not measured",
+  "next_candidate": "Early display paired with GDM ExecStartPre that quits Plymouth and unloads its DRM module; full boot not verified",
+  "uefi_modified": false,
+  "installed_state": {
+    "version": 1,
+    "scope": "Linux rootfs splash only; UEFI and initrd unchanged",
+    "release": "# R36 (release), REVISION: 4.7, GCID: 42132812, BOARD: generic, EABI: aarch64, DATE: Thu Sep 18 22:54:44 UTC 2025\n# KERNEL_VARIANT: oot\nTARGET_USERSPACE_LIB_DIR=nvidia\nTARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia\n",
+    "bios": "36.4.7-gcid-42132812",
+    "extlinux_before": "e3860adef6b5a055e164e00db0dda4aece28a52fb7f0b87e098d84ee22982ad4",
+    "files": {
+      "brand.png": "37b03a52f22780d1a51d1c31ead6d7b518a71315c86165a0bfe017e4c029e3e1",
+      "hdf-vision.plymouth": "fa6513a831f5050e22db0341ee3444e67df5ffcdfde97236881627377e047e5b",
+      "extlinux.conf": "c15cd11ded8156963ff7d30ceb24a6925911486488ea1d499355bde320abbdec",
+      "plymouthd.conf": "f2042ba5bf1fb748efb72525494a66fc90fdc78e81b71a0e8a422f7c5c749579",
+      "hdf-vision.script": "e2f7eb16213752c817c37d4d050eabfb0a65ee32bf36154acb930907add33896"
+    },
+    "destinations": {
+      "/boot/extlinux/extlinux.conf": "c15cd11ded8156963ff7d30ceb24a6925911486488ea1d499355bde320abbdec",
+      "/etc/plymouth/plymouthd.conf": "f2042ba5bf1fb748efb72525494a66fc90fdc78e81b71a0e8a422f7c5c749579",
+      "/usr/share/plymouth/themes/hdf-vision/brand.png": "37b03a52f22780d1a51d1c31ead6d7b518a71315c86165a0bfe017e4c029e3e1",
+      "/usr/share/plymouth/themes/hdf-vision/hdf-vision.plymouth": "fa6513a831f5050e22db0341ee3444e67df5ffcdfde97236881627377e047e5b",
+      "/usr/share/plymouth/themes/hdf-vision/hdf-vision.script": "e2f7eb16213752c817c37d4d050eabfb0a65ee32bf36154acb930907add33896",
+      "/etc/modules-load.d/hdf-boot-display.conf": "be23a0ea1754a536402b54e4ad1263f2585d4db0c342c96d0b0df9123496b38b",
+      "/etc/systemd/system/plymouth-start.service.d/hdf-display.conf": "3a6c236864474bdf6f2a0296f722c7affb6e604471e2d7a977f279de65c401f8",
+      "/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf": "a98046dfb7b716c218c02c9734e7ce73012d18a59e02fe08d6a1f37b4628b6fc",
+      "/usr/local/libexec/hdf-vision-display-handoff": "4c88999351886c98ecb401418196d9e573d2fcdbe9f5ebc9039417c362f02bf2"
+    },
+    "plymouth_existed": false,
+    "additional_created": [
+      "/etc/modules-load.d/hdf-boot-display.conf",
+      "/etc/systemd/system/plymouth-start.service.d/hdf-display.conf",
+      "/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf",
+      "/usr/local/libexec/hdf-vision-display-handoff"
+    ],
+    "display_handoff": "experimental; transient hardware test passed; full boot pending"
+  }
+}
