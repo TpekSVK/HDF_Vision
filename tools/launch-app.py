@@ -55,7 +55,8 @@ def main():
 
     import gi
     gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib, Gio
+    from gnome_startup import register_startup
 
     window = Gtk.Window(title='HDF Vision — načítavanie')
     window.set_decorated(False)
@@ -147,6 +148,9 @@ def main():
 
     def launch():
         nonlocal process, output_thread
+        log.info('Startup cover mapped after %.3fs.', time.monotonic() - visible_at)
+        if not args.preview:
+            register_startup(Gio, GLib, log, Gtk.main_quit)
         animate(outer.set_opacity, 0, 1, .45)
         if not args.preview:
             env = dict(os.environ, HDF_STARTUP_DIR=temporary.name, PYTHONUNBUFFERED='1')

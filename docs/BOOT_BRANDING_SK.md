@@ -201,3 +201,28 @@ pokusy majú časový limit. Úspešné aj úmyselne zlyhané vykreslenie sa ove
 v bežiacej relácii bez prerušenia aplikácie. Skutočné skrátenie čiernej
 medzery čaká na ďalší záznam štartu. Krátke zhasnutie pri opätovnej
 inicializácii grafického výstupu môže zostať.
+
+## Záznam 17:14 a registrácia spúšťača v GNOME
+
+`VID_20261113_171417.mp4` opäť prešiel až do RUN. Linux logo je viditeľné
+približne v sekundách 23–25, následne ostáva čierna medzera 26–34 a od
+35. sekundy vidno logo relácie/spúšťača. RUN je viditeľný približne od
+48. sekundy. Samotné vykreslenie koreňového pozadia teda medzeru výrazne
+neskrátilo. Kontrola potvrdila stabilný X server bez automatického návratu.
+
+V logoch sa navyše našlo 90-sekundové čakanie GNOME na registráciu
+`HDF_Vision.desktop`. Skorá fáza `Initialization` vyžaduje potvrdenie
+spusteného klienta. Spúšťač ho teraz po zobrazení svojho prekrytia posiela
+asynchrónne cez `RegisterClient`, s limitom 2 sekundy. Nečaká pritom na
+Docker ani kamery. Token relácie sa neposúva do aplikácie. Klient odpovedá
+aj na ukončovanie relácie, aby nespomaľoval vypnutie systému.
+
+`python3 tools/setup-launcher.py` doplní do autostartu
+`X-GNOME-Autostart-Notify=true`. Xsession krok teraz zapisuje úspech alebo
+zlyhanie kreslenia cez `journalctl -b -t hdf-x-background`. Nastavenia
+ovládačov sa nemenili. Prešlo 28 cielených testov a samostatná registrácia
+na skutočnej GNOME zbernici bez prerušenia aplikácie. Overenie tejto opravy
+pri celom štarte aj ďalšie skrátenie medzery zostáva otvorené.
+
+Protokol: [GNOME Session Management](https://wiki.gnome.org/Projects%282f%29SessionManagement%282f%29GnomeSession.html).
+Podklady sú v `artifacts/boot-branding/2026-11-13/fifth-reboot/`.

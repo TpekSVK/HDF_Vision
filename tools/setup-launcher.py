@@ -77,7 +77,7 @@ def configure(home, root=ROOT, *, restore=False):
             'Terminal=false\nStartupNotify=false\nX-GNOME-Autostart-enabled=true\n')
     for key, path in targets.items():
         path.parent.mkdir(parents=True, exist_ok=True)
-        content = text + ('X-GNOME-Autostart-Phase=Initialization\n' if key == 'autostart' else '')
+        content = text + ('X-GNOME-Autostart-Phase=Initialization\nX-GNOME-Autostart-Notify=true\n' if key == 'autostart' else '')
         with tempfile.NamedTemporaryFile(mode='w', dir=path.parent, delete=False) as stream:
             stream.write(content)
             temporary = Path(stream.name)

@@ -1,0 +1,49 @@
+{
+  "video": "VID_20261113_171417.mp4",
+  "duration_seconds": 49.5183,
+  "boot_id": "018b7463-dc5d-4ea9-9e67-9d53acfd7fa0",
+  "guard": {
+    "boot_id": "018b7463-dc5d-4ea9-9e67-9d53acfd7fa0",
+    "status": "stable_xserver"
+  },
+  "approximate_video_intervals_seconds": {
+    "uefi_nvidia": [
+      0,
+      13
+    ],
+    "first_black": [
+      14,
+      22
+    ],
+    "linux_hdf_logo": [
+      23,
+      25
+    ],
+    "remaining_black": [
+      26,
+      34
+    ],
+    "session_logo_and_cover": [
+      35,
+      47
+    ],
+    "app_run_visible": [
+      48,
+      49
+    ]
+  },
+  "result": "Successful boot to RUN; X root background did not materially shorten the black gap.",
+  "journal_uptime_seconds": {
+    "plymouth_release": 16.998698,
+    "xsession_begin": 21.188235,
+    "gnome_autostart_registration_timeout": 112.942725
+  },
+  "next_change": "Acknowledge GNOME early autostart with bounded async RegisterClient after cover mapping; log Xsession draw result.",
+  "verification": {
+    "targeted_tests_passed": 28,
+    "real_gnome_dbus_registration_probe": "passed without interrupting app",
+    "full_boot_with_registration_fix": "pending",
+    "owned_system_hashes_match": true,
+    "uefi_modified": false
+  }
+}

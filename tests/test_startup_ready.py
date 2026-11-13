@@ -39,6 +39,7 @@ def test_installer_preserves_original_launchers_and_restores_them(tmp_path):
     module.configure(tmp_path, checkout)
     assert 'Terminal=false' in desktop.read_text()
     assert 'sleep 8' not in desktop.read_text()
+    assert 'X-GNOME-Autostart-Notify=true' in (tmp_path / '.config/autostart/HDF_Vision.desktop').read_text()
     assert '"' + str(checkout / 'tools/launch-app.py') + '"' in desktop.read_text()
     module.configure(tmp_path, checkout)
     module.configure(tmp_path, checkout, restore=True)
