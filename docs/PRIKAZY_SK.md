@@ -23,6 +23,8 @@ samostatné možnosti, nie postup, ktorý treba celý vykonať.
 | Príkaz | Význam |
 |---|---|
 | `bash docker/run.sh` | Spustí HDF Vision v bežnom režime s kamerami, Pico a grafickým rozhraním. |
+| `python3 tools/setup-startup.py` | Jednorazovo nastaví celý overený Linux štart s logom aj spúšťač bez terminálu (Jetson Linux/UEFI 36.4.7, GNOME/X11). Vyžiada sudo pre systémové kroky, nereštartuje. |
+| `python3 tools/setup-startup.py --check` | Overí predpoklady tohto nastavenia bez inštalácie. |
 | `python3 tools/setup-launcher.py` | Nastaví ikonu a automatický štart s logom, plynulým prechodom a bez terminálu. |
 | `python3 tools/launch-app.py` | Spustí aplikáciu s úvodným logom a výpismi do súboru. |
 | `python3 tools/setup-launcher.py --restore` | Obnoví pôvodnú ikonu a automatické spúšťanie zo zálohy. |

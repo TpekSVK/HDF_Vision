@@ -16,10 +16,10 @@ Nasadená je **Linux časť** vzhľadu štartu:
 - Launcher nastaví plnú geometriu monitora ešte pred prvým zobrazením okna;
   žiadosť o fullscreen teda nie je závislá iba od už bežiaceho správcu okien.
 
-**UEFI sa neaktualizovalo. Najskoršie NVIDIA logo zostáva.** Úplný priebeh
-štartu a čas aktivácie Plymouth treba potvrdiť na pripojenom monitore po
-reštarte. Táto fáza nezaručuje súvislý obraz od okamihu zapnutia napájania.
-Pri inicializácii grafického ovládača môže byť obraz krátko čierny.
+**UEFI sa neaktualizovalo. Najskoršie NVIDIA logo zostáva.** Celý štart do
+RUN bol overený opakovanými reštartmi a videami nižšie. Pri poslednom štarte
+zostala približne deväťsekundová čierna medzera pri odovzdaní displeja;
+potom logo zostalo až do aplikácie. Používateľ túto podobu prijal.
 
 Pri kontrole doska hlásila oba A/B sloty v stave `normal`, aktívny slot B,
 verziu 36.4.7 a minimálnu prijateľnú verziu 36.4.7. Verejný manifest NVIDIA
@@ -28,6 +28,29 @@ v čase prípravy neposkytoval kombináciu/tag r36.4.7; starší balík ani prep
 samostatne overený kompatibilný firmvér a plán obnovy cez recovery.
 
 ## Inštalácia Linux časti
+
+### Jedným príkazom vrátane spúšťača
+
+Pre overenú verziu Jetson Linux aj UEFI **36.4.7**, z terminálu pracovnej
+plochy GNOME/X11 v koreňovom priečinku projektu, bez sudo:
+
+```bash
+python3 tools/setup-startup.py
+```
+
+Tento príkaz vykoná prípravu a inštaláciu témy, `display-handoff
+--experimental`, `x-background`, nastavenie spúšťača aj pozadia. Heslo na
+systémové kroky si vyžiada cez sudo. Najprv skontroluje predpoklady; podporu
+iných verzií nepredpokladá a automaticky ich odmietne. Už funkčná aplikácia
+a Docker sú predpokladom. Balíky ani UEFI sa neinštalujú a reštart sa
+nespustí. Predpoklady možno overiť cez `python3 tools/setup-startup.py --check`.
+
+Pri opakovaní preskočí základnú inštaláciu, ak existuje jej uložený stav.
+Existujúce kontrolné súčty overia pôvodné inštalátory. Pri chybe zastaví
+ďalšie kroky; vykonané kroky automaticky nevracia. Na obnovu platia príkazy
+v časti Návrat a `python3 tools/setup-launcher.py --restore` pre spúšťače.
+
+### Jednotlivé kroky
 
 Použiť na konkrétnom Jetsone s funkčným grafickým prostredím a existujúcim
 Plymouth (`script.so`). Nie je to inštalácia UEFI firmvéru.

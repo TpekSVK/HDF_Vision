@@ -20,6 +20,40 @@ znovu zostavovať existujúci Docker obraz.
 
 ## Jednorazové nastavenie
 
+### Celý vzhľad štartu jedným príkazom
+
+Na overenej zostave Orin Nano / Jetson Linux a UEFI **36.4.7**, kde už
+aplikácia bežne funguje, spustite v termináli GNOME/X11 z koreňa projektu:
+
+```bash
+python3 tools/setup-startup.py
+```
+
+Spustite **bez sudo**. Skript si pri systémových krokoch vyžiada heslo cez
+`sudo`. Pripraví a nainštaluje Linux logo, odovzdanie displeja do GDM,
+skoré X pozadie, ikonu, automatické spúšťanie a pozadie pracovnej plochy.
+Ide o rovnakú zostavu, ktorú sme overili reštartmi na tomto Jetsone;
+odovzdanie displeja stále používa internú voľbu `--experimental`.
+
+Najprv overí verziu systému/UEFI, dostupnosť nástrojov, grafickej relácie,
+Plymouth a modulu NVIDIA. Iné verzie automaticky odmietne. Balíky, Docker
+ani aplikáciu neinštaluje, automatické prihlasovanie nenastavuje a systém
+**nereštartuje**. Po úspechu zatvorte aplikáciu a reštartujte Jetson ručne.
+Najskoršie NVIDIA logo zostáva; pri odovzdaní displeja ostáva čierna medzera.
+
+Samotné overenie predpokladov bez inštalácie:
+
+```bash
+python3 tools/setup-startup.py --check
+```
+
+Príkaz možno zopakovať: existujúcu základnú inštaláciu znovu nevytvára,
+ďalšie kroky kontrolujú uložené kontrolné súčty. Pri chybe sa ďalšie kroky
+nespustia; už dokončené kroky sa automaticky nevracajú. Podrobnosti a
+obnovu systémovej časti uvádza [BOOT_BRANDING_SK.md](BOOT_BRANDING_SK.md).
+
+### Iba spúšťač aplikácie bez systémového loga
+
 Otvorte terminál v koreňovom priečinku stiahnutej aplikácie. Na tomto Jetsone:
 
 ```bash
