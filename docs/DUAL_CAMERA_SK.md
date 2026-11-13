@@ -95,7 +95,9 @@ Golden Wizard pripravuje kameru vybraného pohľadu a pri otvorení neopakuje
 predbežnú prípravu z hlavného okna.
 Každá kamera má vlastné snímanie a spracovanie, pričom snímky
 môžu prísť súčasne. Prepnutie zobrazovaného pohľadu nemení už prijatú kontrolu.
-Po kontrole zostane vybraný pohľad zobrazený.
+Pri výsledku OK zostane vybraný pohľad zobrazený. Pri NOK sa automaticky
+zobrazí chybný pohľad. Ak ich v jednom výsledku zlyhá viac, zostane vybraný
+aktuálny, ak patrí medzi chybné; inak sa vyberie prvý chybný pohľad.
 
 Nad obrazom sa zobrazuje názov vybraného pohľadu nastavený v Golden Wizarde;
 v nastaveniach je toto miesto prázdne. Tlačidlo sa volá **Trigger**.

@@ -1,4 +1,4 @@
-"""Capture order and NOK results must not change the operator's selected view."""
+"""OK preserves selection; NOK focuses a failed view and its matching image."""
 from types import SimpleNamespace
 from unittest.mock import Mock
 import logging
@@ -24,6 +24,10 @@ def host_for(selected):
         _logger=logging.getLogger('test.selected-view'), _on_view_selected_view=Mock(),
         _load_view_golden_array=lambda recipe, view: np.zeros((8, 8), np.uint8))
     host._finalize_run_trigger = MainWindow._finalize_run_trigger.__get__(host)
+    def select_view(view_id):
+        host._active_view_id = view_id
+        host.view_strip.set_active(view_id)
+    host._on_view_selected_view.side_effect = select_view
     return host, frames
 
 
@@ -38,35 +42,54 @@ def state_for(statuses):
 
 
 @pytest.mark.parametrize('selected', [f'view_{i}' for i in range(1,5)])
-@pytest.mark.parametrize('statuses', [('ok',)*4, ('nok','ok','ok','nok')])
-def test_four_view_cycle_preserves_selection_and_matching_preview(selected, statuses):
+@pytest.mark.parametrize('statuses', [('ok',)*4, ('nok','ok','ok','nok'), ('ok','ok','nok','ok')])
+def test_four_view_cycle_focuses_only_nok_and_keeps_matching_preview(selected, statuses):
     host, frames = host_for(selected)
     state = state_for(statuses)
     MainWindow._display_inspection_result(host, state)
-    assert host._active_view_id == selected
-    host.view_strip.set_active.assert_not_called()
-    host._on_view_selected_view.assert_not_called()
+    failed = [f'view_{i}' for i, status in enumerate(statuses, 1) if status == 'nok']
+    expected = selected if not failed or selected in failed else failed[0]
+    assert host._active_view_id == expected
+    if expected == selected:
+        host._on_view_selected_view.assert_not_called()
+    else:
+        host._on_view_selected_view.assert_called_once_with(expected)
+        host.view_strip.set_active.assert_called_once_with(expected)
     assert host.view_strip.set_status.call_count == 4
     assert host._bump_runtime_stats.call_count == 4
     assert list(frames) == [f'view_{i}' for i in range(1,5)]
-    np.testing.assert_array_equal(host._last_trigger_frame, frames[selected])
-    assert host._last_trigger_view_id == selected
-    assert host._update_sidebar.call_args.kwargs == {'view_id': selected}
+    np.testing.assert_array_equal(host._last_trigger_frame, frames[expected])
+    assert host._last_trigger_view_id == expected
+    assert host._update_sidebar.call_args.kwargs == {'view_id': expected}
     host._apply_run_status_style.assert_called_once_with(state['status'])
-    if statuses[int(selected[-1])-1] == 'nok':
-        np.testing.assert_array_equal(host._nok_comparison.start.call_args.args[1], frames[selected])
+    if statuses[int(expected[-1])-1] == 'nok':
+        np.testing.assert_array_equal(host._nok_comparison.start.call_args.args[1], frames[expected])
     else:
         host._nok_comparison.start.assert_not_called()
 
 
-def test_external_result_for_another_view_keeps_existing_selected_frame():
+@pytest.mark.parametrize('status', ['ok', 'nok'])
+def test_external_result_for_another_view_switches_only_on_nok(status):
     host, frames = host_for('view_3')
     frames['view_3'] = np.full((8,8), 33, np.uint8)
-    state = state_for(['nok'])
+    state = state_for([status])
     MainWindow._display_inspection_result(host,state)
-    assert host._active_view_id == 'view_3'
-    np.testing.assert_array_equal(host._last_trigger_frame, frames['view_3'])
-    host._nok_comparison.start.assert_not_called()
+    expected = 'view_1' if status == 'nok' else 'view_3'
+    assert host._active_view_id == expected
+    np.testing.assert_array_equal(host._last_trigger_frame, frames[expected])
+    if status == 'ok':
+        host._nok_comparison.start.assert_not_called()
+
+
+def test_following_ok_result_does_not_switch_back_from_nok_view():
+    host, frames = host_for('view_3')
+    MainWindow._display_inspection_result(host, state_for(['nok']))
+    assert host._active_view_id == 'view_1'
+    host._on_view_selected_view.reset_mock()
+    MainWindow._display_inspection_result(host, state_for(['ok'] * 4))
+    assert host._active_view_id == 'view_1'
+    host._on_view_selected_view.assert_not_called()
+    np.testing.assert_array_equal(host._last_trigger_frame, frames['view_1'])
 
 
 def test_selected_view_without_frame_does_not_use_last_processed_view():

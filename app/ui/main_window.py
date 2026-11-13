@@ -1483,7 +1483,13 @@ class MainWindow(QMainWindow):
             if not trigger_state['logging_enabled']:
                 self._bump_runtime_stats(trigger_state['recipe_name'], status=record['status'],
                     view_id=view_id, cycle_time_ms=record['cycle_time_ms'])
-        # Processing order never changes the operator's selected view.
+        # Only a failed view takes focus. Keep the current view if it is already
+        # one of this result's NOK views, so a batch of failures does not jump
+        # through every view in processing order.
+        failed_views = [record['view_id'] for record in trigger_state['records']
+                        if record['status'] == 'nok']
+        if failed_views and self._active_view_id not in failed_views:
+            self._on_view_selected_view(failed_views[0])
         self._update_sidebar(view_id=self._active_view_id)
         self._finalize_run_trigger(trigger_state)
         comparison = getattr(self, '_nok_comparison', None)
