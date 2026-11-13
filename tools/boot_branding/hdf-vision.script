@@ -1,0 +1,33 @@
+# Same background and brand placement as the application launcher.
+Window.SetBackgroundTopColor(0.078431, 0.094118, 0.113725);
+Window.SetBackgroundBottomColor(0.078431, 0.094118, 0.113725);
+brand_original = Image("brand.png");
+brand_sprite = Sprite();
+
+fun refresh () {
+    width = Window.GetWidth();
+    height = Window.GetHeight();
+    size = height * 0.42;
+    if (size > 420) size = 420;
+    image = brand_original.Scale(size, 480 * size / 420);
+    brand_sprite.SetImage(image);
+    brand_sprite.SetPosition((width - size) / 2, (height - image.GetHeight() - 70) / 2, 0);
+}
+Plymouth.SetRefreshFunction(refresh);
+refresh();
+
+# Keep disk-unlock and other authentication prompts usable if ever enabled.
+fun display_password (prompt, bullets) {
+    text = prompt + "\n";
+    for (i = 0; i < bullets; i++) text += "*";
+    global.prompt_sprite = Sprite(Image.Text(text, 0.9, 0.91, 0.92));
+    global.prompt_sprite.SetPosition(40, Window.GetHeight() - 100, 10);
+}
+fun display_question (prompt, entry) {
+    global.prompt_sprite = Sprite(Image.Text(prompt + "\n" + entry, 0.9, 0.91, 0.92));
+    global.prompt_sprite.SetPosition(40, Window.GetHeight() - 100, 10);
+}
+fun display_normal () { global.prompt_sprite = NULL; }
+Plymouth.SetDisplayPasswordFunction(display_password);
+Plymouth.SetDisplayQuestionFunction(display_question);
+Plymouth.SetDisplayNormalFunction(display_normal);

@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "scope": "Linux rootfs splash only; UEFI and initrd unchanged",
+  "release": "# R36 (release), REVISION: 4.7, GCID: 42132812, BOARD: generic, EABI: aarch64, DATE: Thu Sep 18 22:54:44 UTC 2025\n# KERNEL_VARIANT: oot\nTARGET_USERSPACE_LIB_DIR=nvidia\nTARGET_USERSPACE_LIB_DIR_PATH=usr/lib/aarch64-linux-gnu/nvidia\n",
+  "bios": "36.4.7-gcid-42132812",
+  "extlinux_before": "e3860adef6b5a055e164e00db0dda4aece28a52fb7f0b87e098d84ee22982ad4",
+  "files": {
+    "brand.png": "37b03a52f22780d1a51d1c31ead6d7b518a71315c86165a0bfe017e4c029e3e1",
+    "hdf-vision.plymouth": "fa6513a831f5050e22db0341ee3444e67df5ffcdfde97236881627377e047e5b",
+    "extlinux.conf": "c15cd11ded8156963ff7d30ceb24a6925911486488ea1d499355bde320abbdec",
+    "plymouthd.conf": "f2042ba5bf1fb748efb72525494a66fc90fdc78e81b71a0e8a422f7c5c749579",
+    "hdf-vision.script": "e2f7eb16213752c817c37d4d050eabfb0a65ee32bf36154acb930907add33896"
+  },
+  "destinations": {
+    "/boot/extlinux/extlinux.conf": "c15cd11ded8156963ff7d30ceb24a6925911486488ea1d499355bde320abbdec",
+    "/etc/plymouth/plymouthd.conf": "f2042ba5bf1fb748efb72525494a66fc90fdc78e81b71a0e8a422f7c5c749579",
+    "/usr/share/plymouth/themes/hdf-vision/brand.png": "37b03a52f22780d1a51d1c31ead6d7b518a71315c86165a0bfe017e4c029e3e1",
+    "/usr/share/plymouth/themes/hdf-vision/hdf-vision.plymouth": "fa6513a831f5050e22db0341ee3444e67df5ffcdfde97236881627377e047e5b",
+    "/usr/share/plymouth/themes/hdf-vision/hdf-vision.script": "e2f7eb16213752c817c37d4d050eabfb0a65ee32bf36154acb930907add33896"
+  },
+  "plymouth_existed": false,
+  "unchanged_boot_files": {
+    "/boot/Image.hdf-cu55-hcpriv": "4a8d3c09099edf9976fd815dab0b694db467518d4fcfb9dee5a6dd8b7e17535b",
+    "/boot/initrd": "fafd4b4f5168718fa8146d0acf185590c2da86f7f2377badb71301caf8d1353c",
+    "/boot/dtb/kernel_tegra234-p3768-0000+p3767-0005-nv-super.dtb": "3151666bb7125c217f3d93c42ca980f57d5c716fda4d2b69f7953cec40520484",
+    "/boot/jetson-test-gpio-overlay.dtbo": "83db5e73cd08107eee077394e1ad7ee75d2f567bd234959bb819038e2476dc58"
+  },
+  "reboot_verified": false,
+  "uefi_modified": false,
+  "firmware_status": {
+    "version": "36.4.7",
+    "active_slot": "B",
+    "both_slots": "normal",
+    "minimum_version": "36.4.7"
+  },
+  "uefi_source_check": "No r36.4.7 combination in official manifest, no matching edk2-nvidia tag found; no downgrade or version spoofing attempted"
+}

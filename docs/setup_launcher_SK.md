@@ -116,3 +116,9 @@ Jetsonu sa pri overovaní nevykonával. Logo prekrýva plochu počas spúšťani
 aplikácie v grafickej relácii; nemení systémové zobrazenie pred prihlásením.
 
 Ďalšie príkazy sú v [prehľade príkazov](PRIKAZY_SK.md).
+
+## Systémové logo pred spustením aplikácie
+
+Voliteľnú Linux štartovaciu tému, rovnaké pozadie pracovnej plochy a návrat
+na pôvodný stav popisuje [BOOT_BRANDING_SK.md](BOOT_BRANDING_SK.md).
+Tento postup sám nenahrádza najskoršie logo v UEFI firmvéri Jetsonu.

@@ -45,6 +45,8 @@ def main():
     window.set_decorated(False)
     window.set_keep_above(True)
     window.set_accept_focus(False)
+    window.set_skip_taskbar_hint(True)
+    window.set_skip_pager_hint(True)
     css = Gtk.CssProvider()
     css.load_from_data(('''window { background: %s; color: #e6e8eb; }
         label { background: transparent; }
@@ -55,8 +57,16 @@ def main():
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
     outer.set_halign(Gtk.Align.CENTER); outer.set_valign(Gtk.Align.CENTER)
     outer.set_spacing(18)
-    monitor = Gdk.Display.get_default().get_primary_monitor()
-    height = monitor.get_geometry().height if monitor else 768
+    display = Gdk.Display.get_default()
+    monitor = display.get_primary_monitor() or display.get_monitor(0)
+    geometry = monitor.get_geometry() if monitor else None
+    height = geometry.height if geometry else 768
+    # Login autostart can run before the window manager. EWMH fullscreen is
+    # only a request then; provide the real cover geometry before first map.
+    if geometry:
+        window.set_default_size(geometry.width, geometry.height)
+        window.resize(geometry.width, geometry.height)
+        window.move(geometry.x, geometry.y)
     size = min(420, int(height * .42))
     source = GdkPixbuf.Pixbuf.new_from_file(str(ROOT / 'app/assets/hdf_vision.png'))
     # The desktop icon has a stray translucent column at its left edge.

@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=HDF Vision
+Description=HDF Vision startup cover
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/hdf-vision
+ScriptFile=/usr/share/plymouth/themes/hdf-vision/hdf-vision.script

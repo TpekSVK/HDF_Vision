@@ -1,0 +1,12 @@
+
+xwininfo: Window id: 0x50d (the root window) (has no name)
+
+  Root window id: 0x50d (the root window) (has no name)
+  Parent window id: 0x0 (none)
+     3 children:
+     0x200008 (has no name): ()  1x1+-1+-1  +-1+-1
+     0x200003 " (failure in conversion from UTF8_STRING to ANSI_X3.4-1968)": ("launch-app.py" "Launch-app.py")  1920x1080+0+0  +0+0
+        1 child:
+        0x200004 (has no name): ()  1x1+-1+-1  +-1+-1
+     0x200001 "launch-app.py": ("launch-app.py" "")  10x10+10+10  +10+10
+

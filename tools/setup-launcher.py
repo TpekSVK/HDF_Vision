@@ -11,6 +11,33 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def configure_background(home, root=ROOT, *, restore=False):
+    """Optional user-only cover for the handoff from the system splash."""
+    home, root = Path(home), Path(root)
+    schema = 'org.gnome.desktop.background'
+    backup = home / '.local/state/hdf-vision/startup-launchers/background.json'
+    if restore:
+        values = json.loads(backup.read_text())
+        for key, value in values.items():
+            subprocess.run(['gsettings', 'set', schema, key, value], check=True)
+        backup.unlink()
+        return
+    target = home / '.local/share/backgrounds/hdf-vision.png'
+    available = subprocess.check_output(['gsettings', 'list-keys', schema], text=True).split()
+    values = {'picture-uri': target.as_uri(), 'picture-uri-dark': target.as_uri(),
+              'picture-options': 'zoom', 'primary-color': '#14181d', 'secondary-color': '#14181d'}
+    values = {key: value for key, value in values.items() if key in available}
+    if not backup.exists():
+        original = {key: subprocess.check_output(['gsettings', 'get', schema, key], text=True).strip()
+                    for key in values}
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text(json.dumps(original, indent=2) + '\n')
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(root / 'tools/boot_branding/wallpaper.png', target)
+    for key, value in values.items():
+        subprocess.run(['gsettings', 'set', schema, key, json.dumps(value)], check=True)
+
+
 def desktop_argument(path):
     text = str(path)
     for char in ('\\', '"', '`', '$'):
@@ -61,9 +88,17 @@ def configure(home, root=ROOT, *, restore=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--restore', action='store_true')
+    parser.add_argument('--background', choices=['hdf', 'restore'],
+                        help='Set/restore only this user background for the boot handoff.')
     args = parser.parse_args()
     if os.geteuid() == 0:
         parser.error('Spustite ako používateľ pracovnej plochy, bez sudo.')
+    if args.background:
+        if args.restore:
+            parser.error('--background nepoužívajte spolu s --restore.')
+        configure_background(Path.home(), restore=args.background == 'restore')
+        print('Pozadie pracovnej plochy bolo ' + ('obnovené.' if args.background == 'restore' else 'nastavené.'))
+        return
     configure(Path.home(), restore=args.restore)
     if not args.restore and shutil.which('gio'):
         subprocess.run(['gio', 'set', str(Path.home() / 'Desktop/HDF_Vision.desktop'),
