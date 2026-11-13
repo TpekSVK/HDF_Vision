@@ -71,6 +71,10 @@ class ModbusWizard(QDialog):
             parent=self,
         )
         buttons.button(QDialogButtonBox.Save).setText("Uložiť & Aplikovať")
+        # Choose a non-editable initial target before Qt opens the dialog, so
+        # the touch keyboard is requested only when an operator taps a field.
+        self._cancel_button = buttons.button(QDialogButtonBox.Cancel)
+        self._cancel_button.setFocus(Qt.OtherFocusReason)
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -409,6 +413,12 @@ class ModbusWizard(QDialog):
         self.accept()
 
     # ------------------------------------------------------------------
+    def setVisible(self, visible: bool) -> None:
+        # Reset the remembered focus before QDialog restores it on reopening.
+        if visible and hasattr(self, '_cancel_button'):
+            self._cancel_button.setFocus(Qt.OtherFocusReason)
+        super().setVisible(visible)
+
     def showEvent(self, event) -> None:  # type: ignore[override]
         self._poll_timer.start()
         super().showEvent(event)
