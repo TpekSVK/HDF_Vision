@@ -68,7 +68,8 @@ class PicoChannel(PicoService):
         if not self._capture_request_lock.acquire(timeout=125.0):
             raise RuntimeError('Pico nedokončilo predchádzajúce snímanie.')
         self._capture_request_lock.release()
-        error = getattr(self, '_last_master_result', {}).get('error')
+        error = (getattr(self, '_last_master_result', {}).get('error')
+                 if self._session_mode == 'MASTER' else None)
         if error:
             raise RuntimeError(str(error))
 

@@ -57,7 +57,6 @@ class ToolConfigPanel(QWidget):
     locatorAreaRequested = Signal(str)
     locatorFitSearchRequested = Signal()
     presenceLearningRequested = Signal(str)
-    emptyMoldV2Requested = Signal()
     presenceValidationChanged = Signal()
 
     _STATUS_COLORS = {"ok": "#237804", "warn": "#b36b00", "nok": "#b03030"}
@@ -136,11 +135,6 @@ class ToolConfigPanel(QWidget):
         layout.setAlignment(Qt.AlignTop)
         self._settings_scroll.setWidget(self._settings_content)
         root_layout.addWidget(self._settings_scroll, 1)
-
-        self._empty_mold_v2_button = QPushButton("V2: Kavity, vzorky a model", self)
-        self._empty_mold_v2_button.clicked.connect(self.emptyMoldV2Requested.emit)
-        self._empty_mold_v2_button.hide()
-        layout.addWidget(self._empty_mold_v2_button)
 
         self._form_container = QWidget(self)
         self._form_layout = QFormLayout(self._form_container)
@@ -448,7 +442,6 @@ class ToolConfigPanel(QWidget):
         self._current_tool = None
         self._compact_validation_summary = None
         self._compact_tuning_summary = None
-        self._empty_mold_v2_button.hide()
         self._name_input.clear()
         self._name_input.setEnabled(False)
         self._param_specs.clear()
@@ -480,7 +473,6 @@ class ToolConfigPanel(QWidget):
         self._compact_validation_summary = None
         self._compact_tuning_summary = None
         self._presence_validation_result.setText("Zatiaľ bez výsledku")
-        self._empty_mold_v2_button.setVisible(tool.type == "mold.protection_v2")
         self._name_input.setText(tool_display_name(tool))
         self._name_input.setEnabled(True)
         self._param_specs = {k: dict(v) for k, v in (schema.get("params") or {}).items()}

@@ -338,8 +338,6 @@ class TouchInspector(QWidget):
         validation_content.hide()
         self.validation_page = CompactToolValidation(panel, wizard)
         self.body.addWidget(self.validation_page)
-        self.model_button = panel._empty_mold_v2_button
-        layout.addWidget(self.model_button)
         nav = QHBoxLayout()
         self.previous = QPushButton("←")
         self.previous.setAccessibleName("Predošlá stránka parametrov")
@@ -388,7 +386,6 @@ class TouchInspector(QWidget):
         target = self.groups.findData(wanted)
         self.groups.setCurrentIndex(target if target >= 0 else 0)
         self.groups.blockSignals(False)
-        self.model_button.setVisible(bool(tool and tool.type == "mold.protection_v2"))
         for _, section in self.sections:
             section.hide()  # legacy set_tool may show the collapsed containers again
         if available:

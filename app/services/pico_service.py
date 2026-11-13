@@ -93,6 +93,9 @@ class PicoService:
             self._session_mode = None
             raise RuntimeError(response or self.last_error)
         self._session_mode = mode
+        # Completion/error of an earlier MASTER request is not a result of the
+        # newly entered session (in particular a subsequent TRIGGER session).
+        self._last_master_result = {}
 
     def fire_pio(self, profile, *, count=2):
         self.require_pio()
@@ -604,6 +607,10 @@ class PicoService:
             return False
         verb = command.split(maxsplit=1)[0].upper()
         upper = line.upper()
+        if upper in {"ERR SESSION_IDLE", "ERR CAPTURE_AFTER_LIGHT"}:
+            # These can be emitted by a physical input without a host command.
+            # They are direct replies only to FIRE/TRIGGER requests.
+            return verb in {"FIRE", "TRIGGER"}
         if upper.startswith("ERR"):
             return True
         if verb == "STATUS":

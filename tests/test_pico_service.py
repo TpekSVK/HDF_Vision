@@ -364,3 +364,29 @@ def test_close_unblocks_waiting_command(connected_service):
 
     assert not command.is_alive()
     assert result and result[0][0] is False
+
+
+@pytest.mark.parametrize('command,reply', [('STATUS','FIRMWARE pico_hdf_controller 4.3.1\nEND'),('SESSION TRIGGER','OK SESSION TRIGGER'),('PIO FIRE 42 2 33340 100 0 37340 1 50000','PIO RESULT {"id":42,"count":2}\nOK PIO 42')])
+@pytest.mark.parametrize('error',['ERR SESSION_IDLE','ERR CAPTURE_AFTER_LIGHT'])
+def test_async_input_errors_do_not_steal_unrelated_replies(connected_service,command,reply,error):
+    service,device=connected_service
+    result=[]
+    thread=threading.Thread(target=lambda:result.append(service._send_command(command)))
+    thread.start()
+    assert wait_for(lambda:bool(device.writes))
+    device.emit(error,*reply.splitlines())
+    thread.join(timeout=.5)
+    assert result==[(True,reply)]
+
+
+@pytest.mark.parametrize('command',['FIRE V1','TRIGGER IN1'])
+@pytest.mark.parametrize('error',['ERR SESSION_IDLE','ERR CAPTURE_AFTER_LIGHT'])
+def test_direct_fire_input_errors_still_fail(connected_service,command,error):
+    service,device=connected_service
+    result=[]
+    thread=threading.Thread(target=lambda:result.append(service._send_command(command)))
+    thread.start()
+    assert wait_for(lambda:bool(device.writes))
+    device.emit(error)
+    thread.join(timeout=.5)
+    assert result==[(False,error)]

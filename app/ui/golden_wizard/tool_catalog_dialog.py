@@ -21,7 +21,7 @@ _ALL = "__all__"
 _RECOMMENDED = "__recommended__"
 _FAVORITES = "__favorites__"
 # Keep runtime support for saved recipes, but do not offer these for new tools.
-_HIDDEN_TYPES = {"mold.protection_v2", "presence.absence_v2"}
+_HIDDEN_TYPES = {"presence.absence_v2"}
 _RECOMMENDED_TYPES = {
     "locator.template_match", "presence_absence",
     "ssim", "edge_change", "edge_profile_deviation",

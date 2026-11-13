@@ -1071,8 +1071,6 @@ def _register_default_tools() -> None:
     )
 
 
-    from app.services.tools.empty_mold_v2 import EmptyMoldV2Tool, registry_metadata
-    ToolRegistry.register("mold.protection_v2", EmptyMoldV2Tool, registry_metadata())
 
     _log_registered_tools()
 

@@ -59,14 +59,53 @@ class RecipeService:
         return name
 
     def rename(self, old: str, new: str):
+        from app.services.recipe_asset_paths import relocated_document, write_bytes_atomically
+        if old == new:
+            return
+        if not new.strip() or Path(new).name != new or new in {'.', '..'}:
+            raise ValueError('Neplatný názov receptu.')
         rid = self.db.recipe_id(old)
-        # premenuj v DB
-        self.db.rename_recipe(old, new)
-        # premenuj priečinok na FS (golden/regions)
         oldp = self.base / "recipes" / old
         newp = self.base / "recipes" / new
-        if oldp.exists():
-            oldp.rename(newp)
+        if newp.exists() or new in self.list():
+            raise ValueError('Recept s týmto názvom už existuje.')
+        if rid is None or not oldp.is_dir():
+            raise ValueError('Pôvodný recept neexistuje.')
+        originals, updated = {}, {}
+        for name in ('recipe.json', 'recipe.published.json'):
+            path = oldp / name
+            if path.exists():
+                originals[name] = path.read_bytes()
+                data = relocated_document(originals[name], oldp, newp)
+                updated[name] = json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8')
+        # Prepare cached drafts too, before the filesystem changes. This keeps
+        # copied/renamed tools' stable dataset locations and unsaved drafts.
+        drafts = {view: [Tool.from_dict(relocated_document(
+                    json.dumps(tool.to_dict()), oldp, newp)) for tool in tools]
+                  for view, tools in self._draft_tools.get(old, {}).items()}
+        oldp.rename(newp)
+        try:
+            for name, data in updated.items():
+                write_bytes_atomically(newp / name, data)
+            self.db.rename_recipe(old, new)
+        except Exception:
+            # Keep the old DB name and complete original documents if a write
+            # or database rename fails; model/sample files were only moved.
+            try:
+                for name, data in originals.items():
+                    write_bytes_atomically(newp / name, data)
+            finally:
+                newp.rename(oldp)
+            raise
+        if old in self._draft_tools:
+            self._draft_tools[new] = drafts
+            self._draft_tools.pop(old)
+        self._locator_autosort = {(new if name == old else name, view): value
+                                 for (name, view), value in self._locator_autosort.items()}
+        if self.tool.recipe == old:
+            # Golden pixels/regions already in memory belong to the same
+            # unchanged recipe; renaming should not trigger another image read.
+            self.tool.recipe = new
         self.audit.log_change(new, recipe_id=rid, action="RENAME", entity_type="RECIPE",
                               field_name="name", old_value=old, new_value=new,
                               source=self._audit_source("RecipeService"), force=True)

@@ -93,3 +93,22 @@ def test_board_restart_invalidates_both_sessions_and_pending_reply(dual):
         dev.emit('READY pico_hdf_controller 4.3-dual-channel CHANNELS=2')
         assert pending.result()[0] is False
     assert one._session_mode is None and two._session_mode is None
+
+
+def test_old_master_error_does_not_poison_trigger_session(dual):
+    transport,dev=dual
+    channel=transport.channels[1]
+    channel._last_master_result={'error':'old MASTER failure'}
+    channel._pio_capable=True
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        switched=pool.submit(channel.set_session_mode,'TRIGGER')
+        assert wait_for(lambda:bool(dev.writes))
+        dev.emit('CH 1 OK SESSION TRIGGER')
+        switched.result(timeout=1)
+    assert channel._last_master_result=={}
+    channel.wait_capture_idle()
+    # A current MASTER error must still be visible.
+    channel._session_mode='MASTER'
+    channel._last_master_result={'error':'current MASTER failure'}
+    with pytest.raises(RuntimeError,match='current MASTER failure'):
+        channel.wait_capture_idle()

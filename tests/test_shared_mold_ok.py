@@ -188,7 +188,7 @@ def test_shared_button_only_for_original_empty_mold_tool():
     from app.ui.golden_wizard.tool_config_panel import ToolConfigPanel
     app=QApplication.instance() or QApplication([])
     panel=ToolConfigPanel()
-    for kind,visible in [('mold.protection_v1',True),('presence.absence_v2',False),('mold.protection_v2',False)]:
+    for kind,visible in [('mold.protection_v1',True),('presence.absence_v2',False)]:
         panel.set_tool(ToolRegistry.make_default_tool(kind),ToolRegistry.get_tool_definition(kind),ToolRegistry.get_tool_schema(kind))
         assert panel._shared_mold_ok.isHidden()!=visible
     panel.close()

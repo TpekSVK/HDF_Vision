@@ -392,7 +392,7 @@ def test_measurement_locator_preserves_previous_alignment(diagnostic, measuremen
 
 
 @pytest.mark.parametrize('kind', ['ssim','mse','ncc','presence_absence','light_transmission',
-    'edge_change','edge_profile_deviation','presence.absence_v2','mold.protection_v1','mold.protection_v2'])
+    'edge_change','edge_profile_deviation','presence.absence_v2','mold.protection_v1'])
 def test_diagnostic_blocked_locator_does_not_run_selected_analyzer(monkeypatch, kind):
     from app.services.tool_registry import ToolRegistry
     from app.services.tool_pipeline import ToolTestBlockedError, run_tool_test
