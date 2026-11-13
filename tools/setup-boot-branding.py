@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,8 @@ PLYMOUTH = Path('/etc/plymouth/plymouthd.conf')
 THEME = Path('/usr/share/plymouth/themes/hdf-vision')
 RELEASE = Path('/etc/nv_tegra_release')
 BIOS = Path('/sys/class/dmi/id/bios_version')
+EARLY_MODULES = Path('/etc/modules-load.d/hdf-boot-display.conf')
+PLYMOUTH_DROPIN = Path('/etc/systemd/system/plymouth-start.service.d/hdf-display.conf')
 LABEL = 'HDF_VISION_BRANDED'
 FILES = ('brand.png', 'hdf-vision.plymouth', 'hdf-vision.script')
 
@@ -148,11 +151,50 @@ def restore():
         PLYMOUTH.unlink(missing_ok=True)
     for name in FILES:
         (THEME / name).unlink(missing_ok=True)
+    for filename in metadata.get('additional_created', []):
+        Path(filename).unlink(missing_ok=True)
     if THEME.exists():
         THEME.rmdir()
     os.replace(STATE, STATE.with_name('boot-branding-restored-' + str(__import__('time').time_ns())))
     os.sync()
+    if metadata.get('additional_created'):
+        subprocess.run(['systemctl', 'daemon-reload'], check=True)
     print('Pôvodný štart bol obnovený. Reštart nebol vykonaný.')
+
+
+def early_display():
+    """Load the existing display driver before Plymouth instead of at X startup."""
+    require_root()
+    metadata = json.loads((STATE / 'state.json').read_text())
+    if metadata['release'] != RELEASE.read_text() or metadata['bios'] != BIOS.read_text().strip():
+        raise RuntimeError('Zmenila sa verzia systému alebo bootloadera.')
+    for filename, checksum in metadata['destinations'].items():
+        path = Path(filename)
+        if not path.exists() and filename in metadata.get('additional_created', []):
+            continue  # Resume a partially written early-display configuration.
+        if not path.exists() or digest(path.read_bytes()) != checksum:
+            raise RuntimeError('Zmenil sa nainštalovaný súbor: ' + filename)
+    module = subprocess.check_output(['modinfo', '-F', 'filename', 'nvidia_drm'], text=True).strip()
+    if not module:
+        raise RuntimeError('Grafický modul nvidia_drm nie je dostupný.')
+    contents = {
+        EARLY_MODULES: b'# HDF Vision: existing driver, loaded before Plymouth\nnvidia_drm\n',
+        PLYMOUTH_DROPIN: b'[Unit]\nAfter=systemd-modules-load.service\n\n[Service]\nExecStart=\nExecStart=/usr/sbin/plymouthd --mode=boot --pid-file=/run/plymouth/pid --attach-to-session --debug --debug-file=/var/log/hdf-boot-plymouth.log\n',
+    }
+    for path in contents:
+        if path.exists() and str(path) not in metadata.get('additional_created', []):
+            raise RuntimeError('Cieľový súbor už existuje: ' + str(path))
+    metadata['additional_created'] = [str(path) for path in contents]
+    metadata['early_display_module'] = module
+    metadata['destinations'].update({str(path): digest(data) for path, data in contents.items()})
+    # Record cleanup ownership before writing any new system file.
+    write_atomic(STATE / 'state.json', json.dumps(metadata, indent=2).encode())
+    for path, data in contents.items():
+        write_atomic(path, data)
+    subprocess.run(['systemctl', 'daemon-reload'], check=True)
+    os.sync()
+    print('Skoršie načítanie existujúceho grafického modulu pripravené pre ďalší štart.')
+    print('Jadro, initrd a firmvér sa nemenili. Reštart nebol vykonaný.')
 
 
 def main():
@@ -161,12 +203,14 @@ def main():
     commands.add_parser('stage').add_argument('--output', type=Path, required=True)
     commands.add_parser('install').add_argument('--staged', type=Path, required=True)
     commands.add_parser('restore')
+    commands.add_parser('early-display')
     args = parser.parse_args()
     try:
         if args.command == 'stage': stage(args.output)
         elif args.command == 'install': install(args.staged)
+        elif args.command == 'early-display': early_display()
         else: restore()
-    except (OSError, ValueError, RuntimeError, KeyError) as exc:
+    except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
         parser.exit(1, str(exc) + '\n')
 
 

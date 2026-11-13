@@ -1,0 +1,20 @@
+{
+  "boot_id": "31eff362-38c7-46a3-90e3-820797850b38",
+  "cmdline": "root=/dev/nvme0n1p1 rw rootwait rootfstype=ext4 mminit_loglevel=4 console=ttyTCU0,115200 firmware_class.path=/etc/firmware fbcon=map:0 nospectre_bhb video=efifb:off quiet splash loglevel=3 systemd.show_status=false rd.systemd.show_status=false udev.log_priority=3 vt.global_cursor_default=0 plymouth.ignore-serial-consoles bl_prof_dataptr=2031616@0x271E10000 bl_prof_ro_ptr=65536@0x271E00000",
+  "uefi_modified": false,
+  "video": "VID_20261113_161356.mp4",
+  "observations": {
+    "kernel_text_suppressed": true,
+    "early_linux_logo": "not confirmed; long black interval remains",
+    "application_cover": "appears around 36.2 s, before application around 39 s",
+    "uefi_logo": "still visible; not replaced",
+    "camera_readiness": "application returned to SETUP/error; 24 V confirmed on by operator; exact reason not yet captured"
+  },
+  "timeline_seconds_since_kernel": {
+    "plymouth_start": 7.73,
+    "plymouth_deactivated": 14.48,
+    "nvidia_drm_loaded": 16.33
+  },
+  "next_trial": "Preload existing nvidia_drm in modules-load, order Plymouth after modules-load; root X background painted by launcher; log exact preparation failure",
+  "boot_file_hashes_verified_unchanged": true
+}

@@ -18,9 +18,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--preview', action='store_true', help='Show only the startup cover for five seconds.')
     args = parser.parse_args()
-    import gi
-    gi.require_version('Gtk', '3.0')
-    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
     from app.ui.theme import COLOR_BG
 
     state = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hdf-vision'
@@ -40,6 +37,17 @@ def main():
     handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
     log.addHandler(handler)
     log.info('=== HDF Vision startup ===')
+    # X can retain the firmware's framebuffer until a client paints it. Clear
+    # the root before importing GTK so the old NVIDIA image cannot shine through.
+    try:
+        subprocess.run(['xsetroot', '-solid', COLOR_BG], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+    except (OSError, subprocess.TimeoutExpired):
+        log.info('Skoré prekrytie X pozadia nie je dostupné; pokračujem cez GTK.')
+
+    import gi
+    gi.require_version('Gtk', '3.0')
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
     window = Gtk.Window(title='HDF Vision — načítavanie')
     window.set_decorated(False)

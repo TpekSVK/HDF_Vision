@@ -88,3 +88,32 @@ Tieto skúšky nenahrádzajú skúšku skutočného štartu na monitore.
 - [NVIDIA: úprava UEFI loga](https://docs.nvidia.com/jetson/archives/r36.4/DeveloperGuide/SD/Bootloader/UEFI.html#customized-logo)
 - [NVIDIA: kombinácie zdrojov UEFI](https://github.com/NVIDIA/edk2-edkrepo-manifest)
 - [Ubuntu: Plymouth](https://manpages.ubuntu.com/manpages/jammy/man8/plymouth.8.html)
+
+## Prvá skúška skutočného štartu
+
+Po prvom reštarte sa potvrdilo tiché bootovanie s pôvodným USB jadrom,
+ale logo počas Linux štartu ešte nebolo zobrazené dostatočne skoro.
+Plymouth odštartoval v čase 7,73 s od štartu jadra, kým `nvidia_drm`
+sa inicializoval až v čase 16,33 s pri spúšťaní X servera. Úvodné okno
+aplikácie sa vo videu objavilo až približne na 36. sekunde.
+Tieto časy videa sa nepočítajú od rovnakého okamihu ako časy jadra.
+
+Pre ďalšiu skúšku sa doplnilo skoré načítanie už používaného modulu:
+
+```bash
+sudo python3 tools/setup-boot-branding.py early-display
+```
+
+Príkaz vyžaduje existujúcu inštaláciu vyššie. Vytvorí iba
+`/etc/modules-load.d/hdf-boot-display.conf` a
+`/etc/systemd/system/plymouth-start.service.d/hdf-display.conf`.
+Plymouth počká na službu načítania modulov; modul sa teda nebude prvýkrát
+načítavať až pri spustení X servera. Žiadny modul ani jeho parametre
+sa nenahrádzajú. Pre túto skúšku sa zapisuje diagnostický log
+`/var/log/hdf-boot-plymouth.log`. Načasovanie nového postupu čaká na overenie
+ďalším reštartom. `restore` odstráni aj tieto dva vlastnené konfiguračné súbory.
+
+Launcher zároveň pred importom GTK vyfarbí koreňové X okno farbou aplikácie
+pomocou dostupného `xsetroot`, aby sa pri prechode do grafickej relácie
+nepresvital starý framebuffer s NVIDIA obrázkom. Ak nástroj nie je dostupný,
+launcher pokračuje cez GTK bez prerušenia spúšťania aplikácie.

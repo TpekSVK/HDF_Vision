@@ -997,7 +997,9 @@ class MainWindow(QMainWindow):
                 self.mode = "SETUP"
                 self._capture_mode_ready = False
                 self.stack.setCurrentWidget(self.panel_setup)
-                self.lbl_status.setText(f"RUN nie je pripravený: {error or self.inspection.snapshot()['error']}")
+                reason = error or self.inspection.snapshot()['error']
+                self._logger.error('RUN príprava zlyhala: %s', reason)
+                self.lbl_status.setText(f"RUN nie je pripravený: {reason}")
         elif kind in {"pause", "close"}:
             self._pending_runtime_action = None
             if result and error is None:
