@@ -1,0 +1,19 @@
+{
+  "video": "VID_20261113_165817.mp4",
+  "handoff_full_boot_verified": true,
+  "automatic_guard": {
+    "boot_id": "002836df-7324-4e9e-8066-82e4dba00a4d",
+    "status": "stable_xserver"
+  },
+  "rollback_used": false,
+  "video_observations": {
+    "linux_logo": "approximately 22–25 s",
+    "black_interval": "approximately 26–35 s",
+    "application_cover": "around 36–46 s",
+    "application_RUN": "around 47 s"
+  },
+  "camera_preparation": "both cameras prepared; first MASTER wait timed out, automatic retry succeeded",
+  "unchanged_boot_files": true,
+  "uefi_modified": false,
+  "next_step": "Optional Xsession root-image draw before GNOME; manually verified success and failure continue session; effect on real boot interval pending"
+}

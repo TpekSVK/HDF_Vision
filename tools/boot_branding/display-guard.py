@@ -15,6 +15,8 @@ ALLOWED = {
     '/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf',
     '/usr/local/libexec/hdf-vision-display-handoff',
     '/usr/local/libexec/hdf-vision-display-guard',
+    '/usr/share/backgrounds/hdf-vision.png',
+    '/etc/X11/Xsession.d/00hdf-vision-background',
 }
 
 
@@ -54,6 +56,7 @@ def recover(metadata):
         metadata.pop('additional_created', None)
         metadata.pop('display_handoff', None)
         metadata.pop('early_display_module', None)
+        metadata.pop('x_background', None)
         temporary = STATE.with_suffix('.tmp')
         temporary.write_text(json.dumps(metadata, indent=2) + '\n')
         temporary.chmod(0o644)

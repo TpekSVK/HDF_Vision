@@ -22,6 +22,8 @@ PLYMOUTH_DROPIN = Path('/etc/systemd/system/plymouth-start.service.d/hdf-display
 GDM_DROPIN = Path('/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf')
 HANDOFF_HELPER = Path('/usr/local/libexec/hdf-vision-display-handoff')
 GUARD_HELPER = Path('/usr/local/libexec/hdf-vision-display-guard')
+X_BACKGROUND = Path('/usr/share/backgrounds/hdf-vision.png')
+X_SESSION_HOOK = Path('/etc/X11/Xsession.d/00hdf-vision-background')
 LABEL = 'HDF_VISION_BRANDED'
 FILES = ('brand.png', 'hdf-vision.plymouth', 'hdf-vision.script')
 
@@ -214,6 +216,35 @@ def display_handoff(*, experimental=False):
     print('Plymouth sa pred spustením X ukončí a uvoľní nvidia_drm; nepoužíva sa násilné odobratie modulu.')
 
 
+def x_background():
+    require_root()
+    metadata = json.loads((STATE / 'state.json').read_text())
+    if metadata['release'] != RELEASE.read_text() or metadata['bios'] != BIOS.read_text().strip():
+        raise RuntimeError('Zmenila sa verzia systému alebo bootloadera.')
+    for filename, checksum in metadata['destinations'].items():
+        path = Path(filename)
+        if not path.exists() and filename in metadata.get('additional_created', []):
+            continue
+        if not path.exists() or digest(path.read_bytes()) != checksum:
+            raise RuntimeError('Zmenil sa nainštalovaný súbor: ' + filename)
+    contents = {
+        X_BACKGROUND: (ROOT / 'tools/boot_branding/wallpaper.png').read_bytes(),
+        X_SESSION_HOOK: (ROOT / 'tools/boot_branding/xsession-background.sh').read_bytes(),
+    }
+    owned = metadata.get('additional_created', [])
+    for path in contents:
+        if path.exists() and str(path) not in owned:
+            raise RuntimeError('Cieľový súbor už existuje: ' + str(path))
+    metadata['additional_created'] = list(dict.fromkeys([*owned, *(str(p) for p in contents)]))
+    metadata['x_background'] = True
+    metadata['destinations'].update({str(path): digest(data) for path, data in contents.items()})
+    write_atomic(STATE / 'state.json', json.dumps(metadata, indent=2).encode())
+    for path, data in contents.items():
+        write_atomic(path, data)
+    os.sync()
+    print('Logo pred štartom GNOME pripravené. Ovládače sa nemenili. Reštart nebol vykonaný.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
@@ -222,12 +253,14 @@ def main():
     commands.add_parser('restore')
     commands.add_parser('early-display')
     commands.add_parser('display-handoff').add_argument('--experimental', action='store_true')
+    commands.add_parser('x-background')
     args = parser.parse_args()
     try:
         if args.command == 'stage': stage(args.output)
         elif args.command == 'install': install(args.staged)
         elif args.command == 'early-display': early_display()
         elif args.command == 'display-handoff': display_handoff(experimental=args.experimental)
+        elif args.command == 'x-background': x_background()
         else: restore()
     except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError) as exc:
         parser.exit(1, str(exc) + '\n')

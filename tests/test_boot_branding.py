@@ -58,6 +58,8 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(boot, 'GDM_DROPIN', tmp_path / 'systemd/gdm.service.d/zz-hdf.conf')
     monkeypatch.setattr(boot, 'HANDOFF_HELPER', tmp_path / 'libexec/hdf-handoff')
     monkeypatch.setattr(boot, 'GUARD_HELPER', tmp_path / 'libexec/hdf-guard')
+    monkeypatch.setattr(boot, 'X_BACKGROUND', tmp_path / 'backgrounds/hdf.png')
+    monkeypatch.setattr(boot, 'X_SESSION_HOOK', tmp_path / 'Xsession.d/00hdf')
     monkeypatch.setattr(boot.subprocess, 'check_output', lambda *a, **kw: '/lib/modules/nvidia-drm.ko\n')
     monkeypatch.setattr(boot.subprocess, 'run', lambda *a, **kw: None)
     stage = tmp_path / 'staged'
@@ -154,3 +156,23 @@ def test_partial_display_handoff_is_recoverable(paths, monkeypatch):
     boot.display_handoff(experimental=True)
     boot.restore()
     assert not boot.EARLY_MODULES.exists() and not boot.HANDOFF_HELPER.exists()
+
+
+def test_x_background_installs_image_before_hook_and_is_removed_by_restore(paths):
+    boot.install(paths)
+    boot.x_background()
+    boot.x_background()
+    assert boot.X_BACKGROUND.read_bytes().startswith(b'\x89PNG')
+    assert 'xsetbg' in boot.X_SESSION_HOOK.read_text()
+    boot.restore()
+    assert not boot.X_BACKGROUND.exists() and not boot.X_SESSION_HOOK.exists()
+
+
+def test_failed_background_draw_never_exits_xsession(tmp_path):
+    import subprocess
+    image = tmp_path / 'image.png'; image.write_bytes(b'image')
+    script = tmp_path / 'hook.sh'
+    script.write_text((boot.ROOT / 'tools/boot_branding/xsession-background.sh').read_text().replace('/usr/share/backgrounds/hdf-vision.png', str(image)))
+    result = subprocess.run(['sh', '-ec', '. "$1"; echo HDF_SESSION_CONTINUES', 'test', str(script)],
+        env={'DISPLAY': 'not-a-display', 'PATH': '/usr/bin:/bin'}, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    assert result.returncode == 0 and 'HDF_SESSION_CONTINUES' in result.stdout

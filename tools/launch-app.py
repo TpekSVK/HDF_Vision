@@ -37,13 +37,21 @@ def main():
     handler.setFormatter(logging.Formatter('%(asctime)s %(message)s'))
     log.addHandler(handler)
     log.info('=== HDF Vision startup ===')
-    # X can retain the firmware's framebuffer until a client paints it. Clear
-    # the root before importing GTK so the old NVIDIA image cannot shine through.
+    # Paint the brand before importing GTK; this also matches the earlier
+    # Xsession cover while the desktop and application are still loading.
     try:
-        subprocess.run(['xsetroot', '-solid', COLOR_BG], stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        cover = ROOT / 'tools/boot_branding/wallpaper.png'
+        painted = subprocess.run(['xsetbg', '-quiet', '-border', COLOR_BG, '-center', str(cover)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, timeout=2).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
-        log.info('Skoré prekrytie X pozadia nie je dostupné; pokračujem cez GTK.')
+        painted = False
+    if not painted:
+        try:
+            subprocess.run(['xsetroot', '-solid', COLOR_BG], stdin=subprocess.DEVNULL,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
+        except (OSError, subprocess.TimeoutExpired):
+            log.info('Skoré prekrytie X pozadia nie je dostupné; pokračujem cez GTK.')
 
     import gi
     gi.require_version('Gtk', '3.0')

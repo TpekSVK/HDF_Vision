@@ -174,3 +174,30 @@ Prešlo 23 testov. Upravená sekvencia sa následne overila priamo cez
 nainštalovaný `ExecStartPre` GDM: odovzdanie prešlo, aplikácia sa spustila
 a jednorazová kontrola potvrdila stabilný X server. Celý nový štart od
 zapnutia tým ešte nebol overený.
+
+## Overený celý štart a medzera pred aplikáciou
+
+Záznam `VID_20261113_165817.mp4` už prešiel až do RUN. Log potvrdil
+uvoľnenie displeja pred GDM, stabilný X server a úspešnú prípravu oboch
+kamier po automatickom opakovaní prvého pokusu. Automatický návrat sa
+nepoužil. UEFI sa nemenilo. V tomto zázname sa však stále objavuje medzera
+približne medzi 26. a 36. sekundou videa: po Linux logu a pred aplikáciou.
+
+Pre ďalšiu skúšku je doplnený voliteľný Xsession krok:
+
+```bash
+sudo python3 tools/setup-boot-branding.py x-background
+```
+
+Vytvorí iba `/usr/share/backgrounds/hdf-vision.png` a
+`/etc/X11/Xsession.d/00hdf-vision-background`. Hneď na začiatku X relácie
+vykreslí logo pomocou už dostupného `xsetbg`, ešte pred GNOME. Ovládač,
+UEFI ani initrd nemení. Oba súbory sú zahrnuté v obnove a v automatickom
+návrate tejto experimentálnej zostavy.
+
+Skript je načítavaný existujúcim Xsession, preto nikdy nepoužíva `exit`.
+Chyba vykreslenia ani nedostupný nástroj nesmú ukončiť prihlásenie; jednotlivé
+pokusy majú časový limit. Úspešné aj úmyselne zlyhané vykreslenie sa overili
+v bežiacej relácii bez prerušenia aplikácie. Skutočné skrátenie čiernej
+medzery čaká na ďalší záznam štartu. Krátke zhasnutie pri opätovnej
+inicializácii grafického výstupu môže zostať.
