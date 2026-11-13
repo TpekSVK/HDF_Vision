@@ -619,8 +619,12 @@ class PicoService:
                     return str(json.loads(line[11:]).get("id")) == ident
                 except (ValueError, TypeError):
                     return False
-            return upper.startswith("BUSY")
+            # Physical input rejections (BUSY IN1..IN8) are asynchronous,
+            # not the reply to this PIO request. Consuming one here loses the
+            # real PIO RESULT/OK and shifts the next command's response.
+            return upper in {"BUSY PIO", "BUSY LIVE"}
         prefixes = {
+            "SESSION": ("OK SESSION ", "BUSY SESSION"),
             "SAVE": ("OK SAVED",),
             "SET": ("OK SET",),
             "MAP": ("OK MAP",),

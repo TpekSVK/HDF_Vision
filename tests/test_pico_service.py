@@ -304,6 +304,42 @@ def test_unsolicited_fired_line_does_not_steal_save_response(connected_service):
     assert result == [(True, "OK SAVED")]
 
 
+def test_busy_physical_input_does_not_abort_an_inflight_pio_request(connected_service):
+    service, device = connected_service
+    result = []
+    command = threading.Thread(target=lambda: result.append(
+        service._send_command('PIO FIRE 42 2 33340 100 0 37340 1 50000')))
+    command.start()
+    assert wait_for(lambda: bool(device.writes))
+    device.emit('BUSY IN1', 'BUSY IN2', 'PIO RESULT {"id":42,"count":2}', 'OK PIO 42')
+    command.join(timeout=0.5)
+    assert result == [(True, 'PIO RESULT {"id":42,"count":2}\nOK PIO 42')]
+
+
+def test_delayed_pio_confirmation_does_not_steal_session_response(connected_service):
+    service, device = connected_service
+    result = []
+    command = threading.Thread(target=lambda: result.append(service._send_command('SESSION IDLE')))
+    command.start()
+    assert wait_for(lambda: bool(device.writes))
+    device.emit('BUSY IN1', 'OK PIO 42', 'OK SESSION IDLE')
+    command.join(timeout=0.5)
+    assert result == [(True, 'OK SESSION IDLE')]
+
+
+@pytest.mark.parametrize('busy', ['BUSY PIO', 'BUSY LIVE'])
+def test_actual_pio_busy_is_still_reported(connected_service, busy):
+    service, device = connected_service
+    result = []
+    command = threading.Thread(target=lambda: result.append(
+        service._send_command('PIO FIRE 42 2 33340 100 0 37340 1 50000')))
+    command.start()
+    assert wait_for(lambda: bool(device.writes))
+    device.emit(busy)
+    command.join(timeout=0.5)
+    assert result == [(False, busy)]
+
+
 def test_close_stops_reader_and_marks_service_unavailable(connected_service):
     service, device = connected_service
     reader = service._rx_thread
