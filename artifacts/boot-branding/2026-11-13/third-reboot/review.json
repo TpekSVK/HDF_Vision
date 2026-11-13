@@ -1,0 +1,9 @@
+{
+  "video": "VID_20261113_164438.mp4",
+  "operator_timing": "logo around 22 s, black screen after 26 s",
+  "failure": "nvidia_drm still in use; original hook continued after failed unload",
+  "recovery": "Display experiment removed; Plymouth stopped; DRM unloaded; GDM and RUN restored without reboot",
+  "next_change": "Terminate remaining Plymouth service processes, retry normal DRM unload, one-boot recovery guard",
+  "candidate_full_boot_verified": false,
+  "firmware_modified": false
+}

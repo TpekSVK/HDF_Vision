@@ -57,6 +57,7 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(boot, 'PLYMOUTH_DROPIN', tmp_path / 'systemd/plymouth-start.service.d/hdf.conf')
     monkeypatch.setattr(boot, 'GDM_DROPIN', tmp_path / 'systemd/gdm.service.d/zz-hdf.conf')
     monkeypatch.setattr(boot, 'HANDOFF_HELPER', tmp_path / 'libexec/hdf-handoff')
+    monkeypatch.setattr(boot, 'GUARD_HELPER', tmp_path / 'libexec/hdf-guard')
     monkeypatch.setattr(boot.subprocess, 'check_output', lambda *a, **kw: '/lib/modules/nvidia-drm.ko\n')
     monkeypatch.setattr(boot.subprocess, 'run', lambda *a, **kw: None)
     stage = tmp_path / 'staged'
@@ -135,7 +136,7 @@ def test_display_handoff_installs_release_before_gdm_and_restores_all_files(path
     assert helper.index('plymouth quit --retain-splash') < helper.index('modprobe -r nvidia_drm')
     assert boot.HANDOFF_HELPER.stat().st_mode & 0o111
     boot.restore()
-    assert all(not p.exists() for p in (boot.EARLY_MODULES, boot.PLYMOUTH_DROPIN, boot.GDM_DROPIN, boot.HANDOFF_HELPER))
+    assert all(not p.exists() for p in (boot.EARLY_MODULES, boot.PLYMOUTH_DROPIN, boot.GDM_DROPIN, boot.HANDOFF_HELPER, boot.GUARD_HELPER))
     assert boot.EXTLINUX.read_text() == CONFIG
 
 

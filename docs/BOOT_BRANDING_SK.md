@@ -139,3 +139,38 @@ Launcher pred importom GTK vyfarbí koreňové X okno farbou aplikácie
 pomocou dostupného `xsetroot`, aby sa pri prechode do grafickej relácie
 nepresvital starý framebuffer s NVIDIA obrázkom. Ak nástroj nie je dostupný,
 launcher pokračuje cez GTK bez prerušenia spúšťania aplikácie.
+
+## Tretia skúška a doplnené čakanie
+
+Pri ďalšom celom štarte bolo logo viditeľné približne na 22. sekunde videa,
+po 26. sekunde zostal obraz čierny. Boot log zachytil konkrétny dôvod:
+`modprobe: FATAL: Module nvidia_drm is in use.` Pôvodný pomocník po
+neúspešnom uvoľnení pokračoval do GDM. Konfigurácia sa odstránila a grafika
+aj RUN sa obnovili bez reštartu systému.
+
+Doplnená verzia pred spustením GDM:
+
+1. Požiada Plymouth o ukončenie.
+2. Ukončí zostávajúce procesy iba jeho systemd služby.
+3. S obmedzeným počtom pokusov počká na uvoľnenie modulu. Modul nikdy
+   neodoberá násilím.
+4. Vopred naplánuje jednorazovú kontrolu grafického štartu.
+
+Kontrola sa spúšťa približne 25 sekúnd po predštartovom pomocníkovi.
+Rozlišuje stabilný X server od opakovane padajúcich procesov podľa PID.
+Ak nenájde stabilný X server, overí vlastníctvo a kontrolné súčty svojich
+konfiguračných súborov, odstráni iba experimentálnu grafickú konfiguráciu,
+uvoľní modul a obnoví GDM bežnou cestou. Jadrom, initrd, UEFI ani základnou
+Linux témou nemanipuluje. Neskoršie ručné zmeny neprepisuje.
+
+Kontrolný pomocník je vlastnený súbor
+`/usr/local/libexec/hdf-vision-display-guard`; aj ten odstráni `restore`.
+Výsledok je v `/var/lib/hdf-vision/boot-branding/display-guard-result.json`.
+Kontrola potvrdzuje stabilitu X servera, nie pripravenosť kamier alebo
+správnosť výsledku receptu. Je to ochrana tejto experimentálnej skúšky,
+nie záruka obnovy pri ľubovoľnej hardvérovej alebo systémovej chybe.
+
+Prešlo 23 testov. Upravená sekvencia sa následne overila priamo cez
+nainštalovaný `ExecStartPre` GDM: odovzdanie prešlo, aplikácia sa spustila
+a jednorazová kontrola potvrdila stabilný X server. Celý nový štart od
+zapnutia tým ešte nebol overený.

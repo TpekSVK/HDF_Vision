@@ -21,6 +21,7 @@ EARLY_MODULES = Path('/etc/modules-load.d/hdf-boot-display.conf')
 PLYMOUTH_DROPIN = Path('/etc/systemd/system/plymouth-start.service.d/hdf-display.conf')
 GDM_DROPIN = Path('/etc/systemd/system/gdm.service.d/zz-hdf-display-handoff.conf')
 HANDOFF_HELPER = Path('/usr/local/libexec/hdf-vision-display-handoff')
+GUARD_HELPER = Path('/usr/local/libexec/hdf-vision-display-guard')
 LABEL = 'HDF_VISION_BRANDED'
 FILES = ('brand.png', 'hdf-vision.plymouth', 'hdf-vision.script')
 
@@ -188,6 +189,7 @@ def display_handoff(*, experimental=False):
     if not module:
         raise RuntimeError('Grafický modul nvidia_drm nie je dostupný.')
     contents = {
+        GUARD_HELPER: (ROOT / 'tools/boot_branding/display-guard.py').read_bytes(),
         # Install the executable and its hook before enabling early loading.
         HANDOFF_HELPER: (ROOT / 'tools/boot_branding/display-handoff.sh').read_bytes(),
         # "zz" sorts after the existing NVIDIA override which clears ExecStartPre.

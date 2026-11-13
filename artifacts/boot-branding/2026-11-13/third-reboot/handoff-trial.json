@@ -1,0 +1,75 @@
+{
+  "status": "gdm_started_with_installed_handoff",
+  "steps": [
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "gdm.service"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "quit"
+      ],
+      "code": 1,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "stop",
+        "plymouth-start.service"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "modprobe",
+        "-r",
+        "nvidia_drm"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "modprobe",
+        "nvidia_drm"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "start",
+        "plymouth-start.service"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "plymouth",
+        "show-splash"
+      ],
+      "code": 0,
+      "output": ""
+    },
+    {
+      "command": [
+        "systemctl",
+        "start",
+        "gdm.service"
+      ],
+      "code": 0,
+      "output": ""
+    }
+  ],
+  "purpose": "Test the actual GDM ExecStartPre, no manual cleanup between Plymouth and GDM"
+}
