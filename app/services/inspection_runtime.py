@@ -60,13 +60,31 @@ class InspectionRuntime:
         self.recipe_name, self.capture_mode = recipe_name, capture_mode
         self._active_view_id = active_view_id
         view = config.get_view(active_view_id) or config.views[0]
-        apply_view_camera_profile(self.cam, {}, view.camera_profile)
-        if capture_mode == 'trigger':
-            self.pico.prepare_trigger(self.cam)
-        else:
-            self.pico.prepare_master(self.cam)
-            if not self.cam.is_pipeline_open():
-                self.cam.start(caller='inspection_prepare_master')
+        for attempt in range(3):
+            try:
+                apply_view_camera_profile(self.cam, {}, view.camera_profile)
+                if capture_mode == 'trigger':
+                    self.pico.prepare_trigger(self.cam)
+                else:
+                    self.pico.prepare_master(self.cam)
+                    if not self.cam.is_pipeline_open():
+                        self.cam.start(caller='inspection_prepare_master')
+                return
+            except Exception as exc:
+                self._logger.warning('Príprava %s (%s), pokus %s/3 zlyhal: %s',
+                                     self.camera_id, capture_mode, attempt + 1, exc)
+                try:
+                    self.pico.quiesce()
+                except Exception:
+                    self._logger.exception('Pico sa po chybe prípravy nepodarilo pozastaviť.')
+                self.cam.stop(caller='failed_preparation')
+                close_hid = getattr(self.cam, 'close_hid', None)
+                if close_hid is not None:
+                    close_hid()
+                self.cam._trigger_session_active = self.cam._trigger_session_ready = False
+                if not isinstance(exc, (RuntimeError, OSError)) or attempt == 2:
+                    raise
+                time.sleep(.25)
 
     def quiesce(self):
         self.pico.quiesce()

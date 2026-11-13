@@ -172,6 +172,45 @@ def test_missing_camera_blocks_preparation(tmp_path, monkeypatch):
         runtime.prepare('test', 'master', 'view_1')
 
 
+def test_failed_trigger_preparation_reopens_camera_and_recovers_in_same_runtime(tmp_path, monkeypatch):
+    runtime, _, _ = workcell(tmp_path, monkeypatch)
+    runtime.quiesce()
+    monkeypatch.setattr('app.services.inspection_runtime.time.sleep', lambda seconds: None)
+    attempts, cleanup = [], []
+    def prepare(camera):
+        attempts.append(camera)
+        if len(attempts) == 1:
+            raise RuntimeError('MASTER stream nie je pripravený na prechod do TRIGGER.')
+    camera = runtime.registry.cameras['camera_1']
+    monkeypatch.setattr(runtime.registry.picos['camera_1'], 'prepare_trigger', prepare)
+    monkeypatch.setattr(camera, 'stop', lambda **kw: cleanup.append('stream'))
+    camera.close_hid = lambda: cleanup.append('hid')
+    runtime.prepare('test', 'trigger', 'view_1')
+    assert len(attempts) == 2 and cleanup == ['stream', 'hid']
+    assert all(controller.state.value == 'ready' for controller in runtime.controllers.values())
+    jobs, reason = runtime.admit('manual', {'active_view_id': 'view_1'})
+    assert len(jobs) == 2, reason
+    results = [runtime.execute(job) for job in jobs]
+    assert all('error' not in result for result in results)
+    runtime.complete(jobs, results)
+    runtime.quiesce()
+
+
+def test_persistent_preparation_failure_has_bounded_retry_budget(tmp_path, monkeypatch):
+    runtime, _, _ = workcell(tmp_path, monkeypatch)
+    runtime.quiesce()
+    monkeypatch.setattr('app.services.inspection_runtime.time.sleep', lambda seconds: None)
+    attempts = []
+    def failed(camera):
+        attempts.append(camera)
+        raise RuntimeError('camera unavailable')
+    monkeypatch.setattr(runtime.registry.picos['camera_1'], 'prepare_trigger', failed)
+    with pytest.raises(RuntimeError, match='camera unavailable'):
+        runtime.prepare('test', 'trigger', 'view_1')
+    assert len(attempts) == 3
+    assert not runtime.processing
+
+
 def test_stop_never_closes_pico_while_camera_is_processing(tmp_path, monkeypatch):
     runtime, _, _ = workcell(tmp_path, monkeypatch)
     jobs, _ = runtime.admit('manual', {'active_view_id': 'view_1'})

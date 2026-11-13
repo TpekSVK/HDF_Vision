@@ -94,3 +94,16 @@ def test_golden_manual_light_status_and_toggle_are_independent():
     GoldenWizard._toggle_manual_light(host, False)
     assert calls == [False]
     assert not host.btn_manual_light.checked
+
+
+def test_final_close_does_not_reconnect_pico_after_runtime_shutdown():
+    calls = []
+    host = SimpleNamespace(_close_ready=True,
+        _stop_live_and_light=lambda: pytest.fail('closed Pico was reopened'),
+        runtime_worker=SimpleNamespace(shutdown=lambda: calls.append('worker')),
+        workcell=None, _jetson_stats_service=SimpleNamespace(stop=lambda: None),
+        db=SimpleNamespace(close=lambda: calls.append('db')),
+        station_closed=SimpleNamespace(emit=lambda ident: calls.append(ident)),
+        camera_id='camera_1', _power_exit_code=None)
+    MainWindow.closeEvent(host, SimpleNamespace(accept=lambda: calls.append('accepted')))
+    assert calls == ['worker', 'db', 'camera_1', 'accepted']

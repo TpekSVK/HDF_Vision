@@ -160,6 +160,24 @@ na zapojenej zostave. V tejto skúške sa neprivádzal samostatný vonkajší im
 na 24 V vstupy; smerovanie fyzických vstupov overujú automatické testy firmvéru
 a aplikácie. Protokoly sú v `artifacts/dual-camera-implementation/2026-11-12/`.
 
+## Spustenie a obnova prípravy kamier
+
+Posledný zvolený režim MASTER/TRIGGER sa ukladá do `config.json` spolu
+s posledným receptom. Po spustení sa obnoví tento režim, aj keď sa kamera
+po zapnutí napájania hlási ako MASTER. Ak uložený režim ešte neexistuje,
+aplikácia ho prvýkrát prečíta z kamery a po úspešnej príprave uloží.
+
+Pri chybe komunikácie alebo prípravy aplikácia pozastaví príslušný kanál Pica,
+zatvorí chybný stream aj HID spojenie a zopakuje prípravu. Má najviac tri
+pokusy s odstupom 250 ms; opakovaná chyba zostane zobrazená v aplikácii.
+Po odstránení príčiny možno prípravu zopakovať bez reštartu aplikácie.
+Chyba spojenia s Picom sa zobrazuje ako chyba spojenia, nie ako požiadavka
+na aktualizáciu firmvéru.
+
+Bežné prepnutie RUN/NASTAVENIA zachováva pripravené streamy.
+Pri úplnom zatvorení pracoviska sa uvoľní aj HID a sériový port Pica;
+oneskorené udalosti rozhrania už spojenie znova neotvárajú.
+
 ## Zálohy a návrat
 
 Staré recepty v3 sa načítajú. Pred prvým uložením vo verzii4 vzniká presná

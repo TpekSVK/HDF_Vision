@@ -72,6 +72,7 @@ class CameraService:
         resolved = self._device_resolver()
         if resolved != self.device:
             self.stream.stop(caller="usb_identity_changed")
+            self.close_hid()
             self.device = resolved
             self.devices = [resolved]
             self._supported_v4l2_controls = None
@@ -160,6 +161,11 @@ class CameraService:
         except Exception:
             return None
 
+    def close_hid(self):
+        hid, self._hid = self._hid, None
+        if hid is not None:
+            hid.close()
+
     def _init_hid(self):
         if self._hid is not None:
             return
@@ -220,7 +226,7 @@ class CameraService:
         self.height = int(args.get("height", self.height))
         self.fps    = int(args.get("fps", self.fps))
         self.pixel_format = args.get("pixel_format", self.pixel_format)
-        self._hid = None
+        self.close_hid()
         self.stream.start(caller="resume_after_external")
         self._paused_external = False
         print("[CameraService] resumed after external access")

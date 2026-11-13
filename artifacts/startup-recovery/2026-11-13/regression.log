@@ -1,0 +1,11 @@
+{"batch": "unit", "status": 0, "elapsed": 16.76, "summary": "640 passed, 1 warning in 15.70s"}
+{"batch": "test_dual_camera_ui", "status": 0, "elapsed": 2.83, "summary": "5 passed in 2.03s"}
+{"batch": "test_dual_golden_workflow", "status": 0, "elapsed": 2.53, "summary": "1 passed in 1.82s"}
+{"batch": "test_manual_light_ui", "status": 0, "elapsed": 1.89, "summary": "6 passed in 1.10s"}
+{"batch": "test_results_touch", "status": 0, "elapsed": 11.51, "summary": "8 passed in 10.49s"}
+{"batch": "test_run_touch_layout", "status": 0, "elapsed": 8.62, "summary": "4 passed in 7.61s"}
+{"batch": "test_setup_power", "status": 0, "elapsed": 7.67, "summary": "13 passed in 6.59s"}
+{"batch": "test_startup_ready", "status": 0, "elapsed": 0.65, "summary": "2 passed in 0.19s"}
+{"batch": "test_workcell_session", "status": 0, "elapsed": 1.66, "summary": "1 passed in 0.93s"}
+{"batch": "test_workstation_window", "status": 0, "elapsed": 2.99, "summary": "5 passed in 2.06s"}
+FINAL 10 batches 0 failed batches

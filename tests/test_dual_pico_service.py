@@ -74,6 +74,15 @@ def test_old_firmware_is_rejected_with_upgrade_message(dual):
             pending.result()
 
 
+def test_connection_failure_is_not_reported_as_old_firmware(dual, monkeypatch):
+    transport, _ = dual
+    channel = transport.channels[1]
+    channel.last_error = 'Could not exclusively lock port'
+    monkeypatch.setattr(channel, '_send_command', lambda command: (False, ''))
+    with pytest.raises(RuntimeError, match='exclusively lock'):
+        channel.supports_pio()
+
+
 def test_board_restart_invalidates_both_sessions_and_pending_reply(dual):
     transport, dev = dual
     one, two = transport.channels.values()

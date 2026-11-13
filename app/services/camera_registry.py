@@ -36,6 +36,9 @@ class CameraRegistry:
     def close(self):
         for camera in self.cameras.values():
             camera.stop(caller='workcell_close')
+            close_hid = getattr(camera, 'close_hid', None)
+            if close_hid is not None:
+                close_hid()
         if self.transport:
             self.transport.close()
 

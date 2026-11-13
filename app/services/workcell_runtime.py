@@ -108,7 +108,17 @@ class WorkcellRuntime:
             cfg.group_config(group)
         if capture_mode is None:
             first = self.registry.cameras[config.views[0].camera_id]
-            capture_mode = 'trigger' if int(first.get_stream_mode()) == 1 else 'master'
+            for attempt in range(3):
+                try:
+                    capture_mode = 'trigger' if int(first.get_stream_mode()) == 1 else 'master'
+                    break
+                except (RuntimeError, OSError):
+                    close_hid = getattr(first, 'close_hid', None)
+                    if close_hid is not None:
+                        close_hid()
+                    if attempt == 2:
+                        raise
+                    time.sleep(.25)
         self.capture_mode, self.recipe_name = capture_mode, recipe_name
         if self.groups:
             self.groups.close()

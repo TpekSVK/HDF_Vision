@@ -50,6 +50,8 @@ class PicoChannel(PicoService):
     def supports_pio(self):
         if self._pio_capable is None:
             ok, response = self._send_command('STATUS')
+            if not ok and not response.startswith('ERR UNKNOWN'):
+                raise RuntimeError('Spojenie s Picom zlyhalo: ' + (self.last_error or response or 'bez odpovede'))
             firmware = re.search(r'FIRMWARE pico_hdf_controller (\d+)\.(\d+)(?:\.(\d+))?', response)
             version = tuple(int(part or 0) for part in firmware.groups()) if firmware else (0, 0, 0)
             if not ok or 'DUAL_CHANNEL_V1' not in response.split() or version < (4, 3, 1):

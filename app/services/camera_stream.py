@@ -442,7 +442,11 @@ class CameraStream:
                 if self._start_gst(dev):
                     self.camera.device = dev
                     self._active_pipeline_signature = self._pipeline_signature(device=dev)
-                    self.camera._hid = None
+                    close_hid = getattr(self.camera, 'close_hid', None)
+                    if close_hid is not None:
+                        close_hid()
+                    else:
+                        self.camera._hid = None
                     self.camera._init_hid()
                     self.camera._last_open_args.update({
                         "device": dev,

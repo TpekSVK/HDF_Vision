@@ -1,0 +1,54 @@
+(Argus) Error FileOperationFailed: Connecting to nvargus-daemon failed: No such file or directory (in src/rpc/socket/client/SocketClientDispatch.cpp, function openSocketConnection(), line 205)
+(Argus) Error FileOperationFailed: Cannot create camera provider (in src/rpc/socket/client/SocketClientDispatch.cpp, function createCameraProvider(), line 107)
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Tool] Loaded recipe: test2
+This plugin does not support propagateSizeHints()
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000001
+[RUN_STORAGE] run_id=20bd505a0e7a42aaa3b0997e89264e26:group_1
+[RUN_STORAGE] path=/out/data/runs/20261113/000001/
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000002
+[RUN_STORAGE] run_id=f20fe246094949e886b15a1472ba184a:group_2
+[RUN_STORAGE] path=/out/data/runs/20261113/000002/
+PASSED master_defaults
+[Tool] Loaded recipe: test2
+This plugin does not support propagateSizeHints()
+WARNING:app.services.inspection_runtime:Príprava camera_1 (trigger), pokus 1/3 zlyhal: Injected startup preparation error
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000003
+[RUN_STORAGE] run_id=c7fd80e4266040b587f6622fac2d2056:group_1
+[RUN_STORAGE] path=/out/data/runs/20261113/000003/
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000004
+[RUN_STORAGE] run_id=5c8bbd2b33d9466fac143ec5ed9e1510:group_2
+[RUN_STORAGE] path=/out/data/runs/20261113/000004/
+PASSED transient_prepare_error
+[Tool] Loaded recipe: test2
+This plugin does not support propagateSizeHints()
+WARNING:app.services.inspection_runtime:Príprava camera_1 (trigger), pokus 1/3 zlyhal: Injected startup preparation error
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+WARNING:app.services.inspection_runtime:Príprava camera_1 (trigger), pokus 2/3 zlyhal: Injected startup preparation error
+WARNING:app.services.inspection_runtime:Príprava camera_1 (trigger), pokus 3/3 zlyhal: Injected startup preparation error
+[Camera] GST started: v4l2src device=/dev/video2 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[Camera] GST started: v4l2src device=/dev/video0 io-mode=2 ! video/x-raw,format=GRAY8,width=2592,height=1944,framerate=30/1 ! appsink name=sink emit-signals=true sync=false drop=true max-buffers=2
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000005
+[RUN_STORAGE] run_id=cd378252048d450fb83b7069bd553c4e:group_1
+[RUN_STORAGE] path=/out/data/runs/20261113/000005/
+[RUN_STORAGE] date=20261113
+[RUN_STORAGE] next_run_index=000006
+[RUN_STORAGE] run_id=9ce34187407d43d6ad45f584ae5c8968:group_2
+[RUN_STORAGE] path=/out/data/runs/20261113/000006/
+PASSED persistent_error_then_manual_retry
+FINAL {'status': 'passed', 'cases': [{'name': 'master_defaults', 'status': 'passed', 'injected_attempts': 0, 'capture_views': ['view_1', 'view_2'], 'warm_navigation': 'no pipeline restart', 'pico_released': True}, {'name': 'transient_prepare_error', 'status': 'passed', 'injected_attempts': 4, 'capture_views': ['view_1', 'view_2'], 'warm_navigation': 'no pipeline restart', 'pico_released': True}, {'name': 'persistent_error_then_manual_retry', 'status': 'passed', 'injected_attempts': 3, 'capture_views': ['view_1', 'view_2'], 'warm_navigation': 'no pipeline restart', 'pico_released': True}], 'cleanup_errors': [], 'modbus': 'disabled', 'scope': 'Sensor MASTER defaults simulated; no OS reboot performed'}

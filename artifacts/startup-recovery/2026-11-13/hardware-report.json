@@ -1,0 +1,41 @@
+{
+  "status": "passed",
+  "cases": [
+    {
+      "name": "master_defaults",
+      "status": "passed",
+      "capture_views": [
+        "view_1",
+        "view_2"
+      ],
+      "warm_navigation": "no pipeline restart",
+      "pico_released": true,
+      "wrapped_prepare_calls": 0
+    },
+    {
+      "name": "transient_prepare_error",
+      "status": "passed",
+      "capture_views": [
+        "view_1",
+        "view_2"
+      ],
+      "warm_navigation": "no pipeline restart",
+      "pico_released": true,
+      "wrapped_prepare_calls": 4
+    },
+    {
+      "name": "persistent_error_then_manual_retry",
+      "status": "passed",
+      "capture_views": [
+        "view_1",
+        "view_2"
+      ],
+      "warm_navigation": "no pipeline restart",
+      "pico_released": true,
+      "wrapped_prepare_calls": 3
+    }
+  ],
+  "cleanup_errors": [],
+  "modbus": "disabled",
+  "scope": "Sensor MASTER defaults simulated; no OS reboot performed"
+}

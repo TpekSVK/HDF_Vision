@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 from unittest.mock import Mock
 import time
+import json
 
 import pytest
 from PySide6.QtCore import Qt, QEvent, QCoreApplication
@@ -35,11 +36,13 @@ def test_shared_pico_opens_one_recipe_workspace_and_two_camera_history_sources(a
     WorkstationDevices(tmp_path / 'workstation_devices.json').save([
         StationBinding('camera_1', 'Predná kamera', 'USB-A', 'PICO', 1),
         StationBinding('camera_2', 'Zadná kamera', 'USB-B', 'PICO', 2)])
+    (tmp_path / 'config.json').write_text(json.dumps({'capture_mode': 'trigger'}))
     shell = WorkstationWindow(tmp_path)
     shell.resize(1366, 704); shell.show(); app.processEvents()
     assert len(shell.workspaces) == 1
     assert shell.overview_button.text() == 'Všetky kamery (2)'
     workspace = shell.workspaces[0]
+    assert workspace.capture_mode == 'trigger' and not workspace._initial_capture_mode
     assert workspace.workcell is not None
     assert set(workspace.runtime.runtimes) == {'camera_1', 'camera_2'}
     assert len({source['db_path'] for source in workspace.results_sources()}) == 1

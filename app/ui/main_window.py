@@ -103,8 +103,10 @@ class MainWindow(QMainWindow):
 
         # Kamera
         self.cam = camera if camera is not None else CameraService()
-        self.capture_mode = "master"
-        self._initial_capture_mode = True
+        from app.services.capture_mode_state import load_capture_mode
+        saved_mode = load_capture_mode(self._UI_STATE_PATH)
+        self.capture_mode = saved_mode or 'master'
+        self._initial_capture_mode = saved_mode is None
 
         # DB + služby
         self.db = DbService(self.data_root / "HDF_Vision.db")
@@ -829,6 +831,8 @@ class MainWindow(QMainWindow):
             self._run_status_message.setText(outcome.reason)
 
     def _workcell_idle(self):
+        if getattr(self, '_close_ready', False):
+            return
         if self.runtime_worker.busy:
             return
         self.btn_live.setEnabled(True)
@@ -982,6 +986,8 @@ class MainWindow(QMainWindow):
             if result and error is None:
                 self.mode = "SETUP" if self._pending_runtime_action else "RUN"
                 self.capture_mode = self.runtime.capture_mode
+                from app.services.capture_mode_state import save_capture_mode
+                save_capture_mode(getattr(self, '_UI_STATE_PATH', None), self.capture_mode)
                 self._sync_capture_mode_ui()
                 self._capture_mode_ready = True
                 self._run_trigger_session_active = self.capture_mode == "trigger"
@@ -1286,14 +1292,22 @@ class MainWindow(QMainWindow):
         self._sync_capture_mode_ui()
 
         try:
+            shared = getattr(self, 'workcell', None) is not None
+            if shared:
+                lane = self.runtime.runtimes[self.cam.registry.selected]
+                lane.prepare(self.current_recipe_name(), self.capture_mode, self._active_view_id)
             if self.capture_mode == "trigger":
-                self._enter_run_trigger_session()
+                if not shared:
+                    self._enter_run_trigger_session()
+                self._run_trigger_session_active = True
                 self.live_enabled = False
                 self.btn_live.setChecked(False)
                 self.btn_live.setEnabled(True)
                 self.btn_live.setText("Live vypnuté")
             else:
-                self._exit_run_trigger_session(restore_master=True)
+                if not shared:
+                    self._exit_run_trigger_session(restore_master=True)
+                self._run_trigger_session_active = False
                 self.btn_live.setEnabled(True)
                 if ensure_runtime_ready and not self.cam.is_pipeline_open():
                     self.cam.start(caller="capture_mode_master")
@@ -1331,9 +1345,13 @@ class MainWindow(QMainWindow):
             return
         previous = self.capture_mode
         self.capture_mode = requested
+        from app.services.capture_mode_state import save_capture_mode
+        save_capture_mode(getattr(self, '_UI_STATE_PATH', None), requested)
         if self._apply_capture_mode(ensure_runtime_ready=True) is False:
-            self.capture_mode = previous
-            self._apply_capture_mode(ensure_runtime_ready=True)
+            if getattr(self, 'workcell', None) is None:
+                self.capture_mode = previous
+                save_capture_mode(getattr(self, '_UI_STATE_PATH', None), previous)
+                self._apply_capture_mode(ensure_runtime_ready=True)
             self._sync_capture_mode_ui()
         self._logger.info("[CAPTURE_MODE_UI] applied=%s", self.capture_mode)
 
@@ -1655,6 +1673,8 @@ class MainWindow(QMainWindow):
         self.btn_manual_light.blockSignals(False)
 
     def _refresh_manual_light(self) -> None:
+        if getattr(self, '_close_ready', False):
+            return
         if getattr(getattr(self, "runtime_worker", None), "busy", False):
             return
         self._set_manual_light_ui(self.pico.manual_light_status())
@@ -2796,9 +2816,11 @@ class MainWindow(QMainWindow):
             self._debug_overlay.raise_()
 
     def closeEvent(self, e):
-        self._stop_live_and_light()
         if not self._close_ready:
             e.ignore()
+            if getattr(self, '_pending_runtime_action', None) == 'close':
+                return
+            self._stop_live_and_light()
             self._request_runtime_stop(close=True)
             return
         self.runtime_worker.shutdown()
