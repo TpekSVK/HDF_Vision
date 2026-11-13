@@ -1,0 +1,26 @@
+{
+  "video": "VID_20261113_172322.mp4",
+  "boot_id": "13b2403f-41a6-49f4-9ab5-166514b675b1",
+  "guard": {
+    "boot_id": "13b2403f-41a6-49f4-9ab5-166514b675b1",
+    "status": "stable_xserver"
+  },
+  "user_report_seconds": {
+    "first_logo": 19,
+    "logo_disappears": 22,
+    "continuous_logo_returns": 31
+  },
+  "approximate_app_visible_seconds": 45,
+  "journal_uptime_seconds": {
+    "plymouth_release": 15.106792,
+    "xsession_begin": 19.314805,
+    "xsession_root_logo_painted": 19.833338,
+    "initial_x_mode": 18.710862,
+    "gnome_120hz_mode": 21.189898,
+    "gnome_session_running": 24.98955
+  },
+  "gnome_registration": "Confirmed in launcher log at 17:23:51.729; previous 90s timeout absent.",
+  "remaining_issue": "Approximately nine-second visual gap remains during display handoff. Contribution of second modeset has not been isolated.",
+  "uefi_modified": false,
+  "display_configuration_changed_this_review": false
+}

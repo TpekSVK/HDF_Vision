@@ -226,3 +226,21 @@ pri celom štarte aj ďalšie skrátenie medzery zostáva otvorené.
 
 Protokol: [GNOME Session Management](https://wiki.gnome.org/Projects%282f%29SessionManagement%282f%29GnomeSession.html).
 Podklady sú v `artifacts/boot-branding/2026-11-13/fifth-reboot/`.
+
+## Overenie registrácie pri štarte 17:23
+
+Záznam `VID_20261113_172322.mp4` a logy potvrdili registráciu spúšťača.
+GNOME dosiahlo stav `running` v čase 24,990 s od štartu jadra; predchádzajúce
+90-sekundové čakanie na `HDF_Vision.desktop` sa nevyskytlo. Kontrola znovu
+potvrdila stabilný X server, aplikácia prešla do RUN. Prvé pokusy prípravy
+kamier stále potrebovali existujúce automatické opakovanie.
+
+Používateľ vo videu pozoroval prvé logo približne od 19. do 22. sekundy,
+čiernu medzeru do 31. sekundy a potom neprerušené logo až po aplikáciu.
+Medzera teda zostáva nevyriešená. Časy videa nie sú časy od štartu jadra.
+Log potvrdil uvoľnenie Plymouth displeja v čase 15,107 s a vykreslenie
+koreňového X pozadia v čase 19,833 s. X najprv nastavilo
+`nvidia-auto-select` (18,711 s), následne GNOME režim
+`1920x1080_120` (21,190 s). Príspevok druhého prepnutia režimu k viditeľnej
+medzere ešte nie je izolovane overený. Pri tomto rozbore sa konfigurácia
+displeja nemenila. Podklady: `artifacts/boot-branding/2026-11-13/sixth-reboot/`.
