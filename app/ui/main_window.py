@@ -1268,12 +1268,8 @@ class MainWindow(QMainWindow):
     def _exit_run_trigger_session(self, *, restore_master: bool = False) -> None:
         if restore_master:
             self.pico.prepare_master(self.cam)
-        elif getattr(self, 'workcell', None) is not None:
-            self.pico.quiesce()
         else:
-            if self.pico.supports_pio():
-                self.pico.set_session_mode("IDLE")
-            self.cam.exit_trigger_session(restore_master=False)
+            self.pico.quiesce()
         self._run_trigger_session_active = False
 
     def _apply_capture_mode(self, *, ensure_runtime_ready: bool = False) -> bool:

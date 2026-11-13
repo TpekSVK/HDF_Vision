@@ -87,10 +87,9 @@ class InspectionRuntime:
                 time.sleep(.25)
 
     def quiesce(self):
+        # Stop requests and illumination, retaining a healthy prepared camera.
+        # Profile changes, preparation errors and shutdown own stream teardown.
         self.pico.quiesce()
-        if (getattr(self, 'capture_mode', 'master') == 'trigger'
-                and not getattr(self, 'keep_camera_ready_on_pause', False)):
-            self.cam.exit_trigger_session(restore_master=False)
         self.reset()
 
     def shutdown(self):

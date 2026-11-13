@@ -53,7 +53,6 @@ class WorkcellRuntime:
             session_settings=session_settings) for ident, camera in registry.cameras.items()}
         for ident, runtime in self.runtimes.items():
             runtime.allowed_camera_id = ident
-            runtime.keep_camera_ready_on_pause = True
             runtime.camera_serial = registry.serials.get(ident)
             runtime.camera_name = registry.names[ident]
         self.controllers = {ident: InspectionController(ident) for ident in self.runtimes}

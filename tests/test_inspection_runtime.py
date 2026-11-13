@@ -43,6 +43,20 @@ def run(runtime, controller, options):
     return result
 
 
+def test_standalone_trigger_pause_preserves_camera_but_shutdown_releases_it(tmp_path, monkeypatch):
+    runtime, controller, options, captures, outputs, _ = runtime_fixture(tmp_path, monkeypatch)
+    runtime.capture_mode = 'trigger'
+    runtime.cam.exit_trigger_session = lambda **kw: pytest.fail('ordinary pause closed trigger stream')
+    stopped = []
+    runtime.cam.stop = lambda **kw: stopped.append(kw['caller'])
+    runtime.pico.close = lambda: stopped.append('pico_closed')
+    runtime.modbus.close = lambda: stopped.append('modbus_closed')
+    runtime.quiesce()
+    assert outputs == ['idle'] and stopped == []
+    runtime.shutdown()
+    assert stopped == ['inspection_close', 'modbus_closed', 'pico_closed']
+
+
 def test_real_pipeline_without_main_window(tmp_path, monkeypatch):
     runtime, controller, options, captures, outputs, _ = runtime_fixture(tmp_path, monkeypatch)
     result = run(runtime, controller, options)

@@ -134,18 +134,18 @@ class CameraPositionService:
                 self.pico.prepare_master(self.camera)
             self._session_key = key
         except Exception:
-            self.close_session()
+            self.close_session(failed=True)
             raise
 
-    def close_session(self):
-        """Worker-only cleanup on departure or a hardware/capture error."""
+    def close_session(self, *, failed=False):
+        """Stop requests on departure; release a failed standalone stream."""
         if self._session_mode is None:
             return
         try:
             self.pico.quiesce()
         finally:
             from app.services.camera_registry import CameraRouter
-            if self._session_mode == 'trigger' and not isinstance(self.camera, CameraRouter):
+            if failed and self._session_mode == 'trigger' and not isinstance(self.camera, CameraRouter):
                 self.camera.exit_trigger_session(restore_master=False)
         # Keep ownership on cleanup failure so the pause/close path can retry.
         self._session_mode = None
@@ -222,5 +222,5 @@ class CameraPositionService:
                 if trigger_started:
                     cam.end_trigger_capture()
         except Exception:
-            self.close_session()
+            self.close_session(failed=True)
             raise

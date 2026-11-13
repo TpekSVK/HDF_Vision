@@ -174,7 +174,11 @@ Po odstránení príčiny možno prípravu zopakovať bez reštartu aplikácie.
 Chyba spojenia s Picom sa zobrazuje ako chyba spojenia, nie ako požiadavka
 na aktualizáciu firmvéru.
 
-Bežné prepnutie RUN/NASTAVENIA zachováva pripravené streamy.
+Bežné prepnutie RUN/NASTAVENIA, návrat z Golden Wizard bez zmeny kamerového
+profilu aj odchod z Diagnostiky zachovávajú pripravené streamy. Platí to aj
+pre samostatnú kameru so samostatným Picom, nielen pre spoločnú dvojkamerovú
+dosku. Obnovenie príjmu požiadaviek môže zobraziť krátky stav prípravy;
+pri nezmenenom profile sa zdravý stream nezatvára a znovu nerozbieha.
 Pri úplnom zatvorení pracoviska sa uvoľní aj HID a sériový port Pica;
 oneskorené udalosti rozhrania už spojenie znova neotvárajú.
 

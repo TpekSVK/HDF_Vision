@@ -9,6 +9,16 @@ from app.ui.golden_wizard.golden_wizard import GoldenWizard
 from app.ui.main_window import MainWindow
 
 
+def test_standalone_leaving_run_quiesces_pico_without_closing_camera():
+    calls = []
+    host = SimpleNamespace(
+        pico=SimpleNamespace(quiesce=lambda: calls.append('idle')),
+        cam=SimpleNamespace(exit_trigger_session=lambda **kw: pytest.fail('healthy stream closed')),
+        _run_trigger_session_active=True)
+    MainWindow._exit_run_trigger_session(host)
+    assert calls == ['idle'] and not host._run_trigger_session_active
+
+
 class FakeButton:
     def __init__(self, checked=False):
         self.checked = checked

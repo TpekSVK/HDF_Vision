@@ -165,10 +165,8 @@ def test_capture_uses_shared_view_capture_without_any_run_result(tmp_path, monke
     assert calls == ([mode] + ['capture'] * 3 if mode == 'master' else [mode] + ['begin', 'capture', 'end'] * 3)
     service.close_session()
     service.close_session()  # Idempotent departure cleanup.
-    if mode == 'master':
-        assert calls[-1:] == ['idle']
-    else:
-        assert calls[-2:] == ['idle', ('exit', {'restore_master': False})]
+    assert calls[-1:] == ['idle']
+    assert not any(isinstance(call, tuple) and call[0] == 'exit' for call in calls)
     assert calls.count('idle') == 1
     assert before == {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
 
@@ -276,7 +274,7 @@ def test_same_profile_views_keep_session_and_different_profile_reprepares(tmp_pa
     assert calls == ['profile', 'trigger']  # View identity alone never rebuilds.
     other.camera_profile = ViewCameraProfile(width=1280, height=720, fps=60)
     service.prepare_session(replace(ref, view=other), 'trigger')
-    assert calls == ['profile', 'trigger', 'idle', 'exit', 'profile', 'trigger']
+    assert calls == ['profile', 'trigger', 'idle', 'profile', 'trigger']
     service.close_session()
     service.open_reference('test', 'view_1', 'trigger')
     assert calls[-2:] == ['profile', 'trigger']  # Re-entry prepares a new session.
@@ -310,11 +308,12 @@ def test_failed_departure_cleanup_retains_ownership_until_successful_retry(tmp_p
     with pytest.raises(RuntimeError, match='idle failed'):
         service.close_session()
     assert service._session_mode == 'trigger'
-    assert calls[-1] == 'exit'
+    assert 'exit' not in calls
     service.pico.quiesce = lambda: calls.append('idle')
     service.close_session()
     assert service._session_mode is None
-    assert calls[-2:] == ['idle', 'exit']
+    assert calls[-1:] == ['idle']
+    assert 'exit' not in calls
 
 
 def test_prepared_shared_capture_never_reapplies_profile_or_prepares_trigger(monkeypatch):
