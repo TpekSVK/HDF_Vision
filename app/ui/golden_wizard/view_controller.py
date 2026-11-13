@@ -147,10 +147,13 @@ class GoldenViews:
             print(f"[GoldenWizard] load_tools failed for {recipe}/{view_id}: {exc}")
 
         self.dialog._selected_tool_row = -1
+        # Refreshing selection validates learned models. Load this view's golden
+        # first, otherwise current_img still belongs to the previous view and
+        # a valid model is permanently marked invalid against the wrong pixels.
+        self.dialog._refresh_golden_background(recipe, view_id=view_id)
         self.dialog.tools_table.clearSelection()
         self.dialog._tool_panel.clear()
         self.dialog._refresh_tools_table()
-        self.dialog._refresh_golden_background(recipe, view_id=view_id)
         self.dialog._on_tool_selection_changed()
         self.dialog._update_dirty_state(recipe, view_id)
 
